@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
-use tuirealm::event::{Key, KeyEvent};
+use tuirealm::event::KeyEvent;
 
 use crate::animation::{
     Animated, AnimationSettings, AnimationSpec, Easing, ResolvedAnimationSpec, TickResult, Tween,
@@ -87,6 +87,7 @@ pub struct ScrollbarConfig {
     pub vertical: ScrollbarVisibility,
     pub horizontal: ScrollbarVisibility,
     pub gutter: ScrollbarGutter,
+    pub style: ScrollbarStyle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,12 +104,19 @@ pub enum ScrollbarGutter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarStyle {
+    ThinTrack,
+    ThickTrack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScrollPreset {
     pub line_step: usize,
     pub page_overlap: usize,
     pub vertical_scrollbar: ScrollbarVisibility,
     pub horizontal_scrollbar: ScrollbarVisibility,
     pub gutter: ScrollbarGutter,
+    pub style: ScrollbarStyle,
 }
 
 impl Default for ScrollState {
@@ -154,6 +162,7 @@ impl ScrollState {
                 vertical: preset.vertical_scrollbar,
                 horizontal: preset.horizontal_scrollbar,
                 gutter: preset.gutter,
+                style: preset.style,
             })
     }
 
@@ -176,11 +185,23 @@ impl ScrollState {
         content: ScrollSize,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
+        self.scroll_by_with_snap(delta, viewport, content, settings, false, false)
+    }
+
+    fn scroll_by_with_snap(
+        &mut self,
+        delta: ScrollDelta,
+        viewport: ScrollSize,
+        content: ScrollSize,
+        settings: AnimationSettings,
+        snap_x: bool,
+        snap_y: bool,
+    ) -> ScrollOutcome {
         let target = ScrollOffset::new(
             apply_delta(self.x.target, delta.x),
             apply_delta(self.y.target, delta.y),
         );
-        self.scroll_to(target, viewport, content, settings)
+        self.scroll_to_with_snap(target, viewport, content, settings, snap_x, snap_y)
     }
 
     pub fn scroll_to(
@@ -190,6 +211,18 @@ impl ScrollState {
         content: ScrollSize,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
+        self.scroll_to_with_snap(offset, viewport, content, settings, false, false)
+    }
+
+    fn scroll_to_with_snap(
+        &mut self,
+        offset: ScrollOffset,
+        viewport: ScrollSize,
+        content: ScrollSize,
+        settings: AnimationSettings,
+        snap_x: bool,
+        snap_y: bool,
+    ) -> ScrollOutcome {
         let max = max_offset(viewport, content);
         let spec = settings.resolve(self.behavior.animation);
         let before = self.offset();
@@ -198,14 +231,24 @@ impl ScrollState {
 
         if self.axes.horizontal() {
             handled = true;
-            changed |= self.x.start_to(offset.x.min(max.x), spec);
+            let target = offset.x.min(max.x);
+            changed |= if snap_x {
+                self.x.snap_to(target)
+            } else {
+                self.x.start_to(target, spec)
+            };
         } else {
             changed |= self.x.snap_to(0);
         }
 
         if self.axes.vertical() {
             handled = true;
-            changed |= self.y.start_to(offset.y.min(max.y), spec);
+            let target = offset.y.min(max.y);
+            changed |= if snap_y {
+                self.y.snap_to(target)
+            } else {
+                self.y.start_to(target, spec)
+            };
         } else {
             changed |= self.y.snap_to(0);
         }
@@ -243,44 +286,58 @@ impl ScrollState {
             );
         }
 
-        match key.code {
-            Key::Up if self.axes.vertical() => self.scroll_by(
+        if self.axes.vertical() && keybindings.line_up_matches(key) {
+            self.scroll_by_with_snap(
                 ScrollDelta::new(0, -(self.behavior.line_step() as isize)),
                 viewport,
                 content,
                 settings,
-            ),
-            Key::Down if self.axes.vertical() => self.scroll_by(
+                false,
+                true,
+            )
+        } else if self.axes.vertical() && keybindings.line_down_matches(key) {
+            self.scroll_by_with_snap(
                 ScrollDelta::new(0, self.behavior.line_step() as isize),
                 viewport,
                 content,
                 settings,
-            ),
-            Key::Home if self.axes.vertical() => self.scroll_to(
+                false,
+                true,
+            )
+        } else if self.axes.vertical() && keybindings.home_matches(key) {
+            self.scroll_to(
                 ScrollOffset::new(self.x.target, 0),
                 viewport,
                 content,
                 settings,
-            ),
-            Key::End if self.axes.vertical() => self.scroll_to(
+            )
+        } else if self.axes.vertical() && keybindings.end_matches(key) {
+            self.scroll_to(
                 ScrollOffset::new(self.x.target, max_offset(viewport, content).y),
                 viewport,
                 content,
                 settings,
-            ),
-            Key::Left if self.axes.horizontal() => self.scroll_by(
+            )
+        } else if self.axes.horizontal() && keybindings.line_left_matches(key) {
+            self.scroll_by_with_snap(
                 ScrollDelta::new(-(self.behavior.line_step() as isize), 0),
                 viewport,
                 content,
                 settings,
-            ),
-            Key::Right if self.axes.horizontal() => self.scroll_by(
+                true,
+                false,
+            )
+        } else if self.axes.horizontal() && keybindings.line_right_matches(key) {
+            self.scroll_by_with_snap(
                 ScrollDelta::new(self.behavior.line_step() as isize, 0),
                 viewport,
                 content,
                 settings,
-            ),
-            _ => ScrollOutcome::idle(),
+                true,
+                false,
+            )
+        } else {
+            ScrollOutcome::idle()
         }
     }
 
@@ -393,12 +450,14 @@ impl ScrollState {
         focused: bool,
     ) {
         let theme = theme();
-        let style = Style::default().fg(if focused {
+        let track_style = Style::default().fg(theme.border_fg());
+        let thumb_style = Style::default().fg(if focused {
             theme.accent_fg()
         } else {
-            theme.border_fg()
+            theme.muted_fg()
         });
         let offset = self.offset();
+        let chars = self.scrollbars.style.chars();
 
         if let Some(area) = layout.vertical_bar {
             let viewport_height = layout.viewport.height as usize;
@@ -410,7 +469,13 @@ impl ScrollState {
                 .position(offset.y)
                 .viewport_content_length(viewport_height);
             frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight).style(style),
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .track_symbol(Some(chars.vertical_track))
+                    .thumb_symbol(chars.vertical_thumb)
+                    .track_style(track_style)
+                    .thumb_style(thumb_style),
                 area,
                 &mut state,
             );
@@ -426,14 +491,20 @@ impl ScrollState {
                 .position(offset.x)
                 .viewport_content_length(viewport_width);
             frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::HorizontalBottom).style(style),
+                Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .track_symbol(Some(chars.horizontal_track))
+                    .thumb_symbol(chars.horizontal_thumb)
+                    .track_style(track_style)
+                    .thumb_style(thumb_style),
                 area,
                 &mut state,
             );
         }
 
         if let Some(area) = layout.corner {
-            frame.render_widget(Paragraph::new(" ").style(style), area);
+            frame.render_widget(Paragraph::new(" ").style(track_style), area);
         }
     }
 
@@ -666,8 +737,35 @@ impl Default for ScrollbarConfig {
             vertical: ScrollbarVisibility::Auto,
             horizontal: ScrollbarVisibility::Auto,
             gutter: ScrollbarGutter::Reserve,
+            style: ScrollbarStyle::ThinTrack,
         }
     }
+}
+
+impl ScrollbarStyle {
+    fn chars(self) -> ScrollbarChars {
+        match self {
+            Self::ThinTrack => ScrollbarChars {
+                vertical_track: "│",
+                vertical_thumb: "┃",
+                horizontal_track: "─",
+                horizontal_thumb: "━",
+            },
+            Self::ThickTrack => ScrollbarChars {
+                vertical_track: "┃",
+                vertical_thumb: "┃",
+                horizontal_track: "━",
+                horizontal_thumb: "━",
+            },
+        }
+    }
+}
+
+struct ScrollbarChars {
+    vertical_track: &'static str,
+    vertical_thumb: &'static str,
+    horizontal_track: &'static str,
+    horizontal_thumb: &'static str,
 }
 
 impl Default for ScrollPreset {
@@ -678,6 +776,7 @@ impl Default for ScrollPreset {
             vertical_scrollbar: ScrollbarVisibility::Auto,
             horizontal_scrollbar: ScrollbarVisibility::Auto,
             gutter: ScrollbarGutter::Reserve,
+            style: ScrollbarStyle::ThinTrack,
         }
     }
 }
@@ -717,7 +816,10 @@ fn saturating_u16(value: usize) -> u16 {
 mod tests {
     use std::time::Duration;
 
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
+    use tuirealm::event::Key;
 
     use super::*;
 
@@ -755,6 +857,7 @@ mod tests {
             vertical: ScrollbarVisibility::Auto,
             horizontal: ScrollbarVisibility::Auto,
             gutter: ScrollbarGutter::Reserve,
+            style: ScrollbarStyle::ThinTrack,
         });
 
         let layout = scroll.layout(Rect::new(2, 3, 10, 5), ScrollSize::new(20, 10));
@@ -763,5 +866,51 @@ mod tests {
         assert_eq!(layout.vertical_bar, Some(Rect::new(11, 3, 1, 4)));
         assert_eq!(layout.horizontal_bar, Some(Rect::new(2, 7, 9, 1)));
         assert_eq!(layout.corner, Some(Rect::new(11, 7, 1, 1)));
+    }
+
+    #[test]
+    fn horizontal_arrow_scroll_updates_offset_immediately() {
+        let mut scroll = ScrollState::new(ScrollAxes::Horizontal).behavior(ScrollBehavior {
+            line_step: 1,
+            page_overlap: 1,
+            animation: AnimationSpec {
+                enabled: None,
+                duration: Some(Duration::from_millis(150)),
+                easing: None,
+            },
+        });
+
+        let outcome = scroll.on_key(
+            KeyEvent::from(Key::Right),
+            ScrollSize::new(5, 1),
+            ScrollSize::new(20, 1),
+            AnimationSettings::default(),
+        );
+
+        assert!(outcome.handled);
+        assert!(outcome.changed);
+        assert_eq!(scroll.offset().x, 1);
+        assert_eq!(scroll.target_offset().x, 1);
+        assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn thin_track_scrollbar_uses_tira_style_glyphs() {
+        let scroll = ScrollState::new(ScrollAxes::Both).scrollbars(ScrollbarConfig {
+            vertical: ScrollbarVisibility::Always,
+            horizontal: ScrollbarVisibility::Always,
+            gutter: ScrollbarGutter::Reserve,
+            style: ScrollbarStyle::ThinTrack,
+        });
+        let layout = scroll.layout(Rect::new(0, 0, 6, 4), ScrollSize::new(20, 10));
+        let mut terminal = Terminal::new(TestBackend::new(6, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| scroll.render_scrollbars(frame, layout, ScrollSize::new(20, 10), true))
+            .expect("scrollbar should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((5, 0)).unwrap().symbol(), "┃");
+        assert_eq!(buffer.cell((4, 3)).unwrap().symbol(), "─");
     }
 }

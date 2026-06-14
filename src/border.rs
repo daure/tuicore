@@ -77,3 +77,16 @@ pub fn border_set(border: BorderKind) -> Set<'static> {
         BorderKind::Thick => THICK,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn border_chars_match_each_border_kind() {
+        assert_eq!(border_chars(BorderKind::Plain).top_left, "┌");
+        assert_eq!(border_chars(BorderKind::Rounded).top_left, "╭");
+        assert_eq!(border_chars(BorderKind::Double).top_left, "╔");
+        assert_eq!(border_chars(BorderKind::Thick).top_left, "┏");
+    }
+}

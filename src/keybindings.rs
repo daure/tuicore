@@ -10,8 +10,14 @@ pub struct KeyBindings {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavKeyBindings {
+    line_up: Vec<KeySpec>,
+    line_down: Vec<KeySpec>,
+    line_left: Vec<KeySpec>,
+    line_right: Vec<KeySpec>,
     page_up: Vec<KeySpec>,
     page_down: Vec<KeySpec>,
+    home: Vec<KeySpec>,
+    end: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,8 +29,14 @@ pub struct TabsKeyBindings {
 impl Default for NavKeyBindings {
     fn default() -> Self {
         Self {
+            line_up: vec![KeySpec::key(Key::Up)],
+            line_down: vec![KeySpec::key(Key::Down)],
+            line_left: vec![KeySpec::key(Key::Left)],
+            line_right: vec![KeySpec::key(Key::Right)],
             page_up: vec![KeySpec::key(Key::PageUp)],
             page_down: vec![KeySpec::key(Key::PageDown)],
+            home: vec![KeySpec::key(Key::Home)],
+            end: vec![KeySpec::key(Key::End)],
         }
     }
 }
@@ -71,8 +83,14 @@ impl KeyBindings {
             return bindings;
         };
 
+        set_keys(&value, "nav", "line_up", &mut bindings.nav.line_up);
+        set_keys(&value, "nav", "line_down", &mut bindings.nav.line_down);
+        set_keys(&value, "nav", "line_left", &mut bindings.nav.line_left);
+        set_keys(&value, "nav", "line_right", &mut bindings.nav.line_right);
         set_keys(&value, "nav", "page_up", &mut bindings.nav.page_up);
         set_keys(&value, "nav", "page_down", &mut bindings.nav.page_down);
+        set_keys(&value, "nav", "home", &mut bindings.nav.home);
+        set_keys(&value, "nav", "end", &mut bindings.nav.end);
         set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous);
         set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next);
 
@@ -101,6 +119,42 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_nav_line_up(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.line_up = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_line_up(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_line_up(keys);
+        self
+    }
+
+    pub fn set_nav_line_down(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.line_down = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_line_down(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_line_down(keys);
+        self
+    }
+
+    pub fn set_nav_line_left(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.line_left = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_line_left(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_line_left(keys);
+        self
+    }
+
+    pub fn set_nav_line_right(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.line_right = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_line_right(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_line_right(keys);
+        self
+    }
+
     pub fn set_nav_page_up(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
         self.nav.page_up = keys.into_iter().collect();
     }
@@ -119,12 +173,54 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_nav_home(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.home = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_home(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_home(keys);
+        self
+    }
+
+    pub fn set_nav_end(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.end = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_end(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_end(keys);
+        self
+    }
+
+    pub fn line_up_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.nav.line_up, key)
+    }
+
+    pub fn line_down_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.nav.line_down, key)
+    }
+
+    pub fn line_left_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.nav.line_left, key)
+    }
+
+    pub fn line_right_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.nav.line_right, key)
+    }
+
     pub fn page_up_matches(&self, key: KeyEvent) -> bool {
         matches_any(&self.nav.page_up, key)
     }
 
     pub fn page_down_matches(&self, key: KeyEvent) -> bool {
         matches_any(&self.nav.page_down, key)
+    }
+
+    pub fn home_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.nav.home, key)
+    }
+
+    pub fn end_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.nav.end, key)
     }
 }
 
@@ -359,15 +455,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn configured_page_keys_match_scroll_navigation() {
+    fn configured_nav_keys_match_scroll_navigation() {
         let bindings = KeyBindings::from_toml_str(
             r#"
             [nav]
+            line_up = "k"
+            line_down = "j"
+            line_left = "h"
+            line_right = "l"
             page_up = ["ctrl+u", "pageup"]
             page_down = ["ctrl+d", "pagedown"]
+            home = "g"
+            end = "shift+g"
             "#,
         );
 
+        assert!(bindings.line_up_matches(KeyEvent {
+            code: Key::Char('k'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.line_down_matches(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.line_left_matches(KeyEvent {
+            code: Key::Char('h'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.line_right_matches(KeyEvent {
+            code: Key::Char('l'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.page_up_matches(KeyEvent {
             code: Key::Char('u'),
             modifiers: KeyModifiers::CONTROL,
@@ -380,6 +498,14 @@ mod tests {
             code: Key::Char('u'),
             modifiers: KeyModifiers::CONTROL,
         }));
+        assert!(bindings.home_matches(KeyEvent {
+            code: Key::Char('g'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.end_matches(KeyEvent {
+            code: Key::Char('G'),
+            modifiers: KeyModifiers::SHIFT,
+        }));
     }
 
     #[test]
@@ -387,8 +513,14 @@ mod tests {
         let bindings = KeyBindings::new()
             .with_tabs_previous(KeySpec::plain('h'))
             .with_tabs_next(KeySpec::plain('l'))
+            .with_nav_line_up([KeySpec::plain('k')])
+            .with_nav_line_down([KeySpec::plain('j')])
+            .with_nav_line_left([KeySpec::plain('h')])
+            .with_nav_line_right([KeySpec::plain('l')])
             .with_nav_page_up([KeySpec::plain('u')])
-            .with_nav_page_down([KeySpec::plain('d')]);
+            .with_nav_page_down([KeySpec::plain('d')])
+            .with_nav_home([KeySpec::plain('g')])
+            .with_nav_end([KeySpec::shifted('g')]);
 
         assert!(bindings.tabs().previous_matches(KeyEvent {
             code: Key::Char('h'),
@@ -398,12 +530,36 @@ mod tests {
             code: Key::Char('l'),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.line_up_matches(KeyEvent {
+            code: Key::Char('k'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.line_down_matches(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.line_left_matches(KeyEvent {
+            code: Key::Char('h'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.line_right_matches(KeyEvent {
+            code: Key::Char('l'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.page_up_matches(KeyEvent {
             code: Key::Char('u'),
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.page_down_matches(KeyEvent {
             code: Key::Char('d'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.home_matches(KeyEvent {
+            code: Key::Char('g'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.end_matches(KeyEvent {
+            code: Key::Char('G'),
             modifiers: KeyModifiers::NONE,
         }));
     }

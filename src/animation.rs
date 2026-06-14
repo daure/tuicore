@@ -1,5 +1,7 @@
 use std::{num::NonZeroU32, time::Duration};
 
+use tuirealm::ratatui::style::Color;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimationSettings {
     pub enabled: bool,
@@ -52,6 +54,36 @@ mod tests {
         });
 
         assert!(!resolved.enabled);
+    }
+
+    #[test]
+    fn color_tween_interpolates_rgb_channels() {
+        let mut tween = ColorTween::idle(Color::Rgb(0, 0, 0));
+
+        tween.start(
+            Color::Rgb(100, 50, 200),
+            AnimationSettings::default(),
+            AnimationSpec {
+                duration: Some(Duration::from_millis(100)),
+                easing: Some(Easing::Linear),
+                enabled: None,
+            },
+        );
+        tween.tick(Duration::from_millis(50), AnimationSettings::default());
+
+        assert_eq!(tween.value(), Color::Rgb(50, 25, 100));
+    }
+
+    #[test]
+    fn color_tween_snaps_when_disabled() {
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+        let mut tween = ColorTween::idle(Color::Rgb(0, 0, 0));
+
+        tween.start(Color::Rgb(100, 50, 200), settings, AnimationSpec::default());
+
+        assert_eq!(tween.value(), Color::Rgb(100, 50, 200));
+        assert!(!tween.is_active());
     }
 }
 
@@ -239,6 +271,87 @@ impl Tween {
             TickResult::ACTIVE
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ColorTween {
+    from: Color,
+    to: Color,
+    current: Color,
+    tween: Tween,
+}
+
+impl ColorTween {
+    pub fn idle(value: Color) -> Self {
+        Self {
+            from: value,
+            to: value,
+            current: value,
+            tween: Tween::idle(1.0),
+        }
+    }
+
+    pub fn value(&self) -> Color {
+        self.current
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.tween.is_active()
+    }
+
+    pub fn start(&mut self, target: Color, settings: AnimationSettings, spec: AnimationSpec) {
+        let animation = settings.resolve(spec);
+        if !animation.enabled || self.current == target || !colors_can_tween(self.current, target) {
+            self.snap_to(target);
+            return;
+        }
+
+        self.from = self.current;
+        self.to = target;
+        self.tween
+            .start(0.0, 1.0, animation.duration, animation.easing);
+    }
+
+    pub fn snap_to(&mut self, target: Color) -> TickResult {
+        let changed = self.current != target || self.tween.is_active();
+        self.from = target;
+        self.to = target;
+        self.current = target;
+        self.tween.snap_to_end();
+        TickResult {
+            changed,
+            active: false,
+        }
+    }
+
+    pub fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        let result = self.tween.tick(dt, settings);
+        if result.changed {
+            self.current = lerp_color(self.from, self.to, self.tween.value());
+        }
+        result
+    }
+}
+
+pub fn lerp_color(from: Color, to: Color, progress: f64) -> Color {
+    let progress = progress.clamp(0.0, 1.0);
+    match (from, to) {
+        (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) => Color::Rgb(
+            lerp_u8(fr, tr, progress),
+            lerp_u8(fg, tg, progress),
+            lerp_u8(fb, tb, progress),
+        ),
+        _ if progress >= 1.0 => to,
+        _ => from,
+    }
+}
+
+fn colors_can_tween(from: Color, to: Color) -> bool {
+    matches!((from, to), (Color::Rgb(_, _, _), Color::Rgb(_, _, _)))
+}
+
+fn lerp_u8(from: u8, to: u8, progress: f64) -> u8 {
+    (from as f64 + (to as f64 - from as f64) * progress).round() as u8
 }
 
 #[derive(Debug, Clone)]

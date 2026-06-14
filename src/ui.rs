@@ -1,9 +1,14 @@
 use std::{
+    hash::Hash,
     path::Path,
     sync::{OnceLock, RwLock},
 };
 
 use crate::{AnimationSettings, KeyBindings, Preset, Theme};
+use tuirealm::{
+    props::{AttrValue, Attribute},
+    subscription::{EventClause, Sub, SubClause},
+};
 
 #[derive(Debug, Clone, Default)]
 struct UiSettings {
@@ -78,6 +83,36 @@ pub fn set_preset(preset: Preset) {
         .write()
         .expect("tuicore settings lock poisoned")
         .preset = preset;
+}
+
+pub fn animation_tick_subscription<ComponentId, UserEvent>(
+    id: ComponentId,
+) -> Sub<ComponentId, UserEvent>
+where
+    ComponentId: Eq + PartialEq + Clone + Hash,
+    UserEvent: Eq + PartialEq + Clone,
+{
+    Sub::new(
+        EventClause::Tick,
+        SubClause::and(
+            SubClause::IsMounted(id.clone()),
+            SubClause::not(SubClause::HasAttrValue(
+                id,
+                Attribute::Focus,
+                AttrValue::Flag(true),
+            )),
+        ),
+    )
+}
+
+pub fn animation_tick_subscriptions<ComponentId, UserEvent>(
+    id: ComponentId,
+) -> Vec<Sub<ComponentId, UserEvent>>
+where
+    ComponentId: Eq + PartialEq + Clone + Hash,
+    UserEvent: Eq + PartialEq + Clone,
+{
+    vec![animation_tick_subscription(id)]
 }
 
 fn settings() -> &'static RwLock<UiSettings> {

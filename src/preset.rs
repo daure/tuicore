@@ -2,7 +2,7 @@ use std::{fmt, fs, num::NonZeroU32, path::PathBuf, str::FromStr, time::Duration}
 
 use crate::animation::{AnimationSettings, Easing};
 use crate::keybindings::config_dir;
-use crate::scroll::{ScrollPreset, ScrollbarGutter, ScrollbarVisibility};
+use crate::scroll::{ScrollPreset, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabsVariant {
@@ -234,6 +234,15 @@ impl Preset {
             {
                 preset.scroll.gutter = gutter;
             }
+            if let Some(style) = scroll
+                .get("scrollbar_style")
+                .or_else(|| scroll.get("style"))
+                .and_then(toml::Value::as_str)
+                .map(parse_scrollbar_style)
+                .transpose()?
+            {
+                preset.scroll.style = style;
+            }
         }
 
         Ok(preset)
@@ -322,6 +331,19 @@ fn parse_scrollbar_gutter(value: &str) -> Result<ScrollbarGutter, PresetError> {
     }
 }
 
+fn parse_scrollbar_style(value: &str) -> Result<ScrollbarStyle, PresetError> {
+    match value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+        .as_str()
+    {
+        "thin_track" | "thin" => Ok(ScrollbarStyle::ThinTrack),
+        "thick_track" | "thick" => Ok(ScrollbarStyle::ThickTrack),
+        other => Err(PresetError(format!("Unknown scrollbar style `{other}`"))),
+    }
+}
+
 fn preset_path() -> Option<PathBuf> {
     config_dir().map(|path| path.join("tui.toml"))
 }
@@ -345,6 +367,7 @@ mod tests {
             vertical_scrollbar = "always"
             horizontal_scrollbar = "never"
             gutter = "overlay"
+            scrollbar_style = "thick_track"
             "#,
         )
         .expect("preset should parse");
@@ -355,6 +378,7 @@ mod tests {
         assert_eq!(scroll.vertical_scrollbar, ScrollbarVisibility::Always);
         assert_eq!(scroll.horizontal_scrollbar, ScrollbarVisibility::Never);
         assert_eq!(scroll.gutter, ScrollbarGutter::Overlay);
+        assert_eq!(scroll.style, ScrollbarStyle::ThickTrack);
         assert_eq!(preset.animation().max_dt, Duration::from_millis(1));
     }
 

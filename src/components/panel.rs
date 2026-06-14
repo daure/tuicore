@@ -12,19 +12,30 @@ use tuirealm::ratatui::widgets::{Block, Borders, Paragraph};
 use tuirealm::state::State;
 
 use crate::{
-    Animated, AnimationSettings, BorderKind, ScrollAxes, ScrollBehavior, ScrollDelta,
-    ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult,
-    border_set, line_width, paragraph_scroll, preset, theme,
+    Animated, AnimationSettings, AnimationSpec, BorderKind, ColorTween, ScrollAxes, ScrollBehavior,
+    ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize,
+    ScrollState, TickResult, animation_settings, border_chars, border_set, line_width,
+    paragraph_scroll, preset, theme,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelVariant {
+    #[default]
+    Standard,
+    InsetTitle,
+}
 
 #[derive(Debug, Clone)]
 pub struct Panel {
     top_left: Option<String>,
     top_right: Option<String>,
     border: Option<BorderKind>,
+    variant: PanelVariant,
     content: Vec<String>,
     scroll: Option<ScrollState>,
     focused: bool,
+    border_color: ColorTween,
+    title_color: ColorTween,
 }
 
 impl Default for Panel {
@@ -35,13 +46,17 @@ impl Default for Panel {
 
 impl Panel {
     pub fn new() -> Self {
+        let theme = theme();
         Self {
             top_left: None,
             top_right: None,
             border: None,
+            variant: PanelVariant::default(),
             content: Vec::new(),
             scroll: None,
             focused: false,
+            border_color: ColorTween::idle(theme.border_fg()),
+            title_color: ColorTween::idle(theme.muted_fg()),
         }
     }
 
@@ -60,6 +75,11 @@ impl Panel {
         self
     }
 
+    pub fn variant(mut self, variant: PanelVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
     pub fn content(mut self, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.content = lines.into_iter().map(Into::into).collect();
         self
@@ -67,6 +87,17 @@ impl Panel {
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        let theme = theme();
+        self.border_color.snap_to(if focused {
+            theme.accent_fg()
+        } else {
+            theme.border_fg()
+        });
+        self.title_color.snap_to(if focused {
+            theme.accent_fg()
+        } else {
+            theme.muted_fg()
+        });
         self
     }
 
@@ -183,12 +214,7 @@ impl Panel {
         }
 
         let border = self.border.unwrap_or_else(|| preset().border());
-        let theme = theme();
-        let border_style = Style::default().fg(if self.focused {
-            theme.accent_fg()
-        } else {
-            theme.border_fg()
-        });
+        let border_style = Style::default().fg(self.border_color.value());
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -197,7 +223,12 @@ impl Panel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        self.render_title(frame, area, self.top_left.as_deref(), Alignment::Left);
+        match self.variant {
+            PanelVariant::Standard => {
+                self.render_title(frame, area, self.top_left.as_deref(), Alignment::Left)
+            }
+            PanelVariant::InsetTitle => self.render_inset_title(frame, area, border),
+        }
         self.render_title(frame, area, self.top_right.as_deref(), Alignment::Right);
 
         if !inner.is_empty() {
@@ -255,27 +286,60 @@ impl Panel {
             Alignment::Center => area.x + area.width.saturating_sub(width) / 2,
             Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(2),
         };
-        let theme = theme();
         let style = Style::default()
-            .fg(if self.focused {
-                theme.accent_fg()
-            } else {
-                theme.muted_fg()
-            })
+            .fg(self.title_color.value())
             .add_modifier(Modifier::BOLD);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(title, style))),
             Rect::new(x, area.y, width, 1),
         );
     }
+
+    fn render_inset_title(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+        let Some(title) = self.top_left.as_deref() else {
+            return;
+        };
+        if area.width <= 4 {
+            return;
+        }
+
+        let chars = border_chars(border);
+        let border_style = Style::default().fg(self.border_color.value());
+        let title_style = Style::default().fg(self.title_color.value());
+        let title = bounded_title(title, area.width.saturating_sub(5) as usize);
+        let title_width = line_width(&Line::from(title.as_str())).min(area.width as usize);
+        if title_width == 0 {
+            return;
+        }
+
+        let fill_width = (area.width as usize).saturating_sub(4 + title_width);
+        let line = Line::from(vec![
+            Span::styled(chars.top_left, border_style),
+            Span::styled(chars.right_join, border_style),
+            Span::styled(title, title_style),
+            Span::styled(chars.left_join, border_style),
+            Span::styled(chars.horizontal.repeat(fill_width), border_style),
+            Span::styled(chars.top_right, border_style),
+        ]);
+
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+    }
 }
 
 impl Animated for Panel {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.scroll
+        let scroll = self
+            .scroll
             .as_mut()
             .map(|scroll| scroll.tick(dt, settings))
-            .unwrap_or(TickResult::IDLE)
+            .unwrap_or(TickResult::IDLE);
+
+        scroll
+            .merge(self.border_color.tick(dt, settings))
+            .merge(self.title_color.tick(dt, settings))
     }
 }
 
@@ -296,6 +360,7 @@ impl Component for Panel {
             && let AttrValue::Flag(focused) = value
         {
             self.focused = focused;
+            self.start_focus_color_transition(focused, animation_settings());
         }
     }
 
@@ -306,6 +371,34 @@ impl Component for Panel {
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
         CmdResult::Invalid(cmd)
     }
+}
+
+impl Panel {
+    fn start_focus_color_transition(&mut self, focused: bool, settings: AnimationSettings) {
+        let theme = theme();
+        self.border_color.start(
+            if focused {
+                theme.accent_fg()
+            } else {
+                theme.border_fg()
+            },
+            settings,
+            focus_color_animation(),
+        );
+        self.title_color.start(
+            if focused {
+                theme.accent_fg()
+            } else {
+                theme.muted_fg()
+            },
+            settings,
+            focus_color_animation(),
+        );
+    }
+}
+
+fn focus_color_animation() -> AnimationSpec {
+    AnimationSpec::default()
 }
 
 fn bounded_title(title: &str, max_width: usize) -> String {
@@ -385,7 +478,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
-    use crate::{ScrollbarConfig, ScrollbarGutter, ScrollbarVisibility};
+    use crate::{ScrollbarConfig, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility};
 
     use super::*;
 
@@ -397,6 +490,7 @@ mod tests {
                 vertical: ScrollbarVisibility::Always,
                 horizontal: ScrollbarVisibility::Always,
                 gutter: ScrollbarGutter::Reserve,
+                style: ScrollbarStyle::ThinTrack,
             }),
         );
         let mut terminal = Terminal::new(TestBackend::new(6, 4)).expect("terminal should build");
@@ -427,5 +521,50 @@ mod tests {
             panel.scroll.as_ref().unwrap().offset(),
             ScrollOffset::new(0, 0)
         );
+    }
+
+    #[test]
+    fn focus_changes_start_color_transitions() {
+        let mut panel = Panel::new().focused(true);
+
+        panel.attr(Attribute::Focus, AttrValue::Flag(false));
+
+        assert!(panel.border_color.is_active());
+        assert!(panel.title_color.is_active());
+    }
+
+    #[test]
+    fn focus_changes_snap_when_global_animations_are_disabled() {
+        let mut animation = AnimationSettings::default();
+        animation.enabled = false;
+
+        let mut panel = Panel::new().focused(true);
+        panel.start_focus_color_transition(false, animation);
+
+        let theme = theme();
+        assert_eq!(panel.border_color.value(), theme.border_fg());
+        assert_eq!(panel.title_color.value(), theme.muted_fg());
+        assert!(!panel.border_color.is_active());
+        assert!(!panel.title_color.is_active());
+    }
+
+    #[test]
+    fn inset_title_variant_embeds_title_in_top_border() {
+        let panel = Panel::new()
+            .top_left("Processes")
+            .border(BorderKind::Plain)
+            .variant(PanelVariant::InsetTitle)
+            .content(["✖ No processes running"]);
+        let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+
+        let buffer = terminal.backend().buffer();
+        let top = (0..24)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert_eq!(top, "┌┤ Processes ├─────────┐");
     }
 }

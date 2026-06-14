@@ -12,8 +12,8 @@ use tuirealm::ratatui::widgets::{Block, Borders, Paragraph};
 use tuirealm::state::State;
 
 use crate::{
-    Animated, AnimationSettings, AnimationSpec, BorderKind, TabsVariant, TickResult, Tween,
-    border_chars, border_set, line_width,
+    Animated, AnimationSettings, AnimationSpec, BorderKind, ColorTween, TabsVariant, TickResult,
+    Tween, border_chars, border_set, line_width,
     ui::{animation_settings, keybindings, preset, theme},
 };
 
@@ -61,6 +61,9 @@ where
     animation: Option<AnimationSpec>,
     focused: bool,
     transition: Tween,
+    border_color: ColorTween,
+    tab_color: ColorTween,
+    selected_color: ColorTween,
 }
 
 impl<Msg, UserEvent> Tabs<Msg, UserEvent>
@@ -69,6 +72,7 @@ where
     UserEvent: Eq + PartialEq + Clone + 'static,
 {
     pub fn new(tabs: Vec<Tab<Msg, UserEvent>>) -> Self {
+        let theme = theme();
         Self {
             tabs,
             selected: 0,
@@ -80,6 +84,9 @@ where
             animation: None,
             focused: false,
             transition: Tween::idle(1.0),
+            border_color: ColorTween::idle(theme.border_fg()),
+            tab_color: ColorTween::idle(theme.border_fg()),
+            selected_color: ColorTween::idle(theme.muted_fg()),
         }
     }
 
@@ -117,6 +124,7 @@ where
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self.snap_focus_colors(focused);
         self
     }
 
@@ -133,7 +141,9 @@ where
         let selected = self.clamp_selected(selected);
         if selected == current {
             self.selected = current;
-            self.previous_selected = current;
+            if !self.transition.is_active() {
+                self.previous_selected = current;
+            }
             return;
         }
 
@@ -177,6 +187,56 @@ where
 
     fn clamp_selected(&self, selected: usize) -> usize {
         selected.min(self.tabs.len().saturating_sub(1))
+    }
+
+    fn snap_focus_colors(&mut self, focused: bool) {
+        let theme = theme();
+        self.border_color.snap_to(if focused {
+            theme.accent_fg()
+        } else {
+            theme.border_fg()
+        });
+        self.tab_color.snap_to(if focused {
+            theme.muted_fg()
+        } else {
+            theme.border_fg()
+        });
+        self.selected_color.snap_to(if focused {
+            theme.accent_fg()
+        } else {
+            theme.muted_fg()
+        });
+    }
+
+    fn start_focus_color_transition(&mut self, focused: bool, settings: AnimationSettings) {
+        let theme = theme();
+        self.border_color.start(
+            if focused {
+                theme.accent_fg()
+            } else {
+                theme.border_fg()
+            },
+            settings,
+            focus_color_animation(),
+        );
+        self.tab_color.start(
+            if focused {
+                theme.muted_fg()
+            } else {
+                theme.border_fg()
+            },
+            settings,
+            focus_color_animation(),
+        );
+        self.selected_color.start(
+            if focused {
+                theme.accent_fg()
+            } else {
+                theme.muted_fg()
+            },
+            settings,
+            focus_color_animation(),
+        );
     }
 }
 
@@ -318,7 +378,11 @@ where
         if attr == Attribute::Focus
             && let AttrValue::Flag(focused) = value
         {
+            if !focused {
+                self.transition.snap_to_end();
+            }
             self.focused = focused;
+            self.start_focus_color_transition(focused, animation_settings());
         }
     }
 
@@ -655,41 +719,21 @@ where
     }
 
     fn border_style(&self) -> Style {
-        let theme = theme();
-        Style::default().fg(if self.focused {
-            theme.accent_fg()
-        } else {
-            theme.border_fg()
-        })
+        Style::default().fg(self.border_color.value())
     }
 
     fn tab_style(&self) -> Style {
-        let theme = theme();
-        Style::default().fg(if self.focused {
-            theme.muted_fg()
-        } else {
-            theme.border_fg()
-        })
+        Style::default().fg(self.tab_color.value())
     }
 
     fn selected_tab_style(&self) -> Style {
-        let theme = theme();
         Style::default()
-            .fg(if self.focused {
-                theme.accent_fg()
-            } else {
-                theme.muted_fg()
-            })
+            .fg(self.selected_color.value())
             .add_modifier(Modifier::BOLD)
     }
 
     fn selected_underline_style(&self) -> Style {
-        let theme = theme();
-        Style::default().fg(if self.focused {
-            theme.accent_fg()
-        } else {
-            theme.muted_fg()
-        })
+        Style::default().fg(self.selected_color.value())
     }
 }
 
@@ -723,8 +767,16 @@ where
     UserEvent: Eq + PartialEq + Clone + 'static,
 {
     fn tick(&mut self, dt: Duration, settings: crate::AnimationSettings) -> TickResult {
-        self.transition.tick(dt, settings)
+        self.transition
+            .tick(dt, settings)
+            .merge(self.border_color.tick(dt, settings))
+            .merge(self.tab_color.tick(dt, settings))
+            .merge(self.selected_color.tick(dt, settings))
     }
+}
+
+fn focus_color_animation() -> AnimationSpec {
+    AnimationSpec::default()
 }
 
 fn lerp(from: f64, to: f64, progress: f64) -> f64 {
@@ -802,5 +854,41 @@ mod tests {
         assert_eq!(tabs.selected_index(), 1);
         assert!(tabs.transition.is_active());
         assert_eq!(tabs.transition.duration(), Duration::from_millis(42));
+    }
+
+    #[test]
+    fn losing_focus_finishes_active_transition() {
+        let mut tabs = Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
+
+        tabs.select_index_with_settings(1, AnimationSettings::default());
+        tabs.attr(Attribute::Focus, AttrValue::Flag(false));
+
+        assert_eq!(tabs.selected_index(), 1);
+        assert!(!tabs.transition.is_active());
+        assert_eq!(tabs.transition.progress(), 1.0);
+    }
+
+    #[test]
+    fn focus_changes_start_color_transitions() {
+        let mut tabs =
+            Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).focused(true);
+
+        tabs.attr(Attribute::Focus, AttrValue::Flag(false));
+
+        assert!(tabs.border_color.is_active());
+        assert!(tabs.tab_color.is_active());
+        assert!(tabs.selected_color.is_active());
+    }
+
+    #[test]
+    fn repeated_select_of_current_tab_preserves_active_transition_origin() {
+        let mut tabs = Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
+
+        tabs.select_index_with_settings(1, AnimationSettings::default());
+        tabs.select_index_with_settings(1, AnimationSettings::default());
+
+        assert_eq!(tabs.previous_selected, 0);
+        assert_eq!(tabs.selected_index(), 1);
+        assert!(tabs.transition.is_active());
     }
 }
