@@ -349,6 +349,13 @@ where
             vec![id.clone()]
         } else {
             descendants
+                .into_iter()
+                .filter(|descendant| {
+                    descendants_by_id
+                        .get(descendant)
+                        .is_none_or(|children| children.is_empty())
+                })
+                .collect()
         }
     }
 

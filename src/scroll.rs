@@ -8,7 +8,7 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use tuirealm::event::KeyEvent;
 
 use crate::animation::{
-    Animated, AnimationSettings, AnimationSpec, Easing, ResolvedAnimationSpec, TickResult, Tween,
+    Animated, AnimationSettings, AnimationSpec, ResolvedAnimationSpec, ScrollAnimator, TickResult,
 };
 use crate::{theme, ui::keybindings};
 
@@ -24,7 +24,7 @@ pub struct ScrollState {
 #[derive(Debug, Clone)]
 struct AxisScroll {
     target: usize,
-    tween: Tween,
+    animator: ScrollAnimator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -590,18 +590,18 @@ impl Default for AxisScroll {
     fn default() -> Self {
         Self {
             target: 0,
-            tween: Tween::idle(0.0),
+            animator: ScrollAnimator::new(0.0),
         }
     }
 }
 
 impl AxisScroll {
     fn offset(&self) -> usize {
-        self.tween.value().max(0.0).round() as usize
+        self.animator.current().max(0.0).round() as usize
     }
 
     fn is_active(&self) -> bool {
-        self.tween.is_active()
+        (self.animator.current() - self.target as f64).abs() >= 0.5
     }
 
     fn start_to(&mut self, target: usize, spec: ResolvedAnimationSpec) -> bool {
@@ -611,24 +611,20 @@ impl AxisScroll {
         }
 
         self.target = target;
-        let from = self.tween.value().max(0.0);
 
         if !spec.enabled || spec.duration.is_zero() {
-            self.tween
-                .start(target as f64, target as f64, Duration::ZERO, spec.easing);
+            self.animator.snap_to(target as f64);
             return true;
         }
 
-        self.tween
-            .start(from, target as f64, spec.duration, spec.easing);
+        self.animator.set_target(target as f64);
         true
     }
 
     fn snap_to(&mut self, target: usize) -> bool {
         let changed = self.target != target || self.offset() != target || self.is_active();
         self.target = target;
-        self.tween
-            .start(target as f64, target as f64, Duration::ZERO, Easing::Linear);
+        self.animator.snap_to(target as f64);
         changed
     }
 
@@ -648,10 +644,10 @@ impl AxisScroll {
             };
         }
 
-        let _tick = self.tween.tick(dt, settings);
+        let _tick = self.animator.tick(dt, settings);
         TickResult {
             changed: before_offset != self.offset(),
-            active: self.tween.is_active(),
+            active: self.is_active(),
         }
     }
 }

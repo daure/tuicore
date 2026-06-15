@@ -55,9 +55,10 @@ where
             );
             let highlighted = line_index == self.highlighted;
             let row_style = self.row_style(highlighted, row, &selection_descendants);
-            if let Some(style) = row_style {
-                frame.render_widget(Block::default().style(style), row_area);
-            }
+            frame.render_widget(
+                Block::default().style(row_style.unwrap_or_default()),
+                row_area,
+            );
             self.render_row(
                 frame,
                 row_area,

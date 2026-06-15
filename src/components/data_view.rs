@@ -625,16 +625,7 @@ where
     ) -> ScrollOutcome {
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
-        let current = self.scroll.target_offset().y;
-        let target = if self.highlighted < current {
-            self.highlighted
-        } else if self.highlighted >= current.saturating_add(viewport_height) {
-            self.highlighted
-                .saturating_add(1)
-                .saturating_sub(viewport_height)
-        } else {
-            current
-        };
+        let target = self.highlighted.saturating_sub(viewport_height / 2);
         self.scroll.scroll_to(
             ScrollOffset::new(self.scroll.target_offset().x, target),
             geometry.viewport,

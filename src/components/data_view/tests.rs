@@ -346,6 +346,31 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
 }
 
 #[test]
+fn previous_highlight_background_is_cleared_after_navigation() {
+    let mut view = DataView::list(
+        [Row::new(1, "first"), Row::new(2, "second")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 2)))
+        .expect("data view should render");
+    view.highlighted = 1;
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 2)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let old_highlight_cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    let current_highlight_cell = terminal.backend().buffer().cell((0, 1)).unwrap();
+    assert_ne!(old_highlight_cell.bg, theme.highlight_bg());
+    assert_eq!(current_highlight_cell.bg, theme.highlight_bg());
+}
+
+#[test]
 fn inactive_highlight_does_not_style_row() {
     let view = DataView::list(
         [Row::new(1, "selected")],
@@ -490,6 +515,100 @@ fn page_change_clamps_scroll_target_to_new_page() {
 
     assert_eq!(view.highlighted, 2);
     assert_eq!(view.scroll.target_offset().y, 0);
+}
+
+#[test]
+fn navigation_scrolls_when_highlight_passes_viewport_middle() {
+    let mut view = DataView::list(
+        (0..20).map(Row::flat).collect::<Vec<_>>(),
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let area = Rect::new(0, 0, 20, 5);
+
+    for _ in 0..3 {
+        let _ = view.on_key_with_settings(
+            KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+            settings,
+        );
+    }
+
+    assert_eq!(view.highlighted, 3);
+    assert_eq!(view.scroll.target_offset().y, 1);
+    assert_eq!(view.scroll.offset().y, 1);
+}
+
+#[test]
+fn navigation_scrolls_up_when_highlight_moves_above_viewport_middle() {
+    let mut view = DataView::list(
+        (0..20).map(Row::flat).collect::<Vec<_>>(),
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let area = Rect::new(0, 0, 20, 5);
+
+    for _ in 0..8 {
+        let _ = view.on_key_with_settings(
+            KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+            settings,
+        );
+    }
+    assert_eq!(view.scroll.target_offset().y, 6);
+
+    let _ = view.on_key_with_settings(
+        KeyEvent {
+            code: Key::Up,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        settings,
+    );
+
+    assert_eq!(view.highlighted, 7);
+    assert_eq!(view.scroll.target_offset().y, 5);
+    assert_eq!(view.scroll.offset().y, 5);
+}
+
+#[test]
+fn held_navigation_advances_scroll_animation_before_key_repeat_stops() {
+    let mut view = DataView::list(
+        (0..40).map(Row::flat).collect::<Vec<_>>(),
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let settings = AnimationSettings::default();
+    let area = Rect::new(0, 0, 20, 5);
+
+    for _ in 0..8 {
+        let _ = view.on_key_with_settings(
+            KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+            settings,
+        );
+        let _ = view.tick(settings.frame_duration(), settings);
+    }
+
+    assert_eq!(view.highlighted, 8);
+    assert_eq!(view.scroll.target_offset().y, 6);
+    assert!(
+        view.scroll.offset().y >= 2,
+        "scroll offset should advance while navigation key is still repeating"
+    );
 }
 
 #[test]
@@ -977,6 +1096,33 @@ fn cascade_check_state_uses_descendants_for_non_leaf_rows() {
         .selected([4]);
 
     assert_eq!(partial.check_state(&2), CheckState::Indeterminate);
+}
+
+#[test]
+fn cascade_parent_is_checked_when_all_section_descendants_are_selected() {
+    let mut view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .expanded([1, 2, 3]);
+
+    assert!(view.toggle_selected(2));
+    assert!(view.toggle_selected(3));
+
+    assert_eq!(view.selected_ids(), vec![2, 3, 4, 5, 6, 7]);
+    assert_eq!(view.check_state(&1), CheckState::Checked);
+}
+
+#[test]
+fn cascade_parent_is_checked_when_all_leaf_descendants_are_selected() {
+    let view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .selected([4, 5, 6, 7]);
+
+    assert_eq!(view.selected_ids(), vec![4, 5, 6, 7]);
+    assert_eq!(view.check_state(&2), CheckState::Checked);
+    assert_eq!(view.check_state(&3), CheckState::Checked);
+    assert_eq!(view.check_state(&1), CheckState::Checked);
 }
 
 #[test]
