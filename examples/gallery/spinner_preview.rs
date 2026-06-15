@@ -9,7 +9,7 @@ use tuirealm::ratatui::text::{Line, Span};
 use tuirealm::ratatui::widgets::Paragraph;
 use tuirealm::state::State;
 
-use crate::shared::Msg;
+use crate::shared::{Msg, focus_list_key};
 
 pub struct SpinnerPreview {
     spinner: Spinner,
@@ -21,7 +21,7 @@ impl SpinnerPreview {
     pub fn new() -> Self {
         Self {
             spinner: Spinner::new(),
-            panel: Panel::new(),
+            panel: Panel::new().top_left("Spinner"),
             event_area: Rect::default(),
         }
     }
@@ -98,10 +98,7 @@ impl AppComponent<Msg, NoUserEvent> for SpinnerPreview {
                 code: Key::Char('q'),
                 ..
             }) => Some(Msg::Quit),
-            Event::Keyboard(KeyEvent {
-                code: Key::Tab | Key::BackTab,
-                ..
-            }) => Some(Msg::FocusList),
+            Event::Keyboard(key) if focus_list_key(*key) => Some(Msg::FocusList),
             Event::Keyboard(key) => self
                 .panel
                 .on_key(*key, self.event_area, tuicore::animation_settings())

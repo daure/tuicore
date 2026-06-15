@@ -7,6 +7,8 @@ use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalAdapter};
 
 #[path = "gallery/component_list.rs"]
 mod component_list;
+#[path = "gallery/data_view_preview.rs"]
+mod data_view_preview;
 #[path = "gallery/panel_preview.rs"]
 mod panel_preview;
 #[path = "gallery/scroll_preview.rs"]
@@ -19,12 +21,13 @@ mod spinner_preview;
 mod tabs_preview;
 
 use component_list::ComponentList;
+use data_view_preview::{DataViewMode, DataViewPreview};
 use panel_preview::PanelPreview;
 use scroll_preview::AnimatedScrollPreview;
 use shared::{ComponentKind, Id, Msg};
 use spinner_preview::SpinnerPreview;
 use tabs_preview::TabsPreview;
-use tuicore::TuicoreApp;
+use tuicore::{FocusOutcome, FocusRouter, FocusWrap, TuicoreApp};
 use tuirealm::event::NoUserEvent;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -51,9 +54,18 @@ struct Model {
     app: TuicoreApp<Id, Msg, NoUserEvent>,
     terminal: CrosstermTerminalAdapter,
     selected: ComponentKind,
+    focus: FocusRouter<GalleryFocus>,
     quit: bool,
     redraw: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GalleryFocus {
+    ComponentList,
+    Preview,
+}
+
+const GALLERY_FOCUS_ORDER: [GalleryFocus; 2] = [GalleryFocus::ComponentList, GalleryFocus::Preview];
 
 impl Model {
     fn new() -> Result<Self, Box<dyn Error>> {
@@ -66,6 +78,16 @@ impl Model {
         app.mount(Id::Panel, PanelPreview::new())?;
         app.mount(Id::ScrollAnimated, AnimatedScrollPreview::new())?;
         app.mount(Id::Spinner, SpinnerPreview::new())?;
+        app.mount(Id::DataViewList, DataViewPreview::new(DataViewMode::List))?;
+        app.mount(Id::DataViewTable, DataViewPreview::new(DataViewMode::Table))?;
+        app.mount(
+            Id::DataViewListTree,
+            DataViewPreview::new(DataViewMode::ListTree),
+        )?;
+        app.mount(
+            Id::DataViewTableTree,
+            DataViewPreview::new(DataViewMode::TableTree),
+        )?;
         app.active(&Id::ComponentList)?;
 
         let mut terminal = CrosstermTerminalAdapter::new()?;
@@ -76,6 +98,7 @@ impl Model {
             app,
             terminal,
             selected: ComponentKind::Tabs,
+            focus: FocusRouter::try_new(GALLERY_FOCUS_ORDER)?.with_wrap(FocusWrap::Wrap),
             quit: false,
             redraw: true,
         })
@@ -106,7 +129,16 @@ impl Model {
             Attribute::Height,
             AttrValue::Size(list_inner.height),
         )?;
-        for id in [Id::Tabs, Id::Panel, Id::ScrollAnimated, Id::Spinner] {
+        for id in [
+            Id::Tabs,
+            Id::Panel,
+            Id::ScrollAnimated,
+            Id::Spinner,
+            Id::DataViewList,
+            Id::DataViewTable,
+            Id::DataViewListTree,
+            Id::DataViewTableTree,
+        ] {
             self.app
                 .attr(&id, Attribute::Width, AttrValue::Size(preview.width))?;
             self.app
@@ -126,12 +158,36 @@ impl Model {
         self.redraw = true;
         match msg {
             Msg::Quit => self.quit = true,
-            Msg::FocusList => self.app.active(&Id::ComponentList)?,
-            Msg::FocusPreview => self.app.active(&self.selected.preview_id())?,
+            Msg::FocusNext => self.focus_next()?,
+            Msg::FocusPrevious => self.focus_previous()?,
+            Msg::FocusList => self.activate_focus(GalleryFocus::ComponentList)?,
             Msg::Selected(component) => self.selected = component,
             Msg::Redraw => {}
         }
 
+        Ok(())
+    }
+
+    fn focus_next(&mut self) -> Result<(), Box<dyn Error>> {
+        if let FocusOutcome::Moved { to, .. } = self.focus.focus_next() {
+            self.activate_focus(to)?;
+        }
+        Ok(())
+    }
+
+    fn focus_previous(&mut self) -> Result<(), Box<dyn Error>> {
+        if let FocusOutcome::Moved { to, .. } = self.focus.focus_previous() {
+            self.activate_focus(to)?;
+        }
+        Ok(())
+    }
+
+    fn activate_focus(&mut self, focus: GalleryFocus) -> Result<(), Box<dyn Error>> {
+        let _ = self.focus.focus(&focus);
+        match focus {
+            GalleryFocus::ComponentList => self.app.active(&Id::ComponentList)?,
+            GalleryFocus::Preview => self.app.active(&self.selected.preview_id())?,
+        }
         Ok(())
     }
 }

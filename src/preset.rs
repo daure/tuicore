@@ -62,6 +62,7 @@ impl FromStr for TabsVariant {
 pub struct Preset {
     border: BorderKind,
     tabs: TabsPreset,
+    data_view: DataViewPreset,
     scroll: ScrollPreset,
     animation: AnimationSettings,
 }
@@ -72,11 +73,24 @@ pub struct TabsPreset {
     bordered: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataViewPreset {
+    tree_indent_width: usize,
+}
+
 impl Default for TabsPreset {
     fn default() -> Self {
         Self {
             variant: TabsVariant::default(),
             bordered: true,
+        }
+    }
+}
+
+impl Default for DataViewPreset {
+    fn default() -> Self {
+        Self {
+            tree_indent_width: 2,
         }
     }
 }
@@ -93,6 +107,11 @@ impl Preset {
 
     pub fn with_tabs(mut self, tabs: TabsPreset) -> Self {
         self.tabs = tabs;
+        self
+    }
+
+    pub fn with_data_view(mut self, data_view: DataViewPreset) -> Self {
+        self.data_view = data_view;
         self
     }
 
@@ -153,6 +172,16 @@ impl Preset {
             .and_then(toml::Value::as_bool)
         {
             preset.tabs.bordered = value;
+        }
+
+        if let Some(value) = file
+            .get("preset")
+            .and_then(|section| section.get("data_view"))
+            .and_then(|section| section.get("tree_indent_width"))
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| usize::try_from(value).ok())
+        {
+            preset.data_view.tree_indent_width = value;
         }
 
         if let Some(animation) = file
@@ -256,6 +285,10 @@ impl Preset {
         &self.tabs
     }
 
+    pub fn data_view(&self) -> DataViewPreset {
+        self.data_view
+    }
+
     pub fn scroll(&self) -> ScrollPreset {
         self.scroll
     }
@@ -286,6 +319,21 @@ impl TabsPreset {
 
     pub fn bordered(&self) -> bool {
         self.bordered
+    }
+}
+
+impl DataViewPreset {
+    pub fn new(tree_indent_width: usize) -> Self {
+        Self { tree_indent_width }
+    }
+
+    pub fn with_tree_indent_width(mut self, tree_indent_width: usize) -> Self {
+        self.tree_indent_width = tree_indent_width;
+        self
+    }
+
+    pub fn tree_indent_width(&self) -> usize {
+        self.tree_indent_width
     }
 }
 
@@ -368,6 +416,9 @@ mod tests {
             horizontal_scrollbar = "never"
             gutter = "overlay"
             scrollbar_style = "thick_track"
+
+            [preset.data_view]
+            tree_indent_width = 3
             "#,
         )
         .expect("preset should parse");
@@ -379,6 +430,7 @@ mod tests {
         assert_eq!(scroll.horizontal_scrollbar, ScrollbarVisibility::Never);
         assert_eq!(scroll.gutter, ScrollbarGutter::Overlay);
         assert_eq!(scroll.style, ScrollbarStyle::ThickTrack);
+        assert_eq!(preset.data_view().tree_indent_width(), 3);
         assert_eq!(preset.animation().max_dt, Duration::from_millis(1));
     }
 
@@ -391,15 +443,18 @@ mod tests {
             ..ScrollPreset::default()
         };
         let tabs = TabsPreset::new(TabsVariant::Underline, false);
+        let data_view = DataViewPreset::new(4);
 
         let preset = Preset::new()
             .with_border(BorderKind::Double)
             .with_tabs(tabs.clone())
+            .with_data_view(data_view)
             .with_scroll(scroll)
             .with_animation(animation);
 
         assert_eq!(preset.border(), BorderKind::Double);
         assert_eq!(preset.tabs(), &tabs);
+        assert_eq!(preset.data_view(), data_view);
         assert_eq!(preset.scroll().line_step, 4);
         assert!(!preset.animation().enabled);
     }

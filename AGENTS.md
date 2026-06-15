@@ -3,17 +3,19 @@
 - Library-first Rust TUI crate. Examples live in `examples/`; reusable code lives in `src/`.
 - Core stack: `ratatui` + `tuirealm`. Components should remain usable by downstream apps.
 - Keep APIs small, composable, and Rust-idiomatic. Prefer explicit state ownership over magic.
+- Project/library depends on Nerd Font. When an icon is needed, search/use Nerd Font first, then ASCII fallback if needed.
 - Render purity: input/update starts animations, `tick(dt)` advances, `view/render` only reads state.
-- Cross-cutting concerns:
+- Consumer ergonomics: hide ratatui/tuirealm plumbing where possible. Components own scroll/animation/theme behavior; app helpers wire ticks, focus, and subscriptions so common usage stays declarative.
+- Component ergonomics: components should hide internal ratatui/tuirealm machinery, apply global presets by default, and expose small Rust builder/config APIs for overrides instead of forcing app code to wire internals.
+- Cross-cutting primitives live in `src/` and should be reused before adding component-local behavior:
   - Theme = semantic colors only; components use roles from `theme()`.
+  - Color discipline: no raw colors in components; every intentional fg/bg/border color comes from semantic `Theme` roles. Default terminal colors are OK only when intentionally inherited.
   - Preset = structural defaults: borders, tabs, scroll, animation.
   - Keybindings = configurable behavior keys; do not hardcode when a binding exists.
   - Animation = global defaults + optional component override; global disabled is kill switch.
   - Borders = shared `BorderKind` and helpers.
+  - Focus = reusable `FocusChain` / `FocusRouter`; apps own focus topology, components expose focus state and consume focus attrs.
   - Scrolling = reusable `ScrollState`; smooth offset animation only, no stagger/per-row delay.
-- Components so far:
-  - `Tabs`: reusable tab container with variants, borders, focus styling, animated transitions.
-  - `Panel`: bordered container with left/right title slots and optional scrollable text content.
-  - `ScrollState`: reusable vertical/horizontal scroll state, layout, key handling, scrollbars.
+- Components live in `src/components/`; treat that directory as the source of truth instead of maintaining a manual component inventory here.
 - Avoid half APIs: public config should be constructible in Rust, not only via TOML.
 - Keep gallery demos honest: use real components/patterns consumers should copy.

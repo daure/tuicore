@@ -1,4 +1,4 @@
-use tuicore::{Animated, FocusChain, Panel, Tabs, TabsVariant};
+use tuicore::{Animated, FocusOutcome, FocusRouter, Panel, Tabs, TabsVariant};
 use tuirealm::command::{Cmd, CmdResult};
 use tuirealm::component::{AppComponent, Component};
 use tuirealm::event::{Event, Key, KeyEvent, NoUserEvent};
@@ -15,7 +15,7 @@ pub struct TabsPreview {
     minimal: Tabs<Msg, NoUserEvent>,
     underline: Tabs<Msg, NoUserEvent>,
     boxed: Tabs<Msg, NoUserEvent>,
-    focus: FocusChain<TabsFocus>,
+    focus: FocusRouter<TabsFocus>,
     app_focused: bool,
 }
 
@@ -37,11 +37,11 @@ const TABS_FOCUS_ORDER: [TabsFocus; 4] = [
 impl TabsPreview {
     pub fn new() -> Self {
         Self {
-            panel: Panel::new(),
+            panel: Panel::new().top_left("Tabs"),
             minimal: Tabs::default().variant(TabsVariant::Minimal),
             underline: Tabs::default().variant(TabsVariant::Underline),
             boxed: Tabs::default().variant(TabsVariant::Boxed),
-            focus: FocusChain::new(TabsFocus::Outer),
+            focus: FocusRouter::try_new(TABS_FOCUS_ORDER).expect("tabs focus order is valid"),
             app_focused: false,
         }
     }
@@ -57,28 +57,19 @@ impl TabsPreview {
             .areas(area)
     }
 
-    fn focus_next(&mut self) -> Option<Msg> {
-        self.focus
-            .next(&TABS_FOCUS_ORDER)
-            .map(|_| {
+    fn handle_focus_key(&mut self, key: KeyEvent) -> Option<Msg> {
+        match self.focus.on_key(key) {
+            FocusOutcome::Moved { .. } => {
                 self.sync_focus();
-                Msg::Redraw
-            })
-            .or(Some(Msg::FocusList))
-    }
-
-    fn focus_previous(&mut self) -> Option<Msg> {
-        self.focus
-            .previous(&TABS_FOCUS_ORDER)
-            .map(|_| {
-                self.sync_focus();
-                Msg::Redraw
-            })
-            .or(Some(Msg::FocusList))
+                Some(Msg::Redraw)
+            }
+            FocusOutcome::Boundary { .. } => Some(Msg::FocusList),
+            FocusOutcome::Ignored => None,
+        }
     }
 
     fn sync_focus(&mut self) {
-        let focus = self.focus.current();
+        let focus = *self.focus.current();
         self.panel
             .attr(Attribute::Focus, AttrValue::Flag(focus == TabsFocus::Outer));
         self.minimal.attr(
@@ -138,7 +129,7 @@ impl Component for TabsPreview {
         match (attr, value) {
             (Attribute::Focus, AttrValue::Flag(true)) => {
                 self.app_focused = true;
-                self.focus.reset(TabsFocus::Outer);
+                let _ = self.focus.focus(&TabsFocus::Outer);
                 self.sync_focus();
             }
             (Attribute::Focus, AttrValue::Flag(false)) => {
@@ -178,10 +169,6 @@ impl AppComponent<Msg, NoUserEvent> for TabsPreview {
                 code: Key::Char('q'),
                 ..
             }) => Some(Msg::Quit),
-            Event::Keyboard(KeyEvent { code: Key::Tab, .. }) => self.focus_next(),
-            Event::Keyboard(KeyEvent {
-                code: Key::BackTab, ..
-            }) => self.focus_previous(),
             Event::Tick => {
                 let settings = tuicore::animation_settings();
                 let dt = settings.frame_duration();
@@ -193,6 +180,10 @@ impl AppComponent<Msg, NoUserEvent> for TabsPreview {
                     .merge(self.boxed.tick(dt, settings));
                 (tick.changed || tick.active).then_some(Msg::Redraw)
             }
+            Event::Keyboard(key) => self
+                .handle_focus_key(*key)
+                .or_else(|| self.focused_tabs_on(event))
+                .or(Some(Msg::Redraw)),
             _ => self.focused_tabs_on(event).or(Some(Msg::Redraw)),
         }
     }

@@ -1,4 +1,4 @@
-use tuicore::{Animated, BorderKind, FocusChain, Panel, PanelVariant};
+use tuicore::{Animated, BorderKind, FocusOutcome, FocusRouter, Panel, PanelVariant};
 use tuirealm::command::{Cmd, CmdResult};
 use tuirealm::component::{AppComponent, Component};
 use tuirealm::event::{Event, Key, KeyEvent, NoUserEvent};
@@ -17,7 +17,7 @@ pub struct PanelPreview {
     both_titles: Panel,
     standard: Panel,
     inset: Panel,
-    focus: FocusChain<PanelFocus>,
+    focus: FocusRouter<PanelFocus>,
     app_focused: bool,
 }
 
@@ -45,8 +45,8 @@ const PANEL_FOCUS_ORDER: [PanelFocus; 7] = [
 impl PanelPreview {
     pub fn new() -> Self {
         Self {
-            panel: Panel::new(),
-            no_title: Panel::new().content(["No title", "Outer gallery panel is titleless too."]),
+            panel: Panel::new().top_left("Panels"),
+            no_title: Panel::new().content(["No title", "Panels can still render titleless."]),
             left_title: Panel::new()
                 .top_left("Left")
                 .content(["Top-left title slot"]),
@@ -66,7 +66,7 @@ impl PanelPreview {
                 .border(BorderKind::Plain)
                 .variant(PanelVariant::InsetTitle)
                 .content(["✖ No processes running"]),
-            focus: FocusChain::new(PanelFocus::Outer),
+            focus: FocusRouter::try_new(PANEL_FOCUS_ORDER).expect("panel focus order is valid"),
             app_focused: false,
         }
     }
@@ -96,28 +96,19 @@ impl PanelPreview {
         self.inset.render(frame, bottom[1]);
     }
 
-    fn focus_next(&mut self) -> Option<Msg> {
-        self.focus
-            .next(&PANEL_FOCUS_ORDER)
-            .map(|_| {
+    fn handle_focus_key(&mut self, key: KeyEvent) -> Option<Msg> {
+        match self.focus.on_key(key) {
+            FocusOutcome::Moved { .. } => {
                 self.sync_focus();
-                Msg::Redraw
-            })
-            .or(Some(Msg::FocusList))
-    }
-
-    fn focus_previous(&mut self) -> Option<Msg> {
-        self.focus
-            .previous(&PANEL_FOCUS_ORDER)
-            .map(|_| {
-                self.sync_focus();
-                Msg::Redraw
-            })
-            .or(Some(Msg::FocusList))
+                Some(Msg::Redraw)
+            }
+            FocusOutcome::Boundary { .. } => Some(Msg::FocusList),
+            FocusOutcome::Ignored => None,
+        }
     }
 
     fn sync_focus(&mut self) {
-        let focus = self.focus.current();
+        let focus = *self.focus.current();
         self.panel.attr(
             Attribute::Focus,
             AttrValue::Flag(focus == PanelFocus::Outer),
@@ -179,7 +170,7 @@ impl Component for PanelPreview {
         match (attr, value) {
             (Attribute::Focus, AttrValue::Flag(true)) => {
                 self.app_focused = true;
-                self.focus.reset(PanelFocus::Outer);
+                let _ = self.focus.focus(&PanelFocus::Outer);
                 self.sync_focus();
             }
             (Attribute::Focus, AttrValue::Flag(false)) => {
@@ -207,10 +198,6 @@ impl AppComponent<Msg, NoUserEvent> for PanelPreview {
                 code: Key::Char('q'),
                 ..
             }) => Some(Msg::Quit),
-            Event::Keyboard(KeyEvent { code: Key::Tab, .. }) => self.focus_next(),
-            Event::Keyboard(KeyEvent {
-                code: Key::BackTab, ..
-            }) => self.focus_previous(),
             Event::Tick => {
                 let settings = tuicore::animation_settings();
                 let dt = settings.frame_duration();
@@ -225,6 +212,7 @@ impl AppComponent<Msg, NoUserEvent> for PanelPreview {
                     .changed
                     .then_some(Msg::Redraw)
             }
+            Event::Keyboard(key) => self.handle_focus_key(*key).or(Some(Msg::Redraw)),
             _ => Some(Msg::Redraw),
         }
     }

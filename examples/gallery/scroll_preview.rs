@@ -15,7 +15,7 @@ use tuirealm::ratatui::text::{Line, Span};
 use tuirealm::ratatui::widgets::Paragraph;
 use tuirealm::state::State;
 
-use crate::shared::{ComponentKind, Msg};
+use crate::shared::{ComponentKind, Msg, focus_list_key};
 
 pub struct AnimatedScrollPreview {
     scroll: ScrollState,
@@ -84,7 +84,7 @@ impl AnimatedScrollPreview {
 impl Component for AnimatedScrollPreview {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let panel = Panel::new()
-            .top_left("ScrollState")
+            .top_left("Scroll: animated")
             .top_right("animated demo")
             .focused(self.focused);
         panel.render(frame, area);
@@ -155,10 +155,7 @@ impl AppComponent<Msg, NoUserEvent> for AnimatedScrollPreview {
                 code: Key::Char('q'),
                 ..
             }) => Some(Msg::Quit),
-            Event::Keyboard(KeyEvent {
-                code: Key::Tab | Key::BackTab,
-                ..
-            }) => Some(Msg::FocusList),
+            Event::Keyboard(key) if focus_list_key(*key) => Some(Msg::FocusList),
             Event::Keyboard(key) => {
                 let bindings = tuicore::keybindings();
                 let viewport = self.event_viewport();

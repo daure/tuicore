@@ -5,7 +5,9 @@ use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
     nav: NavKeyBindings,
+    focus: FocusKeyBindings,
     tabs: TabsKeyBindings,
+    data_view: DataViewKeyBindings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,20 +23,44 @@ pub struct NavKeyBindings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusKeyBindings {
+    next: Vec<KeySpec>,
+    previous: Vec<KeySpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabsKeyBindings {
     previous: KeySpec,
     next: KeySpec,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataViewKeyBindings {
+    activate: Vec<KeySpec>,
+    toggle_expansion: Vec<KeySpec>,
+    next_page: Vec<KeySpec>,
+    previous_page: Vec<KeySpec>,
+    collapse_all: Vec<KeySpec>,
+    expand_all: Vec<KeySpec>,
+    top_prefix: Vec<KeySpec>,
+    bottom: Vec<KeySpec>,
+}
+
 impl Default for NavKeyBindings {
     fn default() -> Self {
         Self {
-            line_up: vec![KeySpec::key(Key::Up)],
-            line_down: vec![KeySpec::key(Key::Down)],
-            line_left: vec![KeySpec::key(Key::Left)],
-            line_right: vec![KeySpec::key(Key::Right)],
-            page_up: vec![KeySpec::key(Key::PageUp)],
-            page_down: vec![KeySpec::key(Key::PageDown)],
+            line_up: vec![KeySpec::key(Key::Up), KeySpec::plain('k')],
+            line_down: vec![KeySpec::key(Key::Down), KeySpec::plain('j')],
+            line_left: vec![KeySpec::key(Key::Left), KeySpec::plain('h')],
+            line_right: vec![KeySpec::key(Key::Right), KeySpec::plain('l')],
+            page_up: vec![
+                KeySpec::key(Key::PageUp),
+                KeySpec::key_with_modifiers(Key::Char('u'), KeyModifiers::CONTROL),
+            ],
+            page_down: vec![
+                KeySpec::key(Key::PageDown),
+                KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::CONTROL),
+            ],
             home: vec![KeySpec::key(Key::Home)],
             end: vec![KeySpec::key(Key::End)],
         }
@@ -50,11 +76,37 @@ impl Default for TabsKeyBindings {
     }
 }
 
+impl Default for FocusKeyBindings {
+    fn default() -> Self {
+        Self {
+            next: vec![KeySpec::key(Key::Tab)],
+            previous: vec![KeySpec::key(Key::BackTab)],
+        }
+    }
+}
+
+impl Default for DataViewKeyBindings {
+    fn default() -> Self {
+        Self {
+            activate: vec![KeySpec::key(Key::Enter)],
+            toggle_expansion: vec![KeySpec::plain(' ')],
+            next_page: vec![KeySpec::plain('n')],
+            previous_page: vec![KeySpec::plain('p')],
+            collapse_all: vec![KeySpec::plain('z')],
+            expand_all: vec![KeySpec::shifted('z')],
+            top_prefix: vec![KeySpec::plain('g')],
+            bottom: vec![KeySpec::shifted('g')],
+        }
+    }
+}
+
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
             nav: NavKeyBindings::default(),
+            focus: FocusKeyBindings::default(),
             tabs: TabsKeyBindings::default(),
+            data_view: DataViewKeyBindings::default(),
         }
     }
 }
@@ -91,14 +143,72 @@ impl KeyBindings {
         set_keys(&value, "nav", "page_down", &mut bindings.nav.page_down);
         set_keys(&value, "nav", "home", &mut bindings.nav.home);
         set_keys(&value, "nav", "end", &mut bindings.nav.end);
+        set_keys(&value, "focus", "next", &mut bindings.focus.next);
+        set_keys(&value, "focus", "previous", &mut bindings.focus.previous);
         set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous);
         set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next);
+        set_keys(
+            &value,
+            "data_view",
+            "activate",
+            &mut bindings.data_view.activate,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "toggle_expansion",
+            &mut bindings.data_view.toggle_expansion,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "next_page",
+            &mut bindings.data_view.next_page,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "previous_page",
+            &mut bindings.data_view.previous_page,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "collapse_all",
+            &mut bindings.data_view.collapse_all,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "expand_all",
+            &mut bindings.data_view.expand_all,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "top_prefix",
+            &mut bindings.data_view.top_prefix,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "bottom",
+            &mut bindings.data_view.bottom,
+        );
 
         bindings
     }
 
     pub fn tabs(&self) -> &TabsKeyBindings {
         &self.tabs
+    }
+
+    pub fn focus(&self) -> &FocusKeyBindings {
+        &self.focus
+    }
+
+    pub fn data_view(&self) -> &DataViewKeyBindings {
+        &self.data_view
     }
 
     pub fn set_tabs_previous(&mut self, key: KeySpec) {
@@ -116,6 +226,24 @@ impl KeyBindings {
 
     pub fn with_tabs_next(mut self, key: KeySpec) -> Self {
         self.set_tabs_next(key);
+        self
+    }
+
+    pub fn set_focus_next(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.focus.next = keys.into_iter().collect();
+    }
+
+    pub fn with_focus_next(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_focus_next(keys);
+        self
+    }
+
+    pub fn set_focus_previous(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.focus.previous = keys.into_iter().collect();
+    }
+
+    pub fn with_focus_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_focus_previous(keys);
         self
     }
 
@@ -191,6 +319,81 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_data_view_activate(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.activate = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_activate(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_activate(keys);
+        self
+    }
+
+    pub fn set_data_view_toggle_expansion(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.toggle_expansion = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_toggle_expansion(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_data_view_toggle_expansion(keys);
+        self
+    }
+
+    pub fn set_data_view_next_page(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.next_page = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_next_page(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_next_page(keys);
+        self
+    }
+
+    pub fn set_data_view_previous_page(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.previous_page = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_previous_page(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_previous_page(keys);
+        self
+    }
+
+    pub fn set_data_view_collapse_all(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.collapse_all = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_collapse_all(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_collapse_all(keys);
+        self
+    }
+
+    pub fn set_data_view_expand_all(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.expand_all = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_expand_all(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_expand_all(keys);
+        self
+    }
+
+    pub fn set_data_view_top_prefix(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.top_prefix = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_top_prefix(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_top_prefix(keys);
+        self
+    }
+
+    pub fn set_data_view_bottom(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.bottom = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_bottom(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_bottom(keys);
+        self
+    }
+
     pub fn line_up_matches(&self, key: KeyEvent) -> bool {
         matches_any(&self.nav.line_up, key)
     }
@@ -239,6 +442,72 @@ impl TabsKeyBindings {
 
     pub fn next_label(&self) -> String {
         self.next.label()
+    }
+}
+
+impl FocusKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_next(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.next = keys.into_iter().collect();
+    }
+
+    pub fn with_next(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_next(keys);
+        self
+    }
+
+    pub fn set_previous(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.previous = keys.into_iter().collect();
+    }
+
+    pub fn with_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_previous(keys);
+        self
+    }
+
+    pub fn next_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.next, key)
+    }
+
+    pub fn previous_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.previous, key)
+    }
+}
+
+impl DataViewKeyBindings {
+    pub fn activate_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.activate, key)
+    }
+
+    pub fn toggle_expansion_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.toggle_expansion, key)
+    }
+
+    pub fn next_page_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.next_page, key)
+    }
+
+    pub fn previous_page_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.previous_page, key)
+    }
+
+    pub fn collapse_all_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.collapse_all, key)
+    }
+
+    pub fn expand_all_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.expand_all, key)
+    }
+
+    pub fn top_prefix_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.top_prefix, key)
+    }
+
+    pub fn bottom_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.bottom, key)
     }
 }
 
@@ -467,6 +736,16 @@ mod tests {
             page_down = ["ctrl+d", "pagedown"]
             home = "g"
             end = "shift+g"
+
+            [data_view]
+            activate = "enter"
+            toggle_expansion = "space"
+            next_page = "n"
+            previous_page = "p"
+            collapse_all = "z"
+            expand_all = "shift+z"
+            top_prefix = "g"
+            bottom = "shift+g"
             "#,
         );
 
@@ -506,6 +785,38 @@ mod tests {
             code: Key::Char('G'),
             modifiers: KeyModifiers::SHIFT,
         }));
+        assert!(bindings.data_view().activate_matches(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().toggle_expansion_matches(KeyEvent {
+            code: Key::Char(' '),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().next_page_matches(KeyEvent {
+            code: Key::Char('n'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().previous_page_matches(KeyEvent {
+            code: Key::Char('p'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().collapse_all_matches(KeyEvent {
+            code: Key::Char('z'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().expand_all_matches(KeyEvent {
+            code: Key::Char('Z'),
+            modifiers: KeyModifiers::SHIFT,
+        }));
+        assert!(bindings.data_view().top_prefix_matches(KeyEvent {
+            code: Key::Char('g'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().bottom_matches(KeyEvent {
+            code: Key::Char('G'),
+            modifiers: KeyModifiers::SHIFT,
+        }));
     }
 
     #[test]
@@ -520,7 +831,15 @@ mod tests {
             .with_nav_page_up([KeySpec::plain('u')])
             .with_nav_page_down([KeySpec::plain('d')])
             .with_nav_home([KeySpec::plain('g')])
-            .with_nav_end([KeySpec::shifted('g')]);
+            .with_nav_end([KeySpec::shifted('g')])
+            .with_data_view_activate([KeySpec::plain('a')])
+            .with_data_view_toggle_expansion([KeySpec::plain('e')])
+            .with_data_view_next_page([KeySpec::plain('n')])
+            .with_data_view_previous_page([KeySpec::plain('p')])
+            .with_data_view_collapse_all([KeySpec::plain('c')])
+            .with_data_view_expand_all([KeySpec::plain('x')])
+            .with_data_view_top_prefix([KeySpec::plain('t')])
+            .with_data_view_bottom([KeySpec::plain('b')]);
 
         assert!(bindings.tabs().previous_matches(KeyEvent {
             code: Key::Char('h'),
@@ -560,6 +879,58 @@ mod tests {
         }));
         assert!(bindings.end_matches(KeyEvent {
             code: Key::Char('G'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().activate_matches(KeyEvent {
+            code: Key::Char('a'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().toggle_expansion_matches(KeyEvent {
+            code: Key::Char('e'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().next_page_matches(KeyEvent {
+            code: Key::Char('n'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().previous_page_matches(KeyEvent {
+            code: Key::Char('p'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().collapse_all_matches(KeyEvent {
+            code: Key::Char('c'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().expand_all_matches(KeyEvent {
+            code: Key::Char('x'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().top_prefix_matches(KeyEvent {
+            code: Key::Char('t'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().bottom_matches(KeyEvent {
+            code: Key::Char('b'),
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    #[test]
+    fn focus_bindings_can_be_built_directly() {
+        let bindings = FocusKeyBindings::new()
+            .with_next([KeySpec::plain('l')])
+            .with_previous([KeySpec::plain('h')]);
+
+        assert!(bindings.next_matches(KeyEvent {
+            code: Key::Char('l'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.previous_matches(KeyEvent {
+            code: Key::Char('h'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!bindings.next_matches(KeyEvent {
+            code: Key::Tab,
             modifiers: KeyModifiers::NONE,
         }));
     }

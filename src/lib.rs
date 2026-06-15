@@ -15,10 +15,18 @@ pub use animation::{
 };
 pub use app::TuicoreApp;
 pub use border::{BorderChars, border_chars, border_set};
-pub use components::{List, ListOutcome, Panel, PanelVariant, Spinner, Tab, Tabs};
-pub use focus::FocusChain;
-pub use keybindings::{KeyBindings, KeySpec, TabsKeyBindings};
-pub use preset::{BorderKind, Preset, TabsPreset, TabsVariant};
+pub use components::{
+    CellContext, Column, DataView, DataViewEvent, DataViewOutcome, DataViewPagination,
+    DataViewSort, List, ListOutcome, Panel, PanelVariant, SortDirection, Spinner, Tab, Tabs,
+    TreeAdapter, TreeGlyphs,
+};
+pub use focus::{
+    FocusChain, FocusDirection, FocusOutcome, FocusRouter, FocusRouterError, FocusWrap,
+};
+pub use keybindings::{
+    DataViewKeyBindings, FocusKeyBindings, KeyBindings, KeySpec, TabsKeyBindings,
+};
+pub use preset::{BorderKind, DataViewPreset, Preset, TabsPreset, TabsVariant};
 pub use scroll::{
     ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset,
     ScrollOutcome, ScrollPreset, ScrollSize, ScrollState, ScrollbarConfig, ScrollbarGutter,

@@ -1,4 +1,4 @@
-use tuicore::{Animated, List, Panel};
+use tuicore::{Animated, DataView, Panel, TreeAdapter, TreeGlyphs};
 use tuirealm::command::{Cmd, CmdResult};
 use tuirealm::component::{AppComponent, Component};
 use tuirealm::event::{Event, Key, KeyEvent, NoUserEvent};
@@ -7,11 +7,10 @@ use tuirealm::ratatui::Frame;
 use tuirealm::ratatui::layout::Rect;
 use tuirealm::state::State;
 
-use crate::shared::{ComponentKind, Msg};
+use crate::shared::{ComponentKind, Msg, focus_nav_message};
 
 pub struct ComponentList {
-    components: Vec<ComponentKind>,
-    list: List,
+    list: DataView<ComponentKind, ComponentKind>,
     focused: bool,
     list_area: Rect,
     panel: Panel,
@@ -19,9 +18,17 @@ pub struct ComponentList {
 
 impl ComponentList {
     pub fn new(components: Vec<ComponentKind>) -> Self {
-        let list = List::new(components.iter().map(|component| component.title()));
-        Self {
+        let list = DataView::list(
             components,
+            |component| *component,
+            |component| component.title().to_string(),
+        )
+        .tree(TreeAdapter::parent_id(|component: &ComponentKind| {
+            component.parent()
+        }))
+        .tree_glyphs(TreeGlyphs::NERD_FONT)
+        .expanded([ComponentKind::DataView]);
+        Self {
             list,
             focused: false,
             list_area: Rect::default(),
@@ -73,7 +80,6 @@ impl AppComponent<Msg, NoUserEvent> for ComponentList {
                 code: Key::Char('q'),
                 ..
             }) => Some(Msg::Quit),
-            Event::Keyboard(KeyEvent { code: Key::Tab, .. }) => Some(Msg::FocusPreview),
             Event::Tick => {
                 let settings = tuicore::animation_settings();
                 let tick = self
@@ -82,11 +88,21 @@ impl AppComponent<Msg, NoUserEvent> for ComponentList {
                     .merge(self.list.tick(settings.frame_duration(), settings));
                 tick.changed.then_some(Msg::Redraw)
             }
-            Event::Keyboard(key) => self
-                .list
-                .on_key(*key, self.list_area)
-                .needs_redraw()
-                .then(|| Msg::Selected(self.components[self.list.selected_index()])),
+            Event::Keyboard(key) => {
+                if let Some(msg) = focus_nav_message(*key) {
+                    return Some(msg);
+                }
+
+                let outcome = self.list.on_key(*key, self.list_area);
+                if outcome.needs_redraw() {
+                    self.list
+                        .highlighted_id()
+                        .map(Msg::Selected)
+                        .or(Some(Msg::Redraw))
+                } else {
+                    None
+                }
+            }
             _ => Some(Msg::Redraw),
         }
     }
