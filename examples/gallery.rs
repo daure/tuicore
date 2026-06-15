@@ -88,6 +88,22 @@ impl Model {
             Id::DataViewTableTree,
             DataViewPreview::new(DataViewMode::TableTree),
         )?;
+        app.mount(
+            Id::DataViewSingleSelect,
+            DataViewPreview::new(DataViewMode::SingleSelect),
+        )?;
+        app.mount(
+            Id::DataViewMultiSelect,
+            DataViewPreview::new(DataViewMode::MultiSelect),
+        )?;
+        app.mount(
+            Id::DataViewChecklistTree,
+            DataViewPreview::new(DataViewMode::ChecklistTree),
+        )?;
+        app.mount(
+            Id::DataViewActivateOnNavigate,
+            DataViewPreview::new(DataViewMode::ActivateOnNavigate),
+        )?;
         app.active(&Id::ComponentList)?;
 
         let mut terminal = CrosstermTerminalAdapter::new()?;
@@ -138,6 +154,10 @@ impl Model {
             Id::DataViewTable,
             Id::DataViewListTree,
             Id::DataViewTableTree,
+            Id::DataViewSingleSelect,
+            Id::DataViewMultiSelect,
+            Id::DataViewChecklistTree,
+            Id::DataViewActivateOnNavigate,
         ] {
             self.app
                 .attr(&id, Attribute::Width, AttrValue::Size(preview.width))?;

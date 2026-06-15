@@ -1,7 +1,10 @@
-use tuicore::{Animated, Column, DataView, Panel, TreeAdapter, TreeGlyphs};
+use tuicore::{
+    ActivationMode, Animated, Column, DataView, DataViewTypedEvent, Panel, SelectionGlyphs,
+    SelectionMode, SelectionPropagation, SelectionTrigger, TreeAdapter, TreeGlyphs,
+};
 use tuirealm::command::{Cmd, CmdResult};
 use tuirealm::component::{AppComponent, Component};
-use tuirealm::event::{Event, Key, KeyEvent, NoUserEvent};
+use tuirealm::event::{Event, Key, KeyEvent, KeyModifiers, NoUserEvent};
 use tuirealm::props::{AttrValue, Attribute, QueryResult};
 use tuirealm::ratatui::Frame;
 use tuirealm::ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -18,6 +21,7 @@ pub struct DataViewPreview {
     data_view: DataView<DemoRow, usize>,
     area: Rect,
     focused: bool,
+    status: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +30,10 @@ pub enum DataViewMode {
     Table,
     ListTree,
     TableTree,
+    SingleSelect,
+    MultiSelect,
+    ChecklistTree,
+    ActivateOnNavigate,
 }
 
 impl DataViewPreview {
@@ -36,14 +44,37 @@ impl DataViewPreview {
             data_view: mode.data_view(),
             area: Rect::default(),
             focused: false,
+            status: String::from("No event yet"),
         }
     }
 
     fn layout(area: Rect) -> [Rect; 2] {
         Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Fill(1)])
+            .constraints([Constraint::Length(3), Constraint::Fill(1)])
             .areas(area)
+    }
+
+    fn record_events(&mut self) {
+        let statuses = self
+            .data_view
+            .take_events()
+            .into_iter()
+            .map(Self::event_status)
+            .collect::<Vec<_>>();
+        if !statuses.is_empty() {
+            self.status = statuses.join(" • ");
+        }
+    }
+
+    fn event_status(event: DataViewTypedEvent<usize>) -> String {
+        match event {
+            DataViewTypedEvent::HighlightChanged { row_id } => format!("highlight → {:?}", row_id),
+            DataViewTypedEvent::Activated { row_id } => format!("activated #{row_id}"),
+            DataViewTypedEvent::SelectionChanged { selected, .. } => {
+                format!("selected {:?}", selected)
+            }
+        }
     }
 }
 
@@ -54,19 +85,62 @@ impl DataViewMode {
             Self::Table => "DataView: table",
             Self::ListTree => "DataView: list tree",
             Self::TableTree => "DataView: table tree",
+            Self::SingleSelect => "DataView: single select",
+            Self::MultiSelect => "DataView: multi select",
+            Self::ChecklistTree => "DataView: tree checklist",
+            Self::ActivateOnNavigate => "DataView: activate on navigate",
         }
     }
 
-    fn help(self) -> &'static str {
+    fn help(self) -> String {
+        let bindings = tuicore::keybindings();
+        let data_keys = bindings.data_view();
+        let scroll_keys = format!(
+            "{}/{}",
+            bindings.line_up_label(),
+            bindings.line_down_label()
+        );
+        let all_tree_keys = format!(
+            "{}/{}",
+            data_keys.collapse_all_label(),
+            data_keys.expand_all_label()
+        );
         match self {
-            Self::List => "100 rows • one column • no header • ↑/↓ scroll • Enter activates row",
-            Self::Table => "100 rows • headers + rich cells • ↑/↓ scroll • s sorts task column",
-            Self::ListTree => {
-                "100 rows • Space node • z/Z collapse/expand all • using tira glyphs /"
+            Self::List => format!(
+                "100 rows • one column • no header • {scroll_keys} scroll • {} activates row",
+                data_keys.activate_label()
+            ),
+            Self::Table => {
+                format!(
+                    "100 rows • headers + rich cells • {scroll_keys} scroll • s sorts task column"
+                )
             }
-            Self::TableTree => {
-                "100 rows • rich cells • Space node • z/Z all • s sorts • using tira glyphs /"
-            }
+            Self::ListTree => format!(
+                "100 rows • {} node • {all_tree_keys} collapse/expand all • using tree glyphs /",
+                data_keys.toggle_expansion_label()
+            ),
+            Self::TableTree => format!(
+                "100 rows • rich cells • {} node • {all_tree_keys} all • s sorts • using tree glyphs /",
+                data_keys.toggle_expansion_label()
+            ),
+            Self::SingleSelect => format!(
+                "{} toggles row • {} selects + activates • single selected ID",
+                data_keys.toggle_selection_label(),
+                data_keys.activate_label()
+            ),
+            Self::MultiSelect => format!(
+                "{} or {} toggles rows • selected IDs stay in source order",
+                data_keys.activate_label(),
+                data_keys.toggle_selection_label()
+            ),
+            Self::ChecklistTree => format!(
+                "{} or {} cascades descendants • Nerd Font mixed icon",
+                data_keys.activate_label(),
+                data_keys.toggle_selection_label()
+            ),
+            Self::ActivateOnNavigate => format!(
+                "{scroll_keys} changes active + selected row immediately • dropdown-style preview"
+            ),
         }
     }
 
@@ -93,6 +167,26 @@ impl DataViewMode {
                 .tree(TreeAdapter::parent_id(|row: &DemoRow| row.parent))
                 .tree_glyphs(TreeGlyphs::NERD_FONT)
                 .expanded(expanded),
+            Self::SingleSelect => DataView::list(rows, |row| row.id, |row| row.name.clone())
+                .selection_mode(SelectionMode::Single)
+                .selection_trigger(SelectionTrigger::OnActivate),
+            Self::MultiSelect => DataView::new(rows, |row| row.id)
+                .headers(true)
+                .columns(demo_columns())
+                .selection_mode(SelectionMode::Multi)
+                .selection_trigger(SelectionTrigger::OnActivate),
+            Self::ChecklistTree => DataView::list(rows, |row| row.id, |row| row.name.clone())
+                .tree(TreeAdapter::parent_id(|row: &DemoRow| row.parent))
+                .tree_glyphs(TreeGlyphs::NERD_FONT)
+                .selection_mode(SelectionMode::Multi)
+                .selection_trigger(SelectionTrigger::OnActivate)
+                .selection_propagation(SelectionPropagation::CascadeDescendants)
+                .selection_glyphs(SelectionGlyphs::NERD_FONT)
+                .expanded(expanded),
+            Self::ActivateOnNavigate => DataView::list(rows, |row| row.id, |row| row.name.clone())
+                .activation_mode(ActivationMode::OnNavigate)
+                .selection_mode(SelectionMode::Single)
+                .selection_trigger(SelectionTrigger::OnNavigate),
         }
     }
 }
@@ -101,7 +195,14 @@ impl Component for DataViewPreview {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         self.panel.view(frame, area);
         let [help, body] = Self::layout(Panel::inner_area(area));
-        frame.render_widget(Paragraph::new(self.mode.help()), help);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(self.mode.help()),
+                Span::raw("\n"),
+                Span::raw(self.status.clone()),
+            ])),
+            help,
+        );
         self.data_view.view(frame, body);
     }
 
@@ -146,17 +247,17 @@ impl AppComponent<Msg, NoUserEvent> for DataViewPreview {
             Event::Keyboard(key) if focus_list_key(*key) => Some(Msg::FocusList),
             Event::Keyboard(KeyEvent {
                 code: Key::Char('s'),
-                ..
+                modifiers: KeyModifiers::NONE,
             }) if matches!(self.mode, DataViewMode::Table | DataViewMode::TableTree) => {
                 self.data_view.toggle_sort("task");
+                self.record_events();
                 Some(Msg::Redraw)
             }
             Event::Keyboard(key) => {
                 let [_, body] = Self::layout(Panel::inner_area(self.area));
-                self.data_view
-                    .on_key(*key, body)
-                    .needs_redraw()
-                    .then_some(Msg::Redraw)
+                let outcome = self.data_view.on_key(*key, body);
+                self.record_events();
+                outcome.needs_redraw().then_some(Msg::Redraw)
             }
             Event::Tick => {
                 let settings = tuicore::animation_settings();

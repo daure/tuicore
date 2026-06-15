@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::hash::Hash;
 
 use tuirealm::ratatui::Frame;
@@ -6,7 +7,7 @@ use tuirealm::ratatui::style::{Modifier, Style};
 use tuirealm::ratatui::text::{Line, Span};
 use tuirealm::ratatui::widgets::{Block, Paragraph};
 
-use super::{CellContext, DataView, SortDirection, VisibleRow};
+use super::{CellContext, CheckState, DataView, SelectionMode, SortDirection, VisibleRow};
 use crate::{preset, theme};
 
 impl<T, Id> DataView<T, Id>
@@ -27,6 +28,7 @@ where
         let visible = self.visible_rows();
         let offset = self.visible_offset(geometry.viewport, geometry.content);
         let column_widths = self.column_widths(geometry.layout.viewport.width as usize);
+        let selection_descendants = self.selection_descendants_by_id();
 
         if self.headers {
             let header_viewport = Rect::new(
@@ -52,8 +54,8 @@ where
                 1,
             );
             let highlighted = line_index == self.highlighted;
-            let selected_style = highlighted.then(|| self.selected_row_style());
-            if let Some(style) = selected_style {
+            let row_style = self.row_style(highlighted, row, &selection_descendants);
+            if let Some(style) = row_style {
                 frame.render_widget(Block::default().style(style), row_area);
             }
             self.render_row(
@@ -62,7 +64,9 @@ where
                 &column_widths,
                 offset.x,
                 row,
-                selected_style,
+                highlighted,
+                row_style,
+                &selection_descendants,
             );
         }
 
@@ -115,7 +119,9 @@ where
         column_widths: &[usize],
         offset_x: usize,
         row: &VisibleRow<'_, T, Id>,
-        selected_style: Option<Style>,
+        highlighted: bool,
+        row_style: Option<Style>,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
     ) {
         let cells = self.column_areas(area, column_widths, offset_x);
         for (column_index, (column, cell_area)) in self.columns.iter().zip(cells).enumerate() {
@@ -130,45 +136,63 @@ where
                     depth: row.depth,
                     has_children: row.has_children,
                     expanded: row.expanded,
-                    highlighted: selected_style.is_some(),
+                    highlighted,
                     focused: self.focused,
                 },
             );
-            if column_index == 0 && self.tree.is_some() {
-                line = self.with_tree_prefix(line, row);
+            if column_index == 0 && (self.tree.is_some() || self.displays_selection_glyphs()) {
+                line = self.with_row_prefix(line, row, selection_descendants);
             }
-            if let Some(style) = selected_style {
+            if let Some(style) = row_style {
                 line = apply_line_style(line, style);
             }
             let mut paragraph = Paragraph::new(line).scroll((0, cell_area.scroll_x));
-            if let Some(style) = selected_style {
+            if let Some(style) = row_style {
                 paragraph = paragraph.style(style);
             }
             frame.render_widget(paragraph, cell_area.area);
         }
     }
 
-    fn with_tree_prefix(&self, line: Line<'static>, row: &VisibleRow<'_, T, Id>) -> Line<'static> {
+    fn with_row_prefix(
+        &self,
+        line: Line<'static>,
+        row: &VisibleRow<'_, T, Id>,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+    ) -> Line<'static> {
         let Line {
             spans: original_spans,
             style,
             alignment,
         } = line;
         let mut spans = Vec::new();
-        let indent = " ".repeat(
-            row.depth
-                .saturating_mul(preset().data_view().tree_indent_width()),
-        );
-        spans.push(Span::raw(indent));
-        if row.has_children {
-            let glyph = if row.expanded {
-                self.tree_glyphs.expanded
+        if self.tree.is_some() {
+            let indent = " ".repeat(
+                row.depth
+                    .saturating_mul(preset().data_view().tree_indent_width()),
+            );
+            spans.push(Span::raw(indent));
+            if row.has_children {
+                let glyph = if row.expanded {
+                    self.tree_glyphs.expanded
+                } else {
+                    self.tree_glyphs.collapsed
+                };
+                spans.push(Span::raw(format!("{glyph} ")));
             } else {
-                self.tree_glyphs.collapsed
-            };
-            spans.push(Span::raw(format!("{glyph} ")));
-        } else {
-            spans.push(Span::raw(format!("{} ", self.tree_glyphs.leaf)));
+                spans.push(Span::raw(format!("{} ", self.tree_glyphs.leaf)));
+            }
+        }
+        if self.displays_selection_glyphs() {
+            let check_state = self.check_state_with_descendants(&row.id, selection_descendants);
+            let glyph = self.selection_glyphs.glyph(check_state);
+            let content = format!("{glyph} ");
+            spans.push(match check_state {
+                CheckState::Unchecked => Span::raw(content),
+                CheckState::Checked | CheckState::Indeterminate => {
+                    Span::styled(content, Style::default().fg(theme().selected_fg()))
+                }
+            });
         }
         spans.extend(original_spans);
         Line {
@@ -178,18 +202,53 @@ where
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn selection_glyph(&self, row: &VisibleRow<'_, T, Id>) -> &'static str {
+        let descendants = self.selection_descendants_by_id();
+        self.selection_glyph_with_descendants(&row.id, &descendants)
+    }
+
+    fn row_style(
+        &self,
+        highlighted: bool,
+        row: &VisibleRow<'_, T, Id>,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+    ) -> Option<Style> {
+        if highlighted && self.focused {
+            Some(self.highlighted_row_style())
+        } else if self.row_is_visually_selected(&row.id, selection_descendants) {
+            Some(self.selected_row_style())
+        } else {
+            None
+        }
+    }
+
+    fn row_is_visually_selected(
+        &self,
+        id: &Id,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+    ) -> bool {
+        self.selection_mode != SelectionMode::None
+            && self.check_state_with_descendants(id, selection_descendants) != CheckState::Unchecked
+    }
+
+    fn displays_selection_glyphs(&self) -> bool {
+        self.selection_mode == SelectionMode::Multi
+    }
+
+    fn highlighted_row_style(&self) -> Style {
+        let theme = theme();
+        Style::default()
+            .fg(theme.highlight_fg())
+            .bg(theme.highlight_bg())
+            .add_modifier(Modifier::BOLD)
+    }
+
     fn selected_row_style(&self) -> Style {
         let theme = theme();
-        if self.focused {
-            Style::default()
-                .fg(theme.selected_fg())
-                .bg(theme.selected_bg())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(theme.muted_fg())
-                .bg(theme.selected_bg())
-        }
+        Style::default()
+            .fg(theme.selected_fg())
+            .bg(theme.selected_bg())
     }
 
     fn column_areas(

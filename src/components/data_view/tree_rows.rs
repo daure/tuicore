@@ -73,6 +73,24 @@ where
         expandable.into_iter()
     }
 
+    pub(super) fn row_ids(&self) -> Vec<Id> {
+        self.rows.iter().map(|row| (self.row_id)(row)).collect()
+    }
+
+    pub(super) fn descendant_ids(&self, id: &Id) -> Vec<Id> {
+        self.descendant_ids_by_id().remove(id).unwrap_or_default()
+    }
+
+    pub(super) fn descendant_ids_by_id(&self) -> HashMap<Id, Vec<Id>> {
+        match &self.tree {
+            Some(TreeAdapter::ParentId(parent_id)) => {
+                self.parent_descendant_ids_by_id(parent_id.as_ref())
+            }
+            Some(TreeAdapter::Level(level)) => self.level_descendant_ids_by_id(level.as_ref()),
+            None => HashMap::new(),
+        }
+    }
+
     pub(super) fn max_page(&self) -> usize {
         let Some(pagination) = &self.pagination else {
             return 0;
@@ -83,6 +101,48 @@ where
 
     fn row_refs(&self) -> Vec<&T> {
         self.rows.iter().collect()
+    }
+
+    fn parent_descendant_ids_by_id(&self, parent_id: &ParentIdFn<T, Id>) -> HashMap<Id, Vec<Id>> {
+        let ids = self.row_ids();
+        let known_ids = ids.iter().cloned().collect::<HashSet<_>>();
+        let mut children_by_parent: HashMap<Id, Vec<Id>> = HashMap::new();
+
+        for (row, row_id) in self.rows.iter().zip(ids.iter()) {
+            if let Some(parent) = parent_id(row).filter(|parent| known_ids.contains(parent)) {
+                children_by_parent
+                    .entry(parent)
+                    .or_default()
+                    .push(row_id.clone());
+            }
+        }
+
+        ids.into_iter()
+            .map(|id| {
+                let descendants = collect_descendants(&children_by_parent, &id);
+                (id, descendants)
+            })
+            .collect()
+    }
+
+    fn level_descendant_ids_by_id(&self, level: &LevelFn<T>) -> HashMap<Id, Vec<Id>> {
+        let ids = self.row_ids();
+        let levels = self.rows.iter().map(level).collect::<Vec<_>>();
+
+        ids.iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let parent_level = levels[index];
+                let descendants = ids
+                    .iter()
+                    .enumerate()
+                    .skip(index + 1)
+                    .take_while(|(index, _)| levels[*index] > parent_level)
+                    .map(|(_, id)| id.clone())
+                    .collect();
+                (id.clone(), descendants)
+            })
+            .collect()
     }
 
     fn active_sort(&self) -> Option<(&dyn Fn(&T) -> String, SortDirection)> {
@@ -291,4 +351,23 @@ where
             .take(pagination.page_size)
             .collect()
     }
+}
+
+fn collect_descendants<Id>(children_by_parent: &HashMap<Id, Vec<Id>>, id: &Id) -> Vec<Id>
+where
+    Id: Clone + Eq + Hash,
+{
+    let mut descendants = Vec::new();
+    let mut stack = children_by_parent.get(id).cloned().unwrap_or_default();
+    let mut visited = HashSet::new();
+    while let Some(child) = stack.pop() {
+        if !visited.insert(child.clone()) {
+            continue;
+        }
+        descendants.push(child.clone());
+        if let Some(children) = children_by_parent.get(&child) {
+            stack.extend(children.iter().cloned());
+        }
+    }
+    descendants
 }

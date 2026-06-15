@@ -5,6 +5,7 @@ use std::time::Duration;
 mod layout;
 mod model;
 mod render;
+mod selection;
 #[cfg(test)]
 mod tests;
 mod tree_rows;
@@ -18,14 +19,15 @@ use tuirealm::ratatui::layout::{Constraint, Rect};
 use tuirealm::state::State;
 
 use crate::{
-    Animated, AnimationSettings, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollOffset,
-    ScrollOutcome, ScrollState, ScrollbarConfig, TickResult, animation_settings, keybindings,
-    preset,
+    Animated, AnimationSettings, KeyBindings, ScrollAxes, ScrollBehavior, ScrollDelta,
+    ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig, TickResult, animation_settings,
+    keybindings, preset,
 };
 
 pub use model::{
-    CellContext, Column, DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort,
-    SortDirection, TreeAdapter, TreeGlyphs,
+    ActivationMode, CellContext, CheckState, Column, DataViewEvent, DataViewOutcome,
+    DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
+    SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
 use model::{RowIdFn, VisibleRow};
 
@@ -44,8 +46,22 @@ pub struct DataView<T, Id> {
     sort: Option<DataViewSort>,
     pagination: Option<DataViewPagination>,
     last_activated: Option<Id>,
+    events: Vec<DataViewTypedEvent<Id>>,
+    activation_mode: ActivationMode,
+    selection_mode: SelectionMode,
+    selection_trigger: SelectionTrigger,
+    selection_propagation: SelectionPropagation,
+    selected: HashSet<Id>,
+    selection_glyphs: SelectionGlyphs,
     tree_glyphs: TreeGlyphs,
     pending_g: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HighlightUpdate {
+    index_changed: bool,
+    activated: bool,
+    selection_changed: bool,
 }
 
 impl<T, Id> DataView<T, Id>
@@ -66,6 +82,13 @@ where
             sort: None,
             pagination: None,
             last_activated: None,
+            events: Vec::new(),
+            activation_mode: ActivationMode::default(),
+            selection_mode: SelectionMode::default(),
+            selection_trigger: SelectionTrigger::default(),
+            selection_propagation: SelectionPropagation::default(),
+            selected: HashSet::new(),
+            selection_glyphs: SelectionGlyphs::NERD_FONT,
             tree_glyphs: TreeGlyphs::NERD_FONT,
             pending_g: false,
         }
@@ -114,6 +137,11 @@ where
         self
     }
 
+    pub fn activation_mode(mut self, mode: ActivationMode) -> Self {
+        self.activation_mode = mode;
+        self
+    }
+
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
@@ -139,12 +167,21 @@ where
         column_id: impl Into<String>,
         direction: SortDirection,
     ) -> DataViewOutcome {
+        let before_id = self.highlighted_id();
         self.sort = Some(DataViewSort {
             column_id: column_id.into(),
             direction,
         });
-        self.highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
-        DataViewOutcome::CHANGED
+        let update = self.set_highlighted_index_from(
+            self.highlighted.min(self.visible_len().saturating_sub(1)),
+            before_id,
+        );
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
     }
 
     pub fn toggle_sort(&mut self, column_id: impl Into<String>) -> DataViewOutcome {
@@ -162,26 +199,37 @@ where
         if let Some(direction) = next {
             self.sort_by(column_id, direction)
         } else {
+            let before_id = self.highlighted_id();
             self.sort = None;
-            self.highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
-            DataViewOutcome::CHANGED
+            let update = self.set_highlighted_index_from(
+                self.highlighted.min(self.visible_len().saturating_sub(1)),
+                before_id,
+            );
+            DataViewOutcome {
+                handled: true,
+                changed: true,
+                active: false,
+                activated: update.activated,
+            }
         }
     }
 
     pub fn next_page(&mut self) -> DataViewOutcome {
         let max_page = self.max_page();
+        let before_id = self.highlighted_id();
         let Some(pagination) = &mut self.pagination else {
             return DataViewOutcome::IDLE;
         };
         let next = pagination.page.saturating_add(1).min(max_page);
         let changed = next != pagination.page;
         pagination.page = next;
-        self.highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
+        let highlight = self.highlighted.min(self.visible_len().saturating_sub(1));
+        let update = self.set_highlighted_index_from(highlight, before_id);
         DataViewOutcome {
             handled: true,
-            changed,
+            changed: changed || update.selection_changed,
             active: false,
-            activated: false,
+            activated: update.activated,
         }
     }
 
@@ -192,26 +240,31 @@ where
     ) -> DataViewOutcome {
         let outcome = self.next_page();
         if outcome.changed {
-            self.ensure_highlight_visible(area, settings)
-                .into_data_view_outcome(outcome.handled, outcome.changed)
+            let mut scrolled = self
+                .ensure_highlight_visible(area, settings)
+                .into_data_view_outcome(outcome.handled, outcome.changed);
+            scrolled.activated = outcome.activated;
+            scrolled
         } else {
             outcome
         }
     }
 
     pub fn previous_page(&mut self) -> DataViewOutcome {
+        let before_id = self.highlighted_id();
         let Some(pagination) = &mut self.pagination else {
             return DataViewOutcome::IDLE;
         };
         let previous = pagination.page.saturating_sub(1);
         let changed = previous != pagination.page;
         pagination.page = previous;
-        self.highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
+        let highlight = self.highlighted.min(self.visible_len().saturating_sub(1));
+        let update = self.set_highlighted_index_from(highlight, before_id);
         DataViewOutcome {
             handled: true,
-            changed,
+            changed: changed || update.selection_changed,
             active: false,
-            activated: false,
+            activated: update.activated,
         }
     }
 
@@ -222,22 +275,28 @@ where
     ) -> DataViewOutcome {
         let outcome = self.previous_page();
         if outcome.changed {
-            self.ensure_highlight_visible(area, settings)
-                .into_data_view_outcome(outcome.handled, outcome.changed)
+            let mut scrolled = self
+                .ensure_highlight_visible(area, settings)
+                .into_data_view_outcome(outcome.handled, outcome.changed);
+            scrolled.activated = outcome.activated;
+            scrolled
         } else {
             outcome
         }
     }
 
     pub fn collapse_all(&mut self) -> DataViewOutcome {
-        let changed = !self.expanded.is_empty();
+        if self.tree.is_none() || self.expanded.is_empty() {
+            return DataViewOutcome::IDLE;
+        }
+        let before_id = self.highlighted_id();
         self.expanded.clear();
-        let clamped = self.clamp_visible_state();
+        let (_, update) = self.clamp_visible_state_from(before_id);
         DataViewOutcome {
             handled: true,
-            changed: changed || clamped,
+            changed: true,
             active: false,
-            activated: false,
+            activated: update.activated,
         }
     }
 
@@ -248,23 +307,32 @@ where
     ) -> DataViewOutcome {
         let outcome = self.collapse_all();
         if outcome.changed {
-            self.ensure_highlight_visible(area, settings)
-                .into_data_view_outcome(outcome.handled, outcome.changed)
+            let mut scrolled = self
+                .ensure_highlight_visible(area, settings)
+                .into_data_view_outcome(outcome.handled, outcome.changed);
+            scrolled.activated = outcome.activated;
+            scrolled
         } else {
             outcome
         }
     }
 
     pub fn expand_all(&mut self) -> DataViewOutcome {
+        if self.tree.is_none() {
+            return DataViewOutcome::IDLE;
+        }
+        let before_id = self.highlighted_id();
         let ids = self.expandable_ids().collect::<HashSet<_>>();
-        let changed = self.expanded != ids;
+        if ids.is_empty() || self.expanded == ids {
+            return DataViewOutcome::IDLE;
+        }
         self.expanded = ids;
-        let clamped = self.clamp_visible_state();
+        let (_, update) = self.clamp_visible_state_from(before_id);
         DataViewOutcome {
             handled: true,
-            changed: changed || clamped,
+            changed: true,
             active: false,
-            activated: false,
+            activated: update.activated,
         }
     }
 
@@ -275,8 +343,11 @@ where
     ) -> DataViewOutcome {
         let outcome = self.expand_all();
         if outcome.changed {
-            self.ensure_highlight_visible(area, settings)
-                .into_data_view_outcome(outcome.handled, outcome.changed)
+            let mut scrolled = self
+                .ensure_highlight_visible(area, settings)
+                .into_data_view_outcome(outcome.handled, outcome.changed);
+            scrolled.activated = outcome.activated;
+            scrolled
         } else {
             outcome
         }
@@ -286,12 +357,6 @@ where
         self.visible_rows()
             .get(self.highlighted)
             .map(|row| row.id.clone())
-    }
-
-    pub fn take_last_activated(&mut self) -> Option<DataViewEvent<Id>> {
-        self.last_activated
-            .take()
-            .map(|row_id| DataViewEvent { row_id })
     }
 
     pub fn on_key(&mut self, key: KeyEvent, viewport: Rect) -> DataViewOutcome {
@@ -304,10 +369,20 @@ where
         area: Rect,
         settings: AnimationSettings,
     ) -> DataViewOutcome {
-        let page = self.visible_page_step(area);
         let keys = keybindings();
+        self.on_key_with_settings_and_bindings(key, area, settings, &keys)
+    }
+
+    fn on_key_with_settings_and_bindings(
+        &mut self,
+        key: KeyEvent,
+        area: Rect,
+        settings: AnimationSettings,
+        keys: &KeyBindings,
+    ) -> DataViewOutcome {
+        let page = self.visible_page_step(area);
         let data_keys = keys.data_view();
-        if let Some(delta) = horizontal_jump(key) {
+        if let Some(delta) = horizontal_jump(keys, key) {
             self.pending_g = false;
             self.scroll_horizontal_by(delta, area, settings)
         } else if keys.line_up_matches(key) {
@@ -337,6 +412,9 @@ where
         } else if data_keys.activate_matches(key) {
             self.pending_g = false;
             self.activate_highlighted()
+        } else if data_keys.toggle_selection_matches(key) {
+            self.pending_g = false;
+            self.toggle_highlighted_selection()
         } else if data_keys.toggle_expansion_matches(key) {
             self.pending_g = false;
             self.toggle_highlighted_expansion(area, settings)
@@ -363,19 +441,6 @@ where
         }
     }
 
-    fn activate_highlighted(&mut self) -> DataViewOutcome {
-        let Some(row_id) = self.highlighted_id() else {
-            return DataViewOutcome::IDLE;
-        };
-        self.last_activated = Some(row_id);
-        DataViewOutcome {
-            handled: true,
-            changed: false,
-            active: false,
-            activated: true,
-        }
-    }
-
     fn toggle_highlighted_expansion(
         &mut self,
         area: Rect,
@@ -386,7 +451,7 @@ where
             return DataViewOutcome::IDLE;
         };
         if !row.has_children {
-            return DataViewOutcome::HANDLED;
+            return DataViewOutcome::IDLE;
         }
         let id = row.id.clone();
         drop(visible);
@@ -529,10 +594,13 @@ where
         settings: AnimationSettings,
     ) -> DataViewOutcome {
         let highlighted = highlighted.min(self.visible_len().saturating_sub(1));
-        let changed = highlighted != self.highlighted;
-        self.highlighted = highlighted;
-        self.ensure_highlight_visible(area, settings)
-            .into_data_view_outcome(true, changed)
+        let update = self.set_highlighted_index(highlighted);
+        let changed = update.index_changed || update.selection_changed;
+        let mut outcome = self
+            .ensure_highlight_visible(area, settings)
+            .into_data_view_outcome(true, changed);
+        outcome.activated = update.activated;
+        outcome
     }
 
     fn visible_page_step(&self, area: Rect) -> usize {
@@ -582,9 +650,58 @@ where
     fn clamp_visible_state(&mut self) -> bool {
         let page_changed = self.clamp_page();
         let highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
-        let highlighted_changed = highlighted != self.highlighted;
+        let update = self.set_highlighted_index(highlighted);
+        page_changed || update.index_changed || update.selection_changed || update.activated
+    }
+
+    fn set_highlighted_index(&mut self, highlighted: usize) -> HighlightUpdate {
+        let before_id = self.highlighted_id();
+        self.set_highlighted_index_from(highlighted, before_id)
+    }
+
+    fn set_highlighted_index_from(
+        &mut self,
+        highlighted: usize,
+        before_id: Option<Id>,
+    ) -> HighlightUpdate {
+        let before_index = self.highlighted;
         self.highlighted = highlighted;
-        page_changed || highlighted_changed
+        let after_id = self.highlighted_id();
+        if before_id == after_id {
+            return HighlightUpdate {
+                index_changed: before_index != highlighted,
+                activated: false,
+                selection_changed: false,
+            };
+        }
+
+        self.events.push(DataViewTypedEvent::HighlightChanged {
+            row_id: after_id.clone(),
+        });
+        let mut activated = false;
+        let mut selection_changed = false;
+        if let Some(row_id) = after_id {
+            if self.selection_trigger == SelectionTrigger::OnNavigate {
+                selection_changed = self.select_id_internal(row_id.clone());
+            }
+            if self.activation_mode == ActivationMode::OnNavigate {
+                self.emit_activation(row_id);
+                activated = true;
+            }
+        }
+
+        HighlightUpdate {
+            index_changed: before_index != highlighted,
+            activated,
+            selection_changed,
+        }
+    }
+
+    fn clamp_visible_state_from(&mut self, before_id: Option<Id>) -> (bool, HighlightUpdate) {
+        let page_changed = self.clamp_page();
+        let highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
+        let update = self.set_highlighted_index_from(highlighted, before_id);
+        (page_changed, update)
     }
 
     fn clamp_page(&mut self) -> bool {
@@ -599,7 +716,7 @@ where
     }
 }
 
-fn horizontal_jump(key: KeyEvent) -> Option<isize> {
+fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
     let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
         || matches!(key.code, Key::Char(c) if c.is_ascii_uppercase());
     let plain_shift = shifted
@@ -610,11 +727,22 @@ fn horizontal_jump(key: KeyEvent) -> Option<isize> {
         return None;
     }
 
-    match key.code {
-        Key::Left | Key::Char('h') | Key::Char('H') => Some(-HORIZONTAL_JUMP),
-        Key::Right | Key::Char('l') | Key::Char('L') => Some(HORIZONTAL_JUMP),
-        _ => None,
+    let base_key = unshift_key(key);
+    if keys.line_left_matches(base_key) {
+        Some(-HORIZONTAL_JUMP)
+    } else if keys.line_right_matches(base_key) {
+        Some(HORIZONTAL_JUMP)
+    } else {
+        None
     }
+}
+
+fn unshift_key(mut key: KeyEvent) -> KeyEvent {
+    key.modifiers.remove(KeyModifiers::SHIFT);
+    if let Key::Char(c) = key.code {
+        key.code = Key::Char(c.to_ascii_lowercase());
+    }
+    key
 }
 
 impl<T, Id> Animated for DataView<T, Id>

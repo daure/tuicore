@@ -16,9 +16,10 @@ pub use animation::{
 pub use app::TuicoreApp;
 pub use border::{BorderChars, border_chars, border_set};
 pub use components::{
-    CellContext, Column, DataView, DataViewEvent, DataViewOutcome, DataViewPagination,
-    DataViewSort, List, ListOutcome, Panel, PanelVariant, SortDirection, Spinner, Tab, Tabs,
-    TreeAdapter, TreeGlyphs,
+    ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
+    DataViewPagination, DataViewSort, DataViewTypedEvent, List, ListOutcome, Panel, PanelVariant,
+    SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner,
+    Tab, Tabs, TreeAdapter, TreeGlyphs,
 };
 pub use focus::{
     FocusChain, FocusDirection, FocusOutcome, FocusRouter, FocusRouterError, FocusWrap,

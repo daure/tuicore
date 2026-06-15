@@ -63,6 +63,108 @@ pub struct DataViewEvent<Id> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataViewTypedEvent<Id> {
+    HighlightChanged {
+        row_id: Option<Id>,
+    },
+    Activated {
+        row_id: Id,
+    },
+    SelectionChanged {
+        selected: Vec<Id>,
+        added: Vec<Id>,
+        removed: Vec<Id>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationMode {
+    Manual,
+    OnActivateKey,
+    OnNavigate,
+}
+
+impl Default for ActivationMode {
+    fn default() -> Self {
+        Self::OnActivateKey
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    None,
+    Single,
+    Multi,
+}
+
+impl Default for SelectionMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionTrigger {
+    Manual,
+    OnActivate,
+    OnNavigate,
+}
+
+impl Default for SelectionTrigger {
+    fn default() -> Self {
+        Self::Manual
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionPropagation {
+    None,
+    CascadeDescendants,
+}
+
+impl Default for SelectionPropagation {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckState {
+    Unchecked,
+    Checked,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionGlyphs {
+    pub unchecked: &'static str,
+    pub checked: &'static str,
+    pub indeterminate: &'static str,
+}
+
+impl SelectionGlyphs {
+    pub const ASCII: Self = Self {
+        unchecked: "[ ]",
+        checked: "[x]",
+        indeterminate: "[-]",
+    };
+
+    pub const NERD_FONT: Self = Self {
+        unchecked: "󰄱",
+        checked: "󰱒",
+        indeterminate: "󰡖",
+    };
+
+    pub(crate) fn glyph(self, state: CheckState) -> &'static str {
+        match state {
+            CheckState::Unchecked => self.unchecked,
+            CheckState::Checked => self.checked,
+            CheckState::Indeterminate => self.indeterminate,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataViewSort {
     pub column_id: String,
     pub direction: SortDirection,

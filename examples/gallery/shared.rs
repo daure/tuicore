@@ -7,6 +7,10 @@ pub enum Id {
     DataViewTable,
     DataViewListTree,
     DataViewTableTree,
+    DataViewSingleSelect,
+    DataViewMultiSelect,
+    DataViewChecklistTree,
+    DataViewActivateOnNavigate,
     Panel,
     ScrollAnimated,
     Spinner,
@@ -52,10 +56,14 @@ pub enum ComponentKind {
     DataViewTable,
     DataViewListTree,
     DataViewTableTree,
+    DataViewSingleSelect,
+    DataViewMultiSelect,
+    DataViewChecklistTree,
+    DataViewActivateOnNavigate,
 }
 
 impl ComponentKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 13] = [
         Self::Tabs,
         Self::Panel,
         Self::ScrollAnimated,
@@ -65,6 +73,10 @@ impl ComponentKind {
         Self::DataViewTable,
         Self::DataViewListTree,
         Self::DataViewTableTree,
+        Self::DataViewSingleSelect,
+        Self::DataViewMultiSelect,
+        Self::DataViewChecklistTree,
+        Self::DataViewActivateOnNavigate,
     ];
 
     pub fn title(self) -> &'static str {
@@ -78,6 +90,10 @@ impl ComponentKind {
             Self::DataViewTable => "DataView: table",
             Self::DataViewListTree => "DataView: list tree",
             Self::DataViewTableTree => "DataView: table tree",
+            Self::DataViewSingleSelect => "DataView: single select",
+            Self::DataViewMultiSelect => "DataView: multi select",
+            Self::DataViewChecklistTree => "DataView: tree checklist",
+            Self::DataViewActivateOnNavigate => "DataView: activate on navigate",
         }
     }
 
@@ -92,6 +108,10 @@ impl ComponentKind {
             Self::DataViewTable => Id::DataViewTable,
             Self::DataViewListTree => Id::DataViewListTree,
             Self::DataViewTableTree => Id::DataViewTableTree,
+            Self::DataViewSingleSelect => Id::DataViewSingleSelect,
+            Self::DataViewMultiSelect => Id::DataViewMultiSelect,
+            Self::DataViewChecklistTree => Id::DataViewChecklistTree,
+            Self::DataViewActivateOnNavigate => Id::DataViewActivateOnNavigate,
         }
     }
 
@@ -100,7 +120,11 @@ impl ComponentKind {
             Self::DataViewList
             | Self::DataViewTable
             | Self::DataViewListTree
-            | Self::DataViewTableTree => Some(Self::DataView),
+            | Self::DataViewTableTree
+            | Self::DataViewSingleSelect
+            | Self::DataViewMultiSelect
+            | Self::DataViewChecklistTree
+            | Self::DataViewActivateOnNavigate => Some(Self::DataView),
             _ => None,
         }
     }

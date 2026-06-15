@@ -1,10 +1,13 @@
 use super::*;
+use crate::{KeyBindings, KeySpec};
 use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 use tuirealm::ratatui::Terminal;
 use tuirealm::ratatui::backend::TestBackend;
 use tuirealm::ratatui::layout::{Constraint, Rect};
 use tuirealm::ratatui::style::Style;
 use tuirealm::ratatui::text::Line;
+
+// Large cohesive behavior suite; private DataView state helpers stay local.
 
 #[derive(Debug, Clone)]
 struct Row {
@@ -229,6 +232,53 @@ fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
 }
 
 #[test]
+fn shifted_horizontal_keys_follow_configured_navigation_keys() {
+    let bindings = KeyBindings::new()
+        .with_nav_line_left([
+            KeySpec::key(Key::Left),
+            KeySpec::plain('h'),
+            KeySpec::plain('a'),
+        ])
+        .with_nav_line_right([
+            KeySpec::key(Key::Right),
+            KeySpec::plain('l'),
+            KeySpec::plain('d'),
+        ]);
+    let mut view = DataView::new([Row::new(1, "ABCDEFGHIJKLMNOPQRST")], |row| row.id).column(
+        Column::text("name", "Name", Constraint::Length(20), |row: &Row| {
+            row.name.to_string()
+        }),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let area = Rect::new(0, 0, 10, 2);
+
+    let right = view.on_key_with_settings_and_bindings(
+        KeyEvent {
+            code: Key::Char('D'),
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        settings,
+        &bindings,
+    );
+    assert!(right.handled);
+    assert_eq!(view.scroll.offset().x, 8);
+
+    let left = view.on_key_with_settings_and_bindings(
+        KeyEvent {
+            code: Key::Char('A'),
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        settings,
+        &bindings,
+    );
+    assert!(left.handled);
+    assert_eq!(view.scroll.offset().x, 0);
+}
+
+#[test]
 fn horizontal_scroll_extent_uses_rendered_content_width() {
     let mut view = DataView::list(
         [Row::new(1, "ABCDEFGHIJKLMNO")],
@@ -276,7 +326,7 @@ fn horizontal_scroll_extent_includes_percentage_column_expansion() {
 }
 
 #[test]
-fn selected_row_style_is_applied_to_rendered_cell_content() {
+fn highlighted_row_style_is_applied_to_rendered_cell_content() {
     let view = DataView::list(
         [Row::new(1, "selected")],
         |row| row.id,
@@ -291,8 +341,72 @@ fn selected_row_style_is_applied_to_rendered_cell_content() {
 
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, theme.selected_fg());
-    assert_eq!(cell.bg, theme.selected_bg());
+    assert_eq!(cell.fg, theme.highlight_fg());
+    assert_eq!(cell.bg, theme.highlight_bg());
+}
+
+#[test]
+fn inactive_highlight_does_not_style_row() {
+    let view = DataView::list(
+        [Row::new(1, "selected")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_ne!(cell.fg, theme.highlight_fg());
+    assert_ne!(cell.fg, theme.highlight_bg());
+    assert_ne!(cell.bg, theme.highlight_bg());
+}
+
+#[test]
+fn selected_row_style_is_applied_when_row_is_not_highlighted() {
+    let view = DataView::list(
+        [Row::new(1, "first"), Row::new(2, "second")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi)
+    .selection_glyphs(SelectionGlyphs::ASCII)
+    .selected([2]);
+    let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 2)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let content_cell = terminal.backend().buffer().cell((4, 1)).unwrap();
+    assert_eq!(content_cell.fg, theme.selected_fg());
+    assert_eq!(content_cell.bg, theme.selected_bg());
+}
+
+#[test]
+fn single_selection_styles_row_without_selection_glyph() {
+    let view = DataView::list(
+        [Row::new(1, "first"), Row::new(2, "second")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Single)
+    .selected([2]);
+    let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 2)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let first_content_cell = terminal.backend().buffer().cell((0, 1)).unwrap();
+    assert_eq!(first_content_cell.symbol(), "s");
+    assert_eq!(first_content_cell.fg, theme.selected_fg());
+    assert_eq!(first_content_cell.bg, theme.selected_bg());
 }
 
 #[test]
@@ -395,6 +509,547 @@ fn collapsing_tree_clamps_page_to_remaining_rows() {
     assert_eq!(ids, vec![1]);
 }
 
+#[test]
+fn activation_mode_controls_key_and_navigation_activation() {
+    let mut navigate = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .activation_mode(ActivationMode::OnNavigate);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    let outcome = navigate.on_key_with_settings(down_key(), Rect::new(0, 0, 20, 2), settings);
+    assert!(outcome.activated);
+    assert_eq!(
+        navigate.take_last_activated().map(|event| event.row_id),
+        Some(2)
+    );
+    assert_eq!(
+        navigate.take_events(),
+        vec![
+            DataViewTypedEvent::HighlightChanged { row_id: Some(2) },
+            DataViewTypedEvent::Activated { row_id: 2 },
+        ]
+    );
+
+    let mut manual = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .activation_mode(ActivationMode::Manual);
+    let outcome = manual.on_key_with_settings(enter_key(), Rect::new(0, 0, 20, 1), settings);
+    assert!(outcome.handled);
+    assert!(!outcome.activated);
+    assert!(manual.take_last_activated().is_none());
+    assert!(manual.take_events().is_empty());
+}
+
+#[test]
+fn manual_activation_mode_still_applies_activate_selection() {
+    let mut view = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .activation_mode(ActivationMode::Manual)
+    .selection_mode(SelectionMode::Single)
+    .selection_trigger(SelectionTrigger::OnActivate);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    let outcome = view.on_key_with_settings(enter_key(), Rect::new(0, 0, 20, 1), settings);
+
+    assert!(outcome.handled);
+    assert!(outcome.changed);
+    assert!(!outcome.activated);
+    assert_eq!(view.selected_id(), Some(1));
+    assert!(view.take_last_activated().is_none());
+    assert_eq!(
+        view.take_events(),
+        vec![DataViewTypedEvent::SelectionChanged {
+            selected: vec![1],
+            added: vec![1],
+            removed: vec![],
+        }]
+    );
+}
+
+#[test]
+fn default_selection_key_is_not_handled_when_selection_is_disabled() {
+    let mut view = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    let outcome = view.on_key_with_settings(
+        KeyEvent {
+            code: Key::Char('x'),
+            modifiers: KeyModifiers::NONE,
+        },
+        Rect::new(0, 0, 20, 1),
+        settings,
+    );
+
+    assert_eq!(outcome, DataViewOutcome::IDLE);
+    assert!(view.take_events().is_empty());
+}
+
+#[test]
+fn expansion_keys_are_idle_without_tree_actions() {
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let area = Rect::new(0, 0, 20, 3);
+    let mut plain = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+
+    for key in [
+        space_key(),
+        z_key(KeyModifiers::NONE),
+        z_key(KeyModifiers::SHIFT),
+    ] {
+        assert_eq!(
+            plain.on_key_with_settings(key, area, settings),
+            DataViewOutcome::IDLE
+        );
+    }
+
+    let mut leaf = tree_view().expanded([1, 2]);
+    leaf.highlighted = 2;
+    assert_eq!(leaf.highlighted_id(), Some(4));
+    assert_eq!(
+        leaf.on_key_with_settings(space_key(), area, settings),
+        DataViewOutcome::IDLE
+    );
+
+    let mut tree_without_children = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent));
+
+    assert_eq!(
+        tree_without_children.on_key_with_settings(z_key(KeyModifiers::NONE), area, settings),
+        DataViewOutcome::IDLE
+    );
+    assert_eq!(
+        tree_without_children.on_key_with_settings(z_key(KeyModifiers::SHIFT), area, settings),
+        DataViewOutcome::IDLE
+    );
+}
+
+#[test]
+fn selected_builder_and_queries_ignore_selection_when_mode_is_none() {
+    let view = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selected([1]);
+
+    assert!(view.selected.is_empty());
+    assert!(view.selected_ids().is_empty());
+    assert_eq!(view.selected_id(), None);
+    assert!(!view.is_selected(&1));
+    assert_eq!(view.check_state(&1), CheckState::Unchecked);
+
+    let view = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi)
+    .selected([1])
+    .selection_mode(SelectionMode::None);
+
+    assert!(view.selected.is_empty());
+    assert!(view.selected_ids().is_empty());
+    assert!(!view.is_selected(&1));
+}
+
+#[test]
+fn page_change_emits_navigation_activation_when_highlighted_index_stays_same() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "one"),
+            Row::new(2, "two"),
+            Row::new(3, "three"),
+            Row::new(4, "four"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .pagination(2)
+    .activation_mode(ActivationMode::OnNavigate);
+
+    let outcome = view.next_page();
+
+    assert!(outcome.activated);
+    assert_eq!(view.highlighted, 0);
+    assert_eq!(view.highlighted_id(), Some(3));
+    assert_eq!(
+        view.take_last_activated().map(|event| event.row_id),
+        Some(3)
+    );
+    assert_eq!(
+        view.take_events(),
+        vec![
+            DataViewTypedEvent::HighlightChanged { row_id: Some(3) },
+            DataViewTypedEvent::Activated { row_id: 3 },
+        ]
+    );
+}
+
+#[test]
+fn collapse_and_sort_emit_navigation_activation_when_row_changes_at_same_index() {
+    let mut collapsed = DataView::list(
+        [
+            Row {
+                id: 1,
+                parent: None,
+                name: "root",
+            },
+            Row {
+                id: 2,
+                parent: Some(1),
+                name: "child",
+            },
+            Row {
+                id: 3,
+                parent: None,
+                name: "sibling",
+            },
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .expanded([1])
+    .activation_mode(ActivationMode::OnNavigate);
+    collapsed.highlighted = 1;
+
+    let collapse_outcome = collapsed.collapse_all();
+
+    assert!(collapse_outcome.activated);
+    assert_eq!(collapsed.highlighted, 1);
+    assert_eq!(collapsed.highlighted_id(), Some(3));
+    assert_eq!(
+        collapsed.take_events(),
+        vec![
+            DataViewTypedEvent::HighlightChanged { row_id: Some(3) },
+            DataViewTypedEvent::Activated { row_id: 3 },
+        ]
+    );
+
+    let mut sorted = DataView::new([Row::new(1, "B"), Row::new(2, "A")], |row| row.id)
+        .column(
+            Column::text("name", "Name", Constraint::Percentage(100), |row: &Row| {
+                row.name.to_string()
+            })
+            .sortable(|row: &Row| row.name.to_string()),
+        )
+        .activation_mode(ActivationMode::OnNavigate);
+
+    let sort_outcome = sorted.sort_by("name", SortDirection::Ascending);
+
+    assert!(sort_outcome.activated);
+    assert_eq!(sorted.highlighted, 0);
+    assert_eq!(sorted.highlighted_id(), Some(2));
+    assert_eq!(
+        sorted.take_events(),
+        vec![
+            DataViewTypedEvent::HighlightChanged { row_id: Some(2) },
+            DataViewTypedEvent::Activated { row_id: 2 },
+        ]
+    );
+}
+
+#[test]
+fn activate_key_emits_legacy_and_typed_activation_by_default() {
+    let mut view = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    let outcome = view.on_key_with_settings(enter_key(), Rect::new(0, 0, 20, 1), settings);
+
+    assert!(outcome.activated);
+    assert_eq!(
+        view.take_last_activated().map(|event| event.row_id),
+        Some(1)
+    );
+    assert_eq!(
+        view.take_events(),
+        vec![DataViewTypedEvent::Activated { row_id: 1 }]
+    );
+}
+
+#[test]
+fn configured_activate_key_emits_activation() {
+    let bindings =
+        KeyBindings::new().with_data_view_activate([KeySpec::key(Key::Enter), KeySpec::plain('a')]);
+    let mut view = DataView::list(
+        [Row::new(1, "one")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    let outcome = view.on_key_with_settings_and_bindings(
+        KeyEvent {
+            code: Key::Char('a'),
+            modifiers: KeyModifiers::NONE,
+        },
+        Rect::new(0, 0, 20, 1),
+        settings,
+        &bindings,
+    );
+
+    assert!(outcome.activated);
+    assert_eq!(
+        view.take_last_activated().map(|event| event.row_id),
+        Some(1)
+    );
+    assert_eq!(
+        view.take_events(),
+        vec![DataViewTypedEvent::Activated { row_id: 1 }]
+    );
+}
+
+#[test]
+fn single_and_multi_selection_emit_stable_ordered_changes() {
+    let mut single = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Single);
+
+    assert!(single.select_id(2));
+    assert!(single.select_id(1));
+
+    assert_eq!(single.selected_id(), Some(1));
+    assert_eq!(
+        single.take_events(),
+        vec![
+            DataViewTypedEvent::SelectionChanged {
+                selected: vec![2],
+                added: vec![2],
+                removed: vec![],
+            },
+            DataViewTypedEvent::SelectionChanged {
+                selected: vec![1],
+                added: vec![1],
+                removed: vec![2],
+            },
+        ]
+    );
+
+    let mut multi = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two"), Row::new(3, "three")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi)
+    .selected([3]);
+
+    assert!(multi.toggle_selected(1));
+    assert!(multi.toggle_selected(3));
+
+    assert_eq!(multi.selected_ids(), vec![1]);
+    assert_eq!(
+        multi.take_events(),
+        vec![
+            DataViewTypedEvent::SelectionChanged {
+                selected: vec![1, 3],
+                added: vec![1],
+                removed: vec![],
+            },
+            DataViewTypedEvent::SelectionChanged {
+                selected: vec![1],
+                added: vec![],
+                removed: vec![3],
+            },
+        ]
+    );
+}
+
+#[test]
+fn selection_rejects_unknown_ids_consistently() {
+    let mut view = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi)
+    .selected([1, 99]);
+
+    assert!(view.is_selected(&1));
+    assert!(!view.is_selected(&99));
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert!(view.take_events().is_empty());
+
+    assert!(!view.select_id(99));
+    assert!(!view.toggle_selected(99));
+    assert!(!view.is_selected(&99));
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert!(view.take_events().is_empty());
+
+    assert!(view.clear_selection());
+    assert_eq!(
+        view.take_events(),
+        vec![DataViewTypedEvent::SelectionChanged {
+            selected: vec![],
+            added: vec![],
+            removed: vec![1],
+        }]
+    );
+
+    let changed = view.replace_selection([99].into_iter().collect());
+    assert!(!changed);
+    assert!(!view.is_selected(&99));
+    assert!(view.selected_ids().is_empty());
+    assert!(view.take_events().is_empty());
+
+    let changed = view.replace_selection([1, 99].into_iter().collect());
+    assert!(changed);
+    assert!(view.is_selected(&1));
+    assert!(!view.is_selected(&99));
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert_eq!(
+        view.take_events(),
+        vec![DataViewTypedEvent::SelectionChanged {
+            selected: vec![1],
+            added: vec![1],
+            removed: vec![],
+        }]
+    );
+
+    view.selected.insert(99);
+    assert!(!view.is_selected(&99));
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert!(!view.replace_selection([1, 99].into_iter().collect()));
+    assert!(!view.selected.contains(&99));
+    assert!(view.take_events().is_empty());
+}
+
+#[test]
+fn tree_cascade_selects_collapsed_descendants_and_reports_indeterminate_parent() {
+    let mut view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants);
+
+    assert!(view.toggle_selected(2));
+
+    assert_eq!(view.selected_ids(), vec![2, 4, 5]);
+    assert_eq!(view.check_state(&2), CheckState::Checked);
+    assert_eq!(view.check_state(&1), CheckState::Indeterminate);
+    assert_eq!(visible_ids(&view), vec![1]);
+}
+
+#[test]
+fn cascade_check_state_uses_descendants_for_non_leaf_rows() {
+    let checked = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .selected([4, 5]);
+
+    assert_eq!(checked.selected_ids(), vec![4, 5]);
+    assert!(!checked.is_selected(&2));
+    assert_eq!(checked.check_state(&2), CheckState::Checked);
+
+    let partial = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .selected([4]);
+
+    assert_eq!(partial.check_state(&2), CheckState::Indeterminate);
+}
+
+#[test]
+fn cascade_selection_builder_expands_parent_ids() {
+    let view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .selected([2]);
+
+    assert_eq!(view.selected_ids(), vec![2, 4, 5]);
+    assert_eq!(view.check_state(&2), CheckState::Checked);
+}
+
+#[test]
+fn enabling_cascade_selection_expands_existing_parent_ids() {
+    let view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selected([2])
+        .selection_propagation(SelectionPropagation::CascadeDescendants);
+
+    assert_eq!(view.selected_ids(), vec![2, 4, 5]);
+    assert_eq!(view.check_state(&2), CheckState::Checked);
+}
+
+#[test]
+fn cascade_selection_is_ignored_in_single_selection_mode() {
+    let mut view = tree_view()
+        .selection_mode(SelectionMode::Single)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .selection_glyphs(SelectionGlyphs::ASCII)
+        .expanded([1]);
+
+    assert!(view.select_id(2));
+
+    assert_eq!(view.selected_ids(), vec![2]);
+    assert_eq!(view.check_state(&1), CheckState::Unchecked);
+    assert_eq!(view.check_state(&2), CheckState::Checked);
+    assert_eq!(view.check_state(&4), CheckState::Unchecked);
+
+    let visible = view.visible_rows();
+    let root = visible.iter().find(|row| row.id == 1).unwrap();
+    let section = visible.iter().find(|row| row.id == 2).unwrap();
+    assert_eq!(view.selection_glyph(root), "[ ]");
+    assert_eq!(view.selection_glyph(section), "[x]");
+
+    assert!(view.toggle_selected(1));
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert_eq!(view.check_state(&1), CheckState::Checked);
+    assert_eq!(view.check_state(&2), CheckState::Unchecked);
+}
+
+#[test]
+fn selection_prefix_contributes_render_width_and_shows_indeterminate_glyph() {
+    let view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
+        .selection_glyphs(SelectionGlyphs::ASCII)
+        .selected([4])
+        .expanded([1]);
+
+    assert_eq!(view.column_widths(1), vec![17]);
+
+    let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 2)))
+        .expect("data view should render");
+
+    let visible = (0..12)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert_eq!(visible, " [-] root ┃");
+}
+
 fn tree_view() -> DataView<Row, usize> {
     DataView::list(rows(), |row| row.id, |row| row.name.to_string())
         .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
@@ -402,6 +1057,35 @@ fn tree_view() -> DataView<Row, usize> {
 
 fn visible_ids<T>(view: &DataView<T, usize>) -> Vec<usize> {
     view.visible_rows().iter().map(|row| row.id).collect()
+}
+
+fn down_key() -> KeyEvent {
+    KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+fn enter_key() -> KeyEvent {
+    KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+fn space_key() -> KeyEvent {
+    KeyEvent {
+        code: Key::Char(' '),
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+fn z_key(modifiers: KeyModifiers) -> KeyEvent {
+    let shifted = modifiers.contains(KeyModifiers::SHIFT);
+    KeyEvent {
+        code: Key::Char(if shifted { 'Z' } else { 'z' }),
+        modifiers,
+    }
 }
 
 impl Row {

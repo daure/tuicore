@@ -2,6 +2,8 @@ use std::{env, fs, io, path::PathBuf};
 
 use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
+// Large cohesive module; config parsing, defaults, and labels stay aligned.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
     nav: NavKeyBindings,
@@ -37,6 +39,7 @@ pub struct TabsKeyBindings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataViewKeyBindings {
     activate: Vec<KeySpec>,
+    toggle_selection: Vec<KeySpec>,
     toggle_expansion: Vec<KeySpec>,
     next_page: Vec<KeySpec>,
     previous_page: Vec<KeySpec>,
@@ -89,6 +92,7 @@ impl Default for DataViewKeyBindings {
     fn default() -> Self {
         Self {
             activate: vec![KeySpec::key(Key::Enter)],
+            toggle_selection: vec![KeySpec::plain('x')],
             toggle_expansion: vec![KeySpec::plain(' ')],
             next_page: vec![KeySpec::plain('n')],
             previous_page: vec![KeySpec::plain('p')],
@@ -152,6 +156,12 @@ impl KeyBindings {
             "data_view",
             "activate",
             &mut bindings.data_view.activate,
+        );
+        set_keys(
+            &value,
+            "data_view",
+            "toggle_selection",
+            &mut bindings.data_view.toggle_selection,
         );
         set_keys(
             &value,
@@ -332,6 +342,18 @@ impl KeyBindings {
         self.data_view.toggle_expansion = keys.into_iter().collect();
     }
 
+    pub fn set_data_view_toggle_selection(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.toggle_selection = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_toggle_selection(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_data_view_toggle_selection(keys);
+        self
+    }
+
     pub fn with_data_view_toggle_expansion(
         mut self,
         keys: impl IntoIterator<Item = KeySpec>,
@@ -398,8 +420,16 @@ impl KeyBindings {
         matches_any(&self.nav.line_up, key)
     }
 
+    pub fn line_up_label(&self) -> String {
+        labels(&self.nav.line_up)
+    }
+
     pub fn line_down_matches(&self, key: KeyEvent) -> bool {
         matches_any(&self.nav.line_down, key)
+    }
+
+    pub fn line_down_label(&self) -> String {
+        labels(&self.nav.line_down)
     }
 
     pub fn line_left_matches(&self, key: KeyEvent) -> bool {
@@ -482,8 +512,24 @@ impl DataViewKeyBindings {
         matches_any(&self.activate, key)
     }
 
+    pub fn activate_label(&self) -> String {
+        labels(&self.activate)
+    }
+
     pub fn toggle_expansion_matches(&self, key: KeyEvent) -> bool {
         matches_any(&self.toggle_expansion, key)
+    }
+
+    pub fn toggle_expansion_label(&self) -> String {
+        labels(&self.toggle_expansion)
+    }
+
+    pub fn toggle_selection_matches(&self, key: KeyEvent) -> bool {
+        matches_any(&self.toggle_selection, key)
+    }
+
+    pub fn toggle_selection_label(&self) -> String {
+        labels(&self.toggle_selection)
     }
 
     pub fn next_page_matches(&self, key: KeyEvent) -> bool {
@@ -498,8 +544,16 @@ impl DataViewKeyBindings {
         matches_any(&self.collapse_all, key)
     }
 
+    pub fn collapse_all_label(&self) -> String {
+        labels(&self.collapse_all)
+    }
+
     pub fn expand_all_matches(&self, key: KeyEvent) -> bool {
         matches_any(&self.expand_all, key)
+    }
+
+    pub fn expand_all_label(&self) -> String {
+        labels(&self.expand_all)
     }
 
     pub fn top_prefix_matches(&self, key: KeyEvent) -> bool {
@@ -544,8 +598,12 @@ impl KeySpec {
     }
 
     pub fn matches(self, key: KeyEvent) -> bool {
-        if self == KeySpec::from(key) {
-            return true;
+        if self.code == Key::BackTab && key.code == Key::BackTab {
+            return if self.modifiers == KeyModifiers::NONE {
+                key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
+            } else {
+                key.modifiers == self.modifiers
+            };
         }
 
         if let KeySpec {
@@ -554,10 +612,19 @@ impl KeySpec {
         } = self
             && modifiers == KeyModifiers::CONTROL
             && expected.is_ascii_lowercase()
-            && let Key::Char(actual) = key.code
+            && let KeySpec {
+                code: Key::Char(actual),
+                modifiers: actual_modifiers,
+            } = KeySpec::from(key)
         {
-            return key.modifiers.contains(KeyModifiers::CONTROL)
-                && actual.to_ascii_lowercase() == expected;
+            let tolerated_uppercase_report = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+            return (actual_modifiers == KeyModifiers::CONTROL
+                || actual_modifiers == tolerated_uppercase_report)
+                && actual == expected;
+        }
+
+        if self == KeySpec::from(key) {
+            return true;
         }
 
         matches!(
@@ -661,6 +728,14 @@ fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
     bindings.iter().any(|binding| binding.matches(key))
 }
 
+fn labels(bindings: &[KeySpec]) -> String {
+    bindings
+        .iter()
+        .map(|binding| binding.label())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn parse_key(value: &str) -> Option<KeySpec> {
     let value = value.trim().to_ascii_lowercase();
 
@@ -675,6 +750,9 @@ fn parse_key(value: &str) -> Option<KeySpec> {
     }
 
     if let Some(rest) = value.strip_prefix("shift+") {
+        if rest == "tab" || rest == "backtab" {
+            return Some(KeySpec::key(Key::BackTab));
+        }
         return single_char(rest).map(KeySpec::shifted);
     }
 
@@ -739,6 +817,7 @@ mod tests {
 
             [data_view]
             activate = "enter"
+            toggle_selection = "x"
             toggle_expansion = "space"
             next_page = "n"
             previous_page = "p"
@@ -789,6 +868,10 @@ mod tests {
             code: Key::Enter,
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.data_view().toggle_selection_matches(KeyEvent {
+            code: Key::Char('x'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.data_view().toggle_expansion_matches(KeyEvent {
             code: Key::Char(' '),
             modifiers: KeyModifiers::NONE,
@@ -833,6 +916,7 @@ mod tests {
             .with_nav_home([KeySpec::plain('g')])
             .with_nav_end([KeySpec::shifted('g')])
             .with_data_view_activate([KeySpec::plain('a')])
+            .with_data_view_toggle_selection([KeySpec::plain('s')])
             .with_data_view_toggle_expansion([KeySpec::plain('e')])
             .with_data_view_next_page([KeySpec::plain('n')])
             .with_data_view_previous_page([KeySpec::plain('p')])
@@ -885,6 +969,10 @@ mod tests {
             code: Key::Char('a'),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.data_view().toggle_selection_matches(KeyEvent {
+            code: Key::Char('s'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.data_view().toggle_expansion_matches(KeyEvent {
             code: Key::Char('e'),
             modifiers: KeyModifiers::NONE,
@@ -932,6 +1020,57 @@ mod tests {
         assert!(!bindings.next_matches(KeyEvent {
             code: Key::Tab,
             modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    #[test]
+    fn default_focus_previous_matches_backtab_with_or_without_shift_modifier() {
+        let bindings = FocusKeyBindings::default();
+
+        assert!(bindings.previous_matches(KeyEvent {
+            code: Key::BackTab,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.previous_matches(KeyEvent {
+            code: Key::BackTab,
+            modifiers: KeyModifiers::SHIFT,
+        }));
+        assert!(!bindings.previous_matches(KeyEvent {
+            code: Key::BackTab,
+            modifiers: KeyModifiers::ALT,
+        }));
+    }
+
+    #[test]
+    fn shift_tab_config_maps_to_backtab() {
+        let bindings = KeyBindings::from_toml_str(
+            r#"
+            [focus]
+            previous = "shift+tab"
+            "#,
+        );
+
+        assert!(bindings.focus().previous_matches(KeyEvent {
+            code: Key::BackTab,
+            modifiers: KeyModifiers::SHIFT,
+        }));
+    }
+
+    #[test]
+    fn ctrl_bindings_reject_unrelated_modifiers() {
+        let binding = KeySpec::key_with_modifiers(Key::Char('u'), KeyModifiers::CONTROL);
+
+        assert!(binding.matches(KeyEvent {
+            code: Key::Char('U'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        }));
+        assert!(!binding.matches(KeyEvent {
+            code: Key::Char('u'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
+        }));
+        assert!(!binding.matches(KeyEvent {
+            code: Key::Char('U'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
         }));
     }
 }

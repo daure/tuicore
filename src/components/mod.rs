@@ -5,8 +5,9 @@ mod spinner;
 mod tabs;
 
 pub use data_view::{
-    CellContext, Column, DataView, DataViewEvent, DataViewOutcome, DataViewPagination,
-    DataViewSort, SortDirection, TreeAdapter, TreeGlyphs,
+    ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
+    DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
+    SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
 pub use list::{List, ListOutcome};
 pub use panel::{Panel, PanelVariant};

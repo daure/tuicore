@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::hash::Hash;
 
 use tuirealm::ratatui::layout::{Constraint, Direction, Layout, Rect};
 use tuirealm::ratatui::text::Line;
 
-use super::{CellContext, Column, DataView, SortDirection, VisibleRow};
+use super::{CellContext, Column, DataView, SelectionMode, SortDirection, VisibleRow};
 use crate::{ScrollGeometry, ScrollOffset, ScrollSize, line_width, preset};
 
 impl<T, Id> DataView<T, Id>
@@ -113,6 +114,7 @@ where
             }
         }
 
+        let selection_descendants = self.selection_descendants_by_id();
         for (row_index, row) in self.visible_rows().into_iter().enumerate() {
             for (index, column) in self.columns.iter().enumerate() {
                 widths[index] = widths[index].max(self.rendered_cell_width(
@@ -120,6 +122,7 @@ where
                     column,
                     &row,
                     row_index == self.highlighted,
+                    &selection_descendants,
                 ));
             }
         }
@@ -146,6 +149,7 @@ where
         column: &Column<T, Id>,
         row: &VisibleRow<'_, T, Id>,
         highlighted: bool,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
     ) -> usize {
         let line = (column.renderer)(
             row.row,
@@ -159,27 +163,41 @@ where
                 focused: self.focused,
             },
         );
-        let prefix_width = if column_index == 0 && self.tree.is_some() {
-            self.tree_prefix_width(row)
+        let prefix_width = if column_index == 0 {
+            self.row_prefix_width(row, selection_descendants)
         } else {
             0
         };
         prefix_width + line_width(&line)
     }
 
-    fn tree_prefix_width(&self, row: &VisibleRow<'_, T, Id>) -> usize {
-        let indent_width = row
-            .depth
-            .saturating_mul(preset().data_view().tree_indent_width());
-        let glyph = if row.has_children {
-            if row.expanded {
-                self.tree_glyphs.expanded
+    fn row_prefix_width(
+        &self,
+        row: &VisibleRow<'_, T, Id>,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+    ) -> usize {
+        let mut width = 0;
+        if self.tree.is_some() {
+            width += row
+                .depth
+                .saturating_mul(preset().data_view().tree_indent_width());
+            let glyph = if row.has_children {
+                if row.expanded {
+                    self.tree_glyphs.expanded
+                } else {
+                    self.tree_glyphs.collapsed
+                }
             } else {
-                self.tree_glyphs.collapsed
-            }
-        } else {
-            self.tree_glyphs.leaf
-        };
-        indent_width + line_width(&Line::from(format!("{glyph} ")))
+                self.tree_glyphs.leaf
+            };
+            width += line_width(&Line::from(format!("{glyph} ")));
+        }
+        if self.selection_mode == SelectionMode::Multi {
+            width += line_width(&Line::from(format!(
+                "{} ",
+                self.selection_glyph_with_descendants(&row.id, selection_descendants)
+            )));
+        }
+        width
     }
 }

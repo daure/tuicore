@@ -1,4 +1,7 @@
-use tuicore::{Animated, DataView, Panel, TreeAdapter, TreeGlyphs};
+use tuicore::{
+    ActivationMode, Animated, DataView, DataViewTypedEvent, Panel, SelectionMode, SelectionTrigger,
+    TreeAdapter,
+};
 use tuirealm::command::{Cmd, CmdResult};
 use tuirealm::component::{AppComponent, Component};
 use tuirealm::event::{Event, Key, KeyEvent, NoUserEvent};
@@ -26,7 +29,9 @@ impl ComponentList {
         .tree(TreeAdapter::parent_id(|component: &ComponentKind| {
             component.parent()
         }))
-        .tree_glyphs(TreeGlyphs::NERD_FONT)
+        .activation_mode(ActivationMode::OnNavigate)
+        .selection_mode(SelectionMode::Single)
+        .selection_trigger(SelectionTrigger::OnNavigate)
         .expanded([ComponentKind::DataView]);
         Self {
             list,
@@ -94,11 +99,21 @@ impl AppComponent<Msg, NoUserEvent> for ComponentList {
                 }
 
                 let outcome = self.list.on_key(*key, self.list_area);
-                if outcome.needs_redraw() {
-                    self.list
-                        .highlighted_id()
-                        .map(Msg::Selected)
-                        .or(Some(Msg::Redraw))
+                let selected = self
+                    .list
+                    .take_events()
+                    .into_iter()
+                    .find_map(|event| match event {
+                        DataViewTypedEvent::HighlightChanged {
+                            row_id: Some(row_id),
+                        }
+                        | DataViewTypedEvent::Activated { row_id } => Some(row_id),
+                        _ => None,
+                    });
+                if let Some(selected) = selected {
+                    Some(Msg::Selected(selected))
+                } else if outcome.needs_redraw() {
+                    Some(Msg::Redraw)
                 } else {
                     None
                 }
