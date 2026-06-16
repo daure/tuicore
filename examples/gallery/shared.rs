@@ -11,6 +11,8 @@ pub enum Id {
     DataViewMultiSelect,
     DataViewChecklistTree,
     DataViewActivateOnNavigate,
+    TextInput,
+    TextareaInput,
     Panel,
     ScrollAnimated,
     Spinner,
@@ -51,6 +53,9 @@ pub enum ComponentKind {
     Panel,
     ScrollAnimated,
     Spinner,
+    Inputs,
+    TextInput,
+    TextareaInput,
     DataView,
     DataViewList,
     DataViewTable,
@@ -63,11 +68,14 @@ pub enum ComponentKind {
 }
 
 impl ComponentKind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 16] = [
         Self::Tabs,
         Self::Panel,
         Self::ScrollAnimated,
         Self::Spinner,
+        Self::Inputs,
+        Self::TextInput,
+        Self::TextareaInput,
         Self::DataView,
         Self::DataViewList,
         Self::DataViewTable,
@@ -85,6 +93,9 @@ impl ComponentKind {
             Self::Panel => "Panels",
             Self::ScrollAnimated => "Scroll: animated",
             Self::Spinner => "Spinner",
+            Self::Inputs => "Inputs",
+            Self::TextInput => "Input: text",
+            Self::TextareaInput => "Input: textarea",
             Self::DataView => "DataView",
             Self::DataViewList => "DataView: list",
             Self::DataViewTable => "DataView: table",
@@ -103,6 +114,9 @@ impl ComponentKind {
             Self::Panel => Id::Panel,
             Self::ScrollAnimated => Id::ScrollAnimated,
             Self::Spinner => Id::Spinner,
+            Self::Inputs => Id::TextInput,
+            Self::TextInput => Id::TextInput,
+            Self::TextareaInput => Id::TextareaInput,
             Self::DataView => Id::DataViewList,
             Self::DataViewList => Id::DataViewList,
             Self::DataViewTable => Id::DataViewTable,
@@ -125,6 +139,7 @@ impl ComponentKind {
             | Self::DataViewMultiSelect
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
+            Self::TextInput | Self::TextareaInput => Some(Self::Inputs),
             _ => None,
         }
     }

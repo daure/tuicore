@@ -9,6 +9,8 @@ use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalAdapter};
 mod component_list;
 #[path = "gallery/data_view_preview.rs"]
 mod data_view_preview;
+#[path = "gallery/input_preview.rs"]
+mod input_preview;
 #[path = "gallery/panel_preview.rs"]
 mod panel_preview;
 #[path = "gallery/scroll_preview.rs"]
@@ -22,6 +24,7 @@ mod tabs_preview;
 
 use component_list::ComponentList;
 use data_view_preview::{DataViewMode, DataViewPreview};
+use input_preview::{TextInputPreview, TextareaInputPreview};
 use panel_preview::PanelPreview;
 use scroll_preview::AnimatedScrollPreview;
 use shared::{ComponentKind, Id, Msg};
@@ -78,6 +81,8 @@ impl Model {
         app.mount(Id::Panel, PanelPreview::new())?;
         app.mount(Id::ScrollAnimated, AnimatedScrollPreview::new())?;
         app.mount(Id::Spinner, SpinnerPreview::new())?;
+        app.mount(Id::TextInput, TextInputPreview::new())?;
+        app.mount(Id::TextareaInput, TextareaInputPreview::new())?;
         app.mount(Id::DataViewList, DataViewPreview::new(DataViewMode::List))?;
         app.mount(Id::DataViewTable, DataViewPreview::new(DataViewMode::Table))?;
         app.mount(
@@ -150,6 +155,8 @@ impl Model {
             Id::Panel,
             Id::ScrollAnimated,
             Id::Spinner,
+            Id::TextInput,
+            Id::TextareaInput,
             Id::DataViewList,
             Id::DataViewTable,
             Id::DataViewListTree,

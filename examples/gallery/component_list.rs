@@ -32,7 +32,8 @@ impl ComponentList {
         .activation_mode(ActivationMode::OnNavigate)
         .selection_mode(SelectionMode::Single)
         .selection_trigger(SelectionTrigger::OnNavigate)
-        .expanded([ComponentKind::DataView]);
+        .selected([ComponentKind::Tabs])
+        .expanded([ComponentKind::Inputs, ComponentKind::DataView]);
         Self {
             list,
             focused: false,

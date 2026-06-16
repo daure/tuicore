@@ -17,9 +17,9 @@ pub use app::TuicoreApp;
 pub use border::{BorderChars, border_chars, border_set};
 pub use components::{
     ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
-    DataViewPagination, DataViewSort, DataViewTypedEvent, List, ListOutcome, Panel, PanelVariant,
-    SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner,
-    Tab, Tabs, TreeAdapter, TreeGlyphs,
+    DataViewPagination, DataViewSort, DataViewTypedEvent, InputOutcome, List, ListOutcome, Panel,
+    PanelVariant, SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger,
+    SortDirection, Spinner, Tab, Tabs, TextInput, TextareaInput, TreeAdapter, TreeGlyphs,
 };
 pub use focus::{
     FocusChain, FocusDirection, FocusOutcome, FocusRouter, FocusRouterError, FocusWrap,

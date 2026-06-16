@@ -229,6 +229,7 @@ pub struct Theme {
     name: ThemeName,
     selected_fg: Color,
     selected_bg: Color,
+    text_fg: Color,
     muted_fg: Color,
     subtle_fg: Color,
     accent_fg: Color,
@@ -255,6 +256,7 @@ impl Theme {
             name,
             selected_fg: palette.green,
             selected_bg: palette.surface,
+            text_fg: palette.text,
             muted_fg: palette.muted,
             subtle_fg: palette.subtle,
             accent_fg: palette.cyan,
@@ -316,6 +318,9 @@ impl Theme {
     pub fn selected_bg(&self) -> Color {
         self.selected_bg
     }
+    pub fn text_fg(&self) -> Color {
+        self.text_fg
+    }
     pub fn muted_fg(&self) -> Color {
         self.muted_fg
     }
@@ -352,6 +357,7 @@ impl Theme {
         match role {
             "selected_fg" => self.selected_fg = color,
             "selected_bg" => self.selected_bg = color,
+            "text_fg" => self.text_fg = color,
             "muted_fg" => self.muted_fg = color,
             "subtle_fg" => self.subtle_fg = color,
             "accent_fg" => self.accent_fg = color,
