@@ -1,6 +1,6 @@
 use std::{env, fs, io, path::PathBuf};
 
-use tuirealm::event::{Key, KeyEvent, KeyModifiers};
+use crate::event::{Key, KeyEvent, KeyModifiers};
 
 // Large cohesive module; config parsing, defaults, and labels stay aligned.
 
@@ -416,53 +416,53 @@ impl KeyBindings {
         self
     }
 
-    pub fn line_up_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.line_up, key)
+    pub fn line_up_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.line_up, key.into())
     }
 
     pub fn line_up_label(&self) -> String {
         labels(&self.nav.line_up)
     }
 
-    pub fn line_down_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.line_down, key)
+    pub fn line_down_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.line_down, key.into())
     }
 
     pub fn line_down_label(&self) -> String {
         labels(&self.nav.line_down)
     }
 
-    pub fn line_left_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.line_left, key)
+    pub fn line_left_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.line_left, key.into())
     }
 
-    pub fn line_right_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.line_right, key)
+    pub fn line_right_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.line_right, key.into())
     }
 
-    pub fn page_up_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.page_up, key)
+    pub fn page_up_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.page_up, key.into())
     }
 
-    pub fn page_down_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.page_down, key)
+    pub fn page_down_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.page_down, key.into())
     }
 
-    pub fn home_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.home, key)
+    pub fn home_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.home, key.into())
     }
 
-    pub fn end_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.nav.end, key)
+    pub fn end_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.end, key.into())
     }
 }
 
 impl TabsKeyBindings {
-    pub fn previous_matches(&self, key: KeyEvent) -> bool {
+    pub fn previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
         self.previous.matches(key)
     }
 
-    pub fn next_matches(&self, key: KeyEvent) -> bool {
+    pub fn next_matches(&self, key: impl Into<KeyEvent>) -> bool {
         self.next.matches(key)
     }
 
@@ -498,70 +498,70 @@ impl FocusKeyBindings {
         self
     }
 
-    pub fn next_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.next, key)
+    pub fn next_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.next, key.into())
     }
 
-    pub fn previous_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.previous, key)
+    pub fn previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.previous, key.into())
     }
 }
 
 impl DataViewKeyBindings {
-    pub fn activate_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.activate, key)
+    pub fn activate_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.activate, key.into())
     }
 
     pub fn activate_label(&self) -> String {
         labels(&self.activate)
     }
 
-    pub fn toggle_expansion_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.toggle_expansion, key)
+    pub fn toggle_expansion_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.toggle_expansion, key.into())
     }
 
     pub fn toggle_expansion_label(&self) -> String {
         labels(&self.toggle_expansion)
     }
 
-    pub fn toggle_selection_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.toggle_selection, key)
+    pub fn toggle_selection_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.toggle_selection, key.into())
     }
 
     pub fn toggle_selection_label(&self) -> String {
         labels(&self.toggle_selection)
     }
 
-    pub fn next_page_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.next_page, key)
+    pub fn next_page_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.next_page, key.into())
     }
 
-    pub fn previous_page_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.previous_page, key)
+    pub fn previous_page_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.previous_page, key.into())
     }
 
-    pub fn collapse_all_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.collapse_all, key)
+    pub fn collapse_all_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.collapse_all, key.into())
     }
 
     pub fn collapse_all_label(&self) -> String {
         labels(&self.collapse_all)
     }
 
-    pub fn expand_all_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.expand_all, key)
+    pub fn expand_all_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.expand_all, key.into())
     }
 
     pub fn expand_all_label(&self) -> String {
         labels(&self.expand_all)
     }
 
-    pub fn top_prefix_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.top_prefix, key)
+    pub fn top_prefix_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.top_prefix, key.into())
     }
 
-    pub fn bottom_matches(&self, key: KeyEvent) -> bool {
-        matches_any(&self.bottom, key)
+    pub fn bottom_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.bottom, key.into())
     }
 }
 
@@ -597,7 +597,8 @@ impl KeySpec {
         Self { code, modifiers }
     }
 
-    pub fn matches(self, key: KeyEvent) -> bool {
+    pub fn matches(self, key: impl Into<KeyEvent>) -> bool {
+        let key = key.into();
         if self.code == Key::BackTab && key.code == Key::BackTab {
             return if self.modifiers == KeyModifiers::NONE {
                 key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT

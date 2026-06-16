@@ -1,10 +1,13 @@
 pub mod animation;
-pub mod app;
 pub mod border;
+pub mod children;
 pub mod components;
+pub mod event;
 pub mod focus;
 pub mod keybindings;
+pub mod node;
 pub mod preset;
+pub mod runtime;
 pub mod scroll;
 pub mod theme;
 pub mod ui;
@@ -13,13 +16,18 @@ pub use animation::{
     Animated, AnimationSettings, AnimationSpec, ColorTween, Easing, ResolvedAnimationSpec,
     ScrollAnimator, TickResult, Tween, lerp_color,
 };
-pub use app::TuicoreApp;
 pub use border::{BorderChars, border_chars, border_set};
+pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
-    ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
-    DataViewPagination, DataViewSort, DataViewTypedEvent, InputOutcome, List, ListOutcome, Panel,
-    PanelVariant, SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger,
-    SortDirection, Spinner, Tab, Tabs, TextInput, TextareaInput, TreeAdapter, TreeGlyphs,
+    ActivationMode, CellContext, CheckState, Column, CrossAlign, CrossSize, DataView,
+    DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTypedEvent, Flex,
+    FlexItem, InputOutcome, List, ListOutcome, MainAlign, Padding, Panel, PanelHost, PanelVariant,
+    SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner,
+    Split, Tab, Tabs, TextInput, TextareaInput, TreeAdapter, TreeGlyphs,
+};
+pub use event::{
+    Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
+    UnsupportedEvent,
 };
 pub use focus::{
     FocusChain, FocusDirection, FocusOutcome, FocusRouter, FocusRouterError, FocusWrap,
@@ -27,7 +35,15 @@ pub use focus::{
 pub use keybindings::{
     DataViewKeyBindings, FocusKeyBindings, KeyBindings, KeySpec, TabsKeyBindings,
 };
+pub use node::{
+    ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRepair, FocusRequest,
+    FocusTarget, HitRegion, LayoutCtx, LayoutResult, LifecycleCtx, Propagation, TreePath, TuiNode,
+};
 pub use preset::{BorderKind, DataViewPreset, Preset, TabsPreset, TabsVariant};
+pub use runtime::{
+    DispatchEffects, EventSource, FocusManager, FocusTransition, LayoutEngine, Renderer, Result,
+    Scheduler, TerminalGuard, TreeApp, TreeDispatcher, run,
+};
 pub use scroll::{
     ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset,
     ScrollOutcome, ScrollPreset, ScrollSize, ScrollState, ScrollbarConfig, ScrollbarGutter,
@@ -35,6 +51,6 @@ pub use scroll::{
 };
 pub use theme::{Theme, ThemeName};
 pub use ui::{
-    animation_settings, animation_tick_subscription, animation_tick_subscriptions, init,
-    init_from_dir, keybindings, preset, set_keybindings, set_preset, set_theme, theme,
+    animation_settings, init, init_from_dir, keybindings, preset, set_keybindings, set_preset,
+    set_theme, theme,
 };

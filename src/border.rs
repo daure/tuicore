@@ -1,4 +1,4 @@
-use tuirealm::ratatui::symbols::border::{DOUBLE, PLAIN, ROUNDED, Set, THICK};
+use ratatui::symbols::border::{DOUBLE, PLAIN, ROUNDED, Set, THICK};
 
 use crate::BorderKind;
 

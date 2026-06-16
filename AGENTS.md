@@ -1,12 +1,12 @@
 # tuicore constitution
 
 - Library-first Rust TUI crate. Examples live in `examples/`; reusable code lives in `src/`.
-- Core stack: `ratatui` + `tuirealm`. Components should remain usable by downstream apps.
+- Core stack: `ratatui` + direct `crossterm` + tuicore tree runtime. Components should remain usable by downstream apps.
 - Keep APIs small, composable, and Rust-idiomatic. Prefer explicit state ownership over magic.
 - Project/library depends on Nerd Font. When an icon is needed, search/use Nerd Font first, then ASCII fallback if needed.
 - Render purity: input/update starts animations, `tick(dt)` advances, `view/render` only reads state.
-- Consumer ergonomics: hide ratatui/tuirealm plumbing where possible. Components own scroll/animation/theme behavior; app helpers wire ticks, focus, and subscriptions so common usage stays declarative.
-- Component ergonomics: components should hide internal ratatui/tuirealm machinery, apply global presets by default, and expose small Rust builder/config APIs for overrides instead of forcing app code to wire internals.
+- Consumer ergonomics: hide runtime plumbing where possible. Components own scroll/animation/theme behavior; app helpers wire ticks, focus, events, and lifecycle so common usage stays declarative.
+- Component ergonomics: components should hide internal ratatui/crossterm/runtime machinery, apply global presets by default, and expose small Rust builder/config APIs for overrides instead of forcing app code to wire internals.
 - Cross-cutting primitives live in `src/` and should be reused before adding component-local behavior:
   - Theme = semantic colors only; components use roles from `theme()`.
   - Color discipline: no raw colors in components; every intentional fg/bg/border color comes from semantic `Theme` roles. Default terminal colors are OK only when intentionally inherited.

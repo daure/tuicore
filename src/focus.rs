@@ -1,9 +1,6 @@
-use std::{error::Error, fmt, hash::Hash};
+use std::{error::Error, fmt};
 
-use tuirealm::application::ApplicationResult;
-use tuirealm::event::KeyEvent;
-
-use crate::{FocusKeyBindings, TuicoreApp, keybindings};
+use crate::{FocusKeyBindings, KeyEvent, keybindings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FocusChain<T> {
@@ -150,7 +147,8 @@ where
         }
     }
 
-    pub fn on_key(&mut self, key: KeyEvent) -> FocusOutcome<T> {
+    pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> FocusOutcome<T> {
+        let key = key.into();
         if self.keys.next_matches(key) {
             self.focus_next()
         } else if self.keys.previous_matches(key) {
@@ -185,22 +183,6 @@ impl<T> FocusOutcome<T> {
             Self::Moved { from, to } => Some((from, to)),
             _ => None,
         }
-    }
-}
-
-impl<Id> FocusRouter<Id>
-where
-    Id: Clone + Eq + Hash,
-{
-    pub fn activate_current<Msg, UserEvent>(
-        &self,
-        app: &mut TuicoreApp<Id, Msg, UserEvent>,
-    ) -> ApplicationResult<()>
-    where
-        Msg: PartialEq + 'static,
-        UserEvent: Eq + PartialEq + Clone + Send + 'static,
-    {
-        app.active(self.current())
     }
 }
 
@@ -240,8 +222,7 @@ fn has_duplicates<T: Eq>(items: &[T]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KeySpec;
-    use tuirealm::event::{Key, KeyModifiers};
+    use crate::{Key, KeyModifiers, KeySpec};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Target {

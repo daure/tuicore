@@ -1,9 +1,8 @@
+use ratatui::layout::{Constraint, Rect};
 use tuicore::{
-    AnimationSettings, Column, DataView, DataViewTypedEvent, KeyBindings, KeySpec, keybindings,
-    set_keybindings,
+    AnimationSettings, Column, DataView, DataViewTypedEvent, Key, KeyBindings, KeyEvent,
+    KeyModifiers, KeySpec, keybindings, set_keybindings,
 };
-use tuirealm::event::{Key, KeyEvent, KeyModifiers};
-use tuirealm::ratatui::layout::{Constraint, Rect};
 
 #[derive(Clone)]
 struct Row {

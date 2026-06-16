@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, fs, path::PathBuf, str::FromStr};
 
-use tuirealm::ratatui::style::Color;
+use ratatui::style::Color;
 
 use crate::keybindings::config_dir;
 

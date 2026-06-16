@@ -1,6 +1,6 @@
 use std::{num::NonZeroU32, time::Duration};
 
-use tuirealm::ratatui::style::Color;
+use ratatui::style::Color;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimationSettings {
@@ -17,7 +17,7 @@ impl Default for AnimationSettings {
             enabled: true,
             target_fps: NonZeroU32::new(60).expect("60 is non-zero"),
             max_dt: Duration::from_millis(100),
-            default_duration: Duration::from_millis(150),
+            default_duration: Duration::from_millis(250),
             default_easing: Easing::EaseInOut,
         }
     }

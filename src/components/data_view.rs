@@ -2,6 +2,9 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::time::Duration;
 
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Rect};
+
 mod layout;
 mod model;
 mod render;
@@ -10,18 +13,11 @@ mod selection;
 mod tests;
 mod tree_rows;
 
-use tuirealm::command::{Cmd, CmdResult};
-use tuirealm::component::Component;
-use tuirealm::event::{Key, KeyEvent, KeyModifiers};
-use tuirealm::props::{AttrValue, Attribute, QueryResult};
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::{Constraint, Rect};
-use tuirealm::state::State;
-
+use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
-    Animated, AnimationSettings, KeyBindings, ScrollAxes, ScrollBehavior, ScrollDelta,
-    ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig, TickResult, animation_settings,
-    keybindings, preset,
+    Animated, AnimationSettings, EventCtx, EventOutcome, FocusCtx, FocusId, KeyBindings, LayoutCtx,
+    LayoutResult, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome,
+    ScrollState, ScrollbarConfig, TickResult, TuiNode, animation_settings, keybindings, preset,
 };
 
 pub use model::{
@@ -32,6 +28,7 @@ pub use model::{
 use model::{RowIdFn, VisibleRow};
 
 const HORIZONTAL_JUMP: isize = 8;
+const DATA_VIEW_FOCUS: &str = "data-view";
 
 pub struct DataView<T, Id> {
     rows: Vec<T>,
@@ -55,6 +52,7 @@ pub struct DataView<T, Id> {
     selection_glyphs: SelectionGlyphs,
     tree_glyphs: TreeGlyphs,
     pending_g: bool,
+    area: Rect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +89,7 @@ where
             selection_glyphs: SelectionGlyphs::NERD_FONT,
             tree_glyphs: TreeGlyphs::NERD_FONT,
             pending_g: false,
+            area: Rect::default(),
         }
     }
 
@@ -145,6 +144,10 @@ where
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 
     pub fn pagination(mut self, page_size: usize) -> Self {
@@ -359,16 +362,17 @@ where
             .map(|row| row.id.clone())
     }
 
-    pub fn on_key(&mut self, key: KeyEvent, viewport: Rect) -> DataViewOutcome {
+    pub fn on_key(&mut self, key: impl Into<KeyEvent>, viewport: Rect) -> DataViewOutcome {
         self.on_key_with_settings(key, viewport, animation_settings())
     }
 
     pub fn on_key_with_settings(
         &mut self,
-        key: KeyEvent,
+        key: impl Into<KeyEvent>,
         area: Rect,
         settings: AnimationSettings,
     ) -> DataViewOutcome {
+        let key = key.into();
         let keys = keybindings();
         self.on_key_with_settings_and_bindings(key, area, settings, &keys)
     }
@@ -387,10 +391,10 @@ where
             self.scroll_horizontal_by(delta, area, settings)
         } else if keys.line_up_matches(key) {
             self.pending_g = false;
-            self.highlight_with_settings(self.highlighted.saturating_sub(1), area, settings)
+            self.highlight_line_with_settings(self.highlighted.saturating_sub(1), area, settings)
         } else if keys.line_down_matches(key) {
             self.pending_g = false;
-            self.highlight_with_settings(self.highlighted.saturating_add(1), area, settings)
+            self.highlight_line_with_settings(self.highlighted.saturating_add(1), area, settings)
         } else if keys.line_left_matches(key) {
             self.pending_g = false;
             self.navigate_or_scroll_left(key, area, settings)
@@ -399,16 +403,28 @@ where
             self.navigate_or_scroll_right(key, area, settings)
         } else if keys.page_up_matches(key) {
             self.pending_g = false;
-            self.highlight_with_settings(self.highlighted.saturating_sub(page), area, settings)
+            self.highlight_centered_with_settings(
+                self.highlighted.saturating_sub(page),
+                area,
+                settings,
+            )
         } else if keys.page_down_matches(key) {
             self.pending_g = false;
-            self.highlight_with_settings(self.highlighted.saturating_add(page), area, settings)
+            self.highlight_centered_with_settings(
+                self.highlighted.saturating_add(page),
+                area,
+                settings,
+            )
         } else if keys.home_matches(key) {
             self.pending_g = false;
-            self.highlight_with_settings(0, area, settings)
+            self.highlight_centered_with_settings(0, area, settings)
         } else if keys.end_matches(key) {
             self.pending_g = false;
-            self.highlight_with_settings(self.visible_len().saturating_sub(1), area, settings)
+            self.highlight_centered_with_settings(
+                self.visible_len().saturating_sub(1),
+                area,
+                settings,
+            )
         } else if data_keys.activate_matches(key) {
             self.pending_g = false;
             self.activate_highlighted()
@@ -603,6 +619,39 @@ where
         outcome
     }
 
+    fn highlight_line_with_settings(
+        &mut self,
+        highlighted: usize,
+        area: Rect,
+        mut settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        settings.enabled = false;
+        let highlighted = highlighted.min(self.visible_len().saturating_sub(1));
+        let update = self.set_highlighted_index(highlighted);
+        let changed = update.index_changed || update.selection_changed;
+        let mut outcome = self
+            .center_highlight(area, settings)
+            .into_data_view_outcome(true, changed);
+        outcome.activated = update.activated;
+        outcome
+    }
+
+    fn highlight_centered_with_settings(
+        &mut self,
+        highlighted: usize,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        let highlighted = highlighted.min(self.visible_len().saturating_sub(1));
+        let update = self.set_highlighted_index(highlighted);
+        let changed = update.index_changed || update.selection_changed;
+        let mut outcome = self
+            .center_highlight(area, settings)
+            .into_data_view_outcome(true, changed);
+        outcome.activated = update.activated;
+        outcome
+    }
+
     fn visible_page_step(&self, area: Rect) -> usize {
         let height = self.scroll_geometry(area).viewport.height.max(1);
         ((height * 3).saturating_add(4)) / 5
@@ -623,6 +672,27 @@ where
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
+        let geometry = self.scroll_geometry(area);
+        let viewport_height = geometry.viewport.height.max(1);
+        let current = self.scroll.target_offset().y;
+        let target = if self.highlighted < current {
+            self.highlighted
+        } else if self.highlighted >= current.saturating_add(viewport_height) {
+            self.highlighted
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            current
+        };
+        self.scroll.scroll_to(
+            ScrollOffset::new(self.scroll.target_offset().x, target),
+            geometry.viewport,
+            geometry.content,
+            settings,
+        )
+    }
+
+    fn center_highlight(&mut self, area: Rect, settings: AnimationSettings) -> ScrollOutcome {
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
         let target = self.highlighted.saturating_sub(viewport_height / 2);
@@ -745,35 +815,43 @@ where
     }
 }
 
-impl<T, Id> Component for DataView<T, Id>
+impl<T, Id, M> TuiNode<M> for DataView<T, Id>
 where
     Id: Clone + Eq + Hash,
 {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        self.render(frame, area);
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
+        LayoutResult::new(area)
     }
 
-    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
-        match attr {
-            Attribute::Focus => Some(QueryResult::Owned(AttrValue::Flag(self.focused))),
-            _ => None,
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        Self::render(self, frame, area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let TuiEvent::Key(key) = event else {
+            return EventOutcome::Ignored;
+        };
+        let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
+        if outcome.needs_redraw() {
+            ctx.request_redraw();
+        }
+        if outcome.handled {
+            ctx.stop_propagation();
+            EventOutcome::Handled
+        } else {
+            EventOutcome::Ignored
         }
     }
 
-    fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        if attr == Attribute::Focus
-            && let AttrValue::Flag(focused) = value
-        {
-            self.focused = focused;
-        }
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(self, dt, settings)
     }
 
-    fn state(&self) -> State {
-        State::None
-    }
-
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        CmdResult::Invalid(cmd)
+    fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.focused = focused;
+        ctx.request_redraw();
     }
 }
 

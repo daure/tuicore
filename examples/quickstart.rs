@@ -1,76 +1,97 @@
-use std::error::Error;
+use std::{error::Error, time::Duration};
 
-use tuicore::{Animated, Panel, TuicoreApp};
-use tuirealm::command::{Cmd, CmdResult};
-use tuirealm::component::{AppComponent, Component};
-use tuirealm::event::{Event, NoUserEvent};
-use tuirealm::props::{AttrValue, Attribute, QueryResult};
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::Rect;
-use tuirealm::state::State;
-
-#[derive(Debug, Eq, PartialEq, Clone, Hash)]
-enum Id {
-    Main,
-}
-
-#[derive(Debug, PartialEq)]
-enum Msg {
-    Redraw,
-}
+use ratatui::{Frame, layout::Rect};
+use tuicore::{
+    AnimationSettings, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget, Key, KeyEvent,
+    KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, Panel, PanelHost, TextInput, TickResult,
+    TuiEvent, TuiNode,
+};
 
 fn main() -> Result<(), Box<dyn Error>> {
     tuicore::init();
-
-    let mut app = TuicoreApp::<Id, Msg, NoUserEvent>::new();
-    app.mount(
-        Id::Main,
-        MainPanel(
-            Panel::new()
-                .top_left("Main")
-                .content(["Hello from tuicore"]),
-        ),
-    )?;
-    app.active(&Id::Main)?;
-
+    tuicore::run(Quickstart::new())?;
     Ok(())
 }
 
-struct MainPanel(Panel);
+struct Quickstart {
+    inner: PanelHost<TextInput>,
+}
 
-impl Component for MainPanel {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        self.0.view(frame, area);
+impl Quickstart {
+    fn new() -> Self {
+        Self {
+            inner: Panel::new()
+                .top_left("Filter")
+                .host(TextInput::new().placeholder("Search…")),
+        }
     }
 
-    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
-        self.0.query(attr)
-    }
+    fn quit_key(event: &TuiEvent) -> bool {
+        let TuiEvent::Key(KeyEvent { code, modifiers }) = event else {
+            return false;
+        };
 
-    fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        self.0.attr(attr, value);
-    }
-
-    fn state(&self) -> State {
-        self.0.state()
-    }
-
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        self.0.perform(cmd)
+        *code == Key::Esc
+            || (matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'c'))
+                && modifiers.contains(KeyModifiers::CONTROL))
     }
 }
 
-impl AppComponent<Msg, NoUserEvent> for MainPanel {
-    fn on(&mut self, event: &Event<NoUserEvent>) -> Option<Msg> {
-        match event {
-            Event::Tick => {
-                let settings = tuicore::animation_settings();
-                self.0
-                    .tick(settings.frame_duration(), settings)
-                    .changed
-                    .then_some(Msg::Redraw)
-            }
-            _ => Some(Msg::Redraw),
+impl TuiNode for Quickstart {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.inner.layout(area, ctx)
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.inner.render(frame, area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
+        if Self::quit_key(event) {
+            ctx.request_quit();
+            ctx.stop_propagation();
+            EventOutcome::Handled
+        } else {
+            self.inner.event(event, ctx)
         }
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<()>,
+    ) -> EventOutcome {
+        if Self::quit_key(event) {
+            ctx.request_quit();
+            ctx.stop_propagation();
+            EventOutcome::Handled
+        } else {
+            self.inner.dispatch_event(route, event, ctx)
+        }
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<()>) {
+        self.inner.dispatch_focus(target, focused, ctx);
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.inner.tick(dt, settings)
+    }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<()>) {
+        self.inner.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<()>) {
+        self.inner.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<()>) {
+        self.inner.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<()>) {
+        self.inner.destroy(ctx);
     }
 }

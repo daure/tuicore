@@ -1,5 +1,5 @@
-use tuirealm::ratatui::layout::Constraint;
-use tuirealm::ratatui::text::Line;
+use ratatui::layout::Constraint;
+use ratatui::text::Line;
 
 pub(super) type RowIdFn<T, Id> = dyn Fn(&T) -> Id;
 pub(super) type ParentIdFn<T, Id> = dyn Fn(&T) -> Option<Id>;

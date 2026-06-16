@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use tuirealm::ratatui::layout::{Constraint, Direction, Layout, Rect};
-use tuirealm::ratatui::text::Line;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::text::Line;
 
 use super::{CellContext, Column, DataView, SelectionMode, SortDirection, VisibleRow};
 use crate::{ScrollGeometry, ScrollOffset, ScrollSize, line_width, preset};

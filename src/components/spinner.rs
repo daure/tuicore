@@ -1,16 +1,12 @@
 use std::time::Duration;
 
-use tuirealm::command::{Cmd, CmdResult};
-use tuirealm::component::Component;
-use tuirealm::props::{AttrValue, Attribute, QueryResult};
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::{Alignment, Rect};
-use tuirealm::ratatui::style::Style;
-use tuirealm::ratatui::text::Span;
-use tuirealm::ratatui::widgets::Paragraph;
-use tuirealm::state::State;
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Style;
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
 
-use crate::{Animated, AnimationSettings, TickResult, theme};
+use crate::{Animated, AnimationSettings, LayoutCtx, LayoutResult, TickResult, TuiNode, theme};
 
 /// Braille dot frames for the loading spinner, cycling clockwise.
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -50,6 +46,20 @@ impl Spinner {
     pub fn glyph(&self) -> &'static str {
         SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()]
     }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        let glyph = self.glyph();
+        let style = self
+            .style
+            .unwrap_or_else(|| Style::default().fg(theme().accent_fg()));
+        let span = Span::styled(glyph, style);
+        let paragraph = Paragraph::new(span).alignment(Alignment::Center);
+        frame.render_widget(paragraph, area);
+    }
 }
 
 impl Animated for Spinner {
@@ -73,33 +83,17 @@ impl Animated for Spinner {
     }
 }
 
-impl Component for Spinner {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        if area.is_empty() {
-            return;
-        }
-
-        let glyph = self.glyph();
-        let style = self
-            .style
-            .unwrap_or_else(|| Style::default().fg(theme().accent_fg()));
-        let span = Span::styled(glyph, style);
-        let paragraph = Paragraph::new(span).alignment(Alignment::Center);
-        frame.render_widget(paragraph, area);
+impl<M> TuiNode<M> for Spinner {
+    fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+        LayoutResult::new(area)
     }
 
-    fn query<'a>(&'a self, _attr: Attribute) -> Option<QueryResult<'a>> {
-        None
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        Self::render(self, frame, area);
     }
 
-    fn attr(&mut self, _attr: Attribute, _value: AttrValue) {}
-
-    fn state(&self) -> State {
-        State::None
-    }
-
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        CmdResult::Invalid(cmd)
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(self, dt, settings)
     }
 }
 
@@ -115,13 +109,13 @@ mod tests {
         assert_eq!(spinner.glyph(), "⠋");
 
         // Tick less than interval -> no change
-        let result = spinner.tick(Duration::from_millis(50), settings);
+        let result = Animated::tick(&mut spinner, Duration::from_millis(50), settings);
         assert!(!result.changed);
         assert!(result.active);
         assert_eq!(spinner.glyph(), "⠋");
 
         // Tick more -> advances frame
-        let result = spinner.tick(Duration::from_millis(60), settings);
+        let result = Animated::tick(&mut spinner, Duration::from_millis(60), settings);
         assert!(result.changed);
         assert!(result.active);
         assert_eq!(spinner.glyph(), "⠙");
@@ -135,7 +129,7 @@ mod tests {
 
         assert_eq!(spinner.glyph(), "⠋");
 
-        let result = spinner.tick(Duration::from_millis(150), settings);
+        let result = Animated::tick(&mut spinner, Duration::from_millis(150), settings);
         assert!(!result.changed);
         assert!(!result.active);
         assert_eq!(spinner.glyph(), "⠋");

@@ -1,34 +1,33 @@
-use tuirealm::command::{Cmd, CmdResult, Direction as CmdDirection, Position};
-use tuirealm::component::Component;
-use tuirealm::event::{Key, KeyEvent};
-use tuirealm::props::{AttrValue, Attribute, QueryResult};
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::Rect;
-use tuirealm::ratatui::style::{Modifier, Style};
-use tuirealm::ratatui::text::{Line, Span};
-use tuirealm::ratatui::widgets::Paragraph;
-use tuirealm::state::{State, StateValue};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
+use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
+use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
 use super::text_input::{InputOutcome, is_ctrl, text_char};
 
-#[derive(Debug, Clone)]
-pub struct TextareaInput {
+const TEXTAREA_FOCUS: &str = "textarea";
+
+pub struct TextareaInput<M = ()> {
     value: String,
     placeholder: String,
     cursor: usize,
     focused: bool,
     max_lines: Option<usize>,
+    on_submit: Option<Box<dyn Fn(String) -> M>>,
 }
 
-impl Default for TextareaInput {
+impl<M> Default for TextareaInput<M> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TextareaInput {
+impl<M> TextareaInput<M> {
     pub fn new() -> Self {
         Self {
             value: String::new(),
@@ -36,6 +35,7 @@ impl TextareaInput {
             cursor: 0,
             focused: false,
             max_lines: None,
+            on_submit: None,
         }
     }
 
@@ -56,6 +56,15 @@ impl TextareaInput {
         self
     }
 
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+
+    pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_submit = Some(Box::new(handler));
+        self
+    }
+
     pub fn max_lines(mut self, max_lines: usize) -> Self {
         self.max_lines = Some(max_lines.max(1));
         self.clamp_lines();
@@ -67,7 +76,14 @@ impl TextareaInput {
         &self.value
     }
 
-    pub fn on_key(&mut self, key: KeyEvent) -> InputOutcome {
+    pub fn set_value(&mut self, value: impl Into<String>) {
+        self.value = value.into();
+        self.clamp_lines();
+        self.cursor = self.cursor.min(self.len_chars());
+    }
+
+    pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> InputOutcome {
+        let key = key.into();
         if is_ctrl(key, 'd') || (matches!(key.code, Key::Enter) && is_control(key)) {
             return InputOutcome::SUBMITTED;
         }
@@ -366,10 +382,6 @@ impl TextareaInput {
         self.value.chars().filter(|value| *value == '\n').count() + 1
     }
 
-    fn state_value(&self) -> State {
-        State::Single(StateValue::String(self.value.clone()))
-    }
-
     fn len_chars(&self) -> usize {
         self.value.chars().count()
     }
@@ -404,99 +416,40 @@ impl TextareaInput {
     }
 }
 
-impl Component for TextareaInput {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        self.render(frame, area);
+impl<M> TuiNode<M> for TextareaInput<M> {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
+        LayoutResult::new(area)
     }
 
-    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
-        match attr {
-            Attribute::Focus => Some(QueryResult::Owned(AttrValue::Flag(self.focused))),
-            Attribute::Text => Some(QueryResult::Owned(AttrValue::String(self.value.clone()))),
-            _ => None,
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        Self::render(self, frame, area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let TuiEvent::Key(key) = event else {
+            return EventOutcome::Ignored;
+        };
+        let outcome = self.on_key(*key);
+        if outcome.submitted
+            && let Some(on_submit) = &self.on_submit
+        {
+            ctx.emit(on_submit(self.value.clone()));
         }
-    }
-
-    fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        match (attr, value) {
-            (Attribute::Focus, AttrValue::Flag(focused)) => self.focused = focused,
-            (Attribute::Text, AttrValue::String(value)) => {
-                self.value = value;
-                self.clamp_lines();
-                self.cursor = self.cursor.min(self.len_chars());
-            }
-            _ => {}
+        if outcome.needs_redraw() {
+            ctx.request_redraw();
         }
-    }
-
-    fn state(&self) -> State {
-        self.state_value()
-    }
-
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        match cmd {
-            Cmd::Type(value) => {
-                let outcome = self.insert_char(value);
-                self.cmd_changed(outcome)
-            }
-            Cmd::Move(CmdDirection::Left) => {
-                let outcome = self.move_left();
-                self.cmd_visual(outcome)
-            }
-            Cmd::Move(CmdDirection::Right) => {
-                let outcome = self.move_right();
-                self.cmd_visual(outcome)
-            }
-            Cmd::Move(CmdDirection::Up) => {
-                let outcome = self.move_vertical(-1);
-                self.cmd_visual(outcome)
-            }
-            Cmd::Move(CmdDirection::Down) => {
-                let outcome = self.move_vertical(1);
-                self.cmd_visual(outcome)
-            }
-            Cmd::GoTo(Position::Begin) => {
-                let outcome = self.move_to(0);
-                self.cmd_visual(outcome)
-            }
-            Cmd::GoTo(Position::End) => {
-                let end = self.len_chars();
-                let outcome = self.move_to(end);
-                self.cmd_visual(outcome)
-            }
-            Cmd::GoTo(Position::At(cursor)) => {
-                let outcome = self.move_to(cursor);
-                self.cmd_visual(outcome)
-            }
-            Cmd::Delete => {
-                let outcome = self.delete_next();
-                self.cmd_changed(outcome)
-            }
-            Cmd::Submit => CmdResult::Submit(self.state_value()),
-            Cmd::Cancel => CmdResult::Custom("cancel", self.state_value()),
-            Cmd::None => CmdResult::NoChange,
-            _ => CmdResult::Invalid(cmd),
-        }
-    }
-}
-
-impl TextareaInput {
-    fn cmd_changed(&self, outcome: InputOutcome) -> CmdResult {
-        if outcome.changed {
-            CmdResult::Changed(self.state_value())
-        } else if outcome.handled {
-            CmdResult::NoChange
-        } else {
-            CmdResult::Invalid(Cmd::None)
-        }
-    }
-
-    fn cmd_visual(&self, outcome: InputOutcome) -> CmdResult {
         if outcome.handled {
-            CmdResult::Visual
+            ctx.stop_propagation();
+            EventOutcome::Handled
         } else {
-            CmdResult::NoChange
+            EventOutcome::Ignored
         }
+    }
+
+    fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.focused = focused;
+        ctx.request_redraw();
     }
 }
 
@@ -513,6 +466,79 @@ impl LineRange {
 }
 
 fn is_control(key: KeyEvent) -> bool {
-    key.modifiers
-        .contains(tuirealm::event::KeyModifiers::CONTROL)
+    key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Propagation;
+
+    #[test]
+    fn handled_key_stops_propagation() {
+        let mut input = TextareaInput::<()>::new();
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn control_enter_submit_emits_message_and_stops_propagation() {
+        let mut input = TextareaInput::new()
+            .value("first\nsecond")
+            .on_submit(|value| format!("submit:{value}"));
+        let mut ctx = EventCtx::default();
+        let key = KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &["submit:first\nsecond".to_string()]);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn control_d_submit_emits_message_and_stops_propagation() {
+        let mut input = TextareaInput::new()
+            .value("draft")
+            .on_submit(|value| format!("submit:{value}"));
+        let mut ctx = EventCtx::default();
+        let key = KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &["submit:draft".to_string()]);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn escape_bubbles_to_parent_policy() {
+        let mut input = TextareaInput::<()>::new();
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx);
+        let mut parent_observed = false;
+        let bubbled = outcome.bubble(&mut ctx, |_ctx| {
+            parent_observed = true;
+            EventOutcome::Handled
+        });
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert_eq!(bubbled, EventOutcome::Handled);
+        assert!(parent_observed);
+        assert_eq!(ctx.propagation(), Propagation::Continue);
+        assert!(ctx.redraw_requested());
+    }
 }

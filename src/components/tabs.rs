@@ -1,57 +1,29 @@
 use std::time::Duration;
 
-use tuirealm::command::{Cmd, CmdResult};
-use tuirealm::component::{AppComponent, Component};
-use tuirealm::event::Event;
-use tuirealm::props::{AttrValue, Attribute, QueryResult};
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::{Constraint, Direction, Layout, Rect};
-use tuirealm::ratatui::style::{Modifier, Style};
-use tuirealm::ratatui::text::{Line, Span};
-use tuirealm::ratatui::widgets::{Block, Borders, Paragraph};
-use tuirealm::state::State;
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::{
-    Animated, AnimationSettings, AnimationSpec, BorderKind, ColorTween, TabsVariant, TickResult,
-    Tween, border_chars, border_set, line_width,
-    ui::{animation_settings, keybindings, preset, theme},
+    Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, Children, ColorTween,
+    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, LayoutCtx, LayoutResult,
+    LifecycleCtx, TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_set, keybindings,
+    line_width, preset, theme,
 };
 
-pub struct Tab<Msg, UserEvent>
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    pub title: String,
-    body: Box<dyn AppComponent<Msg, UserEvent>>,
+const TABS_FOCUS: &str = "tabs";
+
+pub struct Tab<M = ()> {
+    title: String,
+    body: Box<dyn TuiNode<M>>,
 }
 
-impl<Msg, UserEvent> Tab<Msg, UserEvent>
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    pub fn new(
-        title: impl Into<String>,
-        body: impl AppComponent<Msg, UserEvent> + 'static,
-    ) -> Self {
-        Self {
-            title: title.into(),
-            body: Box::new(body),
-        }
-    }
-
-    pub fn text(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Self::new(title, TextPanel::new(body))
-    }
-}
-
-pub struct Tabs<Msg, UserEvent>
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    tabs: Vec<Tab<Msg, UserEvent>>,
+pub struct Tabs<M = ()> {
+    titles: Vec<String>,
+    bodies: Children<M>,
+    body_keys: Vec<ChildKey>,
     selected: usize,
     previous_selected: usize,
     allow_looping: bool,
@@ -64,17 +36,49 @@ where
     border_color: ColorTween,
     tab_color: ColorTween,
     selected_color: ColorTween,
+    body_area: Rect,
 }
 
-impl<Msg, UserEvent> Tabs<Msg, UserEvent>
+impl<M> Tab<M>
 where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
+    M: 'static,
 {
-    pub fn new(tabs: Vec<Tab<Msg, UserEvent>>) -> Self {
-        let theme = theme();
+    pub fn new<C>(title: impl Into<String>, body: C) -> Self
+    where
+        C: TuiNode<M> + 'static,
+    {
         Self {
-            tabs,
+            title: title.into(),
+            body: Box::new(body),
+        }
+    }
+
+    pub fn text(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self::new(title, TextTabBody::new(body))
+    }
+}
+
+impl<M> Tabs<M>
+where
+    M: 'static,
+{
+    pub fn new(tabs: Vec<Tab<M>>) -> Self {
+        let theme = theme();
+        let mut titles = Vec::with_capacity(tabs.len());
+        let mut body_keys = Vec::with_capacity(tabs.len());
+        let mut bodies = Children::new();
+
+        for (index, tab) in tabs.into_iter().enumerate() {
+            let key = ChildKey::new(format!("tab-{index}"));
+            titles.push(tab.title);
+            body_keys.push(key.clone());
+            bodies = bodies.child(key, tab.body);
+        }
+
+        Self {
+            titles,
+            bodies,
+            body_keys,
             selected: 0,
             previous_selected: 0,
             allow_looping: false,
@@ -87,6 +91,7 @@ where
             border_color: ColorTween::idle(theme.border_fg()),
             tab_color: ColorTween::idle(theme.border_fg()),
             selected_color: ColorTween::idle(theme.muted_fg()),
+            body_area: Rect::default(),
         }
     }
 
@@ -133,7 +138,7 @@ where
     }
 
     pub fn select_index(&mut self, selected: usize) {
-        self.select_index_with_settings(selected, animation_settings());
+        self.select_index_with_settings(selected, crate::animation_settings());
     }
 
     pub fn select_index_with_settings(&mut self, selected: usize, settings: AnimationSettings) {
@@ -160,33 +165,49 @@ where
     }
 
     pub fn next(&mut self) {
-        let selected = self.clamp_selected(self.selected);
-        let last = self.tabs.len().saturating_sub(1);
-        let next = if selected >= last && self.allow_looping {
-            0
-        } else {
-            (selected + 1).min(last)
-        };
-        self.select_index(next);
+        self.select_index(self.next_index());
     }
 
     pub fn previous(&mut self) {
-        let selected = self.clamp_selected(self.selected);
-        let previous = if selected == 0 && self.allow_looping {
-            self.tabs.len().saturating_sub(1)
-        } else {
-            selected.saturating_sub(1)
-        };
-        self.select_index(previous);
+        self.select_index(self.previous_index());
     }
 
-    pub fn selected_body_on(&mut self, event: &Event<UserEvent>) -> Option<Msg> {
+    fn next_index(&self) -> usize {
         let selected = self.clamp_selected(self.selected);
-        self.tabs.get_mut(selected)?.body.on(event)
+        let last = self.titles.len().saturating_sub(1);
+        if selected >= last && self.allow_looping {
+            0
+        } else {
+            (selected + 1).min(last)
+        }
+    }
+
+    fn previous_index(&self) -> usize {
+        let selected = self.clamp_selected(self.selected);
+        if selected == 0 && self.allow_looping {
+            self.titles.len().saturating_sub(1)
+        } else {
+            selected.saturating_sub(1)
+        }
+    }
+
+    pub fn set_focused(&mut self, focused: bool, settings: AnimationSettings) {
+        if !focused {
+            self.transition.snap_to_end();
+        }
+        if self.focused == focused {
+            return;
+        }
+        self.focused = focused;
+        self.start_focus_color_transition(focused, settings);
+    }
+
+    fn selected_key(&self) -> Option<&ChildKey> {
+        self.body_keys.get(self.selected_index())
     }
 
     fn clamp_selected(&self, selected: usize) -> usize {
-        selected.min(self.tabs.len().saturating_sub(1))
+        selected.min(self.titles.len().saturating_sub(1))
     }
 
     fn snap_focus_colors(&mut self, focused: bool) {
@@ -238,63 +259,58 @@ where
             focus_color_animation(),
         );
     }
-}
 
-impl<Msg, UserEvent> Default for Tabs<Msg, UserEvent>
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    fn default() -> Self {
-        Self::new(vec![
-            Tab::text("Overview", "Simple tabs component for tuicore."),
-            Tab::text(
-                "Usage",
-                "Use Tab::new(title, component), then Tabs::new(tabs).",
-            ),
-            Tab::text("State", "The selected tab is a plain index for now."),
-        ])
+    fn calculate_body_area(&self, area: Rect) -> Rect {
+        let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
+        let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
+        if self.titles.is_empty() {
+            return if bordered {
+                Block::default().borders(Borders::ALL).inner(area)
+            } else {
+                area
+            };
+        }
+
+        if variant == TabsVariant::Minimal && bordered {
+            return Block::default().borders(Borders::ALL).inner(area);
+        }
+
+        let header_height = match variant {
+            TabsVariant::Minimal => 1,
+            TabsVariant::Underline if bordered => 1,
+            TabsVariant::Underline => 2,
+            TabsVariant::Boxed => 3,
+        };
+        let [_, body] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(header_height), Constraint::Fill(1)])
+            .areas(area);
+
+        if bordered {
+            let borders = if variant == TabsVariant::Boxed {
+                Borders::LEFT | Borders::RIGHT | Borders::BOTTOM
+            } else {
+                Borders::ALL
+            };
+            Block::default().borders(borders).inner(body)
+        } else {
+            body
+        }
     }
-}
 
-impl<Msg, UserEvent> Component for Tabs<Msg, UserEvent>
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        let selected = self.clamp_selected(self.selected);
-        let preset = preset();
-        let variant = self.variant.unwrap_or_else(|| preset.tabs().variant());
-        let bordered = self.bordered.unwrap_or_else(|| preset.tabs().bordered());
-        let border = self.border.unwrap_or_else(|| preset.border());
-        if self.tabs.is_empty() {
+    fn render_tabs(&self, frame: &mut Frame, area: Rect) {
+        let selected = self.selected_index();
+        let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
+        let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
+        let border = self.border.unwrap_or_else(|| preset().border());
+
+        if self.titles.is_empty() {
             self.render_empty(frame, area, bordered, border);
             return;
         }
 
         if variant == TabsVariant::Minimal {
-            if !bordered {
-                let [tabs_area, body_area] = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Length(1), Constraint::Fill(1)])
-                    .areas(area);
-                frame.render_widget(
-                    Paragraph::new(self.minimal_title_line(selected, tabs_area.width)),
-                    tabs_area,
-                );
-                self.render_body(frame, body_area, selected);
-                return;
-            }
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(border_set(border))
-                .border_style(self.border_style())
-                .title(self.minimal_title_line(selected, area.width.saturating_sub(2)));
-            let body_area = block.inner(area);
-            frame.render_widget(block, area);
-            self.render_body(frame, body_area, selected);
+            self.render_minimal(frame, area, selected, bordered, border);
             return;
         }
 
@@ -311,121 +327,127 @@ where
 
         match variant {
             TabsVariant::Boxed => {
-                let [top, middle, bottom] =
-                    self.boxed_title_lines(selected, tabs_area.width, border);
-                frame.render_widget(Paragraph::new(top), tabs_area);
-                frame.render_widget(
-                    Paragraph::new(middle),
-                    Rect::new(tabs_area.x, tabs_area.y + 1, tabs_area.width, 1),
-                );
-                frame.render_widget(
-                    Paragraph::new(if bordered {
-                        self.boxed_panel_top_line(tabs_area.width, border)
-                    } else {
-                        bottom
-                    }),
-                    Rect::new(tabs_area.x, tabs_area.y + 2, tabs_area.width, 1),
-                );
+                self.render_boxed_header(frame, tabs_area, selected, border, bordered)
             }
             TabsVariant::Underline => {
-                frame.render_widget(
-                    Paragraph::new(self.underline_title_line(selected)),
-                    tabs_area,
-                );
-                if !bordered {
-                    frame.render_widget(
-                        Paragraph::new(self.underline_line(selected, tabs_area.width)),
-                        Rect::new(tabs_area.x, tabs_area.y + 1, tabs_area.width, 1),
-                    );
-                }
+                self.render_underline_header(frame, tabs_area, selected, bordered)
             }
             TabsVariant::Minimal => unreachable!(),
         }
-        let body_area = if variant == TabsVariant::Underline && bordered {
+
+        if bordered {
             let block = Block::default()
-                .borders(Borders::ALL)
+                .borders(if variant == TabsVariant::Boxed {
+                    Borders::LEFT | Borders::RIGHT | Borders::BOTTOM
+                } else {
+                    Borders::ALL
+                })
                 .border_set(border_set(border))
                 .border_style(self.border_style());
-            let inner = block.inner(body_area);
             frame.render_widget(block, body_area);
-            frame.render_widget(
-                Paragraph::new(self.underline_panel_top_line(selected, body_area.width, border)),
-                Rect::new(body_area.x, body_area.y, body_area.width, 1),
-            );
-            inner
-        } else if variant == TabsVariant::Boxed && bordered {
-            let block = Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-                .border_set(border_set(border))
-                .border_style(self.border_style());
-            let inner = block.inner(body_area);
-            frame.render_widget(block, body_area);
-            inner
-        } else {
-            body_area
-        };
-        self.render_body(frame, body_area, selected);
-    }
-
-    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
-        match attr {
-            Attribute::Focus => Some(QueryResult::Owned(AttrValue::Flag(self.focused))),
-            _ => None,
-        }
-    }
-
-    fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        if attr == Attribute::Focus
-            && let AttrValue::Flag(focused) = value
-        {
-            if !focused {
-                self.transition.snap_to_end();
+            if variant == TabsVariant::Underline {
+                frame.render_widget(
+                    Paragraph::new(self.underline_panel_top_line(
+                        selected,
+                        body_area.width,
+                        border,
+                    )),
+                    Rect::new(body_area.x, body_area.y, body_area.width, 1),
+                );
             }
-            self.focused = focused;
-            self.start_focus_color_transition(focused, animation_settings());
         }
     }
 
-    fn state(&self) -> State {
-        State::None
-    }
-
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        CmdResult::Invalid(cmd)
-    }
-}
-
-impl<Msg, UserEvent> Tabs<Msg, UserEvent>
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    fn render_empty(&mut self, frame: &mut Frame, area: Rect, bordered: bool, border: BorderKind) {
-        let body_area = if bordered {
+    fn render_empty(&self, frame: &mut Frame, area: Rect, bordered: bool, border: BorderKind) {
+        if bordered {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_set(border_set(border))
                 .border_style(self.border_style());
-            let inner = block.inner(area);
             frame.render_widget(block, area);
-            inner
-        } else {
-            area
-        };
-        self.render_body(frame, body_area, 0);
+        }
+        frame.render_widget(Paragraph::new("No tabs to show."), self.body_area);
     }
 
-    fn render_body(&mut self, frame: &mut Frame, body_area: Rect, selected: usize) {
-        if let Some(tab) = self.tabs.get_mut(selected) {
-            tab.body.view(frame, body_area);
+    fn render_minimal(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        selected: usize,
+        bordered: bool,
+        border: BorderKind,
+    ) {
+        if bordered {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(border_set(border))
+                .border_style(self.border_style())
+                .title(self.minimal_title_line(selected, area.width.saturating_sub(2)));
+            frame.render_widget(block, area);
         } else {
-            frame.render_widget(Paragraph::new("No tabs to show."), body_area);
+            let [tabs_area, _] = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Fill(1)])
+                .areas(area);
+            frame.render_widget(
+                Paragraph::new(self.minimal_title_line(selected, tabs_area.width)),
+                tabs_area,
+            );
+        }
+    }
+
+    fn render_boxed_header(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        selected: usize,
+        border: BorderKind,
+        bordered: bool,
+    ) {
+        let [top, middle, bottom] = self.boxed_title_lines(selected, area.width, border);
+        frame.render_widget(Paragraph::new(top), area);
+        frame.render_widget(
+            Paragraph::new(middle),
+            Rect::new(area.x, area.y + 1, area.width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(if bordered { bottom } else { bottom }),
+            Rect::new(area.x, area.y + 2, area.width, 1),
+        );
+    }
+
+    fn render_underline_header(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        selected: usize,
+        bordered: bool,
+    ) {
+        frame.render_widget(Paragraph::new(self.underline_title_line(selected)), area);
+        if area.height > 1 {
+            let line = if bordered {
+                self.bordered_animated_underline_line(selected, area.width)
+            } else {
+                self.animated_underline_line(selected, area.width)
+            };
+            frame.render_widget(
+                Paragraph::new(line),
+                Rect::new(area.x, area.y + 1, area.width, 1),
+            );
+        }
+    }
+
+    fn render_selected_body(&self, frame: &mut Frame) {
+        if let Some(key) = self.selected_key()
+            && let Some(body) = self.bodies.get(key)
+        {
+            body.render(frame, self.body_area);
         }
     }
 
     fn title_line(&self, selected: usize, separator: &'static str) -> Line<'static> {
         let mut spans = Vec::new();
-        for (index, tab) in self.tabs.iter().enumerate() {
+        for (index, title) in self.titles.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::styled(separator, self.border_style()));
             }
@@ -434,7 +456,7 @@ where
             } else {
                 self.tab_style()
             };
-            spans.extend(self.tab_title_spans(index, &tab.title, selected, style));
+            spans.extend(self.tab_title_spans(index, title, selected, style));
         }
         Line::from(spans)
     }
@@ -498,31 +520,213 @@ where
         line
     }
 
+    fn underline_line(&self, selected: usize, width: u16) -> Line<'static> {
+        let theme = theme();
+        let selected_start = self.underline_start(selected);
+        let selected_width = self
+            .titles
+            .get(selected)
+            .map(|title| text_width(title))
+            .unwrap_or_default();
+        let width = width as usize;
+        let mut spans = Vec::new();
+        let before = selected_start.min(width);
+        let selected_end = selected_start.saturating_add(selected_width).min(width);
+        if before > 0 {
+            spans.push(Span::styled(
+                "─".repeat(before),
+                Style::default().fg(theme.border_fg()),
+            ));
+        }
+        if selected_end > before {
+            spans.push(Span::styled(
+                "─".repeat(selected_end - before),
+                self.selected_underline_style(),
+            ));
+        }
+        if width > selected_end {
+            spans.push(Span::styled(
+                "─".repeat(width - selected_end),
+                Style::default().fg(theme.border_fg()),
+            ));
+        }
+        Line::from(spans)
+    }
+
+    fn animated_underline_line(&self, selected: usize, width: u16) -> Line<'static> {
+        if !self.transition.is_active() || self.previous_selected == selected {
+            return self.underline_line(selected, width);
+        }
+
+        let start = lerp_usize(
+            self.underline_start(self.previous_selected),
+            self.underline_start(selected),
+            self.transition.value(),
+        );
+        let previous_width = self
+            .titles
+            .get(self.previous_selected)
+            .map(|title| text_width(title))
+            .unwrap_or_default();
+        let selected_width = self
+            .titles
+            .get(selected)
+            .map(|title| text_width(title))
+            .unwrap_or_default();
+        self.underline_segment_line(
+            start,
+            lerp_usize(previous_width, selected_width, self.transition.value()).max(1),
+            width,
+        )
+    }
+
+    fn bordered_animated_underline_line(&self, selected: usize, width: u16) -> Line<'static> {
+        let border = self.border.unwrap_or_else(|| preset().border());
+        let chars = crate::border_chars(border);
+        let border_style = self.border_style();
+        if width < 3 {
+            return Line::from(Span::styled(chars.top_left, border_style));
+        }
+
+        let inner_width = width.saturating_sub(3);
+        let inner = if !self.transition.is_active() || self.previous_selected == selected {
+            self.underline_segment_line(
+                self.underline_start(selected).saturating_sub(1),
+                self.titles
+                    .get(selected)
+                    .map(|title| text_width(title))
+                    .unwrap_or_default(),
+                inner_width,
+            )
+        } else {
+            let start = lerp_usize(
+                self.underline_start(self.previous_selected),
+                self.underline_start(selected),
+                self.transition.value(),
+            )
+            .saturating_sub(1);
+            let previous_width = self
+                .titles
+                .get(self.previous_selected)
+                .map(|title| text_width(title))
+                .unwrap_or_default();
+            let selected_width = self
+                .titles
+                .get(selected)
+                .map(|title| text_width(title))
+                .unwrap_or_default();
+            self.underline_segment_line(
+                start,
+                lerp_usize(previous_width, selected_width, self.transition.value()).max(1),
+                inner_width,
+            )
+        };
+
+        let mut spans = vec![
+            Span::styled(chars.top_left, border_style),
+            Span::styled(chars.horizontal, border_style),
+        ];
+        spans.extend(inner.spans);
+        if self.focused {
+            self.highlight_last_underline_cell(&mut spans);
+        }
+        spans.push(Span::styled(chars.top_right, border_style));
+        Line::from(spans)
+    }
+
+    fn underline_panel_top_line(
+        &self,
+        selected: usize,
+        width: u16,
+        _border: BorderKind,
+    ) -> Line<'static> {
+        self.bordered_animated_underline_line(selected, width)
+    }
+
+    fn highlight_last_underline_cell(&self, spans: &mut Vec<Span<'static>>) {
+        let Some(last) = spans.pop() else {
+            return;
+        };
+        let text = last.content.to_string();
+        let Some((split_at, _)) = text.char_indices().last() else {
+            spans.push(last);
+            return;
+        };
+        let (prefix, suffix) = text.split_at(split_at);
+        if !prefix.is_empty() {
+            spans.push(Span::styled(prefix.to_owned(), last.style));
+        }
+        spans.push(Span::styled(
+            suffix.to_owned(),
+            self.selected_underline_style(),
+        ));
+    }
+
+    fn underline_segment_line(
+        &self,
+        start: usize,
+        segment_width: usize,
+        width: u16,
+    ) -> Line<'static> {
+        let theme = theme();
+        let width = width as usize;
+        let before = start.min(width);
+        let segment_end = start.saturating_add(segment_width).min(width);
+        let mut spans = Vec::new();
+        if before > 0 {
+            spans.push(Span::styled(
+                "─".repeat(before),
+                Style::default().fg(theme.border_fg()),
+            ));
+        }
+        if segment_end > before {
+            spans.push(Span::styled(
+                "─".repeat(segment_end - before),
+                self.selected_underline_style(),
+            ));
+        }
+        if width > segment_end {
+            spans.push(Span::styled(
+                "─".repeat(width - segment_end),
+                Style::default().fg(theme.border_fg()),
+            ));
+        }
+        Line::from(spans)
+    }
+
+    fn underline_start(&self, selected: usize) -> usize {
+        1 + self
+            .titles
+            .iter()
+            .take(selected)
+            .map(|title| text_width(title) + 2)
+            .sum::<usize>()
+    }
+
     fn boxed_title_lines(
         &self,
         selected: usize,
         width: u16,
         border: BorderKind,
     ) -> [Line<'static>; 3] {
-        let chars = border_chars(border);
+        let chars = crate::border_chars(border);
         let border_style = self.border_style();
-        let tab_count = self.tabs.len();
+        let tab_count = self.titles.len();
         let mut widths = self
-            .tabs
+            .titles
             .iter()
-            .map(|tab| text_width(&tab.title) + 2)
+            .map(|title| text_width(title) + 2)
             .collect::<Vec<_>>();
         let used = 2 + widths.iter().sum::<usize>() + tab_count.saturating_sub(1);
-
         if let Some(last) = widths.last_mut() {
             *last += (width as usize).saturating_sub(used);
         }
 
         let mut top = vec![Span::styled(chars.top_left, border_style)];
         let mut middle = vec![Span::styled(chars.vertical, border_style)];
-        let mut bottom = vec![Span::styled(chars.bottom_left, border_style)];
+        let mut bottom = vec![Span::styled(chars.left_join, border_style)];
 
-        for (index, tab) in self.tabs.iter().enumerate() {
+        for (index, title) in self.titles.iter().enumerate() {
             let cell_width = widths[index];
             top.push(Span::styled(
                 chars.horizontal.repeat(cell_width),
@@ -532,21 +736,19 @@ where
                 chars.horizontal.repeat(cell_width),
                 border_style,
             ));
-
             let title_style = if index == selected {
                 self.selected_tab_style()
             } else {
                 self.tab_style()
             };
-            let right_pad = cell_width.saturating_sub(text_width(&tab.title) + 1);
+            let right_pad = cell_width.saturating_sub(text_width(title) + 1);
             middle.push(Span::raw(" "));
-            middle.extend(self.tab_title_spans(index, &tab.title, selected, title_style));
+            middle.extend(self.tab_title_spans(index, title, selected, title_style));
             middle.push(Span::raw(" ".repeat(right_pad)));
-
             if index + 1 == tab_count {
                 top.push(Span::styled(chars.top_right, border_style));
                 middle.push(Span::styled(chars.vertical, border_style));
-                bottom.push(Span::styled(chars.bottom_right, border_style));
+                bottom.push(Span::styled(chars.right_join, border_style));
             } else {
                 top.push(Span::styled(chars.top_join, border_style));
                 middle.push(Span::styled(chars.vertical, border_style));
@@ -557,40 +759,9 @@ where
         [Line::from(top), Line::from(middle), Line::from(bottom)]
     }
 
-    fn boxed_panel_top_line(&self, width: u16, border: BorderKind) -> Line<'static> {
-        let chars = border_chars(border);
-        let border_style = self.border_style();
-        let tab_count = self.tabs.len();
-        let mut widths = self
-            .tabs
-            .iter()
-            .map(|tab| text_width(&tab.title) + 2)
-            .collect::<Vec<_>>();
-        let used = 2 + widths.iter().sum::<usize>() + tab_count.saturating_sub(1);
-
-        if let Some(last) = widths.last_mut() {
-            *last += (width as usize).saturating_sub(used);
-        }
-
-        let mut spans = vec![Span::styled(chars.left_join, border_style)];
-        for (index, cell_width) in widths.iter().copied().enumerate() {
-            spans.push(Span::styled(
-                chars.horizontal.repeat(cell_width),
-                border_style,
-            ));
-            if index + 1 == tab_count {
-                spans.push(Span::styled(chars.right_join, border_style));
-            } else {
-                spans.push(Span::styled(chars.bottom_join, border_style));
-            }
-        }
-
-        Line::from(spans)
-    }
-
     fn minimal_title_line(&self, selected: usize, width: u16) -> Line<'static> {
         let mut spans = vec![Span::styled("─ ", self.border_style())];
-        for (index, tab) in self.tabs.iter().enumerate() {
+        for (index, title) in self.titles.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::styled(" · ", self.border_style()));
             }
@@ -599,7 +770,7 @@ where
             } else {
                 self.tab_style()
             };
-            spans.extend(self.tab_title_spans(index, &tab.title, selected, style));
+            spans.extend(self.tab_title_spans(index, title, selected, style));
         }
         let used = spans
             .iter()
@@ -611,111 +782,6 @@ where
             self.border_style(),
         ));
         Line::from(spans)
-    }
-
-    fn underline_line(&self, selected: usize, width: u16) -> Line<'static> {
-        self.underline_segments_line(selected, width, true, "─")
-    }
-
-    fn underline_segments_line(
-        &self,
-        selected: usize,
-        width: u16,
-        leading: bool,
-        separator: &'static str,
-    ) -> Line<'static> {
-        let theme = theme();
-        let base_style = Style::default().fg(theme.border_fg());
-        let width = width as usize;
-        let separator_width = text_width(separator);
-        let (selected_start, selected_width) =
-            self.underline_range(selected, leading, separator_width);
-        let (previous_start, previous_width) =
-            self.underline_range(self.previous_selected, leading, separator_width);
-        let progress = self.transition.value().clamp(0.0, 1.0);
-        let start = lerp(previous_start as f64, selected_start as f64, progress).round() as usize;
-        let underline_width =
-            lerp(previous_width as f64, selected_width as f64, progress).round() as usize;
-        let end = (start + underline_width).min(width);
-
-        let mut spans = Vec::new();
-        let mut cursor = 0;
-        if start > cursor {
-            spans.push(Span::styled("─".repeat(start - cursor), base_style));
-            cursor = start;
-        }
-        if end > cursor {
-            spans.push(Span::styled(
-                "─".repeat(end - cursor),
-                self.selected_underline_style(),
-            ));
-            cursor = end;
-        }
-        if width > cursor {
-            spans.push(Span::styled("─".repeat(width - cursor), base_style));
-        }
-
-        Line::from(spans)
-    }
-
-    fn underline_range(
-        &self,
-        index: usize,
-        leading: bool,
-        separator_width: usize,
-    ) -> (usize, usize) {
-        let mut start = usize::from(leading);
-        for tab in self.tabs.iter().take(index) {
-            start += text_width(&tab.title) + separator_width;
-        }
-
-        let width = self
-            .tabs
-            .get(index)
-            .map(|tab| text_width(&tab.title))
-            .unwrap_or_default();
-        (start, width)
-    }
-
-    fn underline_panel_top_line(
-        &self,
-        selected: usize,
-        width: u16,
-        border: BorderKind,
-    ) -> Line<'static> {
-        if width < 2 {
-            return self.underline_line(selected, width);
-        }
-
-        let chars = border_chars(border);
-        let mut line = self.underline_segments_line(selected, width.saturating_sub(3), false, "──");
-        self.highlight_last_underline_cell(&mut line);
-        line.spans
-            .insert(0, Span::styled(chars.top_left, self.border_style()));
-        line.spans
-            .insert(1, Span::styled(chars.horizontal, self.border_style()));
-        line.spans
-            .push(Span::styled(chars.top_right, self.border_style()));
-        line
-    }
-
-    fn highlight_last_underline_cell(&self, line: &mut Line<'static>) {
-        let Some(last) = line.spans.pop() else {
-            return;
-        };
-        let text = last.content.to_string();
-        let Some((split_at, _)) = text.char_indices().last() else {
-            line.spans.push(last);
-            return;
-        };
-        let (prefix, suffix) = text.split_at(split_at);
-        if !prefix.is_empty() {
-            line.spans.push(Span::styled(prefix.to_owned(), last.style));
-        }
-        line.spans.push(Span::styled(
-            suffix.to_owned(),
-            self.selected_underline_style(),
-        ));
     }
 
     fn border_style(&self) -> Style {
@@ -737,36 +803,110 @@ where
     }
 }
 
-impl<Msg, UserEvent> AppComponent<Msg, UserEvent> for Tabs<Msg, UserEvent>
+impl<M> Default for Tabs<M>
 where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
+    M: 'static,
 {
-    fn on(&mut self, event: &Event<UserEvent>) -> Option<Msg> {
-        match event {
-            Event::Tick => {
-                self.tick(animation_settings().frame_duration(), animation_settings());
-                self.selected_body_on(event)
-            }
-            Event::Keyboard(key) if keybindings().tabs().previous_matches(*key) => {
-                self.previous();
-                None
-            }
-            Event::Keyboard(key) if keybindings().tabs().next_matches(*key) => {
-                self.next();
-                None
-            }
-            _ => self.selected_body_on(event),
-        }
+    fn default() -> Self {
+        Self::new(vec![
+            Tab::text("Overview", "Simple tabs component for tuicore."),
+            Tab::text("Usage", "Use Tab::new(title, node), then Tabs::new(tabs)."),
+            Tab::text("State", "The selected tab is a plain index."),
+        ])
     }
 }
 
-impl<Msg, UserEvent> Animated for Tabs<Msg, UserEvent>
+impl<M> TuiNode<M> for Tabs<M>
 where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
+    M: 'static,
 {
-    fn tick(&mut self, dt: Duration, settings: crate::AnimationSettings) -> TickResult {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.body_area = self.calculate_body_area(area);
+        ctx.register_focusable(FocusId::new(TABS_FOCUS), area, true);
+        if let Some(key) = self.selected_key().cloned() {
+            self.bodies.layout_child(&key, self.body_area, ctx);
+        }
+        LayoutResult::new(area)
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.render_tabs(frame, area);
+        self.render_selected_body(frame);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let TuiEvent::Key(key) = event else {
+            return EventOutcome::Ignored;
+        };
+        let bindings = keybindings();
+        if bindings.tabs().previous_matches(*key) {
+            self.select_index_with_settings(self.previous_index(), ctx.animation());
+            ctx.request_redraw();
+            ctx.request_layout();
+            ctx.stop_propagation();
+            EventOutcome::Handled
+        } else if bindings.tabs().next_matches(*key) {
+            self.select_index_with_settings(self.next_index(), ctx.animation());
+            ctx.request_redraw();
+            ctx.request_layout();
+            ctx.stop_propagation();
+            EventOutcome::Handled
+        } else {
+            EventOutcome::Ignored
+        }
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if route.path.is_empty() {
+            return self.event(event, ctx);
+        }
+        let child = self.bodies.dispatch_routed_child(route, event, ctx);
+        child.bubble(ctx, |ctx| self.event(event, ctx))
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(self, dt, settings).merge(self.bodies.tick(dt, settings))
+    }
+
+    fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.set_focused(focused, ctx.animation());
+        ctx.request_redraw();
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        if target.path.is_empty() {
+            self.focus(Some(&target.id), focused, ctx);
+        } else {
+            self.set_focused(focused, ctx.animation());
+            self.bodies.dispatch_focus_target(target, focused, ctx);
+            ctx.request_redraw();
+        }
+    }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.bodies.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.bodies.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.bodies.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.bodies.destroy(ctx);
+    }
+}
+
+impl<M> Animated for Tabs<M> {
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.transition
             .tick(dt, settings)
             .merge(self.border_color.tick(dt, settings))
@@ -775,12 +915,14 @@ where
     }
 }
 
-fn focus_color_animation() -> AnimationSpec {
-    AnimationSpec::default()
+fn lerp_usize(from: usize, to: usize, t: f64) -> usize {
+    (from as f64 + (to as f64 - from as f64) * t)
+        .round()
+        .max(0.0) as usize
 }
 
-fn lerp(from: f64, to: f64, progress: f64) -> f64 {
-    from + (to - from) * progress
+fn focus_color_animation() -> AnimationSpec {
+    AnimationSpec::default()
 }
 
 fn text_width(value: &str) -> usize {
@@ -793,61 +935,63 @@ fn char_width(ch: char) -> usize {
     text_width(&value)
 }
 
-struct TextPanel {
+struct TextTabBody {
     body: String,
 }
 
-impl TextPanel {
+impl TextTabBody {
     fn new(body: impl Into<String>) -> Self {
         Self { body: body.into() }
     }
 }
 
-impl Component for TextPanel {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        let panel = Paragraph::new(self.body.as_str())
-            .wrap(tuirealm::ratatui::widgets::Wrap { trim: true });
-
-        frame.render_widget(panel, area);
+impl<M> TuiNode<M> for TextTabBody {
+    fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+        LayoutResult::new(area)
     }
 
-    fn query<'a>(&'a self, _attr: Attribute) -> Option<QueryResult<'a>> {
-        None
-    }
-
-    fn attr(&mut self, _attr: Attribute, _value: AttrValue) {}
-
-    fn state(&self) -> State {
-        State::None
-    }
-
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        CmdResult::Invalid(cmd)
-    }
-}
-
-impl<Msg, UserEvent> AppComponent<Msg, UserEvent> for TextPanel
-where
-    Msg: PartialEq + 'static,
-    UserEvent: Eq + PartialEq + Clone + 'static,
-{
-    fn on(&mut self, _event: &Event<UserEvent>) -> Option<Msg> {
-        None
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(
+            Paragraph::new(self.body.as_str()).wrap(Wrap { trim: true }),
+            area,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use super::*;
+    use crate::{Key, KeyEvent, Propagation, TreePath};
+
+    struct TickProbe {
+        ticks: Rc<RefCell<usize>>,
+    }
+
+    impl TuiNode<()> for TickProbe {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable(FocusId::new("body"), area, true);
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+
+        fn tick(&mut self, _dt: Duration, _settings: AnimationSettings) -> TickResult {
+            *self.ticks.borrow_mut() += 1;
+            TickResult::IDLE
+        }
+    }
 
     #[test]
     fn select_index_with_settings_uses_component_animation_spec() {
-        let mut tabs = Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
-            .animation(AnimationSpec {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).animation(
+            AnimationSpec {
                 enabled: Some(true),
                 duration: Some(Duration::from_millis(42)),
                 easing: None,
-            });
+            },
+        );
 
         tabs.select_index_with_settings(1, AnimationSettings::default());
 
@@ -858,10 +1002,19 @@ mod tests {
 
     #[test]
     fn losing_focus_finishes_active_transition() {
-        let mut tabs = Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
+        let ticks = Rc::new(RefCell::new(0));
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::new(
+                "One",
+                TickProbe {
+                    ticks: Rc::clone(&ticks),
+                },
+            ),
+            Tab::text("Two", ""),
+        ]);
 
         tabs.select_index_with_settings(1, AnimationSettings::default());
-        tabs.attr(Attribute::Focus, AttrValue::Flag(false));
+        tabs.set_focused(false, AnimationSettings::default());
 
         assert_eq!(tabs.selected_index(), 1);
         assert!(!tabs.transition.is_active());
@@ -869,26 +1022,80 @@ mod tests {
     }
 
     #[test]
-    fn focus_changes_start_color_transitions() {
-        let mut tabs =
-            Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).focused(true);
+    fn tabs_layout_uses_children_for_selected_body_path() {
+        let ticks = Rc::new(RefCell::new(0));
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::new(
+                "One",
+                TickProbe {
+                    ticks: Rc::clone(&ticks),
+                },
+            ),
+            Tab::text("Two", ""),
+        ]);
+        let mut ctx = LayoutCtx::new();
 
-        tabs.attr(Attribute::Focus, AttrValue::Flag(false));
+        tabs.layout(Rect::new(0, 0, 20, 5), &mut ctx);
 
-        assert!(tabs.border_color.is_active());
-        assert!(tabs.tab_color.is_active());
-        assert!(tabs.selected_color.is_active());
+        assert_eq!(ctx.focus_targets()[0].path, TreePath::new());
+        assert_eq!(
+            ctx.focus_targets()[1].path,
+            TreePath::from_keys([ChildKey::new("tab-0")])
+        );
     }
 
     #[test]
-    fn repeated_select_of_current_tab_preserves_active_transition_origin() {
-        let mut tabs = Tabs::<(), ()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
+    fn tabs_key_switches_selection_and_stops_propagation() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
+        let mut ctx = EventCtx::default();
 
-        tabs.select_index_with_settings(1, AnimationSettings::default());
-        tabs.select_index_with_settings(1, AnimationSettings::default());
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char(']'))), &mut ctx);
 
-        assert_eq!(tabs.previous_selected, 0);
+        assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(tabs.selected_index(), 1);
-        assert!(tabs.transition.is_active());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.layout_requested());
+    }
+
+    #[test]
+    fn tabs_key_selection_uses_event_context_animation_settings() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+        let mut ctx = EventCtx::new(settings);
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char(']'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert!(!tabs.transition.is_active());
+        assert_eq!(tabs.transition.progress(), 1.0);
+    }
+
+    #[test]
+    fn tabs_tick_propagates_to_all_bodies_once() {
+        let ticks = Rc::new(RefCell::new(0));
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::new(
+                "One",
+                TickProbe {
+                    ticks: Rc::clone(&ticks),
+                },
+            ),
+            Tab::new(
+                "Two",
+                TickProbe {
+                    ticks: Rc::clone(&ticks),
+                },
+            ),
+        ]);
+
+        TuiNode::tick(
+            &mut tabs,
+            Duration::from_millis(16),
+            AnimationSettings::default(),
+        );
+
+        assert_eq!(*ticks.borrow(), 2);
     }
 }

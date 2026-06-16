@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::{Constraint, Direction, Layout, Rect};
-use tuirealm::ratatui::style::{Modifier, Style};
-use tuirealm::ratatui::text::{Line, Span};
-use tuirealm::ratatui::widgets::{Block, Paragraph};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Paragraph};
 
 use super::{CellContext, CheckState, DataView, SelectionMode, SortDirection, VisibleRow};
 use crate::{preset, theme};

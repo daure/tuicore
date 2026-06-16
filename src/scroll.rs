@@ -5,11 +5,11 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
-use tuirealm::event::KeyEvent;
 
 use crate::animation::{
     Animated, AnimationSettings, AnimationSpec, ResolvedAnimationSpec, ScrollAnimator, TickResult,
 };
+use crate::event::KeyEvent;
 use crate::{theme, ui::keybindings};
 
 #[derive(Debug, Clone)]
@@ -263,11 +263,12 @@ impl ScrollState {
 
     pub fn on_key(
         &mut self,
-        key: KeyEvent,
+        key: impl Into<KeyEvent>,
         viewport: ScrollSize,
         content: ScrollSize,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
+        let key = key.into();
         let keybindings = keybindings();
         if self.axes.vertical() && keybindings.page_up_matches(key) {
             return self.scroll_by(
@@ -812,10 +813,10 @@ fn saturating_u16(value: usize) -> u16 {
 mod tests {
     use std::time::Duration;
 
+    use crate::Key;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
-    use tuirealm::event::Key;
 
     use super::*;
 

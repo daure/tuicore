@@ -1,21 +1,20 @@
 use std::time::Duration;
 
-use tuirealm::command::{Cmd, CmdResult};
-use tuirealm::component::Component;
-use tuirealm::event::KeyEvent;
-use tuirealm::props::{AttrValue, Attribute, QueryResult};
-use tuirealm::ratatui::Frame;
-use tuirealm::ratatui::layout::{Alignment, Rect};
-use tuirealm::ratatui::style::{Modifier, Style};
-use tuirealm::ratatui::text::{Line, Span};
-use tuirealm::ratatui::widgets::{Block, Borders, Paragraph};
-use tuirealm::state::State;
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::event::{KeyEvent, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ColorTween, ScrollAxes, ScrollBehavior,
     ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize,
-    ScrollState, TickResult, animation_settings, border_chars, border_set, line_width,
-    paragraph_scroll, preset, theme,
+    ScrollState, TickResult, border_chars, border_set, line_width, paragraph_scroll, preset, theme,
+};
+use crate::{
+    ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, LayoutCtx,
+    LayoutResult, LifecycleCtx, TuiNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -36,6 +35,13 @@ pub struct Panel {
     focused: bool,
     border_color: ColorTween,
     title_color: ColorTween,
+    area: Rect,
+}
+
+pub struct PanelHost<C> {
+    panel: Panel,
+    child: C,
+    child_area: Rect,
 }
 
 impl Default for Panel {
@@ -57,12 +63,17 @@ impl Panel {
             focused: false,
             border_color: ColorTween::idle(theme.border_fg()),
             title_color: ColorTween::idle(theme.muted_fg()),
+            area: Rect::default(),
         }
     }
 
     pub fn top_left(mut self, title: impl Into<String>) -> Self {
         self.top_left = Some(title.into());
         self
+    }
+
+    pub fn set_top_left(&mut self, title: impl Into<String>) {
+        self.top_left = Some(title.into());
     }
 
     pub fn top_right(mut self, title: impl Into<String>) -> Self {
@@ -99,6 +110,22 @@ impl Panel {
             theme.muted_fg()
         });
         self
+    }
+
+    pub fn set_focused(&mut self, focused: bool, settings: AnimationSettings) {
+        if self.focused == focused {
+            return;
+        }
+        self.focused = focused;
+        self.start_focus_color_transition(focused, settings);
+    }
+
+    pub fn host<C>(self, child: C) -> PanelHost<C> {
+        PanelHost {
+            panel: self,
+            child,
+            child_area: Rect::default(),
+        }
     }
 
     pub fn scrollable(mut self, axes: ScrollAxes) -> Self {
@@ -154,10 +181,11 @@ impl Panel {
 
     pub fn on_key(
         &mut self,
-        key: KeyEvent,
+        key: impl Into<KeyEvent>,
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
+        let key = key.into();
         let geometry = self.scroll_geometry(area);
         let Some(scroll) = &mut self.scroll else {
             return ScrollOutcome::idle();
@@ -343,33 +371,135 @@ impl Animated for Panel {
     }
 }
 
-impl Component for Panel {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        self.render(frame, area);
+impl<M> TuiNode<M> for Panel {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        ctx.register_focusable(FocusId::new("panel"), area, true);
+        LayoutResult::new(area)
     }
 
-    fn query<'a>(&'a self, _attr: Attribute) -> Option<QueryResult<'a>> {
-        match _attr {
-            Attribute::Focus => Some(QueryResult::Owned(AttrValue::Flag(self.focused))),
-            _ => None,
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        Self::render(self, frame, area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let TuiEvent::Key(key) = event else {
+            return EventOutcome::Ignored;
+        };
+        let outcome = self.on_key(*key, self.area, ctx.animation());
+        if outcome.needs_redraw() {
+            ctx.request_redraw();
+        }
+        if outcome.handled {
+            ctx.stop_propagation();
+            EventOutcome::Handled
+        } else {
+            EventOutcome::Ignored
         }
     }
 
-    fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        if attr == Attribute::Focus
-            && let AttrValue::Flag(focused) = value
-        {
-            self.focused = focused;
-            self.start_focus_color_transition(focused, animation_settings());
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(self, dt, settings)
+    }
+
+    fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.set_focused(focused, ctx.animation());
+        ctx.request_redraw();
+    }
+}
+
+impl<C> PanelHost<C> {
+    pub fn panel(&self) -> &Panel {
+        &self.panel
+    }
+
+    pub fn panel_mut(&mut self) -> &mut Panel {
+        &mut self.panel
+    }
+
+    pub fn child(&self) -> &C {
+        &self.child
+    }
+
+    pub fn child_mut(&mut self) -> &mut C {
+        &mut self.child
+    }
+
+    pub fn child_area(&self) -> Rect {
+        self.child_area
+    }
+}
+
+impl<C, M> TuiNode<M> for PanelHost<C>
+where
+    C: TuiNode<M>,
+{
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.panel.area = area;
+        let inner = Panel::inner_area(area);
+        self.child_area = inner;
+        ctx.push_slot(ChildKey::body(), inner, |ctx| {
+            self.child.layout(inner, ctx);
+        });
+        LayoutResult::new(area)
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.panel.render(frame, area);
+        self.child.render(frame, self.child_area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        self.panel.event(event, ctx)
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if route.path.is_empty() {
+            return self.event(event, ctx);
+        }
+
+        let body = ChildKey::body();
+        let child = route
+            .path
+            .without_first_if(&body)
+            .map(EventRoute::new)
+            .map(|route| self.child.dispatch_event(&route, event, ctx))
+            .unwrap_or(EventOutcome::Ignored);
+        child.bubble(ctx, |ctx| self.event(event, ctx))
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(&mut self.panel, dt, settings).merge(self.child.tick(dt, settings))
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        let body = ChildKey::body();
+        if let Some(child_target) = target.for_child(&body) {
+            self.panel.set_focused(focused, ctx.animation());
+            self.child.dispatch_focus(&child_target, focused, ctx);
+            ctx.request_redraw();
         }
     }
 
-    fn state(&self) -> State {
-        State::None
+    fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.child.init(ctx);
     }
 
-    fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        CmdResult::Invalid(cmd)
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.child.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.child.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.child.destroy(ctx);
     }
 }
 
@@ -478,8 +608,12 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
-    use crate::{ScrollbarConfig, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility};
+    use crate::{
+        EventCtx, EventRoute, FocusCtx, Key, KeyEvent, LayoutCtx, ScrollbarConfig, ScrollbarGutter,
+        ScrollbarStyle, ScrollbarVisibility, TuiEvent, TuiNode, animation_settings,
+    };
 
+    use super::super::TextInput;
     use super::*;
 
     #[test]
@@ -524,10 +658,26 @@ mod tests {
     }
 
     #[test]
+    fn handled_scroll_key_stops_propagation() {
+        let mut panel = Panel::new()
+            .content((0..20).map(|line| format!("line {line}")))
+            .scrollable(ScrollAxes::Vertical);
+        let area = Rect::new(0, 0, 10, 5);
+        let mut layout = LayoutCtx::new();
+        <Panel as TuiNode<()>>::layout(&mut panel, area, &mut layout);
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = panel.event(&TuiEvent::Key(KeyEvent::from(crate::Key::Down)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
     fn focus_changes_start_color_transitions() {
         let mut panel = Panel::new().focused(true);
 
-        panel.attr(Attribute::Focus, AttrValue::Flag(false));
+        panel.set_focused(false, animation_settings());
 
         assert!(panel.border_color.is_active());
         assert!(panel.title_color.is_active());
@@ -546,6 +696,64 @@ mod tests {
         assert_eq!(panel.title_color.value(), theme.muted_fg());
         assert!(!panel.border_color.is_active());
         assert!(!panel.title_color.is_active());
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Msg {
+        Submit(String),
+    }
+
+    #[test]
+    fn panel_host_routes_focus_keys_submit_redraw_and_tick() {
+        let mut host = Panel::new().top_left("Filter").host(
+            TextInput::new()
+                .placeholder("Search…")
+                .on_submit(Msg::Submit),
+        );
+        let area = Rect::new(0, 0, 20, 3);
+        let mut layout = LayoutCtx::new();
+
+        host.layout(area, &mut layout);
+        let target = layout.focus_targets()[0].clone();
+        let route = EventRoute::new(target.path.clone());
+        let mut focus = FocusCtx::new(AnimationSettings::default());
+        host.dispatch_focus(&target, true, &mut focus);
+
+        assert!(focus.redraw_requested());
+        assert!(host.panel.border_color.is_active());
+
+        let mut key = EventCtx::new(AnimationSettings::default());
+        let outcome = host.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut key,
+        );
+
+        assert!(outcome.handled());
+        assert_eq!(key.propagation(), crate::Propagation::Stopped);
+        assert!(key.redraw_requested());
+        assert_eq!(host.child().current_value(), "x");
+
+        let mut submit = EventCtx::new(AnimationSettings::default());
+        host.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut submit,
+        );
+
+        assert_eq!(
+            submit.drain_messages().collect::<Vec<_>>(),
+            vec![Msg::Submit("x".into())]
+        );
+        assert!(submit.redraw_requested());
+        assert!(
+            TuiNode::tick(
+                &mut host,
+                Duration::from_millis(16),
+                AnimationSettings::default()
+            )
+            .active
+        );
     }
 
     #[test]

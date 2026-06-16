@@ -1,11 +1,14 @@
 use super::*;
 use crate::{KeyBindings, KeySpec};
-use tuirealm::event::{Key, KeyEvent, KeyModifiers};
-use tuirealm::ratatui::Terminal;
-use tuirealm::ratatui::backend::TestBackend;
-use tuirealm::ratatui::layout::{Constraint, Rect};
-use tuirealm::ratatui::style::Style;
-use tuirealm::ratatui::text::Line;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::Style;
+use ratatui::text::Line;
+
+use crate::{
+    EventCtx, EventOutcome, Key, KeyEvent, KeyModifiers, LayoutCtx, Propagation, TuiEvent, TuiNode,
+};
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
 
@@ -188,6 +191,23 @@ fn shifted_horizontal_keys_jump_eight_columns() {
     );
     assert!(left.handled);
     assert_eq!(view.scroll.offset().x, 0);
+}
+
+#[test]
+fn handled_key_stops_propagation() {
+    let mut view = DataView::new([Row::new(1, "A"), Row::new(2, "B")], |row| row.id).column(
+        Column::text("name", "Name", Constraint::Percentage(100), |row: &Row| {
+            row.name.to_string()
+        }),
+    );
+    let mut layout = LayoutCtx::new();
+    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = view.event(&TuiEvent::Key(KeyEvent::from(Key::Down)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]
@@ -518,7 +538,7 @@ fn page_change_clamps_scroll_target_to_new_page() {
 }
 
 #[test]
-fn navigation_scrolls_when_highlight_passes_viewport_middle() {
+fn line_navigation_keeps_highlight_centered_without_scroll_animation() {
     let mut view = DataView::list(
         (0..20).map(Row::flat).collect::<Vec<_>>(),
         |row| row.id,
@@ -542,6 +562,44 @@ fn navigation_scrolls_when_highlight_passes_viewport_middle() {
     assert_eq!(view.highlighted, 3);
     assert_eq!(view.scroll.target_offset().y, 1);
     assert_eq!(view.scroll.offset().y, 1);
+}
+
+#[test]
+fn page_navigation_centers_highlight_when_not_near_edges() {
+    let mut view = DataView::list(
+        (0..100).map(Row::flat).collect::<Vec<_>>(),
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let area = Rect::new(0, 0, 20, 21);
+
+    let _ = view.on_key_with_settings(
+        KeyEvent {
+            code: Key::PageDown,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        settings,
+    );
+
+    assert_eq!(view.highlighted, 13);
+    assert_eq!(view.scroll.target_offset().y, 3);
+    assert_eq!(view.scroll.offset().y, 3);
+
+    let _ = view.on_key_with_settings(
+        KeyEvent {
+            code: Key::PageDown,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        settings,
+    );
+
+    assert_eq!(view.highlighted, 26);
+    assert_eq!(view.scroll.target_offset().y, 16);
+    assert_eq!(view.scroll.offset().y, 16);
 }
 
 #[test]
@@ -600,11 +658,12 @@ fn held_navigation_advances_scroll_animation_before_key_repeat_stops() {
             area,
             settings,
         );
-        let _ = view.tick(settings.frame_duration(), settings);
+        let _ = Animated::tick(&mut view, settings.frame_duration(), settings);
     }
 
     assert_eq!(view.highlighted, 8);
     assert_eq!(view.scroll.target_offset().y, 6);
+    assert_eq!(view.scroll.offset().y, 6);
     assert!(
         view.scroll.offset().y >= 2,
         "scroll offset should advance while navigation key is still repeating"
