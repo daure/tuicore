@@ -100,7 +100,14 @@ where
     }
 
     fn row_refs(&self) -> Vec<&T> {
-        self.rows.iter().collect()
+        if let Some(indices) = &self.visible_row_indices {
+            indices
+                .iter()
+                .filter_map(|index| self.rows.get(*index))
+                .collect()
+        } else {
+            self.rows.iter().collect()
+        }
     }
 
     fn parent_descendant_ids_by_id(&self, parent_id: &ParentIdFn<T, Id>) -> HashMap<Id, Vec<Id>> {

@@ -165,11 +165,18 @@ impl<M> TextInput<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        self.render_with_style(frame, area, Style::default());
+    }
+
+    pub(crate) fn render_with_style(&self, frame: &mut Frame, area: Rect, style: Style) {
         if area.is_empty() {
             return;
         }
 
-        frame.render_widget(Paragraph::new(self.line(area.width as usize)), area);
+        frame.render_widget(
+            Paragraph::new(self.line(area.width as usize)).style(style),
+            area,
+        );
     }
 
     fn line(&self, width: usize) -> Line<'static> {

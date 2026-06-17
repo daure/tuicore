@@ -63,6 +63,7 @@ pub struct Preset {
     border: BorderKind,
     tabs: TabsPreset,
     data_view: DataViewPreset,
+    dropdown: DropdownPreset,
     scroll: ScrollPreset,
     animation: AnimationSettings,
 }
@@ -78,6 +79,11 @@ pub struct DataViewPreset {
     tree_indent_width: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropdownPreset {
+    max_popup_height: u16,
+}
+
 impl Default for TabsPreset {
     fn default() -> Self {
         Self {
@@ -91,6 +97,14 @@ impl Default for DataViewPreset {
     fn default() -> Self {
         Self {
             tree_indent_width: 2,
+        }
+    }
+}
+
+impl Default for DropdownPreset {
+    fn default() -> Self {
+        Self {
+            max_popup_height: 30,
         }
     }
 }
@@ -112,6 +126,11 @@ impl Preset {
 
     pub fn with_data_view(mut self, data_view: DataViewPreset) -> Self {
         self.data_view = data_view;
+        self
+    }
+
+    pub fn with_dropdown(mut self, dropdown: DropdownPreset) -> Self {
+        self.dropdown = dropdown;
         self
     }
 
@@ -182,6 +201,16 @@ impl Preset {
             .and_then(|value| usize::try_from(value).ok())
         {
             preset.data_view.tree_indent_width = value;
+        }
+
+        if let Some(value) = file
+            .get("preset")
+            .and_then(|section| section.get("dropdown"))
+            .and_then(|section| section.get("max_popup_height"))
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| u16::try_from(value).ok())
+        {
+            preset.dropdown.max_popup_height = value.max(1);
         }
 
         if let Some(animation) = file
@@ -289,6 +318,10 @@ impl Preset {
         self.data_view
     }
 
+    pub fn dropdown(&self) -> DropdownPreset {
+        self.dropdown
+    }
+
     pub fn scroll(&self) -> ScrollPreset {
         self.scroll
     }
@@ -334,6 +367,23 @@ impl DataViewPreset {
 
     pub fn tree_indent_width(&self) -> usize {
         self.tree_indent_width
+    }
+}
+
+impl DropdownPreset {
+    pub fn new(max_popup_height: u16) -> Self {
+        Self {
+            max_popup_height: max_popup_height.max(1),
+        }
+    }
+
+    pub fn with_max_popup_height(mut self, max_popup_height: u16) -> Self {
+        self.max_popup_height = max_popup_height.max(1);
+        self
+    }
+
+    pub fn max_popup_height(&self) -> u16 {
+        self.max_popup_height
     }
 }
 
@@ -419,6 +469,9 @@ mod tests {
 
             [preset.data_view]
             tree_indent_width = 3
+
+            [preset.dropdown]
+            max_popup_height = 12
             "#,
         )
         .expect("preset should parse");
@@ -431,7 +484,13 @@ mod tests {
         assert_eq!(scroll.gutter, ScrollbarGutter::Overlay);
         assert_eq!(scroll.style, ScrollbarStyle::ThickTrack);
         assert_eq!(preset.data_view().tree_indent_width(), 3);
+        assert_eq!(preset.dropdown().max_popup_height(), 12);
         assert_eq!(preset.animation().max_dt, Duration::from_millis(1));
+    }
+
+    #[test]
+    fn default_dropdown_preset_max_popup_height_is_30() {
+        assert_eq!(Preset::default().dropdown().max_popup_height(), 30);
     }
 
     #[test]
@@ -444,17 +503,20 @@ mod tests {
         };
         let tabs = TabsPreset::new(TabsVariant::Underline, false);
         let data_view = DataViewPreset::new(4);
+        let dropdown = DropdownPreset::new(9);
 
         let preset = Preset::new()
             .with_border(BorderKind::Double)
             .with_tabs(tabs.clone())
             .with_data_view(data_view)
+            .with_dropdown(dropdown)
             .with_scroll(scroll)
             .with_animation(animation);
 
         assert_eq!(preset.border(), BorderKind::Double);
         assert_eq!(preset.tabs(), &tabs);
         assert_eq!(preset.data_view(), data_view);
+        assert_eq!(preset.dropdown(), dropdown);
         assert_eq!(preset.scroll().line_step, 4);
         assert!(!preset.animation().enabled);
     }

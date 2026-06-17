@@ -10,6 +10,7 @@ pub struct KeyBindings {
     focus: FocusKeyBindings,
     tabs: TabsKeyBindings,
     data_view: DataViewKeyBindings,
+    dropdown: DropdownKeyBindings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,15 @@ pub struct DataViewKeyBindings {
     expand_all: Vec<KeySpec>,
     top_prefix: Vec<KeySpec>,
     bottom: Vec<KeySpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropdownKeyBindings {
+    next: Vec<KeySpec>,
+    previous: Vec<KeySpec>,
+    page_next: Vec<KeySpec>,
+    page_previous: Vec<KeySpec>,
+    select: Vec<KeySpec>,
 }
 
 impl Default for NavKeyBindings {
@@ -104,6 +114,33 @@ impl Default for DataViewKeyBindings {
     }
 }
 
+impl Default for DropdownKeyBindings {
+    fn default() -> Self {
+        Self {
+            next: vec![KeySpec::key_with_modifiers(
+                Key::Char('j'),
+                KeyModifiers::CONTROL,
+            )],
+            previous: vec![KeySpec::key_with_modifiers(
+                Key::Char('k'),
+                KeyModifiers::CONTROL,
+            )],
+            page_next: vec![KeySpec::key_with_modifiers(
+                Key::Char('d'),
+                KeyModifiers::CONTROL,
+            )],
+            page_previous: vec![KeySpec::key_with_modifiers(
+                Key::Char('u'),
+                KeyModifiers::CONTROL,
+            )],
+            select: vec![KeySpec::key_with_modifiers(
+                Key::Char(' '),
+                KeyModifiers::CONTROL,
+            )],
+        }
+    }
+}
+
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
@@ -111,6 +148,7 @@ impl Default for KeyBindings {
             focus: FocusKeyBindings::default(),
             tabs: TabsKeyBindings::default(),
             data_view: DataViewKeyBindings::default(),
+            dropdown: DropdownKeyBindings::default(),
         }
     }
 }
@@ -205,6 +243,26 @@ impl KeyBindings {
             "bottom",
             &mut bindings.data_view.bottom,
         );
+        set_keys(&value, "dropdown", "next", &mut bindings.dropdown.next);
+        set_keys(
+            &value,
+            "dropdown",
+            "previous",
+            &mut bindings.dropdown.previous,
+        );
+        set_keys(
+            &value,
+            "dropdown",
+            "page_next",
+            &mut bindings.dropdown.page_next,
+        );
+        set_keys(
+            &value,
+            "dropdown",
+            "page_previous",
+            &mut bindings.dropdown.page_previous,
+        );
+        set_keys(&value, "dropdown", "select", &mut bindings.dropdown.select);
 
         bindings
     }
@@ -219,6 +277,10 @@ impl KeyBindings {
 
     pub fn data_view(&self) -> &DataViewKeyBindings {
         &self.data_view
+    }
+
+    pub fn dropdown(&self) -> &DropdownKeyBindings {
+        &self.dropdown
     }
 
     pub fn set_tabs_previous(&mut self, key: KeySpec) {
@@ -416,6 +478,51 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_dropdown_next(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.dropdown.next = keys.into_iter().collect();
+    }
+
+    pub fn with_dropdown_next(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_dropdown_next(keys);
+        self
+    }
+
+    pub fn set_dropdown_previous(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.dropdown.previous = keys.into_iter().collect();
+    }
+
+    pub fn with_dropdown_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_dropdown_previous(keys);
+        self
+    }
+
+    pub fn set_dropdown_page_next(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.dropdown.page_next = keys.into_iter().collect();
+    }
+
+    pub fn with_dropdown_page_next(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_dropdown_page_next(keys);
+        self
+    }
+
+    pub fn set_dropdown_page_previous(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.dropdown.page_previous = keys.into_iter().collect();
+    }
+
+    pub fn with_dropdown_page_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_dropdown_page_previous(keys);
+        self
+    }
+
+    pub fn set_dropdown_select(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.dropdown.select = keys.into_iter().collect();
+    }
+
+    pub fn with_dropdown_select(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_dropdown_select(keys);
+        self
+    }
+
     pub fn line_up_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.nav.line_up, key.into())
     }
@@ -562,6 +669,97 @@ impl DataViewKeyBindings {
 
     pub fn bottom_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.bottom, key.into())
+    }
+}
+
+impl DropdownKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_next(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.next = keys.into_iter().collect();
+    }
+
+    pub fn with_next(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_next(keys);
+        self
+    }
+
+    pub fn set_previous(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.previous = keys.into_iter().collect();
+    }
+
+    pub fn with_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_previous(keys);
+        self
+    }
+
+    pub fn set_page_next(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.page_next = keys.into_iter().collect();
+    }
+
+    pub fn with_page_next(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_page_next(keys);
+        self
+    }
+
+    pub fn set_page_previous(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.page_previous = keys.into_iter().collect();
+    }
+
+    pub fn with_page_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_page_previous(keys);
+        self
+    }
+
+    pub fn set_select(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.select = keys.into_iter().collect();
+    }
+
+    pub fn with_select(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_select(keys);
+        self
+    }
+
+    pub fn next_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.next, key.into())
+    }
+
+    pub fn previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.previous, key.into())
+    }
+
+    pub fn page_next_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.page_next, key.into())
+    }
+
+    pub fn page_previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.page_previous, key.into())
+    }
+
+    pub fn select_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.select, key.into())
+    }
+
+    pub fn next_label(&self) -> String {
+        labels(&self.next)
+    }
+
+    pub fn previous_label(&self) -> String {
+        labels(&self.previous)
+    }
+
+    pub fn page_next_label(&self) -> String {
+        labels(&self.page_next)
+    }
+
+    pub fn page_previous_label(&self) -> String {
+        labels(&self.page_previous)
+    }
+
+    pub fn select_label(&self) -> String {
+        labels(&self.select)
     }
 }
 
@@ -741,13 +939,11 @@ fn parse_key(value: &str) -> Option<KeySpec> {
     let value = value.trim().to_ascii_lowercase();
 
     if let Some(rest) = value.strip_prefix("ctrl+") {
-        return single_char(rest)
-            .map(|key| KeySpec::key_with_modifiers(Key::Char(key), KeyModifiers::CONTROL));
+        return modified_key(rest, KeyModifiers::CONTROL);
     }
 
     if let Some(rest) = value.strip_prefix("alt+") {
-        return single_char(rest)
-            .map(|key| KeySpec::key_with_modifiers(Key::Char(key), KeyModifiers::ALT));
+        return modified_key(rest, KeyModifiers::ALT);
     }
 
     if let Some(rest) = value.strip_prefix("shift+") {
@@ -783,6 +979,13 @@ fn single_char(value: &str) -> Option<char> {
     let mut chars = value.chars();
     let key = chars.next()?;
     chars.next().is_none().then_some(key)
+}
+
+fn modified_key(value: &str, modifiers: KeyModifiers) -> Option<KeySpec> {
+    if value == "space" {
+        return Some(KeySpec::key_with_modifiers(Key::Char(' '), modifiers));
+    }
+    single_char(value).map(|key| KeySpec::key_with_modifiers(Key::Char(key), modifiers))
 }
 
 fn keybindings_path() -> Option<PathBuf> {
@@ -826,6 +1029,13 @@ mod tests {
             expand_all = "shift+z"
             top_prefix = "g"
             bottom = "shift+g"
+
+            [dropdown]
+            next = "ctrl+j"
+            previous = "ctrl+k"
+            page_next = "ctrl+d"
+            page_previous = "ctrl+u"
+            select = "ctrl+space"
             "#,
         );
 
@@ -901,6 +1111,26 @@ mod tests {
             code: Key::Char('G'),
             modifiers: KeyModifiers::SHIFT,
         }));
+        assert!(bindings.dropdown().next_matches(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().previous_matches(KeyEvent {
+            code: Key::Char('k'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().page_next_matches(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().page_previous_matches(KeyEvent {
+            code: Key::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().select_matches(KeyEvent {
+            code: Key::Char(' '),
+            modifiers: KeyModifiers::CONTROL,
+        }));
     }
 
     #[test]
@@ -924,7 +1154,12 @@ mod tests {
             .with_data_view_collapse_all([KeySpec::plain('c')])
             .with_data_view_expand_all([KeySpec::plain('x')])
             .with_data_view_top_prefix([KeySpec::plain('t')])
-            .with_data_view_bottom([KeySpec::plain('b')]);
+            .with_data_view_bottom([KeySpec::plain('b')])
+            .with_dropdown_next([KeySpec::plain('j')])
+            .with_dropdown_previous([KeySpec::plain('k')])
+            .with_dropdown_page_next([KeySpec::plain('d')])
+            .with_dropdown_page_previous([KeySpec::plain('u')])
+            .with_dropdown_select([KeySpec::plain(' ')]);
 
         assert!(bindings.tabs().previous_matches(KeyEvent {
             code: Key::Char('h'),
@@ -1001,6 +1236,60 @@ mod tests {
         assert!(bindings.data_view().bottom_matches(KeyEvent {
             code: Key::Char('b'),
             modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.dropdown().next_matches(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.dropdown().previous_matches(KeyEvent {
+            code: Key::Char('k'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.dropdown().page_next_matches(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.dropdown().page_previous_matches(KeyEvent {
+            code: Key::Char('u'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.dropdown().select_matches(KeyEvent {
+            code: Key::Char(' '),
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    #[test]
+    fn default_dropdown_bindings_split_line_page_and_select_actions() {
+        let bindings = KeyBindings::default();
+
+        assert!(bindings.dropdown().next_matches(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(!bindings.dropdown().next_matches(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().previous_matches(KeyEvent {
+            code: Key::Char('k'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(!bindings.dropdown().previous_matches(KeyEvent {
+            code: Key::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().page_next_matches(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().page_previous_matches(KeyEvent {
+            code: Key::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.dropdown().select_matches(KeyEvent {
+            code: Key::Char(' '),
+            modifiers: KeyModifiers::CONTROL,
         }));
     }
 

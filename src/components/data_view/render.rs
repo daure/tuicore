@@ -15,6 +15,15 @@ where
     Id: Clone + Eq + Hash,
 {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        self.render_with_row_style(frame, area, None);
+    }
+
+    pub(crate) fn render_with_row_style(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        base_row_style: Option<Style>,
+    ) {
         if area.is_empty() || self.columns.is_empty() {
             return;
         }
@@ -54,7 +63,8 @@ where
                 1,
             );
             let highlighted = line_index == self.highlighted;
-            let row_style = self.row_style(highlighted, row, &selection_descendants);
+            let row_style =
+                self.row_style(highlighted, row, &selection_descendants, base_row_style);
             frame.render_widget(
                 Block::default().style(row_style.unwrap_or_default()),
                 row_area,
@@ -214,13 +224,14 @@ where
         highlighted: bool,
         row: &VisibleRow<'_, T, Id>,
         selection_descendants: &HashMap<Id, Vec<Id>>,
+        base_row_style: Option<Style>,
     ) -> Option<Style> {
         if highlighted && self.focused {
             Some(self.highlighted_row_style())
         } else if self.row_is_visually_selected(&row.id, selection_descendants) {
             Some(self.selected_row_style())
         } else {
-            None
+            base_row_style
         }
     }
 

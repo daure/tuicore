@@ -32,6 +32,7 @@ const DATA_VIEW_FOCUS: &str = "data-view";
 
 pub struct DataView<T, Id> {
     rows: Vec<T>,
+    visible_row_indices: Option<Vec<usize>>,
     columns: Vec<Column<T, Id>>,
     row_id: Box<RowIdFn<T, Id>>,
     tree: Option<TreeAdapter<T, Id>>,
@@ -69,6 +70,7 @@ where
     pub fn new(rows: impl IntoIterator<Item = T>, row_id: impl Fn(&T) -> Id + 'static) -> Self {
         Self {
             rows: rows.into_iter().collect(),
+            visible_row_indices: None,
             columns: Vec::new(),
             row_id: Box::new(row_id),
             tree: None,
@@ -121,6 +123,22 @@ where
         self
     }
 
+    pub fn visible_row_ids(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
+        self.visible_row_indices = Some(self.row_indices_for_ids(ids));
+        self.highlighted = 0;
+        self.clamp_page();
+        self
+    }
+
+    pub fn set_visible_row_ids(&mut self, ids: impl IntoIterator<Item = Id>) -> DataViewOutcome {
+        let indices = self.row_indices_for_ids(ids);
+        self.replace_visible_row_indices(Some(indices))
+    }
+
+    pub fn clear_visible_row_ids(&mut self) -> DataViewOutcome {
+        self.replace_visible_row_indices(None)
+    }
+
     pub fn tree(mut self, tree: TreeAdapter<T, Id>) -> Self {
         self.tree = Some(tree);
         self
@@ -148,6 +166,11 @@ where
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focused_for_test(&self) -> bool {
+        self.focused
     }
 
     pub fn pagination(mut self, page_size: usize) -> Self {
@@ -360,6 +383,19 @@ where
         self.visible_rows()
             .get(self.highlighted)
             .map(|row| row.id.clone())
+    }
+
+    pub fn highlight_id(&mut self, id: &Id) -> DataViewOutcome {
+        let Some(index) = self.visible_rows().iter().position(|row| &row.id == id) else {
+            return DataViewOutcome::IDLE;
+        };
+        let update = self.set_highlighted_index(index);
+        DataViewOutcome {
+            handled: true,
+            changed: update.index_changed || update.selection_changed,
+            active: false,
+            activated: update.activated,
+        }
     }
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>, viewport: Rect) -> DataViewOutcome {
@@ -706,6 +742,70 @@ where
 
     fn visible_len(&self) -> usize {
         self.visible_rows().len()
+    }
+
+    fn row_indices_for_ids(&self, ids: impl IntoIterator<Item = Id>) -> Vec<usize> {
+        let mut used = HashSet::new();
+        let mut indices = Vec::new();
+        for id in ids {
+            if let Some(index) = self.rows.iter().enumerate().find_map(|(index, row)| {
+                (!used.contains(&index) && (self.row_id)(row) == id).then_some(index)
+            }) {
+                used.insert(index);
+                indices.push(index);
+            }
+        }
+        indices
+    }
+
+    fn replace_visible_row_indices(&mut self, next: Option<Vec<usize>>) -> DataViewOutcome {
+        if self.visible_row_indices == next {
+            return DataViewOutcome::IDLE;
+        }
+
+        let before_id = self.highlighted_id();
+        self.visible_row_indices = next;
+        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
+    }
+
+    fn sync_highlight_after_visible_set_change(
+        &mut self,
+        before_id: Option<Id>,
+    ) -> (bool, HighlightUpdate) {
+        let all_visible = self.all_visible_rows();
+        let position = before_id
+            .as_ref()
+            .and_then(|id| all_visible.iter().position(|row| &row.id == id))
+            .unwrap_or(0);
+        let has_visible_rows = !all_visible.is_empty();
+        drop(all_visible);
+
+        let mut page_changed = false;
+        let highlighted = if has_visible_rows {
+            if let Some(pagination) = &mut self.pagination {
+                let page = position / pagination.page_size;
+                page_changed = pagination.page != page;
+                pagination.page = page;
+                position % pagination.page_size
+            } else {
+                position
+            }
+        } else {
+            if let Some(pagination) = &mut self.pagination {
+                page_changed = pagination.page != 0;
+                pagination.page = 0;
+            }
+            0
+        };
+
+        let update = self.set_highlighted_index_from(highlighted, before_id);
+        (page_changed, update)
     }
 
     fn clamp_visible_state(&mut self) -> bool {

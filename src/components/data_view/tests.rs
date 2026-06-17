@@ -1255,6 +1255,108 @@ fn selection_prefix_contributes_render_width_and_shows_indeterminate_glyph() {
     assert_eq!(visible, " [-] root ┃");
 }
 
+#[test]
+fn filtered_row_ids_apply_ranked_visible_order() {
+    let view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .visible_row_ids([3, 1]);
+
+    assert_eq!(visible_ids(&view), vec![3, 1]);
+}
+
+#[test]
+fn filtering_preserves_highlight_by_row_id() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+            Row::new(4, "Delta"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    view.highlight_line_with_settings(2, Rect::new(0, 0, 20, 4), settings);
+    let outcome = view.set_visible_row_ids([4, 3]);
+
+    assert!(outcome.changed);
+    assert_eq!(visible_ids(&view), vec![4, 3]);
+    assert_eq!(view.highlighted_id(), Some(3));
+}
+
+#[test]
+fn filtering_falls_back_to_first_visible_row_when_highlight_is_hidden() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    view.highlight_line_with_settings(2, Rect::new(0, 0, 20, 3), settings);
+    view.set_visible_row_ids([2]);
+
+    assert_eq!(visible_ids(&view), vec![2]);
+    assert_eq!(view.highlighted_id(), Some(2));
+}
+
+#[test]
+fn empty_filter_has_no_highlight_and_next_nonempty_filter_selects_first_visible_row() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+
+    view.set_visible_row_ids([]);
+    assert_eq!(visible_ids(&view), Vec::<usize>::new());
+    assert_eq!(view.highlighted_id(), None);
+
+    view.set_visible_row_ids([3, 1]);
+    assert_eq!(visible_ids(&view), vec![3, 1]);
+    assert_eq!(view.highlighted_id(), Some(3));
+}
+
+#[test]
+fn hidden_selected_item_is_retained_when_filter_changes() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi)
+    .selected([2]);
+
+    view.set_visible_row_ids([1, 3]);
+
+    assert_eq!(visible_ids(&view), vec![1, 3]);
+    assert_eq!(view.selected_ids(), vec![2]);
+    assert!(view.is_selected(&2));
+}
+
 fn tree_view() -> DataView<Row, usize> {
     DataView::list(rows(), |row| row.id, |row| row.name.to_string())
         .tree(TreeAdapter::parent_id(|row: &Row| row.parent))

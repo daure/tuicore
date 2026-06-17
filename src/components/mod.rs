@@ -1,4 +1,5 @@
 mod data_view;
+mod dropdown;
 mod flex;
 mod list;
 mod panel;
@@ -13,9 +14,12 @@ pub use data_view::{
     DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
+pub use dropdown::{
+    Dropdown, DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant,
+};
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign, Padding};
 pub use list::{List, ListOutcome};
-pub use panel::{Panel, PanelHost, PanelVariant};
+pub use panel::{Panel, PanelHost, PanelTitlePosition, PanelTitleStyle, PanelVariant};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use tabs::{Tab, Tabs};

@@ -24,12 +24,34 @@ pub enum PanelVariant {
     InsetTitle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelTitleStyle {
+    #[default]
+    Standard,
+    Inset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelTitlePosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PanelTitle {
+    text: String,
+    style: PanelTitleStyle,
+}
+
 #[derive(Debug, Clone)]
 pub struct Panel {
-    top_left: Option<String>,
-    top_right: Option<String>,
+    top_left: Option<PanelTitle>,
+    top_right: Option<PanelTitle>,
+    bottom_left: Option<PanelTitle>,
+    bottom_right: Option<PanelTitle>,
     border: Option<BorderKind>,
-    variant: PanelVariant,
     content: Vec<String>,
     scroll: Option<ScrollState>,
     focused: bool,
@@ -56,8 +78,9 @@ impl Panel {
         Self {
             top_left: None,
             top_right: None,
+            bottom_left: None,
+            bottom_right: None,
             border: None,
-            variant: PanelVariant::default(),
             content: Vec::new(),
             scroll: None,
             focused: false,
@@ -68,17 +91,91 @@ impl Panel {
     }
 
     pub fn top_left(mut self, title: impl Into<String>) -> Self {
-        self.top_left = Some(title.into());
+        self.top_left = Some(PanelTitle::standard(title));
         self
     }
 
     pub fn set_top_left(&mut self, title: impl Into<String>) {
-        self.top_left = Some(title.into());
+        self.top_left = Some(PanelTitle::standard(title));
+    }
+
+    pub fn top_left_style(mut self, style: PanelTitleStyle) -> Self {
+        self.set_title_style(PanelTitlePosition::TopLeft, style);
+        self
     }
 
     pub fn top_right(mut self, title: impl Into<String>) -> Self {
-        self.top_right = Some(title.into());
+        self.top_right = Some(PanelTitle::standard(title));
         self
+    }
+
+    pub fn set_top_right(&mut self, title: impl Into<String>) {
+        self.top_right = Some(PanelTitle::standard(title));
+    }
+
+    pub fn top_right_style(mut self, style: PanelTitleStyle) -> Self {
+        self.set_title_style(PanelTitlePosition::TopRight, style);
+        self
+    }
+
+    pub fn bottom_left(mut self, title: impl Into<String>) -> Self {
+        self.bottom_left = Some(PanelTitle::standard(title));
+        self
+    }
+
+    pub fn set_bottom_left(&mut self, title: impl Into<String>) {
+        self.bottom_left = Some(PanelTitle::standard(title));
+    }
+
+    pub fn bottom_left_style(mut self, style: PanelTitleStyle) -> Self {
+        self.set_title_style(PanelTitlePosition::BottomLeft, style);
+        self
+    }
+
+    pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
+        self.bottom_right = Some(PanelTitle::standard(title));
+        self
+    }
+
+    pub fn set_bottom_right(&mut self, title: impl Into<String>) {
+        self.bottom_right = Some(PanelTitle::standard(title));
+    }
+
+    pub fn bottom_right_style(mut self, style: PanelTitleStyle) -> Self {
+        self.set_title_style(PanelTitlePosition::BottomRight, style);
+        self
+    }
+
+    pub fn title(
+        mut self,
+        position: PanelTitlePosition,
+        title: impl Into<String>,
+        style: PanelTitleStyle,
+    ) -> Self {
+        self.set_title(position, title, style);
+        self
+    }
+
+    pub fn set_title(
+        &mut self,
+        position: PanelTitlePosition,
+        title: impl Into<String>,
+        style: PanelTitleStyle,
+    ) {
+        *self.title_slot_mut(position) = Some(PanelTitle {
+            text: title.into(),
+            style,
+        });
+    }
+
+    pub fn clear_title(&mut self, position: PanelTitlePosition) {
+        *self.title_slot_mut(position) = None;
+    }
+
+    pub fn set_title_style(&mut self, position: PanelTitlePosition, style: PanelTitleStyle) {
+        if let Some(title) = self.title_slot_mut(position) {
+            title.style = style;
+        }
     }
 
     pub fn border(mut self, border: BorderKind) -> Self {
@@ -87,7 +184,9 @@ impl Panel {
     }
 
     pub fn variant(mut self, variant: PanelVariant) -> Self {
-        self.variant = variant;
+        if variant == PanelVariant::InsetTitle {
+            self.set_title_style(PanelTitlePosition::TopLeft, PanelTitleStyle::Inset);
+        }
         self
     }
 
@@ -251,13 +350,10 @@ impl Panel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        match self.variant {
-            PanelVariant::Standard => {
-                self.render_title(frame, area, self.top_left.as_deref(), Alignment::Left)
-            }
-            PanelVariant::InsetTitle => self.render_inset_title(frame, area, border),
-        }
-        self.render_title(frame, area, self.top_right.as_deref(), Alignment::Right);
+        self.render_panel_title(frame, area, border, PanelTitlePosition::TopLeft);
+        self.render_panel_title(frame, area, border, PanelTitlePosition::TopRight);
+        self.render_panel_title(frame, area, border, PanelTitlePosition::BottomLeft);
+        self.render_panel_title(frame, area, border, PanelTitlePosition::BottomRight);
 
         if !inner.is_empty() {
             let lines = self
@@ -288,45 +384,63 @@ impl Panel {
         }
     }
 
+    fn render_panel_title(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        border: BorderKind,
+        position: PanelTitlePosition,
+    ) {
+        let Some(title) = self.title_slot(position) else {
+            return;
+        };
+        match title.style {
+            PanelTitleStyle::Standard => self.render_title(frame, area, title, position),
+            PanelTitleStyle::Inset => self.render_inset_title(frame, area, border, title, position),
+        }
+    }
+
     fn render_title(
         &self,
         frame: &mut Frame,
         area: Rect,
-        title: Option<&str>,
-        alignment: Alignment,
+        title: &PanelTitle,
+        position: PanelTitlePosition,
     ) {
-        let Some(title) = title else {
-            return;
-        };
         if area.width <= 4 {
             return;
         }
 
         let max_width = area.width.saturating_sub(4) as usize;
-        let title = bounded_title(title, max_width);
+        let title = bounded_title(&title.text, max_width);
         let width = line_width(&Line::from(title.as_str())).min(u16::MAX as usize) as u16;
         if width == 0 {
             return;
         }
 
-        let x = match alignment {
+        let x = match title_alignment(position) {
             Alignment::Left => area.x.saturating_add(2),
             Alignment::Center => area.x + area.width.saturating_sub(width) / 2,
             Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(2),
         };
+        let y = title_y(area, position);
         let style = Style::default()
             .fg(self.title_color.value())
             .add_modifier(Modifier::BOLD);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(title, style))),
-            Rect::new(x, area.y, width, 1),
+            Rect::new(x, y, width, 1),
         );
     }
 
-    fn render_inset_title(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        let Some(title) = self.top_left.as_deref() else {
-            return;
-        };
+    fn render_inset_title(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        border: BorderKind,
+        title: &PanelTitle,
+        position: PanelTitlePosition,
+    ) {
         if area.width <= 4 {
             return;
         }
@@ -334,26 +448,70 @@ impl Panel {
         let chars = border_chars(border);
         let border_style = Style::default().fg(self.border_color.value());
         let title_style = Style::default().fg(self.title_color.value());
-        let title = bounded_title(title, area.width.saturating_sub(5) as usize);
+        let title = bounded_title(&title.text, area.width.saturating_sub(5) as usize);
         let title_width = line_width(&Line::from(title.as_str())).min(area.width as usize);
         if title_width == 0 {
             return;
         }
 
-        let fill_width = (area.width as usize).saturating_sub(4 + title_width);
         let line = Line::from(vec![
-            Span::styled(chars.top_left, border_style),
             Span::styled(chars.right_join, border_style),
             Span::styled(title, title_style),
             Span::styled(chars.left_join, border_style),
-            Span::styled(chars.horizontal.repeat(fill_width), border_style),
-            Span::styled(chars.top_right, border_style),
         ]);
+        let width = (title_width + 2).min(u16::MAX as usize) as u16;
+        let x = match title_alignment(position) {
+            Alignment::Left | Alignment::Center => area.x.saturating_add(1),
+            Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(1),
+        };
+        let y = title_y(area, position);
 
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(area.x, area.y, area.width, 1),
-        );
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+    }
+}
+
+impl PanelTitle {
+    fn standard(title: impl Into<String>) -> Self {
+        Self {
+            text: title.into(),
+            style: PanelTitleStyle::Standard,
+        }
+    }
+}
+
+impl Panel {
+    fn title_slot(&self, position: PanelTitlePosition) -> Option<&PanelTitle> {
+        match position {
+            PanelTitlePosition::TopLeft => self.top_left.as_ref(),
+            PanelTitlePosition::TopRight => self.top_right.as_ref(),
+            PanelTitlePosition::BottomLeft => self.bottom_left.as_ref(),
+            PanelTitlePosition::BottomRight => self.bottom_right.as_ref(),
+        }
+    }
+
+    fn title_slot_mut(&mut self, position: PanelTitlePosition) -> &mut Option<PanelTitle> {
+        match position {
+            PanelTitlePosition::TopLeft => &mut self.top_left,
+            PanelTitlePosition::TopRight => &mut self.top_right,
+            PanelTitlePosition::BottomLeft => &mut self.bottom_left,
+            PanelTitlePosition::BottomRight => &mut self.bottom_right,
+        }
+    }
+}
+
+fn title_alignment(position: PanelTitlePosition) -> Alignment {
+    match position {
+        PanelTitlePosition::TopLeft | PanelTitlePosition::BottomLeft => Alignment::Left,
+        PanelTitlePosition::TopRight | PanelTitlePosition::BottomRight => Alignment::Right,
+    }
+}
+
+fn title_y(area: Rect, position: PanelTitlePosition) -> u16 {
+    match position {
+        PanelTitlePosition::TopLeft | PanelTitlePosition::TopRight => area.y,
+        PanelTitlePosition::BottomLeft | PanelTitlePosition::BottomRight => {
+            area.y + area.height.saturating_sub(1)
+        }
     }
 }
 
@@ -774,5 +932,25 @@ mod tests {
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
         assert_eq!(top, "┌┤ Processes ├─────────┐");
+    }
+
+    #[test]
+    fn panel_renders_bottom_titles_with_independent_styles() {
+        let panel = Panel::new()
+            .bottom_left("Left")
+            .bottom_right("Right")
+            .bottom_right_style(PanelTitleStyle::Inset)
+            .border(BorderKind::Plain);
+        let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+
+        let buffer = terminal.backend().buffer();
+        let bottom = (0..24)
+            .map(|x| buffer.cell((x, 3)).unwrap().symbol())
+            .collect::<String>();
+        assert_eq!(bottom, "└─ Left ──────┤ Right ├┘");
     }
 }
