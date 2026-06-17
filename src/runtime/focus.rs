@@ -9,6 +9,7 @@ pub struct FocusTransition {
 #[derive(Debug, Clone, Default)]
 pub struct FocusManager {
     current: Option<FocusTarget>,
+    last_focused: Option<FocusTarget>,
 }
 
 impl FocusManager {
@@ -37,6 +38,8 @@ impl FocusManager {
                 self.current = Some(updated);
                 return None;
             }
+        } else if self.last_focused.is_some() {
+            return None;
         }
 
         self.set_current(nearest_enabled_target(self.current.as_ref(), targets))
@@ -56,6 +59,8 @@ impl FocusManager {
                 self.current = Some(updated);
                 return None;
             }
+        } else if self.last_focused.is_some() {
+            return None;
         }
 
         self.set_current(repair_target(repair, self.current.as_ref(), targets))
@@ -69,6 +74,7 @@ impl FocusManager {
         match request {
             FocusRequest::Next => self.set_current(self.next_target(targets)),
             FocusRequest::Previous => self.set_current(self.previous_target(targets)),
+            FocusRequest::Unfocus => self.set_current(None),
             FocusRequest::Target(id) => {
                 self.set_current_if_found(unique_enabled_target(targets, |target| &target.id == id))
             }
@@ -98,18 +104,23 @@ impl FocusManager {
             return None;
         }
 
-        let index = self
-            .current
-            .as_ref()
-            .and_then(|current| {
-                enabled
-                    .iter()
-                    .position(|target| same_focus(target, current))
-            })
-            .map(|index| (index + 1) % enabled.len())
-            .unwrap_or(0);
-
-        Some(enabled[index].clone())
+        if let Some(current) = &self.current {
+            let index = enabled
+                .iter()
+                .position(|target| same_focus(target, current))
+                .map(|index| (index + 1) % enabled.len())
+                .unwrap_or(0);
+            Some(enabled[index].clone())
+        } else if let Some(last) = &self.last_focused {
+            let target = enabled
+                .iter()
+                .find(|target| same_focus(target, last))
+                .map(|&t| t.clone())
+                .or_else(|| nearest_enabled_target(Some(last), targets));
+            target
+        } else {
+            Some(enabled[0].clone())
+        }
     }
 
     fn previous_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
@@ -118,24 +129,29 @@ impl FocusManager {
             return None;
         }
 
-        let index = self
-            .current
-            .as_ref()
-            .and_then(|current| {
-                enabled
-                    .iter()
-                    .position(|target| same_focus(target, current))
-            })
-            .map(|index| {
-                if index == 0 {
-                    enabled.len() - 1
-                } else {
-                    index - 1
-                }
-            })
-            .unwrap_or(0);
-
-        Some(enabled[index].clone())
+        if let Some(current) = &self.current {
+            let index = enabled
+                .iter()
+                .position(|target| same_focus(target, current))
+                .map(|index| {
+                    if index == 0 {
+                        enabled.len() - 1
+                    } else {
+                        index - 1
+                    }
+                })
+                .unwrap_or(0);
+            Some(enabled[index].clone())
+        } else if let Some(last) = &self.last_focused {
+            let target = enabled
+                .iter()
+                .find(|target| same_focus(target, last))
+                .map(|&t| t.clone())
+                .or_else(|| nearest_enabled_target(Some(last), targets));
+            target
+        } else {
+            Some(enabled[0].clone())
+        }
     }
 
     fn set_current(&mut self, next: Option<FocusTarget>) -> Option<FocusTransition> {
@@ -152,6 +168,10 @@ impl FocusManager {
         let previous = std::mem::replace(&mut self.current, next);
         if previous.is_none() && self.current.is_none() {
             return None;
+        }
+
+        if let Some(ref prev) = previous {
+            self.last_focused = Some(prev.clone());
         }
 
         Some(FocusTransition {
@@ -189,6 +209,41 @@ fn nearest_enabled_target(
     let Some(current) = current else {
         return targets.iter().find(|target| target.enabled).cloned();
     };
+
+    if !current.path.is_empty() {
+        let descendants = targets
+            .iter()
+            .filter(|target| {
+                target.enabled
+                    && target.path.keys().starts_with(current.path.keys())
+                    && target.path != current.path
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !descendants.is_empty() {
+            return descendants
+                .into_iter()
+                .min_by_key(|target| focus_distance(current, target));
+        }
+    }
+
+    let ancestors = targets
+        .iter()
+        .filter(|target| {
+            target.enabled
+                && current.path.keys().starts_with(target.path.keys())
+                && target.path != current.path
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if !ancestors.is_empty() {
+        return ancestors
+            .into_iter()
+            .max_by_key(|target| target.path.keys().len());
+    }
+
     targets
         .iter()
         .filter(|target| target.enabled)
@@ -451,5 +506,42 @@ mod tests {
             manager.current().unwrap().path,
             TreePath::from_keys([ChildKey::new("two")])
         );
+    }
+
+    #[test]
+    fn unfocus_and_restore_focus_via_next_previous() {
+        let targets = [target("one"), target("two"), target("three")];
+        let mut manager = FocusManager::new();
+
+        // 1. Initial validation focuses first target.
+        manager.validate(&targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "one");
+
+        // 2. Move focus to "two".
+        manager.apply_request(&FocusRequest::Next, &targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
+
+        // 3. Request unfocus.
+        let transition = manager.apply_request(&FocusRequest::Unfocus, &targets);
+        assert!(transition.is_some());
+        assert!(manager.current().is_none());
+        assert_eq!(manager.last_focused.as_ref().unwrap().id.as_str(), "two");
+
+        // 4. Validate should keep us unfocused.
+        manager.validate(&targets);
+        assert!(manager.current().is_none());
+
+        // 5. Pressing next/previous should restore focus back to the last focused element ("two").
+        let transition_next = manager.apply_request(&FocusRequest::Next, &targets);
+        assert!(transition_next.is_some());
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
+
+        // 6. Unfocus again and test with Previous request.
+        manager.apply_request(&FocusRequest::Unfocus, &targets);
+        assert!(manager.current().is_none());
+
+        let transition_prev = manager.apply_request(&FocusRequest::Previous, &targets);
+        assert!(transition_prev.is_some());
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
     }
 }

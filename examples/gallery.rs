@@ -116,8 +116,20 @@ impl Gallery {
             GalleryFocus::List
         };
         self.sync_focus(ctx.animation());
-        if self.focus == GalleryFocus::Preview && self.selected.preview() == PreviewKind::Panel {
-            self.previews.focus_panel_title_node(0, ctx);
+        if self.focus == GalleryFocus::Preview {
+            match self.selected.preview() {
+                PreviewKind::Panel => {
+                    self.previews.focus_panel_title_node(0, ctx);
+                }
+                PreviewKind::Dropdown => {
+                    self.previews.focus_dropdown_node(0, ctx);
+                }
+                _ => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("preview")));
+                }
+            }
+        } else {
+            ctx.focus(FocusRequest::Target(FocusId::new("data-view")));
         }
     }
 
@@ -145,9 +157,22 @@ impl Gallery {
             GalleryFocus::List
         };
         self.sync_focus(ctx.animation());
-        if self.focus == GalleryFocus::Preview && self.selected.preview() == PreviewKind::Panel {
-            self.previews
-                .focus_panel_title_node(self.previews.focused_panel, ctx);
+        if self.focus == GalleryFocus::Preview {
+            match self.selected.preview() {
+                PreviewKind::Panel => {
+                    self.previews
+                        .focus_panel_title_node(self.previews.focused_panel, ctx);
+                }
+                PreviewKind::Dropdown => {
+                    self.previews
+                        .focus_dropdown_node(self.previews.focused_dropdown, ctx);
+                }
+                _ => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("preview")));
+                }
+            }
+        } else {
+            ctx.focus(FocusRequest::Target(FocusId::new("data-view")));
         }
     }
 
@@ -161,11 +186,16 @@ impl Gallery {
         if matches!(key.code, Key::Enter) {
             self.focus = GalleryFocus::Preview;
             self.sync_focus(ctx.animation());
-            if self.selected.preview() == PreviewKind::Dropdown {
-                self.previews.focus_dropdown_node(0, ctx);
-            }
-            if self.selected.preview() == PreviewKind::Panel {
-                self.previews.focus_panel_title_node(0, ctx);
+            match self.selected.preview() {
+                PreviewKind::Dropdown => {
+                    self.previews.focus_dropdown_node(0, ctx);
+                }
+                PreviewKind::Panel => {
+                    self.previews.focus_panel_title_node(0, ctx);
+                }
+                _ => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("preview")));
+                }
             }
         }
         if outcome.handled || outcome.needs_redraw() || matches!(key.code, Key::Enter) {
@@ -302,6 +332,14 @@ impl TuiNode<Msg> for Gallery {
         );
         self.previews
             .layout(self.selected.preview(), self.areas.preview_body, ctx);
+
+        let has_sub_focusables = matches!(
+            self.selected.preview(),
+            PreviewKind::Panel | PreviewKind::Dropdown
+        );
+        if !has_sub_focusables {
+            ctx.register_focusable(FocusId::new("preview"), self.areas.preview_body, true);
+        }
         LayoutResult::new(area)
     }
 
@@ -317,6 +355,9 @@ impl TuiNode<Msg> for Gallery {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
         if let TuiEvent::Key(key) = event {
             if key.code == Key::Esc && self.preview_handles_escape() {
+                if !self.list_panel.is_focused() && !self.preview_panel.is_focused() {
+                    return EventOutcome::Ignored;
+                }
                 return self.handle_preview_key(*key, ctx);
             }
         }
@@ -330,6 +371,10 @@ impl TuiNode<Msg> for Gallery {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+
+        if !self.list_panel.is_focused() && !self.preview_panel.is_focused() {
+            return EventOutcome::Ignored;
+        }
 
         let bindings = tuicore::keybindings();
         if bindings.focus().previous_matches(*key) {
@@ -387,11 +432,32 @@ impl TuiNode<Msg> for Gallery {
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<Msg>) {
+        if target.id.as_str() == "preview" {
+            if focused {
+                self.focus = GalleryFocus::Preview;
+                self.list_panel.set_focused(false, ctx.animation());
+                self.component_list.set_focused(false);
+                self.preview_panel.set_focused(true, ctx.animation());
+                self.previews
+                    .set_focused(self.selected.preview(), true, ctx.animation());
+            } else {
+                self.preview_panel.set_focused(false, ctx.animation());
+                self.previews
+                    .set_focused(self.selected.preview(), false, ctx.animation());
+            }
+            ctx.request_redraw();
+            return;
+        }
+
         if target.path.is_empty() {
             self.component_list.dispatch_focus(target, focused, ctx);
             self.list_panel.set_focused(focused, ctx.animation());
             if focused {
                 self.focus = GalleryFocus::List;
+                self.preview_panel.set_focused(false, ctx.animation());
+                self.previews
+                    .set_focused(self.selected.preview(), false, ctx.animation());
+            } else {
                 self.preview_panel.set_focused(false, ctx.animation());
                 self.previews
                     .set_focused(self.selected.preview(), false, ctx.animation());
@@ -409,6 +475,10 @@ impl TuiNode<Msg> for Gallery {
                 self.list_panel.set_focused(false, ctx.animation());
                 self.component_list.set_focused(false);
                 self.preview_panel.set_focused(true, ctx.animation());
+                self.previews
+                    .set_focused(self.selected.preview(), true, ctx.animation());
+            } else {
+                self.preview_panel.set_focused(false, ctx.animation());
             }
             ctx.request_redraw();
         }
@@ -636,8 +706,20 @@ impl PreviewState {
         ctx: &mut EventCtx<Msg>,
     ) -> bool {
         match preview {
-            PreviewKind::TextInput => self.text_input.on_key(key).needs_redraw(),
-            PreviewKind::TextareaInput => self.textarea_input.on_key(key).needs_redraw(),
+            PreviewKind::TextInput => {
+                let outcome = self.text_input.on_key(key);
+                if outcome.needs_redraw() {
+                    ctx.request_redraw();
+                }
+                outcome.handled
+            }
+            PreviewKind::TextareaInput => {
+                let outcome = self.textarea_input.on_key(key);
+                if outcome.needs_redraw() {
+                    ctx.request_redraw();
+                }
+                outcome.handled
+            }
             PreviewKind::Tabs => self.tabs_on_key(key, ctx),
             PreviewKind::DataTable | PreviewKind::DataTableTree
                 if matches!(key.code, Key::Char('s')) && key.modifiers == KeyModifiers::NONE =>
@@ -661,7 +743,10 @@ impl PreviewState {
                     ctx.animation(),
                 );
                 self.record_data_events(preview);
-                outcome.handled || outcome.needs_redraw()
+                if outcome.needs_redraw() {
+                    ctx.request_redraw();
+                }
+                outcome.handled
             }
             PreviewKind::Panel => self.panel_on_key(key, area, ctx),
             PreviewKind::Dropdown => self.dropdown_on_key(key, area, ctx),
@@ -1024,7 +1109,7 @@ impl PreviewState {
             frame,
             areas[2],
             2,
-            "Bordered 3 • No search immediate",
+            "Bordered 3 • Centered (No search immediate)",
             &format!(
                 "selected: {:?}\nquery: {:?}\nCtrl+J/Ctrl+K changes committed value while open.",
                 self.dropdown_no_search_immediate.selected_id(),
@@ -1975,6 +2060,7 @@ fn dropdown_no_search_immediate() -> Dropdown<DropdownDemoItem, &'static str> {
         .placeholder("Immediate lane...")
         .search_mode(DropdownSearchMode::None)
         .commit_mode(DropdownCommitMode::Immediate)
+        .centered(true)
         .selected_one("beta")
 }
 

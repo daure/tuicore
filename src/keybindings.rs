@@ -29,6 +29,7 @@ pub struct NavKeyBindings {
 pub struct FocusKeyBindings {
     next: Vec<KeySpec>,
     previous: Vec<KeySpec>,
+    unfocus: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +95,10 @@ impl Default for FocusKeyBindings {
         Self {
             next: vec![KeySpec::key(Key::Tab)],
             previous: vec![KeySpec::key(Key::BackTab)],
+            unfocus: vec![
+                KeySpec::key(Key::Esc),
+                KeySpec::key_with_modifiers(Key::Char('/'), KeyModifiers::CONTROL),
+            ],
         }
     }
 }
@@ -187,6 +192,7 @@ impl KeyBindings {
         set_keys(&value, "nav", "end", &mut bindings.nav.end);
         set_keys(&value, "focus", "next", &mut bindings.focus.next);
         set_keys(&value, "focus", "previous", &mut bindings.focus.previous);
+        set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus);
         set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous);
         set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next);
         set_keys(
@@ -316,6 +322,15 @@ impl KeyBindings {
 
     pub fn with_focus_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_focus_previous(keys);
+        self
+    }
+
+    pub fn set_focus_unfocus(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.focus.unfocus = keys.into_iter().collect();
+    }
+
+    pub fn with_focus_unfocus(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_focus_unfocus(keys);
         self
     }
 
@@ -605,12 +620,25 @@ impl FocusKeyBindings {
         self
     }
 
+    pub fn set_unfocus(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.unfocus = keys.into_iter().collect();
+    }
+
+    pub fn with_unfocus(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_unfocus(keys);
+        self
+    }
+
     pub fn next_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.next, key.into())
     }
 
     pub fn previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.previous, key.into())
+    }
+
+    pub fn unfocus_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.unfocus, key.into())
     }
 }
 

@@ -385,6 +385,8 @@ fn focus_request_from_event_with_bindings<M>(
         Some(FocusRequest::Next)
     } else if focus.previous_matches(*key) {
         Some(FocusRequest::Previous)
+    } else if focus.unfocus_matches(*key) {
+        Some(FocusRequest::Unfocus)
     } else {
         None
     }
@@ -764,6 +766,11 @@ mod tests {
     fn default_focus_keybindings_enqueue_next_and_previous_requests() {
         let next = TuiEvent::Key(KeyEvent::from(Key::Tab));
         let previous = TuiEvent::Key(KeyEvent::from(Key::BackTab));
+        let esc_unfocus = TuiEvent::Key(KeyEvent::from(Key::Esc));
+        let ctrl_slash_unfocus = TuiEvent::Key(KeyEvent {
+            code: Key::Char('/'),
+            modifiers: KeyModifiers::CONTROL,
+        });
         let bindings = FocusKeyBindings::default();
 
         assert_eq!(
@@ -781,6 +788,22 @@ mod tests {
                 &bindings
             ),
             Some(FocusRequest::Previous)
+        );
+        assert_eq!(
+            focus_request_from_event_with_bindings(
+                &esc_unfocus,
+                &effects(Propagation::Continue),
+                &bindings
+            ),
+            Some(FocusRequest::Unfocus)
+        );
+        assert_eq!(
+            focus_request_from_event_with_bindings(
+                &ctrl_slash_unfocus,
+                &effects(Propagation::Continue),
+                &bindings
+            ),
+            Some(FocusRequest::Unfocus)
         );
     }
 

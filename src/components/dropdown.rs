@@ -107,6 +107,7 @@ pub struct Dropdown<T, Id> {
     auto_focus_search: bool,
     placeholder: String,
     variant: DropdownVariant,
+    centered: bool,
     field_area: Rect,
     overlay_bounds: Rect,
     focus_region: Option<DropdownFocusRegion>,
@@ -178,6 +179,7 @@ where
             auto_focus_search: true,
             placeholder: String::from("Select..."),
             variant: DropdownVariant::Bordered,
+            centered: false,
             field_area: Rect::default(),
             overlay_bounds: Rect::default(),
             focus_region: None,
@@ -197,6 +199,11 @@ where
 
     pub fn commit_mode(mut self, mode: DropdownCommitMode) -> Self {
         self.commit_mode = mode;
+        self
+    }
+
+    pub fn centered(mut self, centered: bool) -> Self {
+        self.centered = centered;
         self
     }
 
@@ -328,7 +335,7 @@ where
     pub fn on_key(&mut self, key: impl Into<KeyEvent>, area: Rect) -> DropdownOutcome {
         let key = key.into();
         if !self.open {
-            return self.on_closed_key(key);
+            return self.on_closed_key(key, area);
         }
 
         match key.code {
@@ -429,10 +436,21 @@ where
         LayoutResult::new(self.field_area)
     }
 
-    fn on_closed_key(&mut self, key: KeyEvent) -> DropdownOutcome {
+    fn on_closed_key(&mut self, key: KeyEvent, area: Rect) -> DropdownOutcome {
         let keys = keybindings();
-        if keys.dropdown().next_matches(key) || keys.dropdown().previous_matches(key) {
-            return self.open();
+        if keys.dropdown().next_matches(key) {
+            let mut outcome = self.open();
+            let nav = self.navigate(Key::Down, area);
+            outcome.handled |= nav.handled;
+            outcome.changed |= nav.changed;
+            return outcome;
+        }
+        if keys.dropdown().previous_matches(key) {
+            let mut outcome = self.open();
+            let nav = self.navigate(Key::Up, area);
+            outcome.handled |= nav.handled;
+            outcome.changed |= nav.changed;
+            return outcome;
         }
 
         match key.code {
@@ -632,6 +650,18 @@ where
             return Rect::default();
         }
 
+        if self.centered {
+            let popup_width = field_area.width.max(40).min(bounds.width);
+            let popup_height = self
+                .popup_content_height(popup_width)
+                .min(self.effective_max_popup_height())
+                .min(bounds.height);
+            let popup_x = bounds.x + (bounds.width.saturating_sub(popup_width)) / 2;
+            let popup_y = bounds.y + (bounds.height.saturating_sub(popup_height)) / 2;
+            let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+            return clip_rect(popup_area, bounds);
+        }
+
         let popup_y = field_area
             .y
             .saturating_add(field_area.height)
@@ -785,7 +815,7 @@ where
         frame.render_widget(Clear, area);
         let popup_content_style = self.popup_content_style();
         let inner = if self.popup_has_border() {
-            let border = if self.variant == DropdownVariant::Bordered {
+            let border = if self.variant == DropdownVariant::Bordered && !self.centered {
                 connected_popup_border_set(preset().border())
             } else {
                 border_set(preset().border())
@@ -1054,16 +1084,18 @@ mod tests {
     }
 
     #[test]
-    fn closed_ctrl_j_and_ctrl_k_open_without_navigating() {
-        for key in [ctrl('j'), ctrl('k')] {
-            let mut dropdown = single_dropdown();
+    fn closed_ctrl_j_and_ctrl_k_open_with_navigating() {
+        let mut dropdown = single_dropdown();
+        let outcome = dropdown.on_key(ctrl('j'), AREA);
+        assert!(outcome.opened);
+        assert!(dropdown.is_open());
+        assert_eq!(dropdown.data_view.highlighted_id(), Some("Beta"));
 
-            let outcome = dropdown.on_key(key, AREA);
-
-            assert!(outcome.opened);
-            assert!(dropdown.is_open());
-            assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
-        }
+        let mut dropdown = single_dropdown();
+        let outcome = dropdown.on_key(ctrl('k'), AREA);
+        assert!(outcome.opened);
+        assert!(dropdown.is_open());
+        assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
     }
 
     #[test]
@@ -1499,6 +1531,21 @@ mod tests {
 
         assert_eq!(popup_area, Rect::new(0, 2, 24, 6));
         assert!(popup_area.y + popup_area.height > 3);
+    }
+
+    #[test]
+    fn centered_popup_overlay_centers_popup_within_bounds() {
+        let mut dropdown = single_dropdown().centered(true);
+        dropdown.open();
+        dropdown.layout_overlay::<()>(
+            Rect::new(2, 2, 24, 3),
+            Rect::new(0, 0, 100, 40),
+            &mut LayoutCtx::new(),
+        );
+
+        let popup_area = dropdown.popup_overlay_area(Rect::new(0, 0, 100, 40));
+
+        assert_eq!(popup_area, Rect::new(30, 17, 40, 6));
     }
 
     #[test]

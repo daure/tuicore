@@ -211,6 +211,10 @@ impl Panel {
         self
     }
 
+    pub fn is_focused(&self) -> bool {
+        self.focused
+    }
+
     pub fn set_focused(&mut self, focused: bool, settings: AnimationSettings) {
         if self.focused == focused {
             return;

@@ -245,6 +245,7 @@ pub struct FocusTarget {
 pub enum FocusRequest {
     Next,
     Previous,
+    Unfocus,
     Target(FocusId),
     Path(TreePath),
     TargetAt { path: TreePath, id: FocusId },
@@ -312,6 +313,10 @@ impl<M> EventCtx<M> {
 
     pub fn focus_previous(&mut self) {
         self.focus(FocusRequest::Previous);
+    }
+
+    pub fn unfocus(&mut self) {
+        self.focus(FocusRequest::Unfocus);
     }
 
     pub(crate) fn repair_focus(&mut self, repair: FocusRepair) {
