@@ -6,6 +6,10 @@ use crate::animation::{AnimationSettings, TickResult};
 use crate::event::TuiEvent;
 
 pub trait TuiNode<M = ()> {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        LayoutSizeHint::legacy_fill().normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult;
 
     fn render(&self, frame: &mut Frame, area: Rect);
@@ -52,6 +56,10 @@ impl<M, N> TuiNode<M> for Box<N>
 where
     N: TuiNode<M> + ?Sized,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        self.as_ref().measure(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.as_mut().layout(area, ctx)
     }
@@ -131,12 +139,74 @@ pub enum Propagation {
 pub struct LayoutCtx {
     focus_paths: Vec<FocusTarget>,
     hit_regions: Vec<HitRegion>,
+    overflow_diagnostics: Vec<LayoutOverflowDiagnostic>,
     path: TreePath,
+    focus_disabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutResult {
     pub area: Rect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisProposal {
+    Unbounded,
+    AtMost(u16),
+    Exact(u16),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutProposal {
+    pub width: AxisProposal,
+    pub height: AxisProposal,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutSize {
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AxisExpand {
+    pub width: bool,
+    pub height: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintSource {
+    Measured,
+    LegacyUnmeasured,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutSizeHint {
+    pub source: HintSource,
+    pub min: LayoutSize,
+    pub preferred: LayoutSize,
+    pub expand: AxisExpand,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutAxis {
+    Width,
+    Height,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowPolicyName {
+    Clip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutOverflowDiagnostic {
+    pub path: TreePath,
+    pub child_index: Option<usize>,
+    pub axis: LayoutAxis,
+    pub needed: u16,
+    pub available: u16,
+    pub policy: OverflowPolicyName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,7 +404,18 @@ impl LayoutCtx {
         result
     }
 
+    pub fn focus_disabled(&self) -> bool {
+        self.focus_disabled
+    }
+
+    pub fn set_focus_disabled(&mut self, disabled: bool) {
+        self.focus_disabled = disabled;
+    }
+
     pub fn register_focusable(&mut self, id: FocusId, area: Rect, enabled: bool) {
+        if self.focus_disabled {
+            return;
+        }
         self.focus_paths.push(FocusTarget {
             id,
             path: self.current_path(),
@@ -345,6 +426,41 @@ impl LayoutCtx {
 
     pub fn register_hit_region(&mut self, region: HitRegion) {
         self.hit_regions.push(region);
+    }
+
+    pub fn record_overflow(
+        &mut self,
+        axis: LayoutAxis,
+        needed: u16,
+        available: u16,
+        policy: OverflowPolicyName,
+    ) {
+        self.overflow_diagnostics.push(LayoutOverflowDiagnostic {
+            path: self.current_path(),
+            child_index: None,
+            axis,
+            needed,
+            available,
+            policy,
+        });
+    }
+
+    pub fn record_child_overflow(
+        &mut self,
+        child_index: usize,
+        axis: LayoutAxis,
+        needed: u16,
+        available: u16,
+        policy: OverflowPolicyName,
+    ) {
+        self.overflow_diagnostics.push(LayoutOverflowDiagnostic {
+            path: self.current_path(),
+            child_index: Some(child_index),
+            axis,
+            needed,
+            available,
+            policy,
+        });
     }
 
     pub fn current_path(&self) -> TreePath {
@@ -358,11 +474,116 @@ impl LayoutCtx {
     pub fn hit_regions(&self) -> &[HitRegion] {
         &self.hit_regions
     }
+
+    pub fn overflow_diagnostics(&self) -> &[LayoutOverflowDiagnostic] {
+        &self.overflow_diagnostics
+    }
 }
 
 impl LayoutResult {
     pub fn new(area: Rect) -> Self {
         Self { area }
+    }
+}
+
+impl LayoutProposal {
+    pub fn unbounded() -> Self {
+        Self {
+            width: AxisProposal::Unbounded,
+            height: AxisProposal::Unbounded,
+        }
+    }
+
+    pub fn at_most(width: u16, height: u16) -> Self {
+        Self {
+            width: AxisProposal::AtMost(width),
+            height: AxisProposal::AtMost(height),
+        }
+    }
+
+    pub fn at_most_area(area: Rect) -> Self {
+        Self::at_most(area.width, area.height)
+    }
+
+    pub fn exact(width: u16, height: u16) -> Self {
+        Self {
+            width: AxisProposal::Exact(width),
+            height: AxisProposal::Exact(height),
+        }
+    }
+
+    pub fn exact_area(area: Rect) -> Self {
+        Self::exact(area.width, area.height)
+    }
+}
+
+impl LayoutSize {
+    pub fn new(width: u16, height: u16) -> Self {
+        Self { width, height }
+    }
+}
+
+impl AxisExpand {
+    pub fn both() -> Self {
+        Self {
+            width: true,
+            height: true,
+        }
+    }
+}
+
+impl LayoutSizeHint {
+    pub fn unmeasured() -> Self {
+        Self {
+            source: HintSource::LegacyUnmeasured,
+            min: LayoutSize::default(),
+            preferred: LayoutSize::default(),
+            expand: AxisExpand::default(),
+        }
+    }
+
+    pub fn legacy_fill() -> Self {
+        Self {
+            source: HintSource::LegacyUnmeasured,
+            min: LayoutSize::default(),
+            preferred: LayoutSize::default(),
+            expand: AxisExpand::both(),
+        }
+    }
+
+    pub fn fixed(width: u16, height: u16) -> Self {
+        let size = LayoutSize::new(width, height);
+        Self {
+            source: HintSource::Measured,
+            min: size,
+            preferred: size,
+            expand: AxisExpand::default(),
+        }
+    }
+
+    pub fn content(width: u16, height: u16) -> Self {
+        Self {
+            source: HintSource::Measured,
+            min: LayoutSize::default(),
+            preferred: LayoutSize::new(width, height),
+            expand: AxisExpand::default(),
+        }
+    }
+
+    pub fn normalized(mut self, proposal: LayoutProposal) -> Self {
+        self.preferred.width = normalize_axis(self.min.width, self.preferred.width, proposal.width);
+        self.preferred.height =
+            normalize_axis(self.min.height, self.preferred.height, proposal.height);
+        self
+    }
+}
+
+fn normalize_axis(min: u16, preferred: u16, proposal: AxisProposal) -> u16 {
+    let preferred = preferred.max(min);
+    match proposal {
+        AxisProposal::Unbounded => preferred,
+        AxisProposal::AtMost(max) => preferred.min(max).max(min),
+        AxisProposal::Exact(exact) => exact.max(min),
     }
 }
 
@@ -510,6 +731,64 @@ mod tests {
     fn body_child_key_uses_reserved_name() {
         assert_eq!(ChildKey::body().as_str(), ChildKey::BODY);
     }
+
+    #[test]
+    fn measurement_constructors_normalize_hints() {
+        let fixed = LayoutSizeHint::fixed(5, 3).normalized(LayoutProposal::exact(7, 2));
+
+        assert_eq!(fixed.source, HintSource::Measured);
+        assert_eq!(fixed.min, LayoutSize::new(5, 3));
+        assert_eq!(fixed.preferred, LayoutSize::new(7, 3));
+
+        let content = LayoutSizeHint::content(10, 4).normalized(LayoutProposal::at_most(6, 9));
+
+        assert_eq!(content.min, LayoutSize::default());
+        assert_eq!(content.preferred, LayoutSize::new(6, 4));
+    }
+
+    #[test]
+    fn default_measure_returns_legacy_fill_hint() {
+        struct Probe;
+
+        impl TuiNode<()> for Probe {
+            fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+                LayoutResult::new(area)
+            }
+
+            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        }
+
+        let hint = Probe.measure(LayoutProposal::at_most(10, 5));
+
+        assert_eq!(hint.source, HintSource::LegacyUnmeasured);
+        assert_eq!(hint.preferred, LayoutSize::default());
+        assert!(hint.expand.width);
+        assert!(hint.expand.height);
+    }
+
+    #[test]
+    fn non_focusable_wrapper_prevents_focus_registration() {
+        struct FocusableProbe;
+        impl TuiNode<()> for FocusableProbe {
+            fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+                ctx.register_focusable(FocusId::new("probe"), area, true);
+                LayoutResult::new(area)
+            }
+            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        }
+
+        // Test normal focusable probe registers focus target
+        let mut probe = FocusableProbe;
+        let mut ctx = LayoutCtx::new();
+        probe.layout(Rect::new(0, 0, 10, 10), &mut ctx);
+        assert_eq!(ctx.focus_paths.len(), 1);
+
+        // Test NonFocusable probe does not register focus target
+        let mut non_focusable = NonFocusable::new(FocusableProbe);
+        let mut ctx = LayoutCtx::new();
+        non_focusable.layout(Rect::new(0, 0, 10, 10), &mut ctx);
+        assert_eq!(ctx.focus_paths.len(), 0);
+    }
 }
 
 impl From<&str> for ChildKey {
@@ -585,5 +864,77 @@ impl HitRegion {
             && column < self.area.x.saturating_add(self.area.width)
             && row >= self.area.y
             && row < self.area.y.saturating_add(self.area.height)
+    }
+}
+
+pub struct NonFocusable<N> {
+    inner: N,
+}
+
+impl<N> NonFocusable<N> {
+    pub fn new(inner: N) -> Self {
+        Self { inner }
+    }
+}
+
+impl<N, M> TuiNode<M> for NonFocusable<N>
+where
+    N: TuiNode<M>,
+{
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        self.inner.measure(proposal)
+    }
+
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let was_disabled = ctx.focus_disabled();
+        ctx.set_focus_disabled(true);
+        let result = self.inner.layout(area, ctx);
+        ctx.set_focus_disabled(was_disabled);
+        result
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.inner.render(frame, area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        self.inner.event(event, ctx)
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        self.inner.dispatch_event(route, event, ctx)
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.inner.tick(dt, settings)
+    }
+
+    fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.inner.focus(target, focused, ctx);
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.inner.dispatch_focus(target, focused, ctx);
+    }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.destroy(ctx);
     }
 }

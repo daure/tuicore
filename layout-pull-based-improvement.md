@@ -6,7 +6,7 @@ Make tuicore layout smarter without making it dogmatic.
 
 Components should be able to describe their normal-flow sizing needs, containers should be able to ask before assigning rectangles, and downstream apps should be able to override policy where product needs differ. Existing push-based usage must keep working.
 
-This is not a rewrite of tuicore layout. It is an additive measurement contract plus smarter container behavior, introduced in controlled phases.
+This is not a rewrite of tuicore layout. It is an additive measurement contract plus smarter container behavior, introduced in controlled phases. The contract is shared; layout components stay small and composable instead of becoming one god container.
 
 ## Problem
 
@@ -38,6 +38,57 @@ The system should be:
 - **Incremental:** unmeasured components do not break existing apps.
 - **Component-owned:** borders, presets, trigger variants, configured visible rows, headers, and overlays belong to component measurement instead of parent magic numbers.
 - **Non-magical:** smart defaults, explicit escape hatches.
+
+## Shared layout spacing and alignment plan
+
+Spacing belongs to layout components, not `TuiNode`. `TuiNode` describes component capability; containers own relationships between children.
+
+Add shared spacing primitives:
+
+```rust
+pub struct Padding {
+    pub left: u16,
+    pub right: u16,
+    pub top: u16,
+    pub bottom: u16,
+}
+
+pub struct Gap {
+    pub row: u16,
+    pub column: u16,
+}
+```
+
+Implementation notes:
+
+- Move `Padding` out of `flex` into a shared spacing module if practical; keep `tuicore::Padding` re-export unchanged.
+- Add `Gap` as shared public type and re-export as `tuicore::Gap`.
+- Keep old APIs for compatibility:
+  - `Flex::gap(u16)` remains uniform main-axis gap.
+  - `Grid::gap(column, row)` remains legacy order.
+- Add explicit APIs:
+  - `Grid::gaps(Gap)` maps `column` to column gaps and `row` to row gaps.
+  - `Grid::padding(Padding)` resolves tracks inside padded inner area; measurement includes padding; overflow diagnostics compare against inner size.
+- Do **not** add `Flex::gaps(Gap)` in this pass unless there is a concrete cross-axis use. Flex has one item sequence; `gap(u16)` is clearer and avoids ignored cross-axis fields.
+
+Flex alignment improvements:
+
+- Add `MainAlign::SpaceAround` and `MainAlign::SpaceEvenly` as accepted pre-1.0 source-break risk for downstream exhaustive matches.
+- Keep deterministic integer behavior:
+  - base `gap` is minimum inter-item gap.
+  - Implement justification as a space-vector: leading space, inter-item spaces, trailing space.
+  - `SpaceBetween`: single child uses `[0, 0]`; otherwise spare distributes across `count - 1` inter-item spaces. Remainder goes left-to-right so last child still reaches trailing edge when possible.
+  - `SpaceAround`: spare distributes across `count * 2` half-spaces. Leading/trailing spaces get one half-space; inter-item spaces get two half-spaces. Remainder goes left-to-right across half-spaces before folding into full spaces.
+  - `SpaceEvenly`: spare distributes across `count + 1` spaces. Remainder goes left-to-right from leading edge to trailing edge.
+  - Existing `Center` and `End` keep spare as offset only.
+- Add `FlexItem::align_self(CrossAlign)` with `align: Option<CrossAlign>`.
+- Effective cross alignment = item override or container alignment.
+- Cross-size rules:
+  - `CrossSize::Auto + Stretch` fills cross axis.
+  - `CrossSize::Auto + Start/Center/End` uses child preferred cross size when measured; legacy fallback fills for compatibility.
+  - `CrossSize::Fixed + any alignment` uses `size.min(cross_available)` and positions by effective alignment; `Stretch` behaves like `Start` for fixed-size children. Containment wins in v1; overflow diagnostics can be added later if fixed cross-size is clipped.
+
+Do not add CSS margin, wrap, order, or baseline alignment yet. Those are separate complexity gates.
 
 ## Current layout-related pieces
 
@@ -104,6 +155,16 @@ Current capabilities:
 - ratio and explicit constraints
 
 Current limitation: still parent-driven. Split cannot ask one child for fixed/min size and give the rest to the other child unless caller encodes that manually as constraints.
+
+### Missing layout primitives
+
+The smarter contract should be used by more than Flex/Split immediately:
+
+- `Stack`: layers children in the same area with alignment and optional insets. Useful for badges, centered empty states, scrims, and decorative overlays.
+- `Overlay`: anchors an overlay child to a base child without making overlay consume normal-flow space. Useful for dropdowns, popovers, command palettes, and contextual help.
+- `Grid`: lays children into rows/columns using fixed, percent, fill, and fit-content tracks. Useful for forms, dashboards, galleries, and settings pages.
+
+These should be first-class components, not app-local examples.
 
 ### `Dropdown`
 
@@ -480,6 +541,21 @@ Deliverables:
   - first/second can be fixed, ratio, fill, or fit-content
   - one side can request content size and the other receives remainder
   - overflow diagnostics when both sides cannot fit
+- Add `Stack`:
+  - children share the same parent area by default
+  - per-child alignment and inset
+  - optional per-child fixed size or fit-content size
+  - render order matches child order; event/focus routing stays child-key based
+- Add `Overlay`:
+  - base child receives full normal-flow area
+  - overlay child is anchored relative to base/viewport area
+  - overlay does not affect normal-flow measurement
+  - placement supports top/bottom/left/right/center anchors and clamps to available area
+- Add `Grid`:
+  - configurable rows and columns with fixed/percent/fill/fit-content tracks
+  - per-child row/column/span/alignment
+  - deterministic integer distribution and overflow diagnostics
+  - fit-content tracks use child measurement when available and fallback otherwise
 - Add a reusable helper for clamping hints:
   - normalize min/preferred invariants
   - clamp to proposals
@@ -494,6 +570,9 @@ Tests:
 
 - Allocation priority table tests for Flex.
 - Split content + fill tests.
+- Stack alignment/inset and layered event routing tests.
+- Overlay normal-flow exclusion and clamped anchor tests.
+- Grid fixed/percent/fill/fit-content track tests.
 - Percent in definite and indefinite proposals.
 - Custom min/max override tests.
 - Debug diagnostics for invalid child hints.
@@ -518,6 +597,13 @@ Deliverables:
   - `Spinner`
   - `DataView` where practical
 - Update examples/gallery layouts to prefer `fit_content()` for intrinsic controls and `fill()` for content regions.
+- Add gallery pages for every layout type:
+  - Flex page: fixed, percent, fit-content, fill, gap, padding, alignment
+  - Split page: horizontal/vertical ratio and content+fill examples
+  - Stack page: layered panel, centered empty state, badge overlay
+  - Overlay page: base content with anchored popover/dropdown-style overlay
+  - Grid page: dashboard/form layout with mixed track sizing
+- Add one composition gallery page or section showing these layouts nested together.
 - Audit examples for magic numbers tied to borders, headers, tabs, visible rows, or preset internals.
 - Add component docs with sizing behavior.
 - Add a “custom component measurement” guide for downstream authors.

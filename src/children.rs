@@ -4,7 +4,8 @@ use ratatui::{Frame, layout::Rect};
 
 use crate::{
     AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusRepair, FocusTarget, LayoutCtx, LayoutResult, LifecycleCtx, TickResult, TuiEvent, TuiNode,
+    FocusRepair, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    LifecycleCtx, TickResult, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +95,10 @@ where
 
     pub fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         ctx.push_slot(self.key.clone(), area, |ctx| self.child.layout(area, ctx))
+    }
+
+    pub fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        self.child.measure(proposal)
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -354,6 +359,14 @@ impl<M> Children<M> {
         ctx: &mut LayoutCtx,
     ) -> Option<LayoutResult> {
         self.get_mut(key).map(|slot| slot.layout(area, ctx))
+    }
+
+    pub fn measure_child(
+        &self,
+        key: &ChildKey,
+        proposal: LayoutProposal,
+    ) -> Option<LayoutSizeHint> {
+        self.get(key).map(|slot| slot.measure(proposal))
     }
 
     pub fn dispatch_child(

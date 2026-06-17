@@ -58,7 +58,7 @@ impl FocusManager {
             }
         }
 
-        self.set_current(repair_target(repair, targets))
+        self.set_current(repair_target(repair, self.current.as_ref(), targets))
     }
 
     pub fn apply_request(
@@ -172,20 +172,14 @@ fn enabled_targets(targets: &[FocusTarget]) -> Vec<&FocusTarget> {
     targets.iter().filter(|target| target.enabled).collect()
 }
 
-fn repair_target(repair: &FocusRepair, targets: &[FocusTarget]) -> Option<FocusTarget> {
+fn repair_target(
+    repair: &FocusRepair,
+    current: Option<&FocusTarget>,
+    targets: &[FocusTarget],
+) -> Option<FocusTarget> {
     match *repair {
-        FocusRepair::RemovedChild { index } => enabled_target_near_index(targets, index),
+        FocusRepair::RemovedChild { index: _ } => nearest_enabled_target(current, targets),
     }
-}
-
-fn enabled_target_near_index(targets: &[FocusTarget], index: usize) -> Option<FocusTarget> {
-    let enabled = enabled_targets(targets);
-    if enabled.is_empty() {
-        return None;
-    }
-
-    let index = index.min(enabled.len() - 1);
-    Some(enabled[index].clone())
 }
 
 fn nearest_enabled_target(
@@ -250,6 +244,15 @@ mod tests {
         FocusTarget { area, ..target(id) }
     }
 
+    fn target_with_path(id: &str, path: TreePath, area: Rect) -> FocusTarget {
+        FocusTarget {
+            id: FocusId::new(id),
+            path,
+            area,
+            enabled: true,
+        }
+    }
+
     #[test]
     fn focus_next_wraps_enabled_targets() {
         let targets = [target("one"), target("two")];
@@ -293,9 +296,16 @@ mod tests {
     }
 
     #[test]
-    fn repair_removed_middle_child_focuses_next_enabled_target() {
-        let old_targets = [target("one"), target("two"), target("three")];
-        let new_targets = [target("one"), target("three")];
+    fn repair_removed_child_focuses_nearest_enabled_target() {
+        let old_targets = [
+            target_at("one", Rect::new(0, 0, 5, 1)),
+            target_at("two", Rect::new(10, 0, 5, 1)),
+            target_at("three", Rect::new(11, 0, 5, 1)),
+        ];
+        let new_targets = [
+            target_at("one", Rect::new(0, 0, 5, 1)),
+            target_at("three", Rect::new(11, 0, 5, 1)),
+        ];
         let mut manager = FocusManager::new();
 
         manager.validate(&old_targets);
@@ -303,6 +313,33 @@ mod tests {
         manager.repair(&FocusRepair::RemovedChild { index: 1 }, &new_targets);
 
         assert_eq!(manager.current().unwrap().id.as_str(), "three");
+    }
+
+    #[test]
+    fn repair_removed_nested_child_does_not_treat_local_index_as_global_index() {
+        let removed_path = TreePath::from_keys([ChildKey::new("parent"), ChildKey::new("removed")]);
+        let near_path = TreePath::from_keys([ChildKey::new("parent"), ChildKey::new("near")]);
+        let old_targets = [target_with_path(
+            "input",
+            removed_path.clone(),
+            Rect::new(10, 0, 1, 1),
+        )];
+        let new_targets = [
+            target_at("global-zero", Rect::new(100, 0, 1, 1)),
+            target_with_path("near", near_path, Rect::new(11, 0, 1, 1)),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: removed_path,
+                id: FocusId::new("input"),
+            },
+            &old_targets,
+        );
+        manager.repair(&FocusRepair::RemovedChild { index: 0 }, &new_targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "near");
     }
 
     #[test]

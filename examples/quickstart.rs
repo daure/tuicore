@@ -31,9 +31,8 @@ impl Quickstart {
             return false;
         };
 
-        *code == Key::Esc
-            || (matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'c'))
-                && modifiers.contains(KeyModifiers::CONTROL))
+        matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'q'))
+            && modifiers.contains(KeyModifiers::CONTROL)
     }
 }
 

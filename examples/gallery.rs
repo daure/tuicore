@@ -8,11 +8,13 @@ use ratatui::widgets::Paragraph;
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, BorderKind, CellContext, ChildKey, Column,
     DataView, DataViewTypedEvent, Dropdown, DropdownCommitMode, DropdownSearchMode,
-    DropdownVariant, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest,
-    FocusTarget, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Panel, PanelTitlePosition,
-    PanelTitleStyle, SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger,
-    Spinner, Tabs, TabsVariant, TextInput, TextareaInput, TickResult, TreeAdapter, TreeGlyphs,
-    TreePath, TuiEvent, TuiNode,
+    DropdownVariant, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
+    FocusRequest, FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource, Key, KeyEvent,
+    KeyModifiers, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, Overlay,
+    OverlayAnchor, OverlaySize, Panel, PanelTitlePosition, PanelTitleStyle, SelectionGlyphs,
+    SelectionMode, SelectionPropagation, SelectionTrigger, Separator, SeparatorColorRole, Spinner,
+    Split, Stack, StackAlign, StackItem, Tabs, TabsVariant, TextInput, TextareaInput, TickResult,
+    TreeAdapter, TreeGlyphs, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -61,7 +63,11 @@ impl Gallery {
         .selection_mode(SelectionMode::Single)
         .selection_trigger(SelectionTrigger::OnNavigate)
         .selected([ComponentKind::Tabs])
-        .expanded([ComponentKind::Inputs, ComponentKind::DataView])
+        .expanded([
+            ComponentKind::Inputs,
+            ComponentKind::Layouts,
+            ComponentKind::DataView,
+        ])
         .focused(true);
 
         Self {
@@ -131,7 +137,7 @@ impl Gallery {
         self.focus = if self.focus == GalleryFocus::List {
             match self.selected.preview() {
                 PreviewKind::Tabs => self.previews.focus_last_tab_demo(),
-                PreviewKind::Panel => self.previews.focused_panel = 3,
+                PreviewKind::Panel => self.previews.focused_panel = PANEL_DEMO_FOCUS_INDEX,
                 _ => {}
             }
             GalleryFocus::Preview
@@ -211,6 +217,8 @@ impl Gallery {
         if self.previews.focused_panel < 3 {
             self.previews
                 .focus_panel_title_node(self.previews.focused_panel + 1, ctx);
+        } else if self.previews.focused_panel == 3 {
+            self.previews.focus_panel_demo(ctx);
         } else {
             self.previews.close_panel_title_dropdowns();
             ctx.focus(FocusRequest::TargetAt {
@@ -221,7 +229,9 @@ impl Gallery {
     }
 
     fn focus_previous_panel_title(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.previews.focused_panel > 0 {
+        if self.previews.focused_panel == PANEL_DEMO_FOCUS_INDEX {
+            self.previews.focus_panel_title_node(3, ctx);
+        } else if self.previews.focused_panel > 0 {
             self.previews
                 .focus_panel_title_node(self.previews.focused_panel - 1, ctx);
         } else {
@@ -267,9 +277,8 @@ impl Gallery {
         let TuiEvent::Key(KeyEvent { code, modifiers }) = event else {
             return false;
         };
-        matches!(*code, Key::Char('q'))
-            || (matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'c'))
-                && modifiers.contains(KeyModifiers::CONTROL))
+        matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'q'))
+            && modifiers.contains(KeyModifiers::CONTROL)
     }
 }
 
@@ -411,6 +420,7 @@ struct PreviewState {
     textarea_input: TextareaInput<Msg>,
     spinner: Spinner,
     focused_panel: usize,
+    panel_demo: Panel,
     tabs_minimal: Tabs<Msg>,
     tabs_underline: Tabs<Msg>,
     tabs_boxed: Tabs<Msg>,
@@ -435,6 +445,11 @@ struct PreviewState {
     dropdown_filled_multi_contains: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_no_search_immediate: Dropdown<DropdownDemoItem, &'static str>,
     focused_dropdown: usize,
+    layout_flex: Flex<Msg>,
+    layout_split: Split<DemoBox, DemoBox>,
+    layout_stack: Stack<Msg>,
+    layout_overlay: Overlay<DemoBox, DemoBox>,
+    layout_grid: Grid<Msg>,
 }
 
 impl PreviewState {
@@ -450,6 +465,7 @@ impl PreviewState {
                 .max_lines(8),
             spinner: Spinner::new(),
             focused_panel: 0,
+            panel_demo: Panel::new(),
             tabs_minimal: Tabs::default().variant(TabsVariant::Minimal),
             tabs_underline: Tabs::default().variant(TabsVariant::Underline),
             tabs_boxed: Tabs::default().variant(TabsVariant::Boxed),
@@ -474,6 +490,11 @@ impl PreviewState {
             dropdown_filled_multi_contains: dropdown_filled_multi_contains(),
             dropdown_filled_no_search_immediate: dropdown_filled_no_search_immediate(),
             focused_dropdown: 0,
+            layout_flex: layout_flex_demo(),
+            layout_split: layout_split_demo(),
+            layout_stack: layout_stack_demo(),
+            layout_overlay: layout_overlay_demo(),
+            layout_grid: layout_grid_demo(),
         }
     }
 
@@ -510,6 +531,7 @@ impl PreviewState {
             .set_focused(false);
         if preview == PreviewKind::Panel && !focused {
             self.close_panel_title_dropdowns();
+            self.focused_panel = 0;
         }
         if preview == PreviewKind::Dropdown && !focused {
             self.close_dropdowns();
@@ -563,6 +585,21 @@ impl PreviewState {
                 );
             }
             PreviewKind::Dropdown => self.layout_dropdowns(area, ctx),
+            PreviewKind::LayoutFlex => {
+                self.layout_flex.layout(layout_demo_body(area), ctx);
+            }
+            PreviewKind::LayoutSplit => {
+                self.layout_split.layout(layout_demo_body(area), ctx);
+            }
+            PreviewKind::LayoutStack => {
+                self.layout_stack.layout(layout_demo_body(area), ctx);
+            }
+            PreviewKind::LayoutOverlay => {
+                self.layout_overlay.layout(layout_demo_body(area), ctx);
+            }
+            PreviewKind::LayoutGrid => {
+                self.layout_grid.layout(layout_demo_body(area), ctx);
+            }
             _ => {}
         }
     }
@@ -583,6 +620,11 @@ impl PreviewState {
             | PreviewKind::DataChecklistTree
             | PreviewKind::DataActivateOnNavigate => self.render_data_view(preview, frame, area),
             PreviewKind::Dropdown => self.render_dropdown_preview(frame, area),
+            PreviewKind::LayoutFlex => self.render_layout_flex(frame, area),
+            PreviewKind::LayoutSplit => self.render_layout_split(frame, area),
+            PreviewKind::LayoutStack => self.render_layout_stack(frame, area),
+            PreviewKind::LayoutOverlay => self.render_layout_overlay(frame, area),
+            PreviewKind::LayoutGrid => self.render_layout_grid(frame, area),
         }
     }
 
@@ -623,7 +665,12 @@ impl PreviewState {
             }
             PreviewKind::Panel => self.panel_on_key(key, area, ctx),
             PreviewKind::Dropdown => self.dropdown_on_key(key, area, ctx),
-            PreviewKind::Spinner => false,
+            PreviewKind::Spinner
+            | PreviewKind::LayoutFlex
+            | PreviewKind::LayoutSplit
+            | PreviewKind::LayoutStack
+            | PreviewKind::LayoutOverlay
+            | PreviewKind::LayoutGrid => false,
         }
     }
 
@@ -635,6 +682,9 @@ impl PreviewState {
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
         if preview == PreviewKind::Panel {
+            if let Some(route) = panel_demo_child_route(route) {
+                return self.panel_demo.dispatch_event(&route, event, ctx);
+            }
             let Some((index, route)) = panel_title_child_route(route) else {
                 return EventOutcome::Ignored;
             };
@@ -660,6 +710,14 @@ impl PreviewState {
         ctx: &mut FocusCtx<Msg>,
     ) -> bool {
         if preview == PreviewKind::Panel {
+            if let Some(target) = panel_demo_child_target(target) {
+                if focused {
+                    self.focused_panel = PANEL_DEMO_FOCUS_INDEX;
+                    self.close_panel_title_dropdowns();
+                }
+                self.panel_demo.dispatch_focus(&target, focused, ctx);
+                return true;
+            }
             let Some((index, target)) = panel_title_child_target(target) else {
                 return false;
             };
@@ -750,6 +808,8 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(Animated::tick(&mut self.text_input, dt, settings))
+            .merge(Animated::tick(&mut self.textarea_input, dt, settings))
     }
 
     fn panel_title_dropdown_is_open(&self) -> bool {
@@ -932,7 +992,7 @@ impl PreviewState {
             Paragraph::new(Line::from(vec![
                 Span::raw("1-6 focus demo • Enter/Space opens • "),
                 Span::raw("Ctrl+J/Ctrl+K navigate while typing search; Enter commit; Esc cancel; Space opens/toggles multi • "),
-                Span::raw("Tab/BackTab moves across demos then out • q/Ctrl+C quits"),
+                Span::raw("Tab/BackTab moves across demos then out • Ctrl+Q quits"),
             ])),
             help,
         );
@@ -1151,8 +1211,15 @@ impl PreviewState {
     }
 
     fn layout_panel_preview(&mut self, area: Rect, ctx: &mut LayoutCtx) {
-        let [_, controls, _] = panel_preview_layout(area);
+        let [_, controls, panel_area] = panel_preview_layout(area);
         let areas = panel_title_control_areas(controls).map(panel_title_dropdown_area);
+
+        self.panel_demo = self
+            .panel_from_dropdowns()
+            .focused(self.focused_panel == PANEL_DEMO_FOCUS_INDEX);
+        ctx.push_slot(panel_demo_child_key(), panel_area, |ctx| {
+            <Panel as TuiNode<Msg>>::layout(&mut self.panel_demo, panel_area, ctx);
+        });
 
         ctx.push_slot(panel_title_child_key(0), areas[0], |ctx| {
             self.panel_top_left
@@ -1173,14 +1240,8 @@ impl PreviewState {
     }
 
     fn panel_on_key(&mut self, key: KeyEvent, area: Rect, ctx: &mut EventCtx<Msg>) -> bool {
-        if key.modifiers == KeyModifiers::NONE {
-            match key.code {
-                Key::Char('1') => return self.focus_panel_title_node(0, ctx),
-                Key::Char('2') => return self.focus_panel_title_node(1, ctx),
-                Key::Char('3') => return self.focus_panel_title_node(2, ctx),
-                Key::Char('4') => return self.focus_panel_title_node(3, ctx),
-                _ => {}
-            }
+        if self.focused_panel == PANEL_DEMO_FOCUS_INDEX {
+            return self.panel_demo.event(&TuiEvent::Key(key), ctx).handled();
         }
 
         let outcome = self.active_panel_title_dropdown_mut().on_key(key, area);
@@ -1203,11 +1264,21 @@ impl PreviewState {
         true
     }
 
+    fn focus_panel_demo(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
+        self.focused_panel = PANEL_DEMO_FOCUS_INDEX;
+        self.close_panel_title_dropdowns();
+        ctx.focus(FocusRequest::TargetAt {
+            path: TreePath::from_keys([panel_demo_child_key()]),
+            id: FocusId::new("panel"),
+        });
+        true
+    }
+
     fn render_text_input(&self, frame: &mut Frame, area: Rect) {
         let [instructions, input] = input_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter submits. Tab returns to list. q/Ctrl+C quits from gallery root.",
+                "Type text. Enter submits. Tab returns to list. Ctrl+Q quits from gallery root.",
             ),
             instructions,
         );
@@ -1218,7 +1289,7 @@ impl PreviewState {
         let [instructions, input] = textarea_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab returns to list. q/Ctrl+C quits from gallery root.",
+                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab returns to list. Ctrl+Q quits from gallery root.",
             ),
             instructions,
         );
@@ -1241,13 +1312,13 @@ impl PreviewState {
         let [help, controls, panel_area] = panel_preview_layout(area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::raw("1-4 focus title controls • Enter/Space opens • "),
-                Span::raw("Enter commit; Esc cancel • Tab/BackTab moves through controls"),
+                Span::raw("Enter/Space opens controls • "),
+                Span::raw("Tab/BackTab moves through preview"),
             ])),
             help,
         );
 
-        self.panel_from_dropdowns().render(frame, panel_area);
+        self.panel_demo.render(frame, panel_area);
 
         let areas = panel_title_control_areas(controls);
         self.render_panel_title_control(frame, areas[0], 0, "Top left");
@@ -1255,8 +1326,10 @@ impl PreviewState {
         self.render_panel_title_control(frame, areas[2], 2, "Bottom left");
         self.render_panel_title_control(frame, areas[3], 3, "Bottom right");
 
-        self.panel_title_dropdown(self.focused_panel)
-            .render_popup_overlay(frame, area);
+        if self.focused_panel < PANEL_TITLE_CONTROL_COUNT {
+            self.panel_title_dropdown(self.focused_panel)
+                .render_popup_overlay(frame, area);
+        }
     }
 
     fn render_panel_title_control(&self, frame: &mut Frame, area: Rect, index: usize, title: &str) {
@@ -1303,6 +1376,51 @@ impl PreviewState {
         self.tabs_boxed.render(frame, boxed_tabs);
     }
 
+    fn render_layout_flex(&self, frame: &mut Frame, area: Rect) {
+        render_layout_intro(
+            frame,
+            area,
+            "Flex: fixed + fit-content + fill with gap 2 and horizontal/vertical padding 2/1.",
+        );
+        self.layout_flex.render(frame, layout_demo_body(area));
+    }
+
+    fn render_layout_split(&self, frame: &mut Frame, area: Rect) {
+        render_layout_intro(
+            frame,
+            area,
+            "Split: two panes with ratio/content+fill style composition.",
+        );
+        self.layout_split.render(frame, layout_demo_body(area));
+    }
+
+    fn render_layout_stack(&self, frame: &mut Frame, area: Rect) {
+        render_layout_intro(
+            frame,
+            area,
+            "Stack: children share one area; later layers render on top with alignment/inset.",
+        );
+        self.layout_stack.render(frame, layout_demo_body(area));
+    }
+
+    fn render_layout_overlay(&self, frame: &mut Frame, area: Rect) {
+        render_layout_intro(
+            frame,
+            area,
+            "Overlay: base gets normal flow; anchored layer floats without taking height.",
+        );
+        self.layout_overlay.render(frame, layout_demo_body(area));
+    }
+
+    fn render_layout_grid(&self, frame: &mut Frame, area: Rect) {
+        render_layout_intro(
+            frame,
+            area,
+            "Grid: tracks mix fixed/fit/percent/fill with row gap 1, column gap 2, padding 1.",
+        );
+        self.layout_grid.render(frame, layout_demo_body(area));
+    }
+
     fn tabs_on_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<Msg>) -> bool {
         let event = TuiEvent::Key(key);
         match self.focused_tab_demo {
@@ -1313,11 +1431,188 @@ impl PreviewState {
     }
 }
 
+#[derive(Clone)]
+struct DemoBox {
+    title: &'static str,
+    body: &'static str,
+    size: LayoutSize,
+}
+
+impl DemoBox {
+    fn new(title: &'static str, body: &'static str, width: u16, height: u16) -> Self {
+        Self {
+            title,
+            body,
+            size: LayoutSize::new(width, height),
+        }
+    }
+}
+
+impl TuiNode<Msg> for DemoBox {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        LayoutSizeHint {
+            source: HintSource::Measured,
+            min: LayoutSize::new(1, 1),
+            preferred: self.size,
+            expand: Default::default(),
+        }
+        .normalized(proposal)
+    }
+
+    fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+        LayoutResult::new(area)
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        let title_style = Style::default()
+            .fg(tuicore::theme().muted_fg())
+            .add_modifier(Modifier::BOLD);
+        let lines = vec![
+            Line::from(Span::styled(self.title, title_style)),
+            Line::from(self.body),
+            Line::from(format!("rect: {}×{}", area.width, area.height)),
+        ];
+        frame.render_widget(Paragraph::new(lines), area);
+    }
+}
+
+fn layout_flex_demo() -> Flex<Msg> {
+    Flex::row()
+        .padding(tuicore::Padding::horizontal_vertical(2, 1))
+        .gap(2)
+        .separator(Separator::new().role(SeparatorColorRole::Subtle))
+        .child(
+            "fixed",
+            DemoBox::new("Fixed", "12 cols", 12, 3),
+            FlexItem::fixed(12),
+        )
+        .child(
+            "fit",
+            DemoBox::new("FitContent", "measured child", 18, 3),
+            FlexItem::fit_content(),
+        )
+        .child(
+            "fill",
+            DemoBox::new("Fill", "takes the rest", 12, 3),
+            FlexItem::fill(1),
+        )
+}
+
+fn layout_split_demo() -> Split<DemoBox, DemoBox> {
+    Split::horizontal(
+        DemoBox::new("Navigation", "ratio side pane", 20, 8),
+        DemoBox::new("Workspace", "main region receives remainder", 40, 8),
+    )
+    .ratio(1, 2)
+    .gap(1)
+    .separator(Separator::new().role(SeparatorColorRole::Muted))
+}
+
+fn layout_stack_demo() -> Stack<Msg> {
+    Stack::new()
+        .child(
+            "base",
+            DemoBox::new("Base layer", "fills all available space", 30, 8),
+            StackItem::new(),
+        )
+        .child(
+            "center",
+            DemoBox::new("Centered empty state", "fit-content layer", 26, 4),
+            StackItem::new()
+                .fit_content()
+                .align(StackAlign::Center, StackAlign::Center),
+        )
+        .child(
+            "badge",
+            DemoBox::new("Badge", "top right", 18, 3),
+            StackItem::new()
+                .fixed(18, 3)
+                .align(StackAlign::End, StackAlign::Start)
+                .inset(tuicore::Padding::all(1)),
+        )
+}
+
+fn layout_overlay_demo() -> Overlay<DemoBox, DemoBox> {
+    Overlay::new(
+        DemoBox::new(
+            "Base content",
+            "normal flow size comes from this child",
+            32,
+            8,
+        ),
+        DemoBox::new("Popover", "anchored overlay", 24, 5),
+    )
+    .anchor(OverlayAnchor::BottomRight)
+    .layer_size(OverlaySize::FitContent)
+}
+
+fn layout_grid_demo() -> Grid<Msg> {
+    Grid::new()
+        .columns([
+            GridTrack::fixed(14),
+            GridTrack::fit_content(),
+            GridTrack::fill(1),
+        ])
+        .rows([
+            GridTrack::fixed(4),
+            GridTrack::percent(35),
+            GridTrack::fill(1),
+        ])
+        .gaps(Gap::new(1, 2))
+        .separator(Separator::new().role(SeparatorColorRole::Muted))
+        .padding(tuicore::Padding::all(1))
+        .child(
+            "filters",
+            DemoBox::new("Filters", "fixed track", 10, 3),
+            GridItem::new(0, 0),
+        )
+        .child(
+            "summary",
+            DemoBox::new("Summary", "fit-content track", 18, 3),
+            GridItem::new(0, 1),
+        )
+        .child(
+            "chart",
+            DemoBox::new("Chart", "fills remaining width", 28, 8),
+            GridItem::new(0, 2).span(2, 1),
+        )
+        .child(
+            "table",
+            DemoBox::new("Table", "spans first two columns", 30, 8),
+            GridItem::new(1, 0).span(2, 2),
+        )
+}
+
+fn render_layout_intro(frame: &mut Frame, area: Rect, text: &'static str) {
+    frame.render_widget(Paragraph::new(text), layout_demo_header(area));
+}
+
+fn layout_demo_header(area: Rect) -> Rect {
+    layout_demo_areas(area)[0]
+}
+
+fn layout_demo_body(area: Rect) -> Rect {
+    layout_demo_areas(area)[1]
+}
+
+fn layout_demo_areas(area: Rect) -> [Rect; 2] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Fill(1)])
+        .areas(area)
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 enum ComponentKind {
     Tabs,
     Panel,
     Spinner,
+    Layouts,
+    LayoutFlex,
+    LayoutSplit,
+    LayoutStack,
+    LayoutOverlay,
+    LayoutGrid,
     Inputs,
     TextInput,
     TextareaInput,
@@ -1334,10 +1629,16 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 22] = [
         Self::Tabs,
         Self::Panel,
         Self::Spinner,
+        Self::Layouts,
+        Self::LayoutFlex,
+        Self::LayoutSplit,
+        Self::LayoutStack,
+        Self::LayoutOverlay,
+        Self::LayoutGrid,
         Self::Inputs,
         Self::TextInput,
         Self::TextareaInput,
@@ -1358,6 +1659,12 @@ impl ComponentKind {
             Self::Tabs => "Tabs",
             Self::Panel => "Panels",
             Self::Spinner => "Spinner",
+            Self::Layouts => "Layouts",
+            Self::LayoutFlex => "Flex",
+            Self::LayoutSplit => "Split",
+            Self::LayoutStack => "Stack",
+            Self::LayoutOverlay => "Overlay",
+            Self::LayoutGrid => "Grid",
             Self::Inputs => "Inputs",
             Self::TextInput => "Text",
             Self::TextareaInput => "Textarea",
@@ -1385,6 +1692,11 @@ impl ComponentKind {
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
             Self::TextInput | Self::TextareaInput | Self::Dropdown => Some(Self::Inputs),
+            Self::LayoutFlex
+            | Self::LayoutSplit
+            | Self::LayoutStack
+            | Self::LayoutOverlay
+            | Self::LayoutGrid => Some(Self::Layouts),
             _ => None,
         }
     }
@@ -1394,6 +1706,11 @@ impl ComponentKind {
             Self::Tabs => PreviewKind::Tabs,
             Self::Panel => PreviewKind::Panel,
             Self::Spinner => PreviewKind::Spinner,
+            Self::Layouts | Self::LayoutFlex => PreviewKind::LayoutFlex,
+            Self::LayoutSplit => PreviewKind::LayoutSplit,
+            Self::LayoutStack => PreviewKind::LayoutStack,
+            Self::LayoutOverlay => PreviewKind::LayoutOverlay,
+            Self::LayoutGrid => PreviewKind::LayoutGrid,
             Self::Inputs | Self::TextInput => PreviewKind::TextInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
             Self::Dropdown => PreviewKind::Dropdown,
@@ -1414,6 +1731,11 @@ enum PreviewKind {
     Tabs,
     Panel,
     Spinner,
+    LayoutFlex,
+    LayoutSplit,
+    LayoutStack,
+    LayoutOverlay,
+    LayoutGrid,
     TextInput,
     TextareaInput,
     Dropdown,
@@ -1433,6 +1755,11 @@ impl PreviewKind {
             Self::Tabs => "Tabs",
             Self::Panel => "Panels",
             Self::Spinner => "Spinner",
+            Self::LayoutFlex => "Flex Layout",
+            Self::LayoutSplit => "Split Layout",
+            Self::LayoutStack => "Stack Layout",
+            Self::LayoutOverlay => "Overlay Layout",
+            Self::LayoutGrid => "Grid Layout",
             Self::TextInput => "Text",
             Self::TextareaInput => "Textarea",
             Self::Dropdown => "Dropdown",
@@ -1891,6 +2218,13 @@ fn panel_title_child_key(index: usize) -> ChildKey {
     ChildKey::new(format!("panel-title-{index}"))
 }
 
+const PANEL_TITLE_CONTROL_COUNT: usize = 4;
+const PANEL_DEMO_FOCUS_INDEX: usize = PANEL_TITLE_CONTROL_COUNT;
+
+fn panel_demo_child_key() -> ChildKey {
+    ChildKey::new("panel-demo")
+}
+
 fn panel_title_index(key: &ChildKey) -> Option<usize> {
     key.as_str()
         .strip_prefix("panel-title-")?
@@ -1905,6 +2239,13 @@ fn panel_title_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
     Some((index, EventRoute::new(route.path.without_first())))
 }
 
+fn panel_demo_child_route(route: &EventRoute) -> Option<EventRoute> {
+    route
+        .path
+        .without_first_if(&panel_demo_child_key())
+        .map(EventRoute::new)
+}
+
 fn panel_title_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
     let first = target.path.first()?;
     let index = panel_title_index(first)?;
@@ -1915,6 +2256,15 @@ fn panel_title_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)
         enabled: target.enabled,
     };
     Some((index, child_target))
+}
+
+fn panel_demo_child_target(target: &FocusTarget) -> Option<FocusTarget> {
+    Some(FocusTarget {
+        id: target.id.clone(),
+        path: target.path.without_first_if(&panel_demo_child_key())?,
+        area: target.area,
+        enabled: target.enabled,
+    })
 }
 
 fn dropdown_preview_layout(area: Rect) -> [Rect; 2] {

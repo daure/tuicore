@@ -1,14 +1,17 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use std::time::Duration;
+
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::animation::{Animated, AnimationSettings, TickResult};
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
 use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
-use super::text_input::{InputOutcome, is_ctrl, text_char};
+use super::text_input::{CursorFade, InputOutcome, is_ctrl, text_char};
 
 const TEXTAREA_FOCUS: &str = "textarea";
 
@@ -19,6 +22,7 @@ pub struct TextareaInput<M = ()> {
     focused: bool,
     max_lines: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
+    cursor_fade: CursorFade,
 }
 
 impl<M> Default for TextareaInput<M> {
@@ -36,6 +40,7 @@ impl<M> TextareaInput<M> {
             focused: false,
             max_lines: None,
             on_submit: None,
+            cursor_fade: CursorFade::default(),
         }
     }
 
@@ -83,6 +88,14 @@ impl<M> TextareaInput<M> {
     }
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> InputOutcome {
+        let outcome = self.on_key_inner(key.into());
+        if outcome.needs_redraw() {
+            self.cursor_fade.reset();
+        }
+        outcome
+    }
+
+    fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
         if is_ctrl(key, 'd') || (matches!(key.code, Key::Enter) && is_control(key)) {
             return InputOutcome::SUBMITTED;
@@ -143,10 +156,7 @@ impl<M> TextareaInput<M> {
             theme.subtle_fg()
         });
         let placeholder_style = Style::default().fg(theme.muted_fg());
-        let cursor_style = Style::default()
-            .fg(theme.highlight_fg())
-            .bg(theme.highlight_bg())
-            .add_modifier(Modifier::BOLD);
+        let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
             let mut first = if self.focused {
@@ -449,7 +459,20 @@ impl<M> TuiNode<M> for TextareaInput<M> {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.focused = focused;
+        if focused {
+            self.cursor_fade.reset();
+        }
         ctx.request_redraw();
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(self, dt, settings)
+    }
+}
+
+impl<M> Animated for TextareaInput<M> {
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.cursor_fade.tick(self.focused, dt, settings)
     }
 }
 
@@ -519,6 +542,23 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.messages(), &["submit:draft".to_string()]);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn control_c_clears_value_and_stops_propagation() {
+        let mut input = TextareaInput::<()>::new().value("first\nsecond");
+        let mut ctx = EventCtx::<()>::default();
+        let key = KeyEvent {
+            code: Key::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "");
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.redraw_requested());
     }

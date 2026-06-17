@@ -10,6 +10,8 @@ pub mod preset;
 pub mod runtime;
 pub mod scroll;
 pub mod search;
+pub mod separator;
+mod spacing;
 pub mod theme;
 pub mod ui;
 
@@ -22,10 +24,11 @@ pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
     ActivationMode, CellContext, CheckState, Column, CrossAlign, CrossSize, DataView,
     DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTypedEvent, Dropdown,
-    DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant, Flex, FlexItem,
-    InputOutcome, List, ListOutcome, MainAlign, Padding, Panel, PanelHost, PanelTitlePosition,
-    PanelTitleStyle, PanelVariant, SelectionGlyphs, SelectionMode, SelectionPropagation,
-    SelectionTrigger, SortDirection, Spinner, Split, Tab, Tabs, TextInput, TextareaInput,
+    DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid,
+    GridItem, GridTrack, InputOutcome, List, ListOutcome, MainAlign, Overlay, OverlayAnchor,
+    OverlaySize, Panel, PanelHost, PanelTitlePosition, PanelTitleStyle, PanelVariant,
+    SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner,
+    Split, Stack, StackAlign, StackItem, StackSize, Tab, Tabs, TextInput, TextareaInput,
     TreeAdapter, TreeGlyphs,
 };
 pub use event::{
@@ -40,8 +43,10 @@ pub use keybindings::{
     TabsKeyBindings,
 };
 pub use node::{
-    ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRepair, FocusRequest,
-    FocusTarget, HitRegion, LayoutCtx, LayoutResult, LifecycleCtx, Propagation, TreePath, TuiNode,
+    AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
+    FocusRepair, FocusRequest, FocusTarget, HintSource, HitRegion, LayoutAxis, LayoutCtx,
+    LayoutOverflowDiagnostic, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
+    LifecycleCtx, NonFocusable, OverflowPolicyName, Propagation, TreePath, TuiNode,
 };
 pub use preset::{BorderKind, DataViewPreset, DropdownPreset, Preset, TabsPreset, TabsVariant};
 pub use runtime::{
@@ -56,6 +61,8 @@ pub use scroll::{
 pub use search::{
     MatchSpan, RankedSearchMatch, SearchMatch, SearchMode, search_match, search_ranked,
 };
+pub use separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
+pub use spacing::{Gap, Padding};
 pub use theme::{Theme, ThemeName};
 pub use ui::{
     animation_settings, init, init_from_dir, keybindings, preset, set_keybindings, set_preset,

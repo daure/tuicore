@@ -7,6 +7,7 @@ use crate::{
     AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget,
     LayoutCtx, LayoutResult, LifecycleCtx, TickResult, TuiEvent, TuiNode,
 };
+use crate::{Separator, separator};
 
 pub struct Split<L, R> {
     direction: Direction,
@@ -16,6 +17,9 @@ pub struct Split<L, R> {
     second_constraint: Constraint,
     first_area: Rect,
     second_area: Rect,
+    gap: u16,
+    separator: Option<Separator>,
+    separator_area: Option<Rect>,
 }
 
 impl<L, R> Split<L, R> {
@@ -50,6 +54,16 @@ impl<L, R> Split<L, R> {
         self
     }
 
+    pub fn gap(mut self, gap: u16) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    pub fn separator(mut self, separator: Separator) -> Self {
+        self.separator = Some(separator);
+        self
+    }
+
     pub fn first(&self) -> &L {
         &self.first
     }
@@ -70,6 +84,10 @@ impl<L, R> Split<L, R> {
         (self.first_area, self.second_area)
     }
 
+    pub fn separator_area(&self) -> Option<Rect> {
+        self.separator_area
+    }
+
     fn new(direction: Direction, first: L, second: R) -> Self {
         Self {
             direction,
@@ -79,6 +97,9 @@ impl<L, R> Split<L, R> {
             second_constraint: Constraint::Percentage(50),
             first_area: Rect::default(),
             second_area: Rect::default(),
+            gap: 0,
+            separator: None,
+            separator_area: None,
         }
     }
 }
@@ -89,17 +110,24 @@ where
     R: TuiNode<M>,
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let separator_cell = (self.separator.is_some() && self.main_len(area) > 0) as u16;
+        let gap = self
+            .gap
+            .min(self.main_len(area).saturating_sub(separator_cell));
+        let reserved = gap.saturating_add(separator_cell);
+        let child_area = self.child_layout_area(area, reserved);
         let [first, second] = Layout::default()
             .direction(self.direction)
             .constraints([self.first_constraint, self.second_constraint])
-            .areas(area);
+            .areas(child_area);
         self.first_area = first;
-        self.second_area = second;
+        self.second_area = self.shift_second(second, reserved);
+        self.separator_area = self.separator_rect(first, gap, separator_cell);
         ctx.push_slot(ChildKey::first(), first, |ctx| {
             self.first.layout(first, ctx);
         });
-        ctx.push_slot(ChildKey::second(), second, |ctx| {
-            self.second.layout(second, ctx);
+        ctx.push_slot(ChildKey::second(), self.second_area, |ctx| {
+            self.second.layout(self.second_area, ctx);
         });
         LayoutResult::new(area)
     }
@@ -107,6 +135,12 @@ where
     fn render(&self, frame: &mut Frame, _area: Rect) {
         self.first.render(frame, self.first_area);
         self.second.render(frame, self.second_area);
+        if let (Some(separator), Some(area)) = (self.separator, self.separator_area) {
+            match self.direction {
+                Direction::Horizontal => separator::draw_vertical(frame, area, separator),
+                Direction::Vertical => separator::draw_horizontal(frame, area, separator),
+            }
+        }
     }
 
     fn dispatch_event(
@@ -178,6 +212,70 @@ where
     }
 }
 
+impl<L, R> Split<L, R> {
+    fn main_len(&self, area: Rect) -> u16 {
+        match self.direction {
+            Direction::Horizontal => area.width,
+            Direction::Vertical => area.height,
+        }
+    }
+
+    fn child_layout_area(&self, area: Rect, reserved: u16) -> Rect {
+        match self.direction {
+            Direction::Horizontal => Rect::new(
+                area.x,
+                area.y,
+                area.width.saturating_sub(reserved),
+                area.height,
+            ),
+            Direction::Vertical => Rect::new(
+                area.x,
+                area.y,
+                area.width,
+                area.height.saturating_sub(reserved),
+            ),
+        }
+    }
+
+    fn shift_second(&self, rect: Rect, reserved: u16) -> Rect {
+        match self.direction {
+            Direction::Horizontal => Rect::new(
+                rect.x.saturating_add(reserved),
+                rect.y,
+                rect.width,
+                rect.height,
+            ),
+            Direction::Vertical => Rect::new(
+                rect.x,
+                rect.y.saturating_add(reserved),
+                rect.width,
+                rect.height,
+            ),
+        }
+    }
+
+    fn separator_rect(&self, first: Rect, gap: u16, separator_cell: u16) -> Option<Rect> {
+        if separator_cell == 0 {
+            return None;
+        }
+        let offset = gap / 2;
+        match self.direction {
+            Direction::Horizontal => Some(Rect::new(
+                first.x.saturating_add(first.width).saturating_add(offset),
+                first.y,
+                1,
+                first.height,
+            )),
+            Direction::Vertical => Some(Rect::new(
+                first.x,
+                first.y.saturating_add(first.height).saturating_add(offset),
+                first.width,
+                1,
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, rc::Rc};
@@ -233,6 +331,47 @@ mod tests {
 
         assert_eq!(split.child_areas().0.width, 50);
         assert_eq!(split.child_areas().1.width, 50);
+    }
+
+    #[test]
+    fn split_horizontal_separator_reserves_space_and_records_area() {
+        let mut split = Split::horizontal(Probe::default(), Probe::default())
+            .ratio(1, 1)
+            .gap(2)
+            .separator(Separator::new());
+        let mut ctx = LayoutCtx::new();
+
+        split.layout(Rect::new(0, 0, 11, 3), &mut ctx);
+
+        assert_eq!(split.child_areas().0, Rect::new(0, 0, 4, 3));
+        assert_eq!(split.child_areas().1, Rect::new(7, 0, 4, 3));
+        assert_eq!(split.separator_area(), Some(Rect::new(5, 0, 1, 3)));
+    }
+
+    #[test]
+    fn split_vertical_separator_reserves_space_and_records_area() {
+        let mut split = Split::vertical(Probe::default(), Probe::default())
+            .ratio(1, 1)
+            .separator(Separator::new());
+        let mut ctx = LayoutCtx::new();
+
+        split.layout(Rect::new(0, 0, 8, 5), &mut ctx);
+
+        assert_eq!(split.child_areas().0, Rect::new(0, 0, 8, 2));
+        assert_eq!(split.child_areas().1, Rect::new(0, 3, 8, 2));
+        assert_eq!(split.separator_area(), Some(Rect::new(0, 2, 8, 1)));
+    }
+
+    #[test]
+    fn split_separator_handles_tiny_areas() {
+        let mut split = Split::horizontal(Probe::default(), Probe::default())
+            .gap(10)
+            .separator(Separator::new());
+        let mut ctx = LayoutCtx::new();
+
+        split.layout(Rect::new(0, 0, 1, 1), &mut ctx);
+
+        assert_eq!(split.separator_area(), Some(Rect::new(0, 0, 1, 1)));
     }
 
     #[test]

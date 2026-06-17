@@ -14,8 +14,9 @@ use crate::event::{Key, KeyEvent};
 use crate::search::{SearchMode, search_ranked};
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusTarget, LayoutCtx, LayoutResult, TickResult, TuiEvent, TuiNode, border_chars, border_set,
-    keybindings, line_width, preset, theme,
+    FocusTarget, HintSource, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
+    TickResult, TuiEvent, TuiNode, border_chars, border_set, keybindings, line_width, preset,
+    theme,
 };
 
 const FIELD_FOCUS: &str = "field";
@@ -849,6 +850,24 @@ where
     T: 'static,
     Id: Clone + Eq + Hash + 'static,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let height = match self.variant {
+            DropdownVariant::Bordered => 3,
+            DropdownVariant::Filled => 1,
+        };
+        let width = (self.selected_summary().chars().count() as u16).saturating_add(2);
+        LayoutSizeHint {
+            source: HintSource::Measured,
+            min: LayoutSize::new(width, height),
+            preferred: LayoutSize::new(width, height),
+            expand: crate::AxisExpand {
+                width: true,
+                height: false,
+            },
+        }
+        .normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.layout_overlay::<M>(area, area, ctx)
     }
@@ -933,7 +952,11 @@ where
     Id: Clone + Eq + Hash,
 {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        Animated::tick(&mut self.data_view, dt, settings)
+        Animated::tick(&mut self.data_view, dt, settings).merge(Animated::tick(
+            &mut self.search_input,
+            dt,
+            settings,
+        ))
     }
 }
 
@@ -975,7 +998,10 @@ mod tests {
 
     use super::*;
     use crate::event::KeyModifiers;
-    use crate::{EventCtx, FocusCtx, LayoutCtx, Propagation, TuiEvent, TuiNode};
+    use crate::{
+        ChildKey, EventCtx, Flex, FlexItem, FocusCtx, LayoutCtx, LayoutProposal, Propagation,
+        TuiEvent, TuiNode,
+    };
 
     fn single_dropdown() -> Dropdown<&'static str, &'static str> {
         Dropdown::single(ROWS, |row| *row, |row| row.to_string())
@@ -1257,6 +1283,74 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id.as_str(), FIELD_FOCUS);
         assert_eq!(targets[0].area.height, 1);
+    }
+
+    #[test]
+    fn bordered_dropdown_measure_reports_field_height() {
+        let dropdown = single_dropdown();
+
+        let hint = <Dropdown<_, _> as TuiNode<()>>::measure(&dropdown, LayoutProposal::unbounded());
+
+        assert_eq!(hint.preferred.height, 3);
+        assert!(!hint.expand.height);
+    }
+
+    #[test]
+    fn filled_dropdown_measure_reports_compact_field_height() {
+        let dropdown = single_dropdown().variant(DropdownVariant::Filled);
+
+        let hint = <Dropdown<_, _> as TuiNode<()>>::measure(&dropdown, LayoutProposal::unbounded());
+
+        assert_eq!(hint.preferred.height, 1);
+        assert!(!hint.expand.height);
+    }
+
+    #[test]
+    fn flex_fit_content_uses_dropdown_variant_height() {
+        let mut bordered: Flex<()> =
+            Flex::column().child("dropdown", single_dropdown(), FlexItem::fit_content());
+        let mut filled: Flex<()> = Flex::column().child(
+            "dropdown",
+            single_dropdown().variant(DropdownVariant::Filled),
+            FlexItem::fit_content(),
+        );
+        let mut ctx = LayoutCtx::new();
+
+        bordered.layout(Rect::new(0, 0, 24, 10), &mut ctx);
+        filled.layout(Rect::new(0, 0, 24, 10), &mut ctx);
+
+        assert_eq!(
+            bordered
+                .child_rect(&ChildKey::from("dropdown"))
+                .unwrap()
+                .height,
+            3
+        );
+        assert_eq!(
+            filled
+                .child_rect(&ChildKey::from("dropdown"))
+                .unwrap()
+                .height,
+            1
+        );
+    }
+
+    #[test]
+    fn flex_horizontal_fit_content_allocates_width_based_on_text() {
+        let mut flex: Flex<()> = Flex::row().child(
+            "dropdown",
+            single_dropdown().selected_one("Beta"),
+            FlexItem::fit_content(),
+        );
+        let mut ctx = LayoutCtx::new();
+
+        flex.layout(Rect::new(0, 0, 40, 3), &mut ctx);
+
+        // "Beta" is 4 chars, plus 2 chrome = 6 width.
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("dropdown")).unwrap().width,
+            6
+        );
     }
 
     #[test]

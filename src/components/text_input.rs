@@ -1,14 +1,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use std::time::Duration;
+
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::animation::{Animated, AnimationSettings, Easing, TickResult, lerp_color};
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
 use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
 const INPUT_FOCUS: &str = "input";
+const CURSOR_FADE_HALF: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputOutcome {
@@ -66,6 +70,7 @@ pub struct TextInput<M = ()> {
     focused: bool,
     max_len: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
+    cursor_fade: CursorFade,
 }
 
 impl<M> Default for TextInput<M> {
@@ -83,6 +88,7 @@ impl<M> TextInput<M> {
             focused: false,
             max_len: None,
             on_submit: None,
+            cursor_fade: CursorFade::default(),
         }
     }
 
@@ -130,6 +136,14 @@ impl<M> TextInput<M> {
     }
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> InputOutcome {
+        let outcome = self.on_key_inner(key.into());
+        if outcome.needs_redraw() {
+            self.cursor_fade.reset();
+        }
+        outcome
+    }
+
+    fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
         if is_ctrl(key, 'a') {
             return self.move_to(0);
@@ -191,10 +205,7 @@ impl<M> TextInput<M> {
             theme.subtle_fg()
         });
         let placeholder_style = Style::default().fg(theme.muted_fg());
-        let cursor_style = Style::default()
-            .fg(theme.highlight_fg())
-            .bg(theme.highlight_bg())
-            .add_modifier(Modifier::BOLD);
+        let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
             if self.focused {
@@ -398,8 +409,102 @@ impl<M> TuiNode<M> for TextInput<M> {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.focused = focused;
+        if focused {
+            self.cursor_fade.reset();
+        }
         ctx.request_redraw();
     }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        Animated::tick(self, dt, settings)
+    }
+}
+
+impl<M> Animated for TextInput<M> {
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.cursor_fade.tick(self.focused, dt, settings)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CursorFade {
+    elapsed: Duration,
+}
+
+impl Default for CursorFade {
+    fn default() -> Self {
+        Self {
+            elapsed: Duration::ZERO,
+        }
+    }
+}
+
+impl CursorFade {
+    pub(crate) fn reset(&mut self) {
+        self.elapsed = Duration::ZERO;
+    }
+
+    pub(crate) fn tick(
+        &mut self,
+        focused: bool,
+        dt: Duration,
+        settings: AnimationSettings,
+    ) -> TickResult {
+        if !focused {
+            return TickResult::IDLE;
+        }
+        if !settings.enabled {
+            let changed = self.elapsed != Duration::ZERO;
+            self.reset();
+            return TickResult {
+                changed,
+                active: false,
+            };
+        }
+
+        let total = CURSOR_FADE_HALF.saturating_mul(2);
+        let before = self.elapsed;
+        self.elapsed = duration_mod(self.elapsed.saturating_add(dt.min(settings.max_dt)), total);
+        TickResult {
+            changed: before != self.elapsed,
+            active: true,
+        }
+    }
+
+    pub(crate) fn style(&self, base: Style) -> Style {
+        let opacity = self.opacity();
+        if opacity <= 0.01 {
+            return base;
+        }
+
+        let theme = theme();
+        let fg = fade_color(
+            base.fg.unwrap_or_else(|| theme.text_fg()),
+            theme.highlight_fg(),
+            opacity,
+        );
+        let bg = fade_color(theme.selected_bg(), theme.highlight_bg(), opacity);
+        base.fg(fg).bg(bg).add_modifier(Modifier::BOLD)
+    }
+
+    fn opacity(&self) -> f64 {
+        let total = CURSOR_FADE_HALF.saturating_mul(2);
+        let progress = self.elapsed.as_secs_f64() / total.as_secs_f64();
+        let phase = if progress < 0.5 {
+            1.0 - progress * 2.0
+        } else {
+            (progress - 0.5) * 2.0
+        };
+        Easing::EaseInOut.apply(phase)
+    }
+}
+
+fn fade_color(from: Color, to: Color, opacity: f64) -> Color {
+    lerp_color(from, to, opacity)
+}
+
+fn duration_mod(value: Duration, modulus: Duration) -> Duration {
+    Duration::from_secs_f64(value.as_secs_f64() % modulus.as_secs_f64())
 }
 
 pub(crate) fn is_ctrl(key: KeyEvent, value: char) -> bool {
@@ -438,6 +543,23 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.messages(), &["submit:ship".to_string()]);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn control_c_clears_value_and_stops_propagation() {
+        let mut input = TextInput::<()>::new().value("search");
+        let mut ctx = EventCtx::<()>::default();
+        let key = KeyEvent {
+            code: Key::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "");
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.redraw_requested());
     }

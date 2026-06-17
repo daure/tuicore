@@ -15,7 +15,8 @@
   - Animation = global defaults + optional component override; global disabled is kill switch.
   - Borders = shared `BorderKind` and helpers.
   - Focus = reusable `FocusChain` / `FocusRouter`; apps own focus topology, components expose focus state and consume focus attrs.
+  - Decorators = wrap components via composition to alter behavior (e.g., `NonFocusable` to strip focus registration) without changing inner component code.
   - Scrolling = reusable `ScrollState`; smooth offset animation only, no stagger/per-row delay.
 - Components live in `src/components/`; treat that directory as the source of truth instead of maintaining a manual component inventory here.
 - Avoid half APIs: public config should be constructible in Rust, not only via TOML.
-- Keep gallery demos honest: use real components/patterns consumers should copy.
+- Keep gallery demos honest: use real components/patterns consumers should copy. The gallery serves as the first consumer of the library, so it shouldn't reach into internals or implement custom hacks to make things work. Any such workarounds must be treated as strict exceptions rather than the norm.
