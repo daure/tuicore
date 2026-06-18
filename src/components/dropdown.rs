@@ -13,23 +13,20 @@ use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::{Key, KeyEvent};
 use crate::search::{SearchMode, search_ranked};
 use crate::{
-    Animated, AnimationSettings, BorderKind, ChildKey, EventCtx, EventOutcome, EventRoute,
-    FocusCtx, FocusId, FocusTarget, HintSource, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSize, LayoutSizeHint, TickResult, TuiEvent, TuiNode, border_chars, border_set,
-    keybindings, line_width, preset, theme,
+    Animated, AnimationSettings, BorderKind, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
+    FocusTarget, HintSource, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
+    TickResult, TuiEvent, TuiNode, border_chars, border_set, keybindings, line_width, preset,
+    theme,
 };
 
 const FIELD_FOCUS: &str = "field";
 const SEARCH_FOCUS: &str = "input";
-const SEARCH_SLOT: &str = "search";
-const LIST_SLOT: &str = "list";
 const POPUP_BORDER_HEIGHT: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DropdownFocusRegion {
     Field,
     Search,
-    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,9 +310,9 @@ where
         if !self.multi && self.draft.is_empty() {
             self.set_single_draft_from_highlight();
         }
-        self.sync_focus();
         self.refresh_filter();
         self.sync_view_selection();
+        self.sync_child_focus();
         DropdownOutcome {
             handled: true,
             changed: true,
@@ -332,7 +329,7 @@ where
         self.open = false;
         self.clear_search_query();
         if had_focus {
-            self.sync_focus();
+            self.sync_child_focus();
         } else {
             self.clear_focus();
         }
@@ -483,14 +480,13 @@ where
 
         let popup_area = self.popup_area_for(self.field_area, overlay_bounds);
         let [search_area, list_area] = self.popup_inner_areas(popup_area);
-        if self.search_enabled() {
-            ctx.push_slot(ChildKey::new(SEARCH_SLOT), search_area, |ctx| {
-                ctx.register_focusable(FocusId::new(SEARCH_FOCUS), search_area, true);
-            });
+        if self.search_enabled() && self.auto_focus_search {
+            ctx.register_focusable(FocusId::new(SEARCH_FOCUS), search_area, true);
+        } else {
+            ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
         }
-        ctx.push_slot(ChildKey::new(LIST_SLOT), list_area, |ctx| {
-            <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, list_area, ctx);
-        });
+        let mut child_ctx = LayoutCtx::new();
+        <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, list_area, &mut child_ctx);
         LayoutResult::new(self.field_area)
     }
 
@@ -632,31 +628,36 @@ where
         self.search_mode != DropdownSearchMode::None
     }
 
-    fn sync_focus(&mut self) {
-        let region = if self.open {
-            if self.search_enabled() && self.auto_focus_search {
-                Some(DropdownFocusRegion::Search)
-            } else {
-                Some(DropdownFocusRegion::List)
-            }
-        } else {
-            Some(DropdownFocusRegion::Field)
-        };
-        self.set_focus_region(region);
-    }
-
     fn clear_focus(&mut self) {
         self.set_focus_region(None);
     }
 
     fn set_focus_region(&mut self, region: Option<DropdownFocusRegion>) {
         self.focus_region = region;
+        self.sync_child_focus();
+    }
+
+    fn sync_child_focus(&mut self) {
         self.search_input
-            .set_focused(region == Some(DropdownFocusRegion::Search));
-        self.data_view.set_focused(matches!(
-            region,
-            Some(DropdownFocusRegion::Search | DropdownFocusRegion::List)
-        ));
+            .set_focused(self.open && self.focus_region == Some(DropdownFocusRegion::Search));
+        self.data_view
+            .set_focused(self.open && self.focus_region.is_some());
+    }
+
+    fn target_matches_focus_region(&self, target: Option<&FocusId>) -> bool {
+        match (target.map(FocusId::as_str), self.focus_region) {
+            (Some(SEARCH_FOCUS), Some(DropdownFocusRegion::Search)) => true,
+            (Some(FIELD_FOCUS), Some(DropdownFocusRegion::Field)) => true,
+            _ => false,
+        }
+    }
+
+    fn is_opening_search_field_blur(&self, target: Option<&FocusId>) -> bool {
+        self.open
+            && self.search_enabled()
+            && self.auto_focus_search
+            && self.focus_region == Some(DropdownFocusRegion::Field)
+            && target.is_some_and(|id| id.as_str() == FIELD_FOCUS)
     }
 
     fn popup_inner_areas(&self, popup_area: Rect) -> [Rect; 2] {
@@ -1125,6 +1126,22 @@ where
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        let bindings = keybindings();
+        let focus_keys = bindings.focus();
+        if self.open && focus_keys.next_matches(*key) {
+            ctx.focus_next();
+            ctx.request_layout();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if self.open && focus_keys.previous_matches(*key) {
+            ctx.focus_previous();
+            ctx.request_layout();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.on_key(*key, self.overlay_bounds);
         if outcome.opened || outcome.closed {
             ctx.request_layout();
@@ -1154,9 +1171,17 @@ where
     }
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
-        if focused && target.is_some_and(|id| id.as_str() == FIELD_FOCUS) {
+        if focused && target.is_some_and(|id| id.as_str() == SEARCH_FOCUS) {
+            self.set_focus_region(Some(DropdownFocusRegion::Search));
+        } else if focused && target.is_some_and(|id| id.as_str() == FIELD_FOCUS) {
             self.set_focus_region(Some(DropdownFocusRegion::Field));
-        } else if !focused {
+        } else if !focused && self.is_opening_search_field_blur(target) {
+            ctx.request_redraw();
+        } else if !focused && self.open && self.target_matches_focus_region(target) {
+            self.cancel();
+            self.clear_focus();
+            ctx.request_redraw();
+        } else if !focused && self.target_matches_focus_region(target) {
             self.clear_focus();
         }
         ctx.request_redraw();
@@ -1165,29 +1190,6 @@ where
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
         if target.path.is_empty() {
             self.focus(Some(&target.id), focused, ctx);
-            return;
-        }
-
-        let search = ChildKey::new(SEARCH_SLOT);
-        if target.for_child(&search).is_some() {
-            if focused {
-                self.set_focus_region(Some(DropdownFocusRegion::Search));
-            } else {
-                self.clear_focus();
-            }
-            ctx.request_redraw();
-            return;
-        }
-
-        let list = ChildKey::new(LIST_SLOT);
-        if let Some(child_target) = target.for_child(&list) {
-            if focused {
-                self.set_focus_region(Some(DropdownFocusRegion::List));
-            } else {
-                self.clear_focus();
-            }
-            self.data_view.dispatch_focus(&child_target, focused, ctx);
-            ctx.request_redraw();
         }
     }
 }
@@ -1495,13 +1497,38 @@ mod tests {
     }
 
     #[test]
-    fn searchable_dropdown_keeps_list_highlight_visible_while_search_focused() {
+    fn searchable_dropdown_keeps_field_focus_until_runtime_focuses_search() {
+        let mut dropdown = single_dropdown();
+        let mut layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+        let field = layout.focus_targets()[0].clone();
+        let mut focus = FocusCtx::<()>::new(AnimationSettings::default());
+
+        dropdown.dispatch_focus(&field, true, &mut focus);
+        dropdown.open();
+
+        assert_eq!(dropdown.focus_region, Some(DropdownFocusRegion::Field));
+        assert!(dropdown.data_view.focused_for_test());
+
+        let mut open_layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut open_layout);
+        let search = open_layout.focus_targets()[0].clone();
+        dropdown.dispatch_focus(&field, false, &mut focus);
+        dropdown.dispatch_focus(&search, true, &mut focus);
+
+        assert_eq!(dropdown.focus_region, Some(DropdownFocusRegion::Search));
+        assert!(dropdown.data_view.focused_for_test());
+    }
+
+    #[test]
+    fn open_preserves_unfocused_state() {
         let mut dropdown = single_dropdown();
 
         dropdown.open();
 
-        assert_eq!(dropdown.focus_region, Some(DropdownFocusRegion::Search));
-        assert!(dropdown.data_view.focused_for_test());
+        assert!(dropdown.is_open());
+        assert!(!dropdown.is_focused());
+        assert!(!dropdown.data_view.focused_for_test());
     }
 
     #[test]
@@ -1665,6 +1692,11 @@ mod tests {
     #[test]
     fn focused_bordered_popup_uses_accent_border() {
         let mut dropdown = single_dropdown();
+        let mut initial_layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut initial_layout);
+        let field = initial_layout.focus_targets()[0].clone();
+        let mut focus = FocusCtx::<()>::new(AnimationSettings::default());
+        dropdown.dispatch_focus(&field, true, &mut focus);
         dropdown.open();
         dropdown.layout_overlay::<()>(
             Rect::new(0, 0, 12, 3),
@@ -1700,7 +1732,7 @@ mod tests {
     }
 
     #[test]
-    fn open_layout_registers_search_and_list_focus() {
+    fn open_layout_registers_single_external_search_focus() {
         let mut dropdown = single_dropdown();
         dropdown.open();
         let mut ctx = LayoutCtx::new();
@@ -1708,11 +1740,9 @@ mod tests {
         <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut ctx);
 
         let targets = ctx.focus_targets();
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id.as_str(), "input");
-        assert_eq!(targets[0].path.keys()[0].as_str(), SEARCH_SLOT);
-        assert_eq!(targets[1].id.as_str(), "data-view");
-        assert_eq!(targets[1].path.keys()[0].as_str(), LIST_SLOT);
+        assert!(targets[0].path.is_empty());
     }
 
     #[test]
@@ -1725,7 +1755,86 @@ mod tests {
 
         let targets = ctx.focus_targets();
         assert_eq!(targets[0].area, Rect::new(1, 3, 22, 1));
-        assert_eq!(targets[1].area, Rect::new(1, 4, 22, 3));
+    }
+
+    #[test]
+    fn tab_from_open_dropdown_requests_next_focus_without_closing_before_blur() {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(dropdown.is_open());
+        assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Next));
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn backtab_from_open_dropdown_requests_previous_focus_without_closing_before_blur() {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::BackTab)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(dropdown.is_open());
+        assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Previous));
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn open_dropdown_closes_when_focused_target_blurs() {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        let mut layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+        let target = layout.focus_targets()[0].clone();
+        let mut focus = FocusCtx::<()>::new(AnimationSettings::default());
+
+        dropdown.dispatch_focus(&target, true, &mut focus);
+        dropdown.dispatch_focus(&target, false, &mut focus);
+
+        assert!(!dropdown.is_open());
+        assert!(!dropdown.is_focused());
+        assert!(focus.redraw_requested());
+    }
+
+    #[test]
+    fn opening_search_dropdown_does_not_close_during_runtime_field_to_search_transition() {
+        let mut dropdown = single_dropdown();
+        let mut layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+        let field = layout.focus_targets()[0].clone();
+        let mut focus = FocusCtx::<()>::new(AnimationSettings::default());
+
+        dropdown.dispatch_focus(&field, true, &mut focus);
+        dropdown.open();
+        let mut open_layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut open_layout);
+        let search = open_layout.focus_targets()[0].clone();
+        dropdown.dispatch_focus(&field, false, &mut focus);
+        dropdown.dispatch_focus(&search, true, &mut focus);
+
+        assert!(dropdown.is_open());
+        assert_eq!(dropdown.focus_region, Some(DropdownFocusRegion::Search));
+    }
+
+    #[test]
+    fn open_search_dropdown_can_keep_focus_on_field_when_auto_focus_disabled() {
+        let mut dropdown = single_dropdown().auto_focus_search(false);
+        dropdown.open();
+        let mut layout = LayoutCtx::new();
+
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+
+        assert_eq!(layout.focus_targets()[0].id.as_str(), "field");
     }
 
     #[test]
@@ -1987,12 +2096,7 @@ mod tests {
         T: 'static,
         Id: Clone + Eq + Hash + 'static,
     {
-        let mut ctx = LayoutCtx::new();
-        <Dropdown<T, Id> as TuiNode<()>>::layout(dropdown, area, &mut ctx);
-        ctx.focus_targets()
-            .iter()
-            .find(|target| target.path.keys()[0].as_str() == LIST_SLOT)
-            .expect("list focus target should exist")
-            .area
+        let popup_area = dropdown.popup_overlay_area(area);
+        dropdown.popup_inner_areas(popup_area)[1]
     }
 }

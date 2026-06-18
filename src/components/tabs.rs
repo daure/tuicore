@@ -94,7 +94,7 @@ where
             body_keys,
             selected: 0,
             previous_selected: 0,
-            allow_looping: false,
+            allow_looping: true,
             variant: None,
             border: None,
             bordered: None,
@@ -501,46 +501,79 @@ where
             return vec![Span::styled(title.to_owned(), base_style)];
         }
 
-        let progress = self.transition.value().clamp(0.0, 1.0);
-        let width = text_width(title).max(1);
-        let cut = (progress * width as f64).round() as usize;
         let moving_right = self.selected >= self.previous_selected;
+        let Some((path_start, path_end)) = self.transition_path() else {
+            return vec![Span::styled(title.to_owned(), base_style)];
+        };
+        if index < path_start || index > path_end {
+            return vec![Span::styled(title.to_owned(), base_style)];
+        }
+
+        let progress = self.transition.value().clamp(0.0, 1.0);
+        let total_width = self.transition_path_width(path_start, path_end).max(1);
+        let offset = self.transition_path_offset(path_start, index);
+        let cut = (progress * total_width as f64).round() as usize;
+        let left_cutoff = total_width.saturating_sub(cut);
         let mut spans = Vec::new();
         let mut cursor = 0;
 
         for ch in title.chars() {
             let ch_width = char_width(ch);
             let next = cursor + ch_width;
+            let path_cursor = offset + cursor;
+            let path_next = offset + next;
             let style = if index == self.previous_selected {
                 let stays_highlighted = if moving_right {
-                    cursor >= cut
+                    path_cursor >= cut
                 } else {
-                    next <= width.saturating_sub(cut)
+                    path_next <= left_cutoff
                 };
                 if stays_highlighted {
                     self.selected_tab_style()
                 } else {
                     self.tab_style()
                 }
-            } else if index == selected {
-                let becomes_highlighted = if moving_right {
-                    next <= cut
-                } else {
-                    cursor >= width.saturating_sub(cut)
-                };
+            } else if moving_right {
+                let becomes_highlighted = path_next <= cut;
                 if becomes_highlighted {
                     self.selected_tab_style()
                 } else {
                     self.tab_style()
                 }
             } else {
-                base_style
+                let becomes_highlighted = path_cursor >= left_cutoff;
+                if becomes_highlighted {
+                    self.selected_tab_style()
+                } else {
+                    self.tab_style()
+                }
             };
             spans.push(Span::styled(ch.to_string(), style));
             cursor = next;
         }
 
         spans
+    }
+
+    fn transition_path(&self) -> Option<(usize, usize)> {
+        if self.previous_selected == self.selected {
+            return None;
+        }
+
+        Some((
+            self.previous_selected.min(self.selected),
+            self.previous_selected.max(self.selected),
+        ))
+    }
+
+    fn transition_path_width(&self, start: usize, end: usize) -> usize {
+        (start..=end).map(|index| self.tab_label_width(index)).sum()
+    }
+
+    fn transition_path_offset(&self, start: usize, index: usize) -> usize {
+        (start..index)
+            .map(|index| self.tab_label_width(index))
+            .sum()
     }
 
     fn underline_title_line(&self, selected: usize) -> Line<'static> {
@@ -1203,6 +1236,50 @@ mod tests {
     }
 
     #[test]
+    fn tabs_key_wraps_selection_by_default() {
+        let mut tabs =
+            Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).selected(1);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char(']'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 0);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+
+        let mut ctx = EventCtx::default();
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('['))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn tabs_key_can_disable_wrapping() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .selected(1)
+            .allow_looping(false);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char(']'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+
+        let mut tabs =
+            Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).allow_looping(false);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('['))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 0);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
     fn tabs_key_selection_uses_event_context_animation_settings() {
         let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
         let mut settings = AnimationSettings::default();
@@ -1274,6 +1351,67 @@ mod tests {
         assert_eq!(tabs.selected_index(), 1);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.layout_requested());
+    }
+
+    #[test]
+    fn tab_hotkey_jump_animates_intermediate_tab_title() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("AA", "").hotkey("a"),
+            Tab::text("BB", "").hotkey("b"),
+            Tab::text("CC", "").hotkey("c"),
+        ])
+        .animation(AnimationSpec {
+            enabled: Some(true),
+            duration: Some(Duration::from_millis(100)),
+            easing: Some(crate::Easing::Linear),
+        });
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('c'))), &mut ctx);
+        Animated::tick(
+            &mut tabs,
+            Duration::from_millis(50),
+            AnimationSettings::default(),
+        );
+
+        let spans = tabs.tab_title_spans(1, "BB (b)", tabs.selected_index(), tabs.tab_style());
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.style == tabs.selected_tab_style())
+        );
+    }
+
+    #[test]
+    fn tab_hotkey_jump_left_animates_intermediate_tab_title() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("AA", "").hotkey("a"),
+            Tab::text("BB", "").hotkey("b"),
+            Tab::text("CC", "").hotkey("c"),
+        ])
+        .selected(2)
+        .animation(AnimationSpec {
+            enabled: Some(true),
+            duration: Some(Duration::from_millis(100)),
+            easing: Some(crate::Easing::Linear),
+        });
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('a'))), &mut ctx);
+        Animated::tick(
+            &mut tabs,
+            Duration::from_millis(50),
+            AnimationSettings::default(),
+        );
+
+        let spans = tabs.tab_title_spans(1, "BB (b)", tabs.selected_index(), tabs.tab_style());
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.style == tabs.selected_tab_style())
+        );
     }
 
     #[test]

@@ -211,6 +211,32 @@ fn handled_key_stops_propagation() {
 }
 
 #[test]
+fn configured_hotkey_is_registered_on_focus_target() {
+    let mut view =
+        DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string()).hotkey("c");
+    let mut layout = LayoutCtx::new();
+
+    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
+
+    assert_eq!(
+        layout.focus_targets()[0].hotkey,
+        Some(KeyEvent::from(Key::Char('c')))
+    );
+}
+
+#[test]
+fn cleared_hotkey_is_not_registered_on_focus_target() {
+    let mut view =
+        DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string()).hotkey("c");
+    view.clear_hotkey();
+    let mut layout = LayoutCtx::new();
+
+    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
+
+    assert_eq!(layout.focus_targets()[0].hotkey, None);
+}
+
+#[test]
 fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
     let mut view = DataView::new(
         [

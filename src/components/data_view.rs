@@ -52,6 +52,7 @@ pub struct DataView<T, Id> {
     selected: HashSet<Id>,
     selection_glyphs: SelectionGlyphs,
     tree_glyphs: TreeGlyphs,
+    hotkey: Option<String>,
     pending_g: bool,
     area: Rect,
 }
@@ -90,6 +91,7 @@ where
             selected: HashSet::new(),
             selection_glyphs: SelectionGlyphs::NERD_FONT,
             tree_glyphs: TreeGlyphs::NERD_FONT,
+            hotkey: None,
             pending_g: false,
             area: Rect::default(),
         }
@@ -166,6 +168,19 @@ where
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.hotkey = Some(hotkey.into());
+        self
+    }
+
+    pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.hotkey = Some(hotkey.into());
+    }
+
+    pub fn clear_hotkey(&mut self) {
+        self.hotkey = None;
     }
 
     #[cfg(test)]
@@ -875,6 +890,13 @@ where
         pagination.page = page;
         changed
     }
+
+    fn hotkey_event(&self) -> Option<KeyEvent> {
+        self.hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
+            code: Key::Char(c),
+            modifiers: KeyModifiers::NONE,
+        })
+    }
 }
 
 fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
@@ -921,7 +943,11 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
-        ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
+        if let Some(hotkey) = self.hotkey_event() {
+            ctx.register_focusable_with_hotkey(FocusId::new(DATA_VIEW_FOCUS), area, true, hotkey);
+        } else {
+            ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
+        }
         LayoutResult::new(area)
     }
 

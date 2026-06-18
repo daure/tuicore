@@ -9,12 +9,12 @@ use tuicore::{
     ActivationMode, Animated, AnimationSettings, BorderKind, Button, CellContext, ChildKey, Column,
     DataView, DataViewTypedEvent, Dropdown, DropdownCommitMode, DropdownSearchMode,
     DropdownVariant, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
-    FocusRequest, FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource, Key, KeyEvent,
-    KeyModifiers, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, Overlay,
-    OverlayAnchor, OverlaySize, Panel, PanelTitlePosition, SelectionGlyphs, SelectionMode,
-    SelectionPropagation, SelectionTrigger, Separator, SeparatorColorRole, Spinner, Split, Stack,
-    StackAlign, StackItem, Tab, Tabs, TabsVariant, TextInput, TextareaInput, TickResult, Toggle,
-    TreeAdapter, TreeGlyphs, TreePath, TuiEvent, TuiNode,
+    FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource, Key, KeyEvent, KeyModifiers,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, Overlay, OverlayAnchor,
+    OverlaySize, Panel, PanelTitlePosition, SelectionGlyphs, SelectionMode, SelectionPropagation,
+    SelectionTrigger, Separator, SeparatorColorRole, Spinner, Split, Stack, StackAlign, StackItem,
+    Tab, Tabs, TabsVariant, TextInput, TextareaInput, TickResult, Toggle, TreeAdapter, TreeGlyphs,
+    TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -28,17 +28,10 @@ fn main() -> tuicore::Result<()> {
 struct Gallery {
     component_list: DataView<ComponentKind, ComponentKind>,
     selected: ComponentKind,
-    focus: GalleryFocus,
     areas: GalleryAreas,
     list_panel: Panel,
     preview_panel: Panel,
     previews: PreviewState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GalleryFocus {
-    List,
-    Preview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -62,6 +55,7 @@ impl Gallery {
         .activation_mode(ActivationMode::OnNavigate)
         .selection_mode(SelectionMode::Single)
         .selection_trigger(SelectionTrigger::OnNavigate)
+        .hotkey("c")
         .selected([ComponentKind::Tabs])
         .expanded([
             ComponentKind::Inputs,
@@ -73,7 +67,6 @@ impl Gallery {
         Self {
             component_list,
             selected: ComponentKind::Tabs,
-            focus: GalleryFocus::List,
             areas: GalleryAreas::default(),
             list_panel: Panel::new()
                 .top_left("Components")
@@ -89,151 +82,6 @@ impl Gallery {
         self.preview_panel.set_top_left(selected.preview().title());
     }
 
-    fn sync_focus(&mut self, settings: AnimationSettings) {
-        let list_focused = self.focus == GalleryFocus::List;
-        let preview_focused = self.focus == GalleryFocus::Preview;
-        self.list_panel.set_focused(list_focused, settings);
-        self.preview_panel.set_focused(preview_focused, settings);
-        self.component_list.set_focused(list_focused);
-        self.previews
-            .set_focused(self.selected.preview(), preview_focused, settings);
-    }
-
-    fn focus_next(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.focus == GalleryFocus::Preview {
-            let advanced = match self.selected.preview() {
-                PreviewKind::Tabs => self.previews.focus_next_tab_demo(),
-                PreviewKind::Panel => return self.focus_next_panel_title(ctx),
-                _ => false,
-            };
-            if advanced {
-                self.previews
-                    .set_focused(self.selected.preview(), true, ctx.animation());
-                return;
-            }
-        }
-        self.focus = if self.focus == GalleryFocus::List {
-            self.previews.reset_tab_demo_focus();
-            GalleryFocus::Preview
-        } else {
-            GalleryFocus::List
-        };
-        self.sync_focus(ctx.animation());
-        if self.focus == GalleryFocus::Preview {
-            match self.selected.preview() {
-                PreviewKind::Panel => {
-                    self.previews.focus_panel_title_node(0, ctx);
-                }
-                PreviewKind::Dropdown => {
-                    self.previews.focus_dropdown_node(0, ctx);
-                }
-                PreviewKind::Toggle => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("toggle")));
-                }
-                PreviewKind::Button => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("button")));
-                }
-                _ => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("preview")));
-                }
-            }
-        } else {
-            ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            });
-        }
-    }
-
-    fn focus_previous(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.focus == GalleryFocus::Preview {
-            let moved = match self.selected.preview() {
-                PreviewKind::Tabs => self.previews.focus_previous_tab_demo(),
-                PreviewKind::Panel => return self.focus_previous_panel_title(ctx),
-                _ => false,
-            };
-            if moved {
-                self.previews
-                    .set_focused(self.selected.preview(), true, ctx.animation());
-                return;
-            }
-        }
-        self.focus = if self.focus == GalleryFocus::List {
-            match self.selected.preview() {
-                PreviewKind::Tabs => self.previews.focus_last_tab_demo(),
-                PreviewKind::Panel => self.previews.focused_panel = PANEL_DEMO_FOCUS_INDEX,
-                _ => {}
-            }
-            GalleryFocus::Preview
-        } else {
-            GalleryFocus::List
-        };
-        self.sync_focus(ctx.animation());
-        if self.focus == GalleryFocus::Preview {
-            match self.selected.preview() {
-                PreviewKind::Panel => {
-                    self.previews
-                        .focus_panel_title_node(self.previews.focused_panel, ctx);
-                }
-                PreviewKind::Dropdown => {
-                    self.previews
-                        .focus_dropdown_node(self.previews.focused_dropdown, ctx);
-                }
-                PreviewKind::Toggle => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("toggle")));
-                }
-                PreviewKind::Button => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("button")));
-                }
-                _ => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("preview")));
-                }
-            }
-        } else {
-            ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            });
-        }
-    }
-
-    fn handle_list_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        let outcome =
-            self.component_list
-                .on_key_with_settings(key, self.areas.list_body, ctx.animation());
-        if let Some(selected) = self.selected_from_list_events() {
-            self.select(selected);
-        }
-        if matches!(key.code, Key::Enter) {
-            self.focus = GalleryFocus::Preview;
-            self.sync_focus(ctx.animation());
-            match self.selected.preview() {
-                PreviewKind::Dropdown => {
-                    self.previews.focus_dropdown_node(0, ctx);
-                }
-                PreviewKind::Panel => {
-                    self.previews.focus_panel_title_node(0, ctx);
-                }
-                PreviewKind::Toggle => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("toggle")));
-                }
-                PreviewKind::Button => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("button")));
-                }
-                _ => {
-                    ctx.focus(FocusRequest::Target(FocusId::new("preview")));
-                }
-            }
-        }
-        if outcome.handled || outcome.needs_redraw() || matches!(key.code, Key::Enter) {
-            ctx.request_redraw();
-            ctx.stop_propagation();
-            EventOutcome::Handled
-        } else {
-            EventOutcome::Ignored
-        }
-    }
-
     fn selected_from_list_events(&mut self) -> Option<ComponentKind> {
         self.component_list
             .take_events()
@@ -244,90 +92,6 @@ impl Gallery {
                 DataViewTypedEvent::HighlightChanged { row_id: None }
                 | DataViewTypedEvent::SelectionChanged { .. } => None,
             })
-    }
-
-    fn handle_preview_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        if self
-            .previews
-            .on_key(self.selected.preview(), key, self.areas.preview_body, ctx)
-        {
-            ctx.request_redraw();
-            ctx.stop_propagation();
-            EventOutcome::Handled
-        } else {
-            EventOutcome::Ignored
-        }
-    }
-
-    fn preview_handles_escape(&self) -> bool {
-        if self.focus != GalleryFocus::Preview {
-            return false;
-        }
-        match self.selected.preview() {
-            PreviewKind::Panel => self.previews.panel_title_dropdown_is_open(),
-            PreviewKind::Dropdown => self.previews.dropdown_is_open(),
-            _ => false,
-        }
-    }
-
-    fn focus_next_panel_title(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.previews.focused_panel < 3 {
-            self.previews
-                .focus_panel_title_node(self.previews.focused_panel + 1, ctx);
-        } else if self.previews.focused_panel == 3 {
-            self.previews.focus_panel_demo(ctx);
-        } else {
-            self.previews.close_panel_title_dropdowns();
-            ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            });
-        }
-    }
-
-    fn focus_previous_panel_title(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.previews.focused_panel == PANEL_DEMO_FOCUS_INDEX {
-            self.previews.focus_panel_title_node(3, ctx);
-        } else if self.previews.focused_panel > 0 {
-            self.previews
-                .focus_panel_title_node(self.previews.focused_panel - 1, ctx);
-        } else {
-            self.previews.close_panel_title_dropdowns();
-            ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            });
-        }
-    }
-
-    fn focus_next_dropdown(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.focus == GalleryFocus::List {
-            self.previews.focus_dropdown_node(0, ctx);
-        } else if self.previews.focused_dropdown < 5 {
-            self.previews
-                .focus_dropdown_node(self.previews.focused_dropdown + 1, ctx);
-        } else {
-            self.previews.close_dropdowns();
-            ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            });
-        }
-    }
-
-    fn focus_previous_dropdown(&mut self, ctx: &mut EventCtx<Msg>) {
-        if self.focus == GalleryFocus::List {
-            self.previews.focus_dropdown_node(5, ctx);
-        } else if self.previews.focused_dropdown > 0 {
-            self.previews
-                .focus_dropdown_node(self.previews.focused_dropdown - 1, ctx);
-        } else {
-            self.previews.close_dropdowns();
-            ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            });
-        }
     }
 
     fn quit_key(event: &TuiEvent) -> bool {
@@ -358,13 +122,6 @@ impl TuiNode<Msg> for Gallery {
                 self.areas.list_body,
                 ctx,
             );
-            ctx.set_focus_hotkey(
-                FocusId::new("data-view"),
-                KeyEvent {
-                    code: Key::Char('c'),
-                    modifiers: KeyModifiers::NONE,
-                },
-            );
         });
         ctx.push_slot(
             gallery_preview_child_key(),
@@ -389,59 +146,12 @@ impl TuiNode<Msg> for Gallery {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        if let TuiEvent::Key(key) = event {
-            if key.code == Key::Esc && self.preview_handles_escape() {
-                if !self.list_panel.is_focused() && !self.preview_panel.is_focused() {
-                    return EventOutcome::Ignored;
-                }
-                return self.handle_preview_key(*key, ctx);
-            }
-        }
-
         if Self::quit_key(event) {
             ctx.request_quit();
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
-
-        let TuiEvent::Key(key) = event else {
-            return EventOutcome::Ignored;
-        };
-
-        if !self.list_panel.is_focused() && !self.preview_panel.is_focused() {
-            return EventOutcome::Ignored;
-        }
-
-        let bindings = tuicore::keybindings();
-        if bindings.focus().previous_matches(*key) {
-            if self.selected.preview() == PreviewKind::Dropdown {
-                self.focus_previous_dropdown(ctx);
-                ctx.request_redraw();
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
-            self.focus_previous(ctx);
-            ctx.request_redraw();
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
-        }
-        if bindings.focus().next_matches(*key) {
-            if self.selected.preview() == PreviewKind::Dropdown {
-                self.focus_next_dropdown(ctx);
-                ctx.request_redraw();
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
-            self.focus_next(ctx);
-            ctx.request_redraw();
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
-        }
-
-        match self.focus {
-            GalleryFocus::List => self.handle_list_key(*key, ctx),
-            GalleryFocus::Preview => self.handle_preview_key(*key, ctx),
-        }
+        EventOutcome::Ignored
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
@@ -472,6 +182,15 @@ impl TuiNode<Msg> for Gallery {
                 ctx.request_layout();
                 ctx.request_redraw();
             }
+            if let TuiEvent::Key(KeyEvent {
+                code: Key::Enter, ..
+            }) = event
+            {
+                ctx.focus_next();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             return child.bubble(ctx, |ctx| self.event(event, ctx));
         }
 
@@ -494,16 +213,6 @@ impl TuiNode<Msg> for Gallery {
             self.component_list
                 .dispatch_focus(&child_target, focused, ctx);
             self.list_panel.set_focused(focused, ctx.animation());
-            if focused {
-                self.focus = GalleryFocus::List;
-                self.preview_panel.set_focused(false, ctx.animation());
-                self.previews
-                    .set_focused(self.selected.preview(), false, ctx.animation());
-            } else {
-                self.preview_panel.set_focused(false, ctx.animation());
-                self.previews
-                    .set_focused(self.selected.preview(), false, ctx.animation());
-            }
             ctx.request_redraw();
             return;
         }
@@ -512,23 +221,12 @@ impl TuiNode<Msg> for Gallery {
             return;
         };
 
-        if child_target.id.as_str() == "preview"
-            || self
-                .previews
-                .dispatch_focus(self.selected.preview(), &child_target, focused, ctx)
-        {
-            if focused {
-                self.focus = GalleryFocus::Preview;
-                self.list_panel.set_focused(false, ctx.animation());
-                self.component_list.set_focused(false);
-                self.preview_panel.set_focused(true, ctx.animation());
-                self.previews
-                    .set_focused(self.selected.preview(), true, ctx.animation());
-            } else {
-                self.preview_panel.set_focused(false, ctx.animation());
-            }
-            ctx.request_redraw();
+        if child_target.id.as_str() != "preview" {
+            self.previews
+                .dispatch_focus(self.selected.preview(), &child_target, focused, ctx);
         }
+        self.preview_panel.set_focused(focused, ctx.animation());
+        ctx.request_redraw();
     }
 }
 
@@ -539,12 +237,10 @@ struct PreviewState {
     button_presses: u32,
     toggle: Toggle<Msg>,
     spinner: Spinner,
-    focused_panel: usize,
     panel_demo: Panel,
     tabs_minimal: Tabs<Msg>,
     tabs_underline: Tabs<Msg>,
     tabs_boxed: Tabs<Msg>,
-    focused_tab_demo: usize,
     data_list: DataView<DemoRow, usize>,
     data_table: DataView<DemoRow, usize>,
     data_list_tree: DataView<DemoRow, usize>,
@@ -564,7 +260,6 @@ struct PreviewState {
     dropdown_filled_fuzzy_single: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_multi_contains: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_no_search_immediate: Dropdown<DropdownDemoItem, &'static str>,
-    focused_dropdown: usize,
     layout_flex: Flex<Msg>,
     layout_split: Split<DemoBox, DemoBox>,
     layout_stack: Stack<Msg>,
@@ -587,8 +282,7 @@ impl PreviewState {
             button_presses: 0,
             toggle: Toggle::new("Telemetry").hotkey("x"),
             spinner: Spinner::new(),
-            focused_panel: 0,
-            panel_demo: Panel::new(),
+            panel_demo: panel_demo(),
             tabs_minimal: Tabs::default().variant(TabsVariant::Minimal).hotkey("m"),
             tabs_underline: Tabs::default().variant(TabsVariant::Underline).hotkey("l"),
             tabs_boxed: Tabs::new(vec![
@@ -598,7 +292,6 @@ impl PreviewState {
             ])
             .variant(TabsVariant::Boxed)
             .hotkey("b"),
-            focused_tab_demo: 0,
             data_list: DataViewMode::List.data_view(),
             data_table: DataViewMode::Table.data_view(),
             data_list_tree: DataViewMode::ListTree.data_view(),
@@ -618,7 +311,6 @@ impl PreviewState {
             dropdown_filled_fuzzy_single: dropdown_filled_fuzzy_single(),
             dropdown_filled_multi_contains: dropdown_filled_multi_contains(),
             dropdown_filled_no_search_immediate: dropdown_filled_no_search_immediate(),
-            focused_dropdown: 0,
             layout_flex: layout_flex_demo(),
             layout_split: layout_split_demo(),
             layout_stack: layout_stack_demo(),
@@ -627,83 +319,24 @@ impl PreviewState {
         }
     }
 
-    fn set_focused(&mut self, preview: PreviewKind, focused: bool, settings: AnimationSettings) {
-        self.text_input.set_focused(focused);
-        self.textarea_input.set_focused(focused);
-        self.button
-            .set_focused(focused && preview == PreviewKind::Button, settings);
-        self.toggle
-            .set_focused(focused && preview == PreviewKind::Toggle, settings);
-        self.tabs_minimal.set_focused(
-            focused && preview == PreviewKind::Tabs && self.focused_tab_demo == 0,
-            settings,
-        );
-        self.tabs_underline.set_focused(
-            focused && preview == PreviewKind::Tabs && self.focused_tab_demo == 1,
-            settings,
-        );
-        self.tabs_boxed.set_focused(
-            focused && preview == PreviewKind::Tabs && self.focused_tab_demo == 2,
-            settings,
-        );
-        self.active_data_view_mut(PreviewKind::DataList)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataTable)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataListTree)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataTableTree)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataSingleSelect)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataMultiSelect)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataChecklistTree)
-            .set_focused(false);
-        self.active_data_view_mut(PreviewKind::DataActivateOnNavigate)
-            .set_focused(false);
-        if preview == PreviewKind::Panel && !focused {
-            self.close_panel_title_dropdowns();
-            self.focused_panel = 0;
-        }
-        if preview == PreviewKind::Dropdown && !focused {
-            self.close_dropdowns();
-        }
-        if preview.is_data_view() {
-            self.active_data_view_mut(preview).set_focused(focused);
-        }
-    }
-
-    fn reset_tab_demo_focus(&mut self) {
-        self.focused_tab_demo = 0;
-    }
-
-    fn focus_next_tab_demo(&mut self) -> bool {
-        if self.focused_tab_demo >= 2 {
-            return false;
-        }
-        self.focused_tab_demo += 1;
-        true
-    }
-
-    fn focus_previous_tab_demo(&mut self) -> bool {
-        if self.focused_tab_demo == 0 {
-            return false;
-        }
-        self.focused_tab_demo -= 1;
-        true
-    }
-
-    fn focus_last_tab_demo(&mut self) {
-        self.focused_tab_demo = 2;
-    }
-
     fn layout(&mut self, preview: PreviewKind, area: Rect, ctx: &mut LayoutCtx) {
         match preview {
             PreviewKind::Tabs => self.layout_tabs(area, ctx),
             PreviewKind::Panel => self.layout_panel_preview(area, ctx),
             PreviewKind::Button => self.layout_button(area, ctx),
             PreviewKind::Toggle => self.layout_toggle(area, ctx),
+            PreviewKind::TextInput => {
+                let [_, input] = input_layout(area);
+                ctx.push_slot(text_input_child_key(), input, |ctx| {
+                    self.text_input.layout(input, ctx);
+                });
+            }
+            PreviewKind::TextareaInput => {
+                let [_, input] = input_layout(area);
+                ctx.push_slot(textarea_input_child_key(), input, |ctx| {
+                    self.textarea_input.layout(input, ctx);
+                });
+            }
             PreviewKind::DataList
             | PreviewKind::DataTable
             | PreviewKind::DataListTree
@@ -716,7 +349,7 @@ impl PreviewState {
                 <DataView<DemoRow, usize> as TuiNode<Msg>>::layout(
                     self.active_data_view_mut(preview),
                     body,
-                    &mut LayoutCtx::new(),
+                    ctx,
                 );
             }
             PreviewKind::Dropdown => self.layout_dropdowns(area, ctx),
@@ -765,73 +398,35 @@ impl PreviewState {
         }
     }
 
-    fn on_key(
+    fn data_view_dispatch_event(
         &mut self,
         preview: PreviewKind,
-        key: KeyEvent,
-        area: Rect,
+        route: &EventRoute,
+        event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
-    ) -> bool {
-        match preview {
-            PreviewKind::TextInput => {
-                let outcome = self.text_input.on_key(key);
-                if outcome.clear {
-                    ctx.request_clear();
-                }
-                if outcome.needs_redraw() {
-                    ctx.request_redraw();
-                }
-                outcome.handled
-            }
-            PreviewKind::TextareaInput => {
-                let outcome = self.textarea_input.on_key(key);
-                if outcome.clear {
-                    ctx.request_clear();
-                }
-                if outcome.needs_redraw() {
-                    ctx.request_redraw();
-                }
-                outcome.handled
-            }
-            PreviewKind::Tabs => self.tabs_on_key(key, ctx),
-            PreviewKind::Button => self.button_on_key(key, ctx),
-            PreviewKind::Toggle => self.toggle.event(&TuiEvent::Key(key), ctx).handled(),
-            PreviewKind::DataTable | PreviewKind::DataTableTree
-                if matches!(key.code, Key::Char('s')) && key.modifiers == KeyModifiers::NONE =>
+    ) -> EventOutcome {
+        if let TuiEvent::Key(key) = event {
+            if matches!(preview, PreviewKind::DataTable | PreviewKind::DataTableTree)
+                && matches!(key.code, Key::Char('s'))
+                && key.modifiers == KeyModifiers::NONE
             {
                 self.active_data_view_mut(preview).toggle_sort("task");
                 self.record_data_events(preview);
-                true
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
             }
-            PreviewKind::DataList
-            | PreviewKind::DataTable
-            | PreviewKind::DataListTree
-            | PreviewKind::DataTableTree
-            | PreviewKind::DataSingleSelect
-            | PreviewKind::DataMultiSelect
-            | PreviewKind::DataChecklistTree
-            | PreviewKind::DataActivateOnNavigate => {
-                let [_, body] = data_view_layout(area);
-                let outcome = self.active_data_view_mut(preview).on_key_with_settings(
-                    key,
-                    body,
-                    ctx.animation(),
-                );
-                self.record_data_events(preview);
-                if outcome.needs_redraw() {
-                    ctx.request_redraw();
-                }
-                outcome.handled
-            }
-            PreviewKind::Panel => self.panel_on_key(key, area, ctx),
-            PreviewKind::Dropdown => self.dropdown_on_key(key, area, ctx),
-            PreviewKind::Spinner
-            | PreviewKind::LayoutFlex
-            | PreviewKind::LayoutSplit
-            | PreviewKind::LayoutStack
-            | PreviewKind::LayoutOverlay
-            | PreviewKind::LayoutGrid => false,
         }
+
+        if !preview.is_data_view() {
+            return EventOutcome::Ignored;
+        }
+
+        let outcome = self
+            .active_data_view_mut(preview)
+            .dispatch_event(route, event, ctx);
+        self.record_data_events(preview);
+        outcome
     }
 
     fn dispatch_event(
@@ -841,6 +436,26 @@ impl PreviewState {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if preview == PreviewKind::TextInput {
+            let Some(route) = route
+                .path
+                .without_first_if(&text_input_child_key())
+                .map(EventRoute::new)
+            else {
+                return EventOutcome::Ignored;
+            };
+            return self.text_input.dispatch_event(&route, event, ctx);
+        }
+        if preview == PreviewKind::TextareaInput {
+            let Some(route) = route
+                .path
+                .without_first_if(&textarea_input_child_key())
+                .map(EventRoute::new)
+            else {
+                return EventOutcome::Ignored;
+            };
+            return self.textarea_input.dispatch_event(&route, event, ctx);
+        }
         if preview == PreviewKind::Tabs {
             let Some((index, route)) = tab_demo_child_route(route) else {
                 return EventOutcome::Ignored;
@@ -852,6 +467,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::Button {
             return self.button_dispatch_event(route, event, ctx);
+        }
+        if preview.is_data_view() {
+            return self.data_view_dispatch_event(preview, route, event, ctx);
         }
         if preview == PreviewKind::Panel {
             if let Some(route) = panel_demo_child_route(route) {
@@ -880,60 +498,67 @@ impl PreviewState {
         target: &FocusTarget,
         focused: bool,
         ctx: &mut FocusCtx<Msg>,
-    ) -> bool {
-        if preview == PreviewKind::Tabs {
-            let Some((index, target)) = tab_demo_child_target(target) else {
-                return false;
-            };
-            if focused {
-                self.focused_tab_demo = index;
+    ) {
+        match preview {
+            PreviewKind::TextInput => {
+                dispatch_focus_child(
+                    &mut self.text_input,
+                    target,
+                    text_input_child_key(),
+                    focused,
+                    ctx,
+                );
             }
-            self.tab_demo_mut(index)
-                .dispatch_focus(&target, focused, ctx);
-            return true;
-        }
-        if preview == PreviewKind::Toggle {
-            self.toggle.dispatch_focus(target, focused, ctx);
-            return true;
-        }
-        if preview == PreviewKind::Button {
-            self.button.dispatch_focus(target, focused, ctx);
-            return true;
-        }
-        if preview == PreviewKind::Panel {
-            if let Some(target) = panel_demo_child_target(target) {
-                if focused {
-                    self.focused_panel = PANEL_DEMO_FOCUS_INDEX;
-                    self.close_panel_title_dropdowns();
+            PreviewKind::TextareaInput => {
+                dispatch_focus_child(
+                    &mut self.textarea_input,
+                    target,
+                    textarea_input_child_key(),
+                    focused,
+                    ctx,
+                );
+            }
+            PreviewKind::Tabs => dispatch_focus_indexed(
+                target,
+                tab_demo_index,
+                |state, index| state.tab_demo_mut(index),
+                self,
+                focused,
+                ctx,
+            ),
+            PreviewKind::Toggle => self.toggle.dispatch_focus(target, focused, ctx),
+            PreviewKind::Button => self.button.dispatch_focus(target, focused, ctx),
+            preview if preview.is_data_view() => self
+                .active_data_view_mut(preview)
+                .dispatch_focus(target, focused, ctx),
+            PreviewKind::Panel => {
+                if !dispatch_focus_child(
+                    &mut self.panel_demo,
+                    target,
+                    panel_demo_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    dispatch_focus_indexed(
+                        target,
+                        panel_title_index,
+                        |state, index| state.panel_title_dropdown_mut(index),
+                        self,
+                        focused,
+                        ctx,
+                    );
                 }
-                self.panel_demo.dispatch_focus(&target, focused, ctx);
-                return true;
             }
-            let Some((index, target)) = panel_title_child_target(target) else {
-                return false;
-            };
-            if focused {
-                self.focused_panel = index;
-                self.close_inactive_panel_title_dropdowns();
-            }
-            self.panel_title_dropdown_mut(index)
-                .dispatch_focus(&target, focused, ctx);
-            return true;
+            PreviewKind::Dropdown => dispatch_focus_indexed(
+                target,
+                dropdown_index,
+                |state, index| state.dropdown_mut(index),
+                self,
+                focused,
+                ctx,
+            ),
+            _ => {}
         }
-        if preview != PreviewKind::Dropdown {
-            return false;
-        }
-
-        let Some((index, target)) = dropdown_child_target(target) else {
-            return false;
-        };
-        if focused {
-            self.focused_dropdown = index;
-            self.close_inactive_dropdowns();
-        }
-        self.dropdown_mut(index)
-            .dispatch_focus(&target, focused, ctx);
-        true
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
@@ -967,6 +592,7 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(Animated::tick(&mut self.panel_demo, dt, settings))
             .merge(Animated::tick(&mut self.panel_top_left, dt, settings))
             .merge(Animated::tick(&mut self.panel_top_right, dt, settings))
             .merge(Animated::tick(&mut self.panel_bottom_left, dt, settings))
@@ -1005,44 +631,6 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.textarea_input, dt, settings))
     }
 
-    fn panel_title_dropdown_is_open(&self) -> bool {
-        self.panel_top_left.is_open()
-            || self.panel_top_right.is_open()
-            || self.panel_bottom_left.is_open()
-            || self.panel_bottom_right.is_open()
-    }
-
-    fn close_panel_title_dropdowns(&mut self) {
-        self.panel_top_left.cancel();
-        self.panel_top_right.cancel();
-        self.panel_bottom_left.cancel();
-        self.panel_bottom_right.cancel();
-    }
-
-    fn close_inactive_panel_title_dropdowns(&mut self) {
-        if self.focused_panel != 0 {
-            self.panel_top_left.cancel();
-        }
-        if self.focused_panel != 1 {
-            self.panel_top_right.cancel();
-        }
-        if self.focused_panel != 2 {
-            self.panel_bottom_left.cancel();
-        }
-        if self.focused_panel != 3 {
-            self.panel_bottom_right.cancel();
-        }
-    }
-
-    fn active_panel_title_dropdown_mut(&mut self) -> &mut Dropdown<PanelTitleChoice, &'static str> {
-        match self.focused_panel {
-            1 => &mut self.panel_top_right,
-            2 => &mut self.panel_bottom_left,
-            3 => &mut self.panel_bottom_right,
-            _ => &mut self.panel_top_left,
-        }
-    }
-
     fn panel_title_dropdown_mut(
         &mut self,
         index: usize,
@@ -1069,56 +657,6 @@ impl PreviewState {
             1 => &mut self.tabs_underline,
             2 => &mut self.tabs_boxed,
             _ => &mut self.tabs_minimal,
-        }
-    }
-
-    fn dropdown_is_open(&self) -> bool {
-        self.dropdown_fuzzy_single.is_open()
-            || self.dropdown_multi_contains.is_open()
-            || self.dropdown_no_search_immediate.is_open()
-            || self.dropdown_filled_fuzzy_single.is_open()
-            || self.dropdown_filled_multi_contains.is_open()
-            || self.dropdown_filled_no_search_immediate.is_open()
-    }
-
-    fn close_dropdowns(&mut self) {
-        self.dropdown_fuzzy_single.cancel();
-        self.dropdown_multi_contains.cancel();
-        self.dropdown_no_search_immediate.cancel();
-        self.dropdown_filled_fuzzy_single.cancel();
-        self.dropdown_filled_multi_contains.cancel();
-        self.dropdown_filled_no_search_immediate.cancel();
-    }
-
-    fn close_inactive_dropdowns(&mut self) {
-        if self.focused_dropdown != 0 {
-            self.dropdown_fuzzy_single.cancel();
-        }
-        if self.focused_dropdown != 1 {
-            self.dropdown_multi_contains.cancel();
-        }
-        if self.focused_dropdown != 2 {
-            self.dropdown_no_search_immediate.cancel();
-        }
-        if self.focused_dropdown != 3 {
-            self.dropdown_filled_fuzzy_single.cancel();
-        }
-        if self.focused_dropdown != 4 {
-            self.dropdown_filled_multi_contains.cancel();
-        }
-        if self.focused_dropdown != 5 {
-            self.dropdown_filled_no_search_immediate.cancel();
-        }
-    }
-
-    fn active_dropdown_mut(&mut self) -> &mut Dropdown<DropdownDemoItem, &'static str> {
-        match self.focused_dropdown {
-            1 => &mut self.dropdown_multi_contains,
-            2 => &mut self.dropdown_no_search_immediate,
-            3 => &mut self.dropdown_filled_fuzzy_single,
-            4 => &mut self.dropdown_filled_multi_contains,
-            5 => &mut self.dropdown_filled_no_search_immediate,
-            _ => &mut self.dropdown_fuzzy_single,
         }
     }
 
@@ -1266,11 +804,12 @@ impl PreviewState {
             ),
         );
 
-        self.render_inactive_dropdowns(frame, areas);
-        self.dropdown(self.focused_dropdown)
-            .render(frame, dropdown_area(areas[self.focused_dropdown]));
-        self.dropdown(self.focused_dropdown)
-            .render_popup_overlay(frame, body);
+        for (index, area) in areas.iter().copied().enumerate() {
+            self.dropdown(index).render(frame, dropdown_area(area));
+        }
+        for index in 0..6 {
+            self.dropdown(index).render_popup_overlay(frame, body);
+        }
     }
 
     fn render_dropdown_column(
@@ -1296,14 +835,6 @@ impl PreviewState {
             label,
         );
         frame.render_widget(Paragraph::new(details.to_string()), details_area);
-    }
-
-    fn render_inactive_dropdowns(&self, frame: &mut Frame, areas: [Rect; 6]) {
-        for (index, area) in areas.iter().copied().enumerate() {
-            if self.focused_dropdown != index {
-                self.dropdown(index).render(frame, dropdown_area(area));
-            }
-        }
     }
 
     fn layout_dropdowns(&mut self, area: Rect, ctx: &mut LayoutCtx) {
@@ -1337,28 +868,6 @@ impl PreviewState {
         });
     }
 
-    fn dropdown_on_key(&mut self, key: KeyEvent, area: Rect, ctx: &mut EventCtx<Msg>) -> bool {
-        let [_, body] = dropdown_preview_layout(area);
-        let outcome = self.active_dropdown_mut().on_key(key, body);
-        if outcome.opened || outcome.closed {
-            ctx.request_layout();
-        }
-        if outcome.opened {
-            self.close_inactive_dropdowns();
-        }
-        outcome.handled || outcome.changed
-    }
-
-    fn focus_dropdown_node(&mut self, index: usize, ctx: &mut EventCtx<Msg>) -> bool {
-        self.focused_dropdown = index;
-        self.close_dropdowns();
-        ctx.focus(FocusRequest::TargetAt {
-            path: TreePath::from_keys([gallery_preview_child_key(), dropdown_child_key(index)]),
-            id: FocusId::new("field"),
-        });
-        true
-    }
-
     fn dropdown(&self, index: usize) -> &Dropdown<DropdownDemoItem, &'static str> {
         match index {
             1 => &self.dropdown_multi_contains,
@@ -1370,42 +879,38 @@ impl PreviewState {
         }
     }
 
-    fn panel_from_dropdowns(&self) -> Panel {
-        let mut panel = Panel::new().border(BorderKind::Plain).content([
-            "Use dropdowns below to toggle each panel label or hotkey.",
-            "Top labels use the standard - label - style.",
-            "Bottom labels and hotkeys use the -| label |- inset style.",
-        ]);
+    fn sync_panel_demo_from_dropdowns(&mut self) {
+        self.panel_demo.clear_title(PanelTitlePosition::TopLeft);
+        self.panel_demo.clear_title(PanelTitlePosition::TopRight);
+        self.panel_demo.clear_title(PanelTitlePosition::BottomLeft);
+        self.panel_demo.clear_title(PanelTitlePosition::BottomRight);
         apply_panel_choice(
-            &mut panel,
+            &mut self.panel_demo,
             PanelTitlePosition::TopLeft,
             self.panel_top_left.selected_id(),
         );
         apply_panel_choice(
-            &mut panel,
+            &mut self.panel_demo,
             PanelTitlePosition::TopRight,
             self.panel_top_right.selected_id(),
         );
         apply_panel_choice(
-            &mut panel,
+            &mut self.panel_demo,
             PanelTitlePosition::BottomLeft,
             self.panel_bottom_left.selected_id(),
         );
         apply_panel_choice(
-            &mut panel,
+            &mut self.panel_demo,
             PanelTitlePosition::BottomRight,
             self.panel_bottom_right.selected_id(),
         );
-        panel
     }
 
     fn layout_panel_preview(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [_, controls, panel_area] = panel_preview_layout(area);
         let areas = panel_title_control_areas(controls).map(panel_title_dropdown_area);
 
-        self.panel_demo = self
-            .panel_from_dropdowns()
-            .focused(self.focused_panel == PANEL_DEMO_FOCUS_INDEX);
+        self.sync_panel_demo_from_dropdowns();
         ctx.push_slot(panel_demo_child_key(), panel_area, |ctx| {
             <Panel as TuiNode<Msg>>::layout(&mut self.panel_demo, panel_area, ctx);
         });
@@ -1426,41 +931,6 @@ impl PreviewState {
             self.panel_bottom_right
                 .layout_overlay::<Msg>(areas[3], area, ctx);
         });
-    }
-
-    fn panel_on_key(&mut self, key: KeyEvent, area: Rect, ctx: &mut EventCtx<Msg>) -> bool {
-        if self.focused_panel == PANEL_DEMO_FOCUS_INDEX {
-            return self.panel_demo.event(&TuiEvent::Key(key), ctx).handled();
-        }
-
-        let outcome = self.active_panel_title_dropdown_mut().on_key(key, area);
-        if outcome.opened || outcome.closed {
-            ctx.request_layout();
-        }
-        if outcome.opened {
-            self.close_inactive_panel_title_dropdowns();
-        }
-        outcome.handled || outcome.changed
-    }
-
-    fn focus_panel_title_node(&mut self, index: usize, ctx: &mut EventCtx<Msg>) -> bool {
-        self.focused_panel = index;
-        self.close_panel_title_dropdowns();
-        ctx.focus(FocusRequest::TargetAt {
-            path: TreePath::from_keys([gallery_preview_child_key(), panel_title_child_key(index)]),
-            id: FocusId::new("field"),
-        });
-        true
-    }
-
-    fn focus_panel_demo(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
-        self.focused_panel = PANEL_DEMO_FOCUS_INDEX;
-        self.close_panel_title_dropdowns();
-        ctx.focus(FocusRequest::TargetAt {
-            path: TreePath::from_keys([gallery_preview_child_key(), panel_demo_child_key()]),
-            id: FocusId::new("panel"),
-        });
-        true
     }
 
     fn render_text_input(&self, frame: &mut Frame, area: Rect) {
@@ -1523,15 +993,6 @@ impl PreviewState {
         );
     }
 
-    fn button_on_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        let outcome = self.button.on_key_with_settings(key, ctx.animation());
-        if outcome.pressed {
-            self.button_presses += 1;
-            ctx.request_redraw();
-        }
-        outcome.handled
-    }
-
     fn button_dispatch_event(
         &mut self,
         route: &EventRoute,
@@ -1592,8 +1053,8 @@ impl PreviewState {
         self.render_panel_title_control(frame, areas[2], 2, "Bottom left");
         self.render_panel_title_control(frame, areas[3], 3, "Bottom right");
 
-        if self.focused_panel < PANEL_TITLE_CONTROL_COUNT {
-            self.panel_title_dropdown(self.focused_panel)
+        for index in 0..PANEL_TITLE_CONTROL_COUNT {
+            self.panel_title_dropdown(index)
                 .render_popup_overlay(frame, area);
         }
     }
@@ -1689,15 +1150,6 @@ impl PreviewState {
             "Grid: tracks mix fixed/fit/percent/fill with row gap 1, column gap 2, padding 1.",
         );
         self.layout_grid.render(frame, layout_demo_body(area));
-    }
-
-    fn tabs_on_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        let event = TuiEvent::Key(key);
-        match self.focused_tab_demo {
-            0 => self.tabs_minimal.event(&event, ctx).handled(),
-            1 => self.tabs_underline.event(&event, ctx).handled(),
-            _ => self.tabs_boxed.event(&event, ctx).handled(),
-        }
     }
 }
 
@@ -1873,6 +1325,56 @@ fn gallery_preview_child_key() -> ChildKey {
     ChildKey::new("preview")
 }
 
+fn text_input_child_key() -> ChildKey {
+    ChildKey::new("text-input")
+}
+
+fn textarea_input_child_key() -> ChildKey {
+    ChildKey::new("textarea-input")
+}
+
+fn dispatch_focus_child<N>(
+    node: &mut N,
+    target: &FocusTarget,
+    key: ChildKey,
+    focused: bool,
+    ctx: &mut FocusCtx<Msg>,
+) -> bool
+where
+    N: TuiNode<Msg>,
+{
+    let Some(target) = target.for_child(&key) else {
+        return false;
+    };
+    node.dispatch_focus(&target, focused, ctx);
+    true
+}
+
+fn dispatch_focus_indexed<N>(
+    target: &FocusTarget,
+    index_for: fn(&ChildKey) -> Option<usize>,
+    node_for: impl for<'a> FnOnce(&'a mut PreviewState, usize) -> &'a mut N,
+    state: &mut PreviewState,
+    focused: bool,
+    ctx: &mut FocusCtx<Msg>,
+) where
+    N: TuiNode<Msg>,
+{
+    let Some((index, target)) = indexed_child_target(target, index_for) else {
+        return;
+    };
+    node_for(state, index).dispatch_focus(&target, focused, ctx);
+}
+
+fn indexed_child_target(
+    target: &FocusTarget,
+    index_for: fn(&ChildKey) -> Option<usize>,
+) -> Option<(usize, FocusTarget)> {
+    let first = target.path.first()?;
+    let index = index_for(first)?;
+    Some((index, target.for_child(first)?))
+}
+
 fn layout_demo_areas(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
@@ -1999,8 +1501,8 @@ impl ComponentKind {
             Self::LayoutStack => PreviewKind::LayoutStack,
             Self::LayoutOverlay => PreviewKind::LayoutOverlay,
             Self::LayoutGrid => PreviewKind::LayoutGrid,
-            Self::Inputs | Self::TextInput => PreviewKind::TextInput,
-            Self::Button => PreviewKind::Button,
+            Self::Inputs | Self::Button => PreviewKind::Button,
+            Self::TextInput => PreviewKind::TextInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
             Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
@@ -2329,6 +1831,14 @@ fn panel_title_choices(position: PanelTitlePosition) -> Vec<PanelTitleChoice> {
     ]
 }
 
+fn panel_demo() -> Panel {
+    Panel::new().border(BorderKind::Plain).content([
+        "Use dropdowns below to toggle each panel label or hotkey.",
+        "Top labels use the standard - label - style.",
+        "Bottom labels and hotkeys use the -| label |- inset style.",
+    ])
+}
+
 fn panel_title_dropdown(position: PanelTitlePosition) -> Dropdown<PanelTitleChoice, &'static str> {
     Dropdown::single(
         panel_title_choices(position),
@@ -2557,7 +2067,6 @@ fn panel_title_child_key(index: usize) -> ChildKey {
 }
 
 const PANEL_TITLE_CONTROL_COUNT: usize = 4;
-const PANEL_DEMO_FOCUS_INDEX: usize = PANEL_TITLE_CONTROL_COUNT;
 
 fn panel_demo_child_key() -> ChildKey {
     ChildKey::new("panel-demo")
@@ -2582,31 +2091,6 @@ fn panel_demo_child_route(route: &EventRoute) -> Option<EventRoute> {
         .path
         .without_first_if(&panel_demo_child_key())
         .map(EventRoute::new)
-}
-
-fn panel_title_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
-    let first = target.path.first()?;
-    let index = panel_title_index(first)?;
-    let child_target = FocusTarget {
-        id: target.id.clone(),
-        path: target.path.without_first(),
-        area: target.area,
-        enabled: target.enabled,
-        hotkey: target.hotkey.clone(),
-        hotkeys: target.hotkeys.clone(),
-    };
-    Some((index, child_target))
-}
-
-fn panel_demo_child_target(target: &FocusTarget) -> Option<FocusTarget> {
-    Some(FocusTarget {
-        id: target.id.clone(),
-        path: target.path.without_first_if(&panel_demo_child_key())?,
-        area: target.area,
-        enabled: target.enabled,
-        hotkey: target.hotkey.clone(),
-        hotkeys: target.hotkeys.clone(),
-    })
 }
 
 fn dropdown_preview_layout(area: Rect) -> [Rect; 2] {
@@ -2677,20 +2161,6 @@ fn tab_demo_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
     Some((index, EventRoute::new(route.path.without_first())))
 }
 
-fn tab_demo_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
-    let first = target.path.first()?;
-    let index = tab_demo_index(first)?;
-    let child_target = FocusTarget {
-        id: target.id.clone(),
-        path: target.path.without_first(),
-        area: target.area,
-        enabled: target.enabled,
-        hotkey: target.hotkey.clone(),
-        hotkeys: target.hotkeys.clone(),
-    };
-    Some((index, child_target))
-}
-
 fn dropdown_child_key(index: usize) -> ChildKey {
     ChildKey::new(format!("dropdown-{index}"))
 }
@@ -2707,20 +2177,6 @@ fn dropdown_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
     let first = route.path.first()?;
     let index = dropdown_index(first)?;
     Some((index, EventRoute::new(route.path.without_first())))
-}
-
-fn dropdown_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
-    let first = target.path.first()?;
-    let index = dropdown_index(first)?;
-    let child_target = FocusTarget {
-        id: target.id.clone(),
-        path: target.path.without_first(),
-        area: target.area,
-        enabled: target.enabled,
-        hotkey: target.hotkey.clone(),
-        hotkeys: target.hotkeys.clone(),
-    };
-    Some((index, child_target))
 }
 
 fn input_layout(area: Rect) -> [Rect; 2] {
@@ -2771,4 +2227,29 @@ fn labeled_area(area: Rect) -> [Rect; 2] {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Fill(1)])
         .areas(area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_preview_layout_keeps_panel_focus_state() {
+        let mut state = PreviewState::new();
+        state
+            .panel_demo
+            .set_focused(true, AnimationSettings::default());
+        let mut ctx = LayoutCtx::new();
+
+        state.layout_panel_preview(Rect::new(0, 0, 80, 20), &mut ctx);
+
+        assert!(state.panel_demo.is_focused());
+    }
+
+    #[test]
+    fn parent_preview_uses_first_child_demo() {
+        assert_eq!(ComponentKind::Layouts.preview(), PreviewKind::LayoutFlex);
+        assert_eq!(ComponentKind::Inputs.preview(), PreviewKind::Button);
+        assert_eq!(ComponentKind::DataView.preview(), PreviewKind::DataList);
+    }
 }

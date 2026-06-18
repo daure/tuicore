@@ -436,6 +436,27 @@ impl LayoutCtx {
         result
     }
 
+    pub fn with_focus_fallback_hotkey<R>(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        hotkey: KeyEvent,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let focus_count = self.focus_paths.len();
+        let result = layout(self);
+        if self.focus_paths.len() == focus_count {
+            self.register_focusable_with_hotkey(id, area, true, hotkey);
+        } else if let Some(target) = self.focus_paths.get_mut(focus_count) {
+            if target.hotkey.is_none() {
+                target.hotkey = Some(hotkey);
+            } else if target.hotkey != Some(hotkey) && !target.hotkeys.contains(&hotkey) {
+                target.hotkeys.push(hotkey);
+            }
+        }
+        result
+    }
+
     pub fn focus_disabled(&self) -> bool {
         self.focus_disabled
     }
@@ -932,6 +953,39 @@ mod tests {
 
         assert_eq!(ctx.drain_messages().collect::<Vec<_>>(), vec!["blurred"]);
     }
+
+    #[test]
+    fn on_blur_decorator_emits_message_through_dispatcher_focus_blur() {
+        struct Probe;
+        impl TuiNode<&'static str> for Probe {
+            fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+                LayoutResult::new(area)
+            }
+            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        }
+
+        let target = FocusTarget {
+            id: FocusId::new("probe"),
+            path: TreePath::new(),
+            area: Rect::default(),
+            enabled: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+        };
+        let mut decorator = OnBlur::new(Probe, || "blurred");
+        let mut dispatcher = crate::TreeDispatcher::new();
+
+        let effects = dispatcher.dispatch_focus(
+            &mut decorator,
+            crate::FocusTransition {
+                previous: Some(target),
+                current: None,
+            },
+            AnimationSettings::default(),
+        );
+
+        assert_eq!(effects.messages, vec!["blurred"]);
+    }
 }
 
 impl From<&str> for ChildKey {
@@ -1094,6 +1148,12 @@ impl<N, M> OnBlur<N, M> {
             on_blur: Some(Box::new(on_blur)),
         }
     }
+
+    fn emit_blur(&self, ctx: &mut FocusCtx<M>) {
+        if let Some(on_blur) = &self.on_blur {
+            ctx.emit(on_blur());
+        }
+    }
 }
 
 impl<N, M> TuiNode<M> for OnBlur<N, M>
@@ -1131,14 +1191,15 @@ where
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         if !focused {
-            if let Some(on_blur) = &self.on_blur {
-                ctx.emit(on_blur());
-            }
+            self.emit_blur(ctx);
         }
         self.inner.focus(target, focused, ctx);
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        if !focused {
+            self.emit_blur(ctx);
+        }
         self.inner.dispatch_focus(target, focused, ctx);
     }
 

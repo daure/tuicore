@@ -29,7 +29,7 @@ pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use grid::{Grid, GridItem, GridTrack};
 pub use list::{List, ListOutcome};
 pub use overlay::{Overlay, OverlayAnchor, OverlaySize};
-pub use panel::{Panel, PanelHost, PanelTitlePosition, PanelTitleStyle, PanelVariant};
+pub use panel::{Panel, PanelHost, PanelTitlePosition};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};
