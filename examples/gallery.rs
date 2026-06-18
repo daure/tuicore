@@ -11,10 +11,10 @@ use tuicore::{
     DropdownVariant, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
     FocusRequest, FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource, Key, KeyEvent,
     KeyModifiers, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, Overlay,
-    OverlayAnchor, OverlaySize, Panel, PanelTitlePosition, PanelTitleStyle, SelectionGlyphs,
-    SelectionMode, SelectionPropagation, SelectionTrigger, Separator, SeparatorColorRole, Spinner,
-    Split, Stack, StackAlign, StackItem, Tabs, TabsVariant, TextInput, TextareaInput, TickResult,
-    TreeAdapter, TreeGlyphs, TreePath, TuiEvent, TuiNode,
+    OverlayAnchor, OverlaySize, Panel, PanelTitlePosition, SelectionGlyphs, SelectionMode,
+    SelectionPropagation, SelectionTrigger, Separator, SeparatorColorRole, Spinner, Split, Stack,
+    StackAlign, StackItem, Tabs, TabsVariant, TextInput, TextareaInput, TickResult, TreeAdapter,
+    TreeGlyphs, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -536,9 +536,9 @@ impl PreviewState {
             spinner: Spinner::new(),
             focused_panel: 0,
             panel_demo: Panel::new(),
-            tabs_minimal: Tabs::default().variant(TabsVariant::Minimal),
-            tabs_underline: Tabs::default().variant(TabsVariant::Underline),
-            tabs_boxed: Tabs::default().variant(TabsVariant::Boxed),
+            tabs_minimal: Tabs::default().variant(TabsVariant::Minimal).hotkey("m"),
+            tabs_underline: Tabs::default().variant(TabsVariant::Underline).hotkey("u"),
+            tabs_boxed: Tabs::default().variant(TabsVariant::Boxed).hotkey("b"),
             focused_tab_demo: 0,
             data_list: DataViewMode::List.data_view(),
             data_table: DataViewMode::Table.data_view(),
@@ -637,7 +637,7 @@ impl PreviewState {
 
     fn layout(&mut self, preview: PreviewKind, area: Rect, ctx: &mut LayoutCtx) {
         match preview {
-            PreviewKind::Tabs => self.layout_tabs(area),
+            PreviewKind::Tabs => self.layout_tabs(area, ctx),
             PreviewKind::Panel => self.layout_panel_preview(area, ctx),
             PreviewKind::DataList
             | PreviewKind::DataTable
@@ -772,6 +772,12 @@ impl PreviewState {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if preview == PreviewKind::Tabs {
+            let Some((index, route)) = tab_demo_child_route(route) else {
+                return EventOutcome::Ignored;
+            };
+            return self.tab_demo_mut(index).dispatch_event(&route, event, ctx);
+        }
         if preview == PreviewKind::Panel {
             if let Some(route) = panel_demo_child_route(route) {
                 return self.panel_demo.dispatch_event(&route, event, ctx);
@@ -800,6 +806,17 @@ impl PreviewState {
         focused: bool,
         ctx: &mut FocusCtx<Msg>,
     ) -> bool {
+        if preview == PreviewKind::Tabs {
+            let Some((index, target)) = tab_demo_child_target(target) else {
+                return false;
+            };
+            if focused {
+                self.focused_tab_demo = index;
+            }
+            self.tab_demo_mut(index)
+                .dispatch_focus(&target, focused, ctx);
+            return true;
+        }
         if preview == PreviewKind::Panel {
             if let Some(target) = panel_demo_child_target(target) {
                 if focused {
@@ -959,6 +976,14 @@ impl PreviewState {
             2 => &self.panel_bottom_left,
             3 => &self.panel_bottom_right,
             _ => &self.panel_top_left,
+        }
+    }
+
+    fn tab_demo_mut(&mut self, index: usize) -> &mut Tabs<Msg> {
+        match index {
+            1 => &mut self.tabs_underline,
+            2 => &mut self.tabs_boxed,
+            _ => &mut self.tabs_minimal,
         }
     }
 
@@ -1228,18 +1253,6 @@ impl PreviewState {
     }
 
     fn dropdown_on_key(&mut self, key: KeyEvent, area: Rect, ctx: &mut EventCtx<Msg>) -> bool {
-        if key.modifiers == KeyModifiers::NONE {
-            match key.code {
-                Key::Char('1') => return self.focus_dropdown_node(0, ctx),
-                Key::Char('2') => return self.focus_dropdown_node(1, ctx),
-                Key::Char('3') => return self.focus_dropdown_node(2, ctx),
-                Key::Char('4') => return self.focus_dropdown_node(3, ctx),
-                Key::Char('5') => return self.focus_dropdown_node(4, ctx),
-                Key::Char('6') => return self.focus_dropdown_node(5, ctx),
-                _ => {}
-            }
-        }
-
         let [_, body] = dropdown_preview_layout(area);
         let outcome = self.active_dropdown_mut().on_key(key, body);
         if outcome.opened || outcome.closed {
@@ -1274,26 +1287,26 @@ impl PreviewState {
 
     fn panel_from_dropdowns(&self) -> Panel {
         let mut panel = Panel::new().border(BorderKind::Plain).content([
-            "Use dropdowns below to independently configure each border title.",
-            "Style 1 draws a normal title over the border.",
-            "Style 2 draws the -| Title |- inset style.",
+            "Use dropdowns below to toggle each panel label or hotkey.",
+            "Top labels use the standard - label - style.",
+            "Bottom labels and hotkeys use the -| label |- inset style.",
         ]);
-        apply_title_choice(
+        apply_panel_choice(
             &mut panel,
             PanelTitlePosition::TopLeft,
             self.panel_top_left.selected_id(),
         );
-        apply_title_choice(
+        apply_panel_choice(
             &mut panel,
             PanelTitlePosition::TopRight,
             self.panel_top_right.selected_id(),
         );
-        apply_title_choice(
+        apply_panel_choice(
             &mut panel,
             PanelTitlePosition::BottomLeft,
             self.panel_bottom_left.selected_id(),
         );
-        apply_title_choice(
+        apply_panel_choice(
             &mut panel,
             PanelTitlePosition::BottomRight,
             self.panel_bottom_right.selected_id(),
@@ -1458,16 +1471,20 @@ impl PreviewState {
         self.panel_title_dropdown(index).render(frame, field);
     }
 
-    fn layout_tabs(&mut self, area: Rect) {
+    fn layout_tabs(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [minimal, underline, boxed] = tabs_areas(area);
         let [_, minimal_tabs] = labeled_area(minimal);
         let [_, underline_tabs] = labeled_area(underline);
         let [_, boxed_tabs] = labeled_area(boxed);
-        self.tabs_minimal
-            .layout(minimal_tabs, &mut LayoutCtx::new());
-        self.tabs_underline
-            .layout(underline_tabs, &mut LayoutCtx::new());
-        self.tabs_boxed.layout(boxed_tabs, &mut LayoutCtx::new());
+        ctx.push_slot(tab_demo_child_key(0), minimal_tabs, |ctx| {
+            self.tabs_minimal.layout(minimal_tabs, ctx);
+        });
+        ctx.push_slot(tab_demo_child_key(1), underline_tabs, |ctx| {
+            self.tabs_underline.layout(underline_tabs, ctx);
+        });
+        ctx.push_slot(tab_demo_child_key(2), boxed_tabs, |ctx| {
+            self.tabs_boxed.layout(boxed_tabs, ctx);
+        });
     }
 
     fn render_tabs(&self, frame: &mut Frame, area: Rect) {
@@ -1476,11 +1493,11 @@ impl PreviewState {
         let [underline_label, underline_tabs] = labeled_area(underline);
         let [boxed_label, boxed_tabs] = labeled_area(boxed);
 
-        frame.render_widget(Paragraph::new("Style 1: minimal"), minimal_label);
+        frame.render_widget(Paragraph::new("Style 1: minimal (m)"), minimal_label);
         self.tabs_minimal.render(frame, minimal_tabs);
-        frame.render_widget(Paragraph::new("Style 2: underline"), underline_label);
+        frame.render_widget(Paragraph::new("Style 2: underline (u)"), underline_label);
         self.tabs_underline.render(frame, underline_tabs);
-        frame.render_widget(Paragraph::new("Style 3: boxed"), boxed_label);
+        frame.render_widget(Paragraph::new("Style 3: boxed (b)"), boxed_label);
         self.tabs_boxed.render(frame, boxed_tabs);
     }
 
@@ -2069,6 +2086,8 @@ fn dropdown_fuzzy_single() -> Dropdown<DropdownDemoItem, &'static str> {
     Dropdown::single(dropdown_items(), |row| row.id, |row| row.label.to_string())
         .placeholder("Pick release lane...")
         .selected_one("gamma")
+        .label("Lane")
+        .hotkey("1")
 }
 
 fn dropdown_multi_contains() -> Dropdown<DropdownDemoItem, &'static str> {
@@ -2076,6 +2095,8 @@ fn dropdown_multi_contains() -> Dropdown<DropdownDemoItem, &'static str> {
         .placeholder("Pick workstreams...")
         .search_mode(DropdownSearchMode::Contains)
         .selected(["alpha", "delta"])
+        .label("Work")
+        .hotkey("2")
 }
 
 fn dropdown_no_search_immediate() -> Dropdown<DropdownDemoItem, &'static str> {
@@ -2085,55 +2106,70 @@ fn dropdown_no_search_immediate() -> Dropdown<DropdownDemoItem, &'static str> {
         .commit_mode(DropdownCommitMode::Immediate)
         .centered(true)
         .selected_one("beta")
+        .label("Immediate")
+        .hotkey("3")
 }
 
 fn dropdown_filled_fuzzy_single() -> Dropdown<DropdownDemoItem, &'static str> {
-    dropdown_fuzzy_single().variant(DropdownVariant::Filled)
+    dropdown_fuzzy_single()
+        .variant(DropdownVariant::Filled)
+        .label("Lane")
+        .hotkey("4")
+        .alt_style(true)
 }
 
 fn dropdown_filled_multi_contains() -> Dropdown<DropdownDemoItem, &'static str> {
-    dropdown_multi_contains().variant(DropdownVariant::Filled)
+    dropdown_multi_contains()
+        .variant(DropdownVariant::Filled)
+        .label("Work")
+        .hotkey("5")
+        .alt_style(true)
 }
 
 fn dropdown_filled_no_search_immediate() -> Dropdown<DropdownDemoItem, &'static str> {
-    dropdown_no_search_immediate().variant(DropdownVariant::Filled)
+    dropdown_no_search_immediate()
+        .variant(DropdownVariant::Filled)
+        .label("Immediate")
+        .hotkey("6")
+        .alt_style(true)
 }
 
 #[derive(Clone)]
 struct PanelTitleChoice {
     id: &'static str,
     label: &'static str,
-    style: Option<PanelTitleStyle>,
+    enabled: bool,
 }
 
-fn panel_title_choices() -> Vec<PanelTitleChoice> {
+fn panel_title_choices(position: PanelTitlePosition) -> Vec<PanelTitleChoice> {
+    let enabled_label = match position {
+        PanelTitlePosition::BottomRight => "show hotkey",
+        _ => "show label",
+    };
     vec![
         PanelTitleChoice {
             id: "none",
-            label: "no text",
-            style: None,
+            label: "none",
+            enabled: false,
         },
         PanelTitleChoice {
-            id: "style-1",
-            label: "top left style 1",
-            style: Some(PanelTitleStyle::Standard),
-        },
-        PanelTitleChoice {
-            id: "style-2",
-            label: "top left style 2",
-            style: Some(PanelTitleStyle::Inset),
+            id: "show",
+            label: enabled_label,
+            enabled: true,
         },
     ]
 }
 
 fn panel_title_dropdown(position: PanelTitlePosition) -> Dropdown<PanelTitleChoice, &'static str> {
     Dropdown::single(
-        panel_title_choices(),
+        panel_title_choices(position),
         |row| row.id,
         |row| row.label.to_string(),
     )
     .placeholder(panel_title_placeholder(position))
-    .selected_one("style-1")
+    .selected_one("show")
+    .label(panel_title_control_label(position))
+    .hotkey(panel_title_control_hotkey(position))
 }
 
 fn panel_title_placeholder(position: PanelTitlePosition) -> &'static str {
@@ -2141,26 +2177,50 @@ fn panel_title_placeholder(position: PanelTitlePosition) -> &'static str {
         PanelTitlePosition::TopLeft => "Top left title...",
         PanelTitlePosition::TopRight => "Top right title...",
         PanelTitlePosition::BottomLeft => "Bottom left title...",
-        PanelTitlePosition::BottomRight => "Bottom right title...",
+        PanelTitlePosition::BottomRight => "Panel hotkey...",
     }
 }
 
-fn apply_title_choice(
+fn panel_title_control_label(position: PanelTitlePosition) -> &'static str {
+    match position {
+        PanelTitlePosition::TopLeft => "Top left",
+        PanelTitlePosition::TopRight => "Top right",
+        PanelTitlePosition::BottomLeft => "Bottom left",
+        PanelTitlePosition::BottomRight => "Hotkey",
+    }
+}
+
+fn panel_title_control_hotkey(position: PanelTitlePosition) -> &'static str {
+    match position {
+        PanelTitlePosition::TopLeft => "q",
+        PanelTitlePosition::TopRight => "w",
+        PanelTitlePosition::BottomLeft => "e",
+        PanelTitlePosition::BottomRight => "r",
+    }
+}
+
+fn apply_panel_choice(
     panel: &mut Panel,
     position: PanelTitlePosition,
     selected: Option<&'static str>,
 ) {
-    let Some(choice) = panel_title_choices()
+    let Some(choice) = panel_title_choices(position)
         .into_iter()
         .find(|choice| Some(choice.id) == selected)
     else {
         return;
     };
-    let Some(style) = choice.style else {
+    if !choice.enabled {
         panel.clear_title(position);
         return;
-    };
-    panel.set_title(position, choice.label, style);
+    }
+
+    match position {
+        PanelTitlePosition::TopLeft => panel.set_top_left("top left"),
+        PanelTitlePosition::TopRight => panel.set_top_right("top right"),
+        PanelTitlePosition::BottomLeft => panel.set_bottom_left("bottom left"),
+        PanelTitlePosition::BottomRight => panel.set_hotkey("p"),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2363,6 +2423,7 @@ fn panel_title_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)
         path: target.path.without_first(),
         area: target.area,
         enabled: target.enabled,
+        hotkey: target.hotkey.clone(),
     };
     Some((index, child_target))
 }
@@ -2373,6 +2434,7 @@ fn panel_demo_child_target(target: &FocusTarget) -> Option<FocusTarget> {
         path: target.path.without_first_if(&panel_demo_child_key())?,
         area: target.area,
         enabled: target.enabled,
+        hotkey: target.hotkey.clone(),
     })
 }
 
@@ -2426,6 +2488,37 @@ fn dropdown_area(area: Rect) -> Rect {
     dropdown_column_layout(area)[1]
 }
 
+fn tab_demo_child_key(index: usize) -> ChildKey {
+    ChildKey::new(format!("tab-demo-{index}"))
+}
+
+fn tab_demo_index(key: &ChildKey) -> Option<usize> {
+    key.as_str()
+        .strip_prefix("tab-demo-")?
+        .parse()
+        .ok()
+        .filter(|index| *index < 3)
+}
+
+fn tab_demo_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
+    let first = route.path.first()?;
+    let index = tab_demo_index(first)?;
+    Some((index, EventRoute::new(route.path.without_first())))
+}
+
+fn tab_demo_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
+    let first = target.path.first()?;
+    let index = tab_demo_index(first)?;
+    let child_target = FocusTarget {
+        id: target.id.clone(),
+        path: target.path.without_first(),
+        area: target.area,
+        enabled: target.enabled,
+        hotkey: target.hotkey.clone(),
+    };
+    Some((index, child_target))
+}
+
 fn dropdown_child_key(index: usize) -> ChildKey {
     ChildKey::new(format!("dropdown-{index}"))
 }
@@ -2452,6 +2545,7 @@ fn dropdown_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
         path: target.path.without_first(),
         area: target.area,
         enabled: target.enabled,
+        hotkey: target.hotkey.clone(),
     };
     Some((index, child_target))
 }

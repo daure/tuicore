@@ -11,7 +11,9 @@ use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
 use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
-use super::text_input::{CursorFade, InputOutcome, is_ctrl, is_alt, text_char, edit_in_external_editor};
+use super::text_input::{
+    CursorFade, InputOutcome, edit_in_external_editor, is_alt, is_ctrl, text_char,
+};
 
 const TEXTAREA_FOCUS: &str = "textarea";
 
@@ -22,6 +24,7 @@ pub struct TextareaInput<M = ()> {
     focused: bool,
     max_lines: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
+    on_blur: Option<Box<dyn Fn(String) -> M>>,
     cursor_fade: CursorFade,
 }
 
@@ -40,6 +43,7 @@ impl<M> TextareaInput<M> {
             focused: false,
             max_lines: None,
             on_submit: None,
+            on_blur: None,
             cursor_fade: CursorFade::default(),
         }
     }
@@ -67,6 +71,11 @@ impl<M> TextareaInput<M> {
 
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
         self.on_submit = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_blur(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_blur = Some(Box::new(handler));
         self
     }
 
@@ -100,11 +109,15 @@ impl<M> TextareaInput<M> {
         if is_ctrl(key, 'o') {
             let ranges = self.line_ranges();
             let (line, col) = self.cursor_line_col(&ranges);
-            if let Ok(Some((new_value, exit_line, exit_col))) = edit_in_external_editor(&self.value, line + 1, col + 1) {
+            if let Ok(Some((new_value, exit_line, exit_col))) =
+                edit_in_external_editor(&self.value, line + 1, col + 1)
+            {
                 self.value = new_value;
                 self.clamp_lines();
                 let ranges = self.line_ranges();
-                let line_idx = exit_line.saturating_sub(1).min(ranges.len().saturating_sub(1));
+                let line_idx = exit_line
+                    .saturating_sub(1)
+                    .min(ranges.len().saturating_sub(1));
                 let range = ranges[line_idx];
                 self.cursor = (range.start + exit_col.saturating_sub(1)).min(self.len_chars());
                 return InputOutcome {
@@ -584,6 +597,8 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         self.focused = focused;
         if focused {
             self.cursor_fade.reset();
+        } else if let Some(on_blur) = &self.on_blur {
+            ctx.emit(on_blur(self.value.clone()));
         }
         ctx.request_redraw();
     }
@@ -767,7 +782,12 @@ mod tests {
     fn ctrl_o_opens_external_editor() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
         let old_editor = std::env::var("EDITOR").ok();
-        unsafe { std::env::set_var("EDITOR", "sh -c 'for last; do true; done; printf \"edited\\nlines\\n\" > \"$last\"' --"); }
+        unsafe {
+            std::env::set_var(
+                "EDITOR",
+                "sh -c 'for last; do true; done; printf \"edited\\nlines\\n\" > \"$last\"' --",
+            );
+        }
 
         let mut input = TextareaInput::<()>::new().value("initial");
         let mut ctx = EventCtx::default();
@@ -790,5 +810,20 @@ mod tests {
                 std::env::remove_var("EDITOR");
             }
         }
+    }
+
+    #[test]
+    fn on_blur_emits_message_when_focus_lost() {
+        let mut input = TextareaInput::new()
+            .value("hello")
+            .on_blur(|value| format!("blur:{value}"));
+        let mut ctx = FocusCtx::new(AnimationSettings::default());
+
+        input.focus(None, false, &mut ctx);
+
+        assert_eq!(
+            ctx.drain_messages().collect::<Vec<_>>(),
+            vec!["blur:hello".to_string()]
+        );
     }
 }

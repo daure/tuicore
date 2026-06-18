@@ -6,11 +6,12 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
+use crate::event::{Key, KeyEvent, KeyModifiers};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, Children, ColorTween,
     EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, LayoutCtx, LayoutResult,
-    LifecycleCtx, TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_set, keybindings,
-    line_width, preset, theme,
+    LifecycleCtx, TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_chars, border_set,
+    keybindings, line_width, preset, theme,
 };
 
 const TABS_FOCUS: &str = "tabs";
@@ -37,6 +38,7 @@ pub struct Tabs<M = ()> {
     tab_color: ColorTween,
     selected_color: ColorTween,
     body_area: Rect,
+    hotkey: Option<String>,
 }
 
 impl<M> Tab<M>
@@ -92,6 +94,7 @@ where
             tab_color: ColorTween::idle(theme.border_fg()),
             selected_color: ColorTween::idle(theme.muted_fg()),
             body_area: Rect::default(),
+            hotkey: None,
         }
     }
 
@@ -125,6 +128,19 @@ where
     pub fn animation(mut self, animation: AnimationSpec) -> Self {
         self.animation = Some(animation);
         self
+    }
+
+    pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.hotkey = Some(hotkey.into());
+        self
+    }
+
+    pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.hotkey = Some(hotkey.into());
+    }
+
+    pub fn clear_hotkey(&mut self) {
+        self.hotkey = None;
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -345,6 +361,7 @@ where
                 .border_set(border_set(border))
                 .border_style(self.border_style());
             frame.render_widget(block, body_area);
+            self.render_hotkey(frame, body_area, border);
             if variant == TabsVariant::Underline {
                 frame.render_widget(
                     Paragraph::new(self.underline_panel_top_line(
@@ -384,6 +401,7 @@ where
                 .border_style(self.border_style())
                 .title(self.minimal_title_line(selected, area.width.saturating_sub(2)));
             frame.render_widget(block, area);
+            self.render_hotkey(frame, area, border);
         } else {
             let [tabs_area, _] = Layout::default()
                 .direction(Direction::Vertical)
@@ -801,6 +819,41 @@ where
     fn selected_underline_style(&self) -> Style {
         Style::default().fg(self.selected_color.value())
     }
+
+    fn render_hotkey(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+        let Some(ref hotkey) = self.hotkey else {
+            return;
+        };
+        if area.width <= 4 || area.height == 0 {
+            return;
+        }
+
+        let chars = border_chars(border);
+        let border_style = self.border_style();
+        let title_style = self.selected_tab_style();
+        let title = bounded_hotkey_title(hotkey, area.width.saturating_sub(5) as usize);
+        let title_width = text_width(&title).min(area.width as usize);
+        if title_width == 0 {
+            return;
+        }
+
+        let line = Line::from(vec![
+            Span::styled(chars.right_join, border_style),
+            Span::styled(title, title_style),
+            Span::styled(chars.left_join, border_style),
+        ]);
+        let width = (title_width + 2).min(u16::MAX as usize) as u16;
+        let x = area.x + area.width.saturating_sub(width).saturating_sub(1);
+        let y = area.y + area.height.saturating_sub(1);
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+    }
+
+    fn hotkey_event(&self) -> Option<KeyEvent> {
+        self.hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
+            code: Key::Char(c),
+            modifiers: KeyModifiers::NONE,
+        })
+    }
 }
 
 impl<M> Default for Tabs<M>
@@ -822,7 +875,11 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.body_area = self.calculate_body_area(area);
-        ctx.register_focusable(FocusId::new(TABS_FOCUS), area, true);
+        if let Some(hotkey) = self.hotkey_event() {
+            ctx.register_focusable_with_hotkey(FocusId::new(TABS_FOCUS), area, true, hotkey);
+        } else {
+            ctx.register_focusable(FocusId::new(TABS_FOCUS), area, true);
+        }
         if let Some(key) = self.selected_key().cloned() {
             self.bodies.layout_child(&key, self.body_area, ctx);
         }
@@ -838,6 +895,13 @@ where
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self
+            .hotkey_event()
+            .is_some_and(|hotkey| tab_hotkey_matches(hotkey, *key))
+        {
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let bindings = keybindings();
         if bindings.tabs().previous_matches(*key) {
             self.select_index_with_settings(self.previous_index(), ctx.animation());
@@ -925,8 +989,46 @@ fn focus_color_animation() -> AnimationSpec {
     AnimationSpec::default()
 }
 
+fn tab_hotkey_matches(hotkey: KeyEvent, key: KeyEvent) -> bool {
+    if hotkey.modifiers != key.modifiers {
+        return false;
+    }
+    match (hotkey.code, key.code) {
+        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (a, b) => a == b,
+    }
+}
+
 fn text_width(value: &str) -> usize {
     line_width(&Line::from(value))
+}
+
+fn bounded_hotkey_title(title: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut value = format!(" {title} ");
+    if text_width(&value) > max_width {
+        value = truncate_cells(&value, max_width);
+    }
+    value
+}
+
+fn truncate_cells(value: &str, max_width: usize) -> String {
+    let mut width = 0;
+    let mut truncated = String::new();
+
+    for ch in value.chars() {
+        let ch_width = char_width(ch);
+        if ch_width > 0 && width + ch_width > max_width {
+            break;
+        }
+        width += ch_width;
+        truncated.push(ch);
+    }
+
+    truncated
 }
 
 fn char_width(ch: char) -> usize {
@@ -961,6 +1063,8 @@ impl<M> TuiNode<M> for TextTabBody {
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, rc::Rc};
+
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::{Key, KeyEvent, Propagation, TreePath};
@@ -1070,6 +1174,46 @@ mod tests {
         assert_eq!(tabs.selected_index(), 1);
         assert!(!tabs.transition.is_active());
         assert_eq!(tabs.transition.progress(), 1.0);
+    }
+
+    #[test]
+    fn tabs_registers_hotkey_with_focus_target() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "")]).hotkey("m");
+        let mut ctx = LayoutCtx::new();
+
+        tabs.layout(Rect::new(0, 0, 20, 5), &mut ctx);
+
+        assert_eq!(
+            ctx.focus_targets()[0].hotkey,
+            Some(KeyEvent::from(Key::Char('m')))
+        );
+    }
+
+    #[test]
+    fn tabs_hotkey_event_is_consumed_when_focused() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "")]).hotkey("m");
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('m'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn bordered_tabs_render_bottom_right_hotkey() {
+        let tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")]).hotkey("m");
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let bottom = (0..24)
+            .map(|x| buffer.cell((x, 5)).unwrap().symbol())
+            .collect::<String>();
+        assert!(bottom.contains("┤ m ├"));
     }
 
     #[test]

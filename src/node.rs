@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::{Frame, layout::Rect};
 
 use crate::animation::{AnimationSettings, TickResult};
-use crate::event::TuiEvent;
+use crate::event::{KeyEvent, TuiEvent};
 
 pub trait TuiNode<M = ()> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
@@ -240,6 +240,7 @@ pub struct FocusTarget {
     pub path: TreePath,
     pub area: Rect,
     pub enabled: bool,
+    pub hotkey: Option<KeyEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -437,6 +438,26 @@ impl LayoutCtx {
             path: self.current_path(),
             area,
             enabled,
+            hotkey: None,
+        });
+    }
+
+    pub fn register_focusable_with_hotkey(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        enabled: bool,
+        hotkey: KeyEvent,
+    ) {
+        if self.focus_disabled {
+            return;
+        }
+        self.focus_paths.push(FocusTarget {
+            id,
+            path: self.current_path(),
+            area,
+            enabled,
+            hotkey: Some(hotkey),
         });
     }
 
@@ -709,6 +730,7 @@ impl FocusTarget {
             path,
             area: self.area,
             enabled: self.enabled,
+            hotkey: self.hotkey.clone(),
         })
     }
 }
@@ -804,6 +826,24 @@ mod tests {
         let mut ctx = LayoutCtx::new();
         non_focusable.layout(Rect::new(0, 0, 10, 10), &mut ctx);
         assert_eq!(ctx.focus_paths.len(), 0);
+    }
+
+    #[test]
+    fn on_blur_decorator_emits_message() {
+        struct Probe;
+        impl TuiNode<&'static str> for Probe {
+            fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+                LayoutResult::new(area)
+            }
+            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        }
+
+        let mut decorator = OnBlur::new(Probe, || "blurred");
+        let mut ctx = FocusCtx::new(AnimationSettings::default());
+
+        decorator.focus(None, false, &mut ctx);
+
+        assert_eq!(ctx.drain_messages().collect::<Vec<_>>(), vec!["blurred"]);
     }
 }
 
@@ -931,6 +971,83 @@ where
     }
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.inner.focus(target, focused, ctx);
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.inner.dispatch_focus(target, focused, ctx);
+    }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.inner.destroy(ctx);
+    }
+}
+
+pub struct OnBlur<N, M> {
+    inner: N,
+    on_blur: Option<Box<dyn Fn() -> M>>,
+}
+
+impl<N, M> OnBlur<N, M> {
+    pub fn new(inner: N, on_blur: impl Fn() -> M + 'static) -> Self {
+        Self {
+            inner,
+            on_blur: Some(Box::new(on_blur)),
+        }
+    }
+}
+
+impl<N, M> TuiNode<M> for OnBlur<N, M>
+where
+    N: TuiNode<M>,
+{
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        self.inner.measure(proposal)
+    }
+
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.inner.layout(area, ctx)
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.inner.render(frame, area);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        self.inner.event(event, ctx)
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        self.inner.dispatch_event(route, event, ctx)
+    }
+
+    fn tick(&mut self, dt: std::time::Duration, settings: AnimationSettings) -> TickResult {
+        self.inner.tick(dt, settings)
+    }
+
+    fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        if !focused {
+            if let Some(on_blur) = &self.on_blur {
+                ctx.emit(on_blur());
+            }
+        }
         self.inner.focus(target, focused, ctx);
     }
 

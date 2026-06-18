@@ -292,6 +292,7 @@ mod tests {
             path: TreePath::from_keys([ChildKey::new(id)]),
             area: Rect::default(),
             enabled: true,
+            hotkey: None,
         }
     }
 
@@ -305,6 +306,7 @@ mod tests {
             path,
             area,
             enabled: true,
+            hotkey: None,
         }
     }
 
@@ -405,12 +407,14 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("one")]),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             },
             FocusTarget {
                 id: FocusId::new("input"),
                 path: TreePath::from_keys([ChildKey::new("two")]),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             },
         ];
         let mut manager = FocusManager::new();
@@ -450,12 +454,14 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("shared")]),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             },
             FocusTarget {
                 id: FocusId::new("input"),
                 path: TreePath::from_keys([ChildKey::new("shared")]),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             },
         ];
         let mut manager = FocusManager::new();
@@ -484,12 +490,14 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("one")]),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             },
             FocusTarget {
                 id: FocusId::new("input"),
                 path: TreePath::from_keys([ChildKey::new("two")]),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             },
         ];
         let mut manager = FocusManager::new();

@@ -46,7 +46,7 @@ pub use node::{
     AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
     FocusRepair, FocusRequest, FocusTarget, HintSource, HitRegion, LayoutAxis, LayoutCtx,
     LayoutOverflowDiagnostic, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
-    LifecycleCtx, NonFocusable, OverflowPolicyName, Propagation, TreePath, TuiNode,
+    LifecycleCtx, NonFocusable, OnBlur, OverflowPolicyName, Propagation, TreePath, TuiNode,
 };
 pub use preset::{BorderKind, DataViewPreset, DropdownPreset, Preset, TabsPreset, TabsVariant};
 pub use runtime::{

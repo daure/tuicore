@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::event::{KeyEvent, TuiEvent};
+use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ColorTween, ScrollAxes, ScrollBehavior,
     ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize,
@@ -42,7 +42,6 @@ pub enum PanelTitlePosition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PanelTitle {
     text: String,
-    style: PanelTitleStyle,
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +49,7 @@ pub struct Panel {
     top_left: Option<PanelTitle>,
     top_right: Option<PanelTitle>,
     bottom_left: Option<PanelTitle>,
-    bottom_right: Option<PanelTitle>,
+    hotkey: Option<String>,
     border: Option<BorderKind>,
     content: Vec<String>,
     scroll: Option<ScrollState>,
@@ -79,7 +78,7 @@ impl Panel {
             top_left: None,
             top_right: None,
             bottom_left: None,
-            bottom_right: None,
+            hotkey: None,
             border: None,
             content: Vec::new(),
             scroll: None,
@@ -133,12 +132,12 @@ impl Panel {
     }
 
     pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
-        self.bottom_right = Some(PanelTitle::standard(title));
+        self.hotkey = Some(title.into());
         self
     }
 
     pub fn set_bottom_right(&mut self, title: impl Into<String>) {
-        self.bottom_right = Some(PanelTitle::standard(title));
+        self.hotkey = Some(title.into());
     }
 
     pub fn bottom_right_style(mut self, style: PanelTitleStyle) -> Self {
@@ -162,20 +161,37 @@ impl Panel {
         title: impl Into<String>,
         style: PanelTitleStyle,
     ) {
-        *self.title_slot_mut(position) = Some(PanelTitle {
-            text: title.into(),
-            style,
-        });
+        let _ = style;
+        if position == PanelTitlePosition::BottomRight {
+            self.hotkey = Some(title.into());
+        } else {
+            *self.title_slot_mut(position) = Some(PanelTitle { text: title.into() });
+        }
     }
 
     pub fn clear_title(&mut self, position: PanelTitlePosition) {
-        *self.title_slot_mut(position) = None;
+        if position == PanelTitlePosition::BottomRight {
+            self.hotkey = None;
+        } else {
+            *self.title_slot_mut(position) = None;
+        }
     }
 
     pub fn set_title_style(&mut self, position: PanelTitlePosition, style: PanelTitleStyle) {
-        if let Some(title) = self.title_slot_mut(position) {
-            title.style = style;
-        }
+        let _ = (position, style);
+    }
+
+    pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.hotkey = Some(hotkey.into());
+        self
+    }
+
+    pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.hotkey = Some(hotkey.into());
+    }
+
+    pub fn clear_hotkey(&mut self) {
+        self.hotkey = None;
     }
 
     pub fn border(mut self, border: BorderKind) -> Self {
@@ -357,7 +373,7 @@ impl Panel {
         self.render_panel_title(frame, area, border, PanelTitlePosition::TopLeft);
         self.render_panel_title(frame, area, border, PanelTitlePosition::TopRight);
         self.render_panel_title(frame, area, border, PanelTitlePosition::BottomLeft);
-        self.render_panel_title(frame, area, border, PanelTitlePosition::BottomRight);
+        self.render_hotkey(frame, area, border);
 
         if !inner.is_empty() {
             let lines = self
@@ -398,10 +414,23 @@ impl Panel {
         let Some(title) = self.title_slot(position) else {
             return;
         };
-        match title.style {
+        match fixed_title_style(position) {
             PanelTitleStyle::Standard => self.render_title(frame, area, title, position),
             PanelTitleStyle::Inset => self.render_inset_title(frame, area, border, title, position),
         }
+    }
+
+    fn render_hotkey(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+        let Some(ref hotkey) = self.hotkey else {
+            return;
+        };
+        self.render_inset_title(
+            frame,
+            area,
+            border,
+            &PanelTitle::standard(hotkey.clone()),
+            PanelTitlePosition::BottomRight,
+        );
     }
 
     fn render_title(
@@ -476,10 +505,7 @@ impl Panel {
 
 impl PanelTitle {
     fn standard(title: impl Into<String>) -> Self {
-        Self {
-            text: title.into(),
-            style: PanelTitleStyle::Standard,
-        }
+        Self { text: title.into() }
     }
 }
 
@@ -489,7 +515,7 @@ impl Panel {
             PanelTitlePosition::TopLeft => self.top_left.as_ref(),
             PanelTitlePosition::TopRight => self.top_right.as_ref(),
             PanelTitlePosition::BottomLeft => self.bottom_left.as_ref(),
-            PanelTitlePosition::BottomRight => self.bottom_right.as_ref(),
+            PanelTitlePosition::BottomRight => None,
         }
     }
 
@@ -498,8 +524,17 @@ impl Panel {
             PanelTitlePosition::TopLeft => &mut self.top_left,
             PanelTitlePosition::TopRight => &mut self.top_right,
             PanelTitlePosition::BottomLeft => &mut self.bottom_left,
-            PanelTitlePosition::BottomRight => &mut self.bottom_right,
+            PanelTitlePosition::BottomRight => {
+                panic!("bottom-right panel slot is reserved for hotkeys")
+            }
         }
+    }
+}
+
+fn fixed_title_style(position: PanelTitlePosition) -> PanelTitleStyle {
+    match position {
+        PanelTitlePosition::TopLeft | PanelTitlePosition::TopRight => PanelTitleStyle::Standard,
+        PanelTitlePosition::BottomLeft | PanelTitlePosition::BottomRight => PanelTitleStyle::Inset,
     }
 }
 
@@ -536,7 +571,11 @@ impl Animated for Panel {
 impl<M> TuiNode<M> for Panel {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
-        ctx.register_focusable(FocusId::new("panel"), area, true);
+        if let Some(hotkey) = self.hotkey_event() {
+            ctx.register_focusable_with_hotkey(FocusId::new("panel"), area, true, hotkey);
+        } else {
+            ctx.register_focusable(FocusId::new("panel"), area, true);
+        }
         LayoutResult::new(area)
     }
 
@@ -548,6 +587,13 @@ impl<M> TuiNode<M> for Panel {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self
+            .hotkey_event()
+            .is_some_and(|hotkey| panel_hotkey_matches(hotkey, *key))
+        {
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.on_key(*key, self.area, ctx.animation());
         if outcome.needs_redraw() {
             ctx.request_redraw();
@@ -687,10 +733,27 @@ impl Panel {
             focus_color_animation(),
         );
     }
+
+    fn hotkey_event(&self) -> Option<KeyEvent> {
+        self.hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
+            code: Key::Char(c),
+            modifiers: KeyModifiers::NONE,
+        })
+    }
 }
 
 fn focus_color_animation() -> AnimationSpec {
     AnimationSpec::default()
+}
+
+fn panel_hotkey_matches(hotkey: KeyEvent, key: KeyEvent) -> bool {
+    if hotkey.modifiers != key.modifiers {
+        return false;
+    }
+    match (hotkey.code, key.code) {
+        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (a, b) => a == b,
+    }
 }
 
 fn bounded_title(title: &str, max_width: usize) -> String {
@@ -919,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn inset_title_variant_embeds_title_in_top_border() {
+    fn top_titles_always_render_standard() {
         let panel = Panel::new()
             .top_left("Processes")
             .border(BorderKind::Plain)
@@ -935,15 +998,14 @@ mod tests {
         let top = (0..24)
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
-        assert_eq!(top, "┌┤ Processes ├─────────┐");
+        assert_eq!(top, "┌─ Processes ──────────┐");
     }
 
     #[test]
-    fn panel_renders_bottom_titles_with_independent_styles() {
+    fn bottom_left_title_and_bottom_right_hotkey_render_inset() {
         let panel = Panel::new()
             .bottom_left("Left")
-            .bottom_right("Right")
-            .bottom_right_style(PanelTitleStyle::Inset)
+            .hotkey("r")
             .border(BorderKind::Plain);
         let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
 
@@ -955,6 +1017,30 @@ mod tests {
         let bottom = (0..24)
             .map(|x| buffer.cell((x, 3)).unwrap().symbol())
             .collect::<String>();
-        assert_eq!(bottom, "└─ Left ──────┤ Right ├┘");
+        assert_eq!(bottom, "└┤ Left ├─────────┤ r ├┘");
+    }
+
+    #[test]
+    fn panel_registers_hotkey_with_focus_target() {
+        let mut panel = Panel::new().hotkey("p");
+        let mut ctx = LayoutCtx::new();
+
+        <Panel as TuiNode<()>>::layout(&mut panel, Rect::new(0, 0, 20, 4), &mut ctx);
+
+        assert_eq!(
+            ctx.focus_targets()[0].hotkey,
+            Some(KeyEvent::from(Key::Char('p')))
+        );
+    }
+
+    #[test]
+    fn panel_hotkey_event_is_consumed_when_focused() {
+        let mut panel = Panel::new().hotkey("p");
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = panel.event(&TuiEvent::Key(KeyEvent::from(Key::Char('p'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
     }
 }

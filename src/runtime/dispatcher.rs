@@ -270,6 +270,7 @@ mod tests {
             path: TreePath::from_keys([ChildKey::new("child"), ChildKey::new("leaf")]),
             area: Rect::default(),
             enabled: true,
+            hotkey: None,
         };
         let transition = FocusTransition {
             previous: None,
@@ -296,6 +297,7 @@ mod tests {
                 path: TreePath::new(),
                 area: Rect::default(),
                 enabled: true,
+                hotkey: None,
             }),
         };
         let mut settings = AnimationSettings::default();

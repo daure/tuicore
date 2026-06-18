@@ -76,6 +76,7 @@ pub struct TextInput<M = ()> {
     focused: bool,
     max_len: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
+    on_blur: Option<Box<dyn Fn(String) -> M>>,
     cursor_fade: CursorFade,
 }
 
@@ -94,6 +95,7 @@ impl<M> TextInput<M> {
             focused: false,
             max_len: None,
             on_submit: None,
+            on_blur: None,
             cursor_fade: CursorFade::default(),
         }
     }
@@ -121,6 +123,11 @@ impl<M> TextInput<M> {
 
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
         self.on_submit = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_blur(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_blur = Some(Box::new(handler));
         self
     }
 
@@ -152,15 +159,19 @@ impl<M> TextInput<M> {
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
         if is_ctrl(key, 'o') {
-            if let Ok(Some((new_value, exit_line, exit_col))) = edit_in_external_editor(&self.value, 1, self.cursor + 1) {
+            if let Ok(Some((new_value, exit_line, exit_col))) =
+                edit_in_external_editor(&self.value, 1, self.cursor + 1)
+            {
                 let mut collapsed_cursor = 0;
                 let lines: Vec<&str> = new_value.split('\n').collect();
-                let target_line_idx = exit_line.saturating_sub(1).min(lines.len().saturating_sub(1));
-                
+                let target_line_idx = exit_line
+                    .saturating_sub(1)
+                    .min(lines.len().saturating_sub(1));
+
                 for i in 0..target_line_idx {
                     collapsed_cursor += lines[i].chars().count() + 1;
                 }
-                
+
                 let col_idx = exit_col.saturating_sub(1);
                 let target_line_chars = lines[target_line_idx].chars().count();
                 collapsed_cursor += col_idx.min(target_line_chars);
@@ -541,6 +552,8 @@ impl<M> TuiNode<M> for TextInput<M> {
         self.focused = focused;
         if focused {
             self.cursor_fade.reset();
+        } else if let Some(on_blur) = &self.on_blur {
+            ctx.emit(on_blur(self.value.clone()));
         }
         ctx.request_redraw();
     }
@@ -657,7 +670,8 @@ pub(crate) fn edit_in_external_editor(
     col: usize,
 ) -> std::io::Result<Option<(String, usize, usize)>> {
     let temp_path = std::env::temp_dir().join(format!("tuicore-edit-{}.txt", std::process::id()));
-    let pos_path = std::env::temp_dir().join(format!("tuicore-edit-pos-{}.txt", std::process::id()));
+    let pos_path =
+        std::env::temp_dir().join(format!("tuicore-edit-pos-{}.txt", std::process::id()));
     std::fs::write(&temp_path, value)?;
 
     let editor = std::env::var("EDITOR")
@@ -678,10 +692,25 @@ pub(crate) fn edit_in_external_editor(
     let status = if cfg!(unix) {
         let mut cmd = std::process::Command::new("sh");
         let args = if editor_bin.contains("nano") {
-            format!("{} +{},{} '{}'", editor, line, col, temp_path.to_string_lossy())
+            format!(
+                "{} +{},{} '{}'",
+                editor,
+                line,
+                col,
+                temp_path.to_string_lossy()
+            )
         } else if editor_bin.contains("emacs") {
-            format!("{} +{}:{} '{}'", editor, line, col, temp_path.to_string_lossy())
-        } else if editor_bin.contains("vim") || editor_bin.contains("nvim") || editor_bin.contains("vi") {
+            format!(
+                "{} +{}:{} '{}'",
+                editor,
+                line,
+                col,
+                temp_path.to_string_lossy()
+            )
+        } else if editor_bin.contains("vim")
+            || editor_bin.contains("nvim")
+            || editor_bin.contains("vi")
+        {
             format!(
                 "{} +{} -c 'autocmd VimLeavePre * call writefile([string(line(\".\")), string(col(\".\"))], \"{}\")' -c 'normal! {}|' '{}'",
                 editor,
@@ -700,10 +729,16 @@ pub(crate) fn edit_in_external_editor(
             cmd.arg(format!("+{},{}", line, col));
         } else if editor_bin.contains("emacs") {
             cmd.arg(format!("+{}:{}", line, col));
-        } else if editor_bin.contains("vim") || editor_bin.contains("nvim") || editor_bin.contains("vi") {
+        } else if editor_bin.contains("vim")
+            || editor_bin.contains("nvim")
+            || editor_bin.contains("vi")
+        {
             cmd.arg(format!("+{}", line));
             cmd.arg("-c");
-            cmd.arg(format!("autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')", pos_path.to_string_lossy()));
+            cmd.arg(format!(
+                "autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')",
+                pos_path.to_string_lossy()
+            ));
             cmd.arg("-c");
             cmd.arg(format!("normal! {}|", col));
         } else {
@@ -902,7 +937,12 @@ mod tests {
     fn ctrl_o_opens_external_editor() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
         let old_editor = std::env::var("EDITOR").ok();
-        unsafe { std::env::set_var("EDITOR", "sh -c 'for last; do true; done; echo \"edited value\" > \"$last\"' --"); }
+        unsafe {
+            std::env::set_var(
+                "EDITOR",
+                "sh -c 'for last; do true; done; echo \"edited value\" > \"$last\"' --",
+            );
+        }
 
         let mut input = TextInput::<()>::new().value("initial");
         let mut ctx = EventCtx::default();
@@ -925,5 +965,20 @@ mod tests {
                 std::env::remove_var("EDITOR");
             }
         }
+    }
+
+    #[test]
+    fn on_blur_emits_message_when_focus_lost() {
+        let mut input = TextInput::new()
+            .value("hello")
+            .on_blur(|value| format!("blur:{value}"));
+        let mut ctx = FocusCtx::new(AnimationSettings::default());
+
+        input.focus(None, false, &mut ctx);
+
+        assert_eq!(
+            ctx.drain_messages().collect::<Vec<_>>(),
+            vec!["blur:hello".to_string()]
+        );
     }
 }

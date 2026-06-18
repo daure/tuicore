@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
-    HitRegion, LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode, animation_settings,
-    keybindings,
+    HitRegion, Key, KeyEvent, LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode,
+    animation_settings, keybindings,
 };
 
 use super::{
@@ -248,7 +248,7 @@ where
         &mut self,
         flags: &mut RuntimeFlags,
         focus_manager: &mut FocusManager,
-        layout_engine: &mut LayoutEngine,
+        layout_engine: &LayoutEngine,
         dispatcher: &mut TreeDispatcher,
     ) {
         let Some(request) = flags.focus_request.take() else {
@@ -272,6 +272,34 @@ where
         dispatcher: &mut TreeDispatcher,
         event: TuiEvent,
     ) {
+        let event = event;
+        if let TuiEvent::Key(key) = &event {
+            let current_is_input = focus_manager
+                .current()
+                .map(|t| t.id.as_str() == "input" || t.id.as_str() == "textarea")
+                .unwrap_or(false);
+            if !current_is_input {
+                let mut hotkey_target = None;
+                for target in layout_engine.focus_targets() {
+                    if target.enabled {
+                        if let Some(ref hk) = target.hotkey {
+                            if keys_match(hk, key) {
+                                hotkey_target = Some(target.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(target) = hotkey_target {
+                    flags.focus_request = Some(FocusRequest::TargetAt {
+                        path: target.path.clone(),
+                        id: target.id.clone(),
+                    });
+                    self.apply_pending_focus(flags, focus_manager, layout_engine, dispatcher);
+                }
+            }
+        }
+
         let route = EventRoute::new(route_path_for_event(
             &event,
             layout_engine.hit_regions(),
@@ -333,7 +361,7 @@ where
             self.apply_pending_focus(
                 &mut flags,
                 &mut focus_manager,
-                &mut layout_engine,
+                &layout_engine,
                 &mut dispatcher,
             );
             self.dispatch_runtime_event(
@@ -426,6 +454,16 @@ impl RuntimeFlags {
         if other.focus_repair.is_some() {
             self.focus_repair = other.focus_repair;
         }
+    }
+}
+
+fn keys_match(a: &KeyEvent, b: &KeyEvent) -> bool {
+    if a.modifiers != b.modifiers {
+        return false;
+    }
+    match (a.code, b.code) {
+        (Key::Char(c1), Key::Char(c2)) => c1.to_ascii_lowercase() == c2.to_ascii_lowercase(),
+        (code_a, code_b) => code_a == code_b,
     }
 }
 

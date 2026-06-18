@@ -895,6 +895,7 @@ mod tests {
             path: TreePath::new(),
             area: Rect::default(),
             enabled: true,
+            hotkey: None,
         };
         let mut ctx = FocusCtx::default();
 

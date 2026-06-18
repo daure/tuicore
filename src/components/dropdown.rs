@@ -6,17 +6,17 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border::Set;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::{Key, KeyEvent};
 use crate::search::{SearchMode, search_ranked};
 use crate::{
-    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusTarget, HintSource, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
-    TickResult, TuiEvent, TuiNode, border_chars, border_set, keybindings, line_width, preset,
-    theme,
+    Animated, AnimationSettings, BorderKind, ChildKey, EventCtx, EventOutcome, EventRoute,
+    FocusCtx, FocusId, FocusTarget, HintSource, LayoutCtx, LayoutProposal, LayoutResult,
+    LayoutSize, LayoutSizeHint, TickResult, TuiEvent, TuiNode, border_chars, border_set,
+    keybindings, line_width, preset, theme,
 };
 
 const FIELD_FOCUS: &str = "field";
@@ -111,6 +111,9 @@ pub struct Dropdown<T, Id> {
     field_area: Rect,
     overlay_bounds: Rect,
     focus_region: Option<DropdownFocusRegion>,
+    label: Option<String>,
+    hotkey: Option<String>,
+    alt_style: bool,
 }
 
 impl<T, Id> Dropdown<T, Id>
@@ -183,6 +186,9 @@ where
             field_area: Rect::default(),
             overlay_bounds: Rect::default(),
             focus_region: None,
+            label: None,
+            hotkey: None,
+            alt_style: false,
         }
     }
 
@@ -220,6 +226,41 @@ where
     pub fn auto_focus_search(mut self, auto_focus: bool) -> Self {
         self.auto_focus_search = auto_focus;
         self
+    }
+
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn set_label(&mut self, label: impl Into<String>) {
+        self.label = Some(label.into());
+    }
+
+    pub fn clear_label(&mut self) {
+        self.label = None;
+    }
+
+    pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.hotkey = Some(hotkey.into());
+        self
+    }
+
+    pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.hotkey = Some(hotkey.into());
+    }
+
+    pub fn clear_hotkey(&mut self) {
+        self.hotkey = None;
+    }
+
+    pub fn alt_style(mut self, alt_style: bool) -> Self {
+        self.alt_style = alt_style;
+        self
+    }
+
+    pub fn set_alt_style(&mut self, alt_style: bool) {
+        self.alt_style = alt_style;
     }
 
     pub fn variant(mut self, variant: DropdownVariant) -> Self {
@@ -419,7 +460,24 @@ where
         self.field_area = self.field_area(area);
         self.overlay_bounds = overlay_bounds;
         if !self.open {
-            ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
+            if let Some(ref h) = self.hotkey {
+                if let Some(c) = h.chars().next() {
+                    let key = KeyEvent {
+                        code: Key::Char(c),
+                        modifiers: crate::event::KeyModifiers::NONE,
+                    };
+                    ctx.register_focusable_with_hotkey(
+                        FocusId::new(FIELD_FOCUS),
+                        self.field_area,
+                        true,
+                        key,
+                    );
+                } else {
+                    ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
+                }
+            } else {
+                ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
+            }
             return LayoutResult::new(self.field_area);
         }
 
@@ -451,6 +509,18 @@ where
             outcome.handled |= nav.handled;
             outcome.changed |= nav.changed;
             return outcome;
+        }
+
+        if let Key::Char(c) = key.code {
+            if key.modifiers.is_empty() {
+                if let Some(ref h) = self.hotkey {
+                    if h.chars().next().map(|hc| hc.to_ascii_lowercase())
+                        == Some(c.to_ascii_lowercase())
+                    {
+                        return self.open();
+                    }
+                }
+            }
         }
 
         match key.code {
@@ -680,9 +750,14 @@ where
     }
 
     fn field_height(&self, area: Rect) -> u16 {
-        match self.variant {
-            DropdownVariant::Bordered => area.height.min(3),
-            DropdownVariant::Filled => area.height.min(1),
+        let base_height = match self.variant {
+            DropdownVariant::Bordered => 3,
+            DropdownVariant::Filled => 1,
+        };
+        if self.alt_style {
+            area.height.min(base_height + 1)
+        } else {
+            area.height.min(base_height)
         }
     }
 
@@ -749,17 +824,55 @@ where
             return;
         }
 
-        match self.variant {
-            DropdownVariant::Bordered => self.render_bordered_field(frame, area),
-            DropdownVariant::Filled => self.render_filled_field(frame, area),
+        if self.alt_style {
+            let label_area = Rect::new(area.x, area.y, area.width, area.height.min(1));
+            let mut text = String::new();
+            if let Some(ref l) = self.label {
+                text.push_str(l);
+            }
+            if let Some(ref h) = self.hotkey {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&format!("({h})"));
+            }
+            if !text.is_empty() && !label_area.is_empty() {
+                let theme = theme();
+                let style = Style::default()
+                    .fg(if self.is_focused() {
+                        theme.accent_fg()
+                    } else {
+                        theme.muted_fg()
+                    })
+                    .add_modifier(Modifier::BOLD);
+                frame.render_widget(Paragraph::new(text).style(style), label_area);
+            }
+            let dropdown_area = Rect::new(
+                area.x,
+                area.y.saturating_add(1),
+                area.width,
+                area.height.saturating_sub(1),
+            );
+            if !dropdown_area.is_empty() {
+                match self.variant {
+                    DropdownVariant::Bordered => self.render_bordered_field(frame, dropdown_area),
+                    DropdownVariant::Filled => self.render_filled_field(frame, dropdown_area),
+                }
+            }
+        } else {
+            match self.variant {
+                DropdownVariant::Bordered => self.render_bordered_field(frame, area),
+                DropdownVariant::Filled => self.render_filled_field(frame, area),
+            }
         }
     }
 
     fn render_bordered_field(&self, frame: &mut Frame, area: Rect) {
         let theme = theme();
+        let border = preset().border();
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_set(border_set(preset().border()))
+            .border_set(border_set(border))
             .border_style(Style::default().fg(if self.is_focused() {
                 theme.accent_fg()
             } else {
@@ -773,6 +886,22 @@ where
             Style::default().fg(theme.text_fg())
         };
         frame.render_widget(Paragraph::new(self.selected_summary()).style(style), inner);
+
+        if !self.alt_style {
+            if let Some(ref label) = self.label {
+                self.render_title(frame, area, label, Alignment::Left, area.y);
+            }
+            if let Some(ref hotkey) = self.hotkey {
+                self.render_inset_title(
+                    frame,
+                    area,
+                    border,
+                    hotkey,
+                    Alignment::Right,
+                    area.y + area.height.saturating_sub(1),
+                );
+            }
+        }
     }
 
     fn render_filled_field(&self, frame: &mut Frame, area: Rect) {
@@ -873,6 +1002,89 @@ where
     fn popup_content_style(&self) -> Option<Style> {
         (self.variant == DropdownVariant::Filled).then(|| Style::default().bg(theme().border_fg()))
     }
+
+    fn render_title(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        alignment: Alignment,
+        y: u16,
+    ) {
+        if area.width <= 4 {
+            return;
+        }
+
+        let max_width = area.width.saturating_sub(4) as usize;
+        let title = bounded_title(title, max_width);
+        let width = line_width(&Line::from(title.as_str())).min(u16::MAX as usize) as u16;
+        if width == 0 {
+            return;
+        }
+
+        let x = match alignment {
+            Alignment::Left => area.x.saturating_add(2),
+            Alignment::Center => area.x + area.width.saturating_sub(width) / 2,
+            Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(2),
+        };
+        let theme = theme();
+        let style = Style::default()
+            .fg(if self.is_focused() {
+                theme.accent_fg()
+            } else {
+                theme.muted_fg()
+            })
+            .add_modifier(Modifier::BOLD);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(title, style))),
+            Rect::new(x, y, width, 1),
+        );
+    }
+
+    fn render_inset_title(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        border: BorderKind,
+        title: &str,
+        alignment: Alignment,
+        y: u16,
+    ) {
+        if area.width <= 4 {
+            return;
+        }
+
+        let chars = border_chars(border);
+        let theme = theme();
+        let border_style = Style::default().fg(if self.is_focused() {
+            theme.accent_fg()
+        } else {
+            theme.border_fg()
+        });
+        let title_style = Style::default().fg(if self.is_focused() {
+            theme.accent_fg()
+        } else {
+            theme.muted_fg()
+        });
+        let title = bounded_title(title, area.width.saturating_sub(5) as usize);
+        let title_width = line_width(&Line::from(title.as_str())).min(area.width as usize);
+        if title_width == 0 {
+            return;
+        }
+
+        let line = Line::from(vec![
+            Span::styled(chars.right_join, border_style),
+            Span::styled(title, title_style),
+            Span::styled(chars.left_join, border_style),
+        ]);
+        let width = (title_width + 2).min(u16::MAX as usize) as u16;
+        let x = match alignment {
+            Alignment::Left | Alignment::Center => area.x.saturating_add(1),
+            Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(1),
+        };
+
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+    }
 }
 
 impl<T, Id, M> TuiNode<M> for Dropdown<T, Id>
@@ -881,10 +1093,13 @@ where
     Id: Clone + Eq + Hash + 'static,
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        let height = match self.variant {
+        let mut height = match self.variant {
             DropdownVariant::Bordered => 3,
             DropdownVariant::Filled => 1,
         };
+        if self.alt_style {
+            height += 1;
+        }
         let width = (self.selected_summary().chars().count() as u16).saturating_add(2);
         LayoutSizeHint {
             source: HintSource::Measured,
@@ -1016,6 +1231,40 @@ fn clip_rect(area: Rect, bounds: Rect) -> Rect {
         .saturating_add(area.height)
         .min(bounds.y.saturating_add(bounds.height));
     Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+}
+
+fn bounded_title(title: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut value = format!(" {title} ");
+    if line_width(&Line::from(value.as_str())) > max_width {
+        value = truncate_cells(&value, max_width);
+    }
+    value
+}
+
+fn truncate_cells(value: &str, max_width: usize) -> String {
+    let mut width = 0;
+    let mut truncated = String::new();
+
+    for ch in value.chars() {
+        let ch_width = char_width(ch);
+        if ch_width > 0 && width + ch_width > max_width {
+            break;
+        }
+        width += ch_width;
+        truncated.push(ch);
+    }
+
+    truncated
+}
+
+fn char_width(ch: char) -> usize {
+    let mut value = String::new();
+    value.push(ch);
+    line_width(&Line::from(value))
 }
 
 #[cfg(test)]
@@ -1648,6 +1897,75 @@ mod tests {
         assert!(dropdown.is_open());
         assert!(event.layout_requested());
         assert_eq!(event.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn hotkey_opens_dropdown() {
+        let mut dropdown = single_dropdown().hotkey("d");
+        let mut layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+        let target = layout.focus_targets()[0].clone();
+        let mut focus = FocusCtx::<()>::default();
+        dropdown.dispatch_focus(&target, true, &mut focus);
+        let mut event = EventCtx::<()>::default();
+
+        let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut event);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(dropdown.is_open());
+    }
+
+    #[test]
+    fn dropdown_with_label_and_hotkey_renders_in_borders() {
+        let dropdown = single_dropdown().label("Database").hotkey("d");
+        let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dropdown.render(frame, frame.area()))
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        let top = (0..24)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(top.contains("Database"));
+
+        let bottom = (0..24)
+            .map(|x| buffer.cell((x, 2)).unwrap().symbol())
+            .collect::<String>();
+        assert!(bottom.contains("┤ d ├"));
+    }
+
+    #[test]
+    fn dropdown_with_alternative_style_layout_and_render() {
+        let mut dropdown = single_dropdown()
+            .label("Search")
+            .hotkey("s")
+            .alt_style(true);
+
+        let area = Rect::new(0, 0, 24, 4);
+        let mut ctx = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, area, &mut ctx);
+
+        let hint = <Dropdown<_, _> as TuiNode<()>>::measure(&dropdown, LayoutProposal::unbounded());
+        assert_eq!(hint.preferred.height, 4);
+
+        let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
+        terminal
+            .draw(|frame| dropdown.render(frame, frame.area()))
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        let row0 = (0..24)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row0.contains("Search (s)"));
+
+        let row1 = (0..24)
+            .map(|x| buffer.cell((x, 1)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row1.contains("╭"));
+        assert!(row1.contains("╮"));
     }
 
     fn char_key(value: char) -> KeyEvent {
