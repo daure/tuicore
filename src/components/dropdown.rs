@@ -19,6 +19,8 @@ use crate::{
     theme,
 };
 
+use super::text_input::{CursorFade, placeholder_line};
+
 const FIELD_FOCUS: &str = "field";
 const SEARCH_FOCUS: &str = "input";
 const POPUP_BORDER_HEIGHT: u16 = 2;
@@ -111,6 +113,7 @@ pub struct Dropdown<T, Id> {
     label: Option<String>,
     hotkey: Option<String>,
     alt_style: bool,
+    field_cursor_fade: CursorFade,
 }
 
 impl<T, Id> Dropdown<T, Id>
@@ -186,6 +189,7 @@ where
             label: None,
             hotkey: None,
             alt_style: false,
+            field_cursor_fade: CursorFade::default(),
         }
     }
 
@@ -633,6 +637,9 @@ where
     }
 
     fn set_focus_region(&mut self, region: Option<DropdownFocusRegion>) {
+        if self.focus_region != region {
+            self.field_cursor_fade.reset();
+        }
         self.focus_region = region;
         self.sync_child_focus();
     }
@@ -881,12 +888,22 @@ where
             }));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let style = if self.committed.is_empty() {
-            Style::default().fg(theme.muted_fg())
+        let text = if self.committed.is_empty() {
+            let placeholder_style = Style::default().fg(theme.muted_fg());
+            placeholder_line(
+                &self.placeholder,
+                inner.width as usize,
+                self.focus_region == Some(DropdownFocusRegion::Field),
+                self.field_cursor_fade.style(placeholder_style),
+                placeholder_style,
+            )
         } else {
-            Style::default().fg(theme.text_fg())
+            Line::from(Span::styled(
+                self.selected_summary(),
+                Style::default().fg(theme.text_fg()),
+            ))
         };
-        frame.render_widget(Paragraph::new(self.selected_summary()).style(style), inner);
+        frame.render_widget(Paragraph::new(text), inner);
 
         if !self.alt_style {
             if let Some(ref label) = self.label {
@@ -925,10 +942,18 @@ where
             1,
         );
         if !text_area.is_empty() {
-            frame.render_widget(
-                Paragraph::new(self.selected_summary()).style(text_style),
-                text_area,
-            );
+            let text = if self.committed.is_empty() {
+                placeholder_line(
+                    &self.placeholder,
+                    text_area.width as usize,
+                    self.focus_region == Some(DropdownFocusRegion::Field),
+                    self.field_cursor_fade.style(text_style),
+                    text_style,
+                )
+            } else {
+                Line::from(Span::styled(self.selected_summary(), text_style))
+            };
+            frame.render_widget(Paragraph::new(text), text_area);
         }
 
         let arrow_area = Rect::new(area.x + area.width.saturating_sub(1), area.y, 1, 1);
@@ -1129,6 +1154,7 @@ where
         let bindings = keybindings();
         let focus_keys = bindings.focus();
         if self.open && focus_keys.next_matches(*key) {
+            self.cancel();
             ctx.focus_next();
             ctx.request_layout();
             ctx.request_redraw();
@@ -1136,6 +1162,7 @@ where
             return EventOutcome::Handled;
         }
         if self.open && focus_keys.previous_matches(*key) {
+            self.cancel();
             ctx.focus_previous();
             ctx.request_layout();
             ctx.request_redraw();
@@ -1199,11 +1226,13 @@ where
     Id: Clone + Eq + Hash,
 {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        Animated::tick(&mut self.data_view, dt, settings).merge(Animated::tick(
-            &mut self.search_input,
-            dt,
-            settings,
-        ))
+        Animated::tick(&mut self.data_view, dt, settings)
+            .merge(Animated::tick(&mut self.search_input, dt, settings))
+            .merge(self.field_cursor_fade.tick(
+                self.focus_region == Some(DropdownFocusRegion::Field),
+                dt,
+                settings,
+            ))
     }
 }
 
@@ -1280,8 +1309,8 @@ mod tests {
     use super::*;
     use crate::event::KeyModifiers;
     use crate::{
-        ChildKey, EventCtx, Flex, FlexItem, FocusCtx, LayoutCtx, LayoutProposal, Propagation,
-        TuiEvent, TuiNode,
+        ChildKey, EventCtx, Flex, FlexItem, FocusCtx, FocusRequest, LayoutCtx, LayoutProposal,
+        Propagation, TuiEvent, TuiNode,
     };
 
     fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -1423,6 +1452,22 @@ mod tests {
 
         assert_eq!(dropdown.search_query(), "");
         assert_eq!(dropdown.filtered, ROWS.to_vec());
+    }
+
+    #[test]
+    fn tab_while_open_cancels_and_requests_next_focus() {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        dropdown.on_key(char_key('g'), AREA);
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = dropdown.event(&TuiEvent::Key(Key::Tab.into()), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!dropdown.is_open());
+        assert_eq!(dropdown.search_query(), "");
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Next));
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
     }
 
     #[test]
@@ -1758,7 +1803,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_from_open_dropdown_requests_next_focus_without_closing_before_blur() {
+    fn tab_from_open_dropdown_cancels_and_requests_next_focus() {
         let mut dropdown = single_dropdown();
         dropdown.open();
         let mut ctx = EventCtx::<()>::default();
@@ -1766,7 +1811,7 @@ mod tests {
         let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Handled);
-        assert!(dropdown.is_open());
+        assert!(!dropdown.is_open());
         assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Next));
         assert!(ctx.layout_requested());
         assert!(ctx.redraw_requested());
@@ -1774,7 +1819,7 @@ mod tests {
     }
 
     #[test]
-    fn backtab_from_open_dropdown_requests_previous_focus_without_closing_before_blur() {
+    fn backtab_from_open_dropdown_cancels_and_requests_previous_focus() {
         let mut dropdown = single_dropdown();
         dropdown.open();
         let mut ctx = EventCtx::<()>::default();
@@ -1782,7 +1827,7 @@ mod tests {
         let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::BackTab)), &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Handled);
-        assert!(dropdown.is_open());
+        assert!(!dropdown.is_open());
         assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Previous));
         assert!(ctx.layout_requested());
         assert!(ctx.redraw_requested());

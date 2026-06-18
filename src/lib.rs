@@ -24,12 +24,13 @@ pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
     ActivationMode, Button, ButtonOutcome, CellContext, CheckState, Column, CrossAlign, CrossSize,
     DataView, DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTypedEvent,
-    Dropdown, DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant, Flex,
-    FlexItem, Grid, GridItem, GridTrack, InputOutcome, List, ListOutcome, MainAlign, Overlay,
-    OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition, SelectionGlyphs,
-    SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack,
-    StackAlign, StackItem, StackSize, Tab, Tabs, TextInput, TextareaInput, Toggle, ToggleOutcome,
-    TreeAdapter, TreeGlyphs,
+    Dialog, DialogCloseReason, DialogHost, DialogLayer, DialogTitlePosition, Dropdown,
+    DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid,
+    GridItem, GridTrack, InputOutcome, List, ListOutcome, MainAlign, Overlay, OverlayAnchor,
+    OverlaySize, Panel, PanelHost, PanelTitlePosition, SelectionGlyphs, SelectionMode,
+    SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack, StackAlign,
+    StackItem, StackSize, Tab, Tabs, TextInput, TextareaInput, Toggle, ToggleOutcome, TreeAdapter,
+    TreeGlyphs,
 };
 pub use event::{
     Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,

@@ -586,6 +586,7 @@ where
         self.panel.area = area;
         let inner = Panel::inner_area(area);
         self.child_area = inner;
+        let focus_count = ctx.focus_targets().len();
         if let Some(hotkey) = self.panel.hotkey_event() {
             ctx.with_focus_fallback_hotkey(FocusId::new(PANEL_FOCUS), area, hotkey, |ctx| {
                 ctx.push_slot(ChildKey::body(), inner, |ctx| {
@@ -598,6 +599,9 @@ where
                     self.child.layout(inner, ctx);
                 });
             });
+        }
+        if ctx.focus_targets().len() > focus_count {
+            ctx.register_focusable(FocusId::new(PANEL_FOCUS), area, true);
         }
         LayoutResult::new(area)
     }
@@ -943,7 +947,7 @@ mod tests {
 
         host.layout(Rect::new(0, 0, 20, 4), &mut layout);
 
-        assert_eq!(layout.focus_targets().len(), 1);
+        assert_eq!(layout.focus_targets().len(), 2);
         assert_eq!(
             layout.focus_targets()[0].hotkey,
             Some(KeyEvent::from(Key::Char('p')))
@@ -952,6 +956,8 @@ mod tests {
             layout.focus_targets()[0].path,
             TreePath::from_keys([ChildKey::body()])
         );
+        assert_eq!(layout.focus_targets()[1].id.as_str(), "panel");
+        assert!(layout.focus_targets()[1].path.is_empty());
     }
 
     #[test]

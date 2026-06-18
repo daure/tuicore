@@ -38,11 +38,15 @@ impl FocusManager {
                 self.current = Some(updated);
                 return None;
             }
-        } else if self.last_focused.is_some() {
+        } else if self
+            .last_focused
+            .as_ref()
+            .is_some_and(|last| targets.iter().any(|target| same_focus(target, last)))
+        {
             return None;
         }
 
-        self.set_current(nearest_enabled_target(self.current.as_ref(), targets))
+        self.set_current(validate_replacement_target(self.current.as_ref(), targets))
     }
 
     pub fn repair(
@@ -59,7 +63,11 @@ impl FocusManager {
                 self.current = Some(updated);
                 return None;
             }
-        } else if self.last_focused.is_some() {
+        } else if self
+            .last_focused
+            .as_ref()
+            .is_some_and(|last| targets.iter().any(|target| same_focus(target, last)))
+        {
             return None;
         }
 
@@ -74,7 +82,8 @@ impl FocusManager {
         match request {
             FocusRequest::Next => self.set_current(self.next_target(targets)),
             FocusRequest::Previous => self.set_current(self.previous_target(targets)),
-            FocusRequest::Unfocus => self.set_current(None),
+            FocusRequest::Unfocus => self.set_current(self.parent_target(targets)),
+            FocusRequest::Last => self.set_current_if_found(self.last_enabled_target(targets)),
             FocusRequest::Target(id) => {
                 self.set_current_if_found(unique_enabled_target(targets, |target| &target.id == id))
             }
@@ -99,58 +108,86 @@ impl FocusManager {
     }
 
     fn next_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
-        let enabled = enabled_targets(targets);
-        if enabled.is_empty() {
+        let traversal = traversal_targets(targets);
+        if traversal.is_empty() {
             return None;
         }
 
         if let Some(current) = &self.current {
-            let index = enabled
+            if let Some(first_child) = first_leaf_descendant(current, targets) {
+                return Some(first_child);
+            }
+            let index = traversal
                 .iter()
                 .position(|target| same_focus(target, current))
-                .map(|index| (index + 1) % enabled.len())
+                .map(|index| (index + 1) % traversal.len())
+                .or_else(|| {
+                    nearest_enabled_target(Some(current), targets).and_then(|nearest| {
+                        traversal
+                            .iter()
+                            .position(|target| same_focus(target, &nearest))
+                            .map(|index| (index + 1) % traversal.len())
+                    })
+                })
                 .unwrap_or(0);
-            Some(enabled[index].clone())
+            Some(traversal[index].clone())
         } else if let Some(last) = &self.last_focused {
-            let target = enabled
+            let target = traversal
                 .iter()
                 .find(|target| same_focus(target, last))
                 .map(|&t| t.clone())
-                .or_else(|| nearest_enabled_target(Some(last), targets));
+                .or_else(|| nearest_traversal_target(Some(last), targets));
             target
         } else {
-            Some(enabled[0].clone())
+            Some(traversal[0].clone())
         }
     }
 
     fn previous_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
-        let enabled = enabled_targets(targets);
-        if enabled.is_empty() {
+        let traversal = traversal_targets(targets);
+        if traversal.is_empty() {
             return None;
         }
 
         if let Some(current) = &self.current {
-            let index = enabled
+            if let Some(last_child) = last_leaf_descendant(current, targets) {
+                return Some(last_child);
+            }
+            let index = traversal
                 .iter()
                 .position(|target| same_focus(target, current))
                 .map(|index| {
                     if index == 0 {
-                        enabled.len() - 1
+                        traversal.len() - 1
                     } else {
                         index - 1
                     }
                 })
+                .or_else(|| {
+                    nearest_enabled_target(Some(current), targets).and_then(|nearest| {
+                        traversal
+                            .iter()
+                            .position(|target| same_focus(target, &nearest))
+                            .map(|index| {
+                                if index == 0 {
+                                    traversal.len() - 1
+                                } else {
+                                    index - 1
+                                }
+                            })
+                    })
+                })
                 .unwrap_or(0);
-            Some(enabled[index].clone())
+            Some(traversal[index].clone())
         } else if let Some(last) = &self.last_focused {
-            let target = enabled
+            let target = traversal
                 .iter()
                 .find(|target| same_focus(target, last))
                 .map(|&t| t.clone())
-                .or_else(|| nearest_enabled_target(Some(last), targets));
+                .or_else(|| nearest_traversal_target(Some(last), targets));
             target
         } else {
-            Some(enabled[0].clone())
+            Some(traversal[0].clone())
         }
     }
 
@@ -186,10 +223,43 @@ impl FocusManager {
             None => None,
         }
     }
+
+    fn last_enabled_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
+        let last = self.last_focused.as_ref()?;
+        targets
+            .iter()
+            .find(|target| target.enabled && same_focus(target, last))
+            .cloned()
+    }
+
+    fn parent_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
+        let current = self.current.as_ref()?;
+        targets
+            .iter()
+            .filter(|target| {
+                target.enabled
+                    && current.path.keys().starts_with(target.path.keys())
+                    && target.path != current.path
+            })
+            .max_by_key(|target| target.path.keys().len())
+            .cloned()
+    }
 }
 
 fn enabled_targets(targets: &[FocusTarget]) -> Vec<&FocusTarget> {
     targets.iter().filter(|target| target.enabled).collect()
+}
+
+fn traversal_targets(targets: &[FocusTarget]) -> Vec<&FocusTarget> {
+    let leaves = targets
+        .iter()
+        .filter(|target| target.enabled && !has_enabled_descendant(target, targets))
+        .collect::<Vec<_>>();
+    if leaves.is_empty() {
+        enabled_targets(targets)
+    } else {
+        leaves
+    }
 }
 
 fn repair_target(
@@ -202,6 +272,28 @@ fn repair_target(
     }
 }
 
+fn validate_replacement_target(
+    current: Option<&FocusTarget>,
+    targets: &[FocusTarget],
+) -> Option<FocusTarget> {
+    let Some(current) = current else {
+        return targets.iter().find(|target| target.enabled).cloned();
+    };
+
+    if let Some(replacement) = same_path_target(current, targets) {
+        return Some(replacement);
+    }
+
+    if let Some(ancestor) = nearest_enabled_ancestor(current, targets) {
+        if let Some(descendant) = first_leaf_descendant(&ancestor, targets) {
+            return Some(descendant);
+        }
+        return Some(ancestor);
+    }
+
+    nearest_enabled_target(Some(current), targets)
+}
+
 fn nearest_enabled_target(
     current: Option<&FocusTarget>,
     targets: &[FocusTarget],
@@ -209,6 +301,10 @@ fn nearest_enabled_target(
     let Some(current) = current else {
         return targets.iter().find(|target| target.enabled).cloned();
     };
+
+    if let Some(same_path) = same_path_target(current, targets) {
+        return Some(same_path);
+    }
 
     if !current.path.is_empty() {
         let descendants = targets
@@ -244,11 +340,97 @@ fn nearest_enabled_target(
             .max_by_key(|target| target.path.keys().len());
     }
 
-    targets
+    let leaves = targets
         .iter()
-        .filter(|target| target.enabled)
+        .filter(|target| target.enabled && !has_enabled_descendant(target, targets))
+        .collect::<Vec<_>>();
+    if leaves_share_root(&leaves) {
+        return leaves.first().copied().cloned();
+    }
+
+    leaves
+        .into_iter()
         .min_by_key(|target| focus_distance(current, target))
         .cloned()
+        .or_else(|| {
+            targets
+                .iter()
+                .filter(|target| target.enabled)
+                .min_by_key(|target| focus_distance(current, target))
+                .cloned()
+        })
+}
+
+fn same_path_target(current: &FocusTarget, targets: &[FocusTarget]) -> Option<FocusTarget> {
+    targets
+        .iter()
+        .find(|target| target.enabled && target.path == current.path)
+        .cloned()
+}
+
+fn nearest_enabled_ancestor(current: &FocusTarget, targets: &[FocusTarget]) -> Option<FocusTarget> {
+    targets
+        .iter()
+        .filter(|target| {
+            target.enabled
+                && current.path.keys().starts_with(target.path.keys())
+                && target.path != current.path
+        })
+        .max_by_key(|target| target.path.keys().len())
+        .cloned()
+}
+
+fn first_leaf_descendant(parent: &FocusTarget, targets: &[FocusTarget]) -> Option<FocusTarget> {
+    targets
+        .iter()
+        .find(|target| {
+            target.enabled
+                && target.path != parent.path
+                && target.path.keys().starts_with(parent.path.keys())
+                && !has_enabled_descendant(target, targets)
+        })
+        .cloned()
+}
+
+fn last_leaf_descendant(parent: &FocusTarget, targets: &[FocusTarget]) -> Option<FocusTarget> {
+    targets
+        .iter()
+        .rev()
+        .find(|target| {
+            target.enabled
+                && target.path != parent.path
+                && target.path.keys().starts_with(parent.path.keys())
+                && !has_enabled_descendant(target, targets)
+        })
+        .cloned()
+}
+
+fn nearest_traversal_target(
+    current: Option<&FocusTarget>,
+    targets: &[FocusTarget],
+) -> Option<FocusTarget> {
+    let current = current?;
+    traversal_targets(targets)
+        .into_iter()
+        .min_by_key(|target| focus_distance(current, target))
+        .cloned()
+}
+
+fn has_enabled_descendant(target: &FocusTarget, targets: &[FocusTarget]) -> bool {
+    targets.iter().any(|other| {
+        other.enabled
+            && other.path != target.path
+            && other.path.keys().starts_with(target.path.keys())
+    })
+}
+
+fn leaves_share_root(leaves: &[&FocusTarget]) -> bool {
+    let Some(first) = leaves.first().and_then(|target| target.path.first()) else {
+        return false;
+    };
+    leaves
+        .iter()
+        .all(|target| target.path.first() == Some(first))
 }
 
 fn focus_distance(current: &FocusTarget, target: &FocusTarget) -> u32 {
@@ -290,6 +472,17 @@ mod tests {
         FocusTarget {
             id: FocusId::new(id),
             path: TreePath::from_keys([ChildKey::new(id)]),
+            area: Rect::default(),
+            enabled: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+        }
+    }
+
+    fn target_at_path(id: &str, path: TreePath) -> FocusTarget {
+        FocusTarget {
+            id: FocusId::new(id),
+            path,
             area: Rect::default(),
             enabled: true,
             hotkey: None,
@@ -352,6 +545,289 @@ mod tests {
         manager.validate(&new_targets);
 
         assert_eq!(manager.current().unwrap().id.as_str(), "three");
+    }
+
+    #[test]
+    fn last_request_restores_previous_enabled_target() {
+        let targets = [target("one"), target("two")];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&targets);
+        manager.next(&targets);
+        manager.apply_request(&FocusRequest::Last, &targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "one");
+    }
+
+    #[test]
+    fn unfocus_request_moves_to_nearest_parent_target() {
+        let targets = [
+            target_at_path("parent", TreePath::new()),
+            target_at_path("child", TreePath::from_keys([ChildKey::new("body")])),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: TreePath::from_keys([ChildKey::new("body")]),
+                id: FocusId::new("child"),
+            },
+            &targets,
+        );
+        manager.apply_request(&FocusRequest::Unfocus, &targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "parent");
+    }
+
+    #[test]
+    fn repeated_unfocus_climbs_nested_focusable_parents() {
+        let dialog = TreePath::from_keys([ChildKey::new("dialog")]);
+        let tabs = TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("body")]);
+        let input = TreePath::from_keys([
+            ChildKey::new("dialog"),
+            ChildKey::new("body"),
+            ChildKey::new("input"),
+        ]);
+        let targets = [
+            target_at_path("input", input.clone()),
+            target_at_path("tabs", tabs.clone()),
+            target_at_path("dialog", dialog.clone()),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: input,
+                id: FocusId::new("input"),
+            },
+            &targets,
+        );
+        manager.apply_request(&FocusRequest::Unfocus, &targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "tabs");
+
+        manager.apply_request(&FocusRequest::Unfocus, &targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "dialog");
+
+        manager.apply_request(&FocusRequest::Unfocus, &targets);
+        assert!(manager.current().is_none());
+    }
+
+    #[test]
+    fn next_and_previous_skip_container_targets() {
+        let targets = [
+            target_at_path(
+                "first",
+                TreePath::from_keys([ChildKey::new("panel"), ChildKey::new("first")]),
+            ),
+            target_at_path("panel", TreePath::from_keys([ChildKey::new("panel")])),
+            target_at_path("second", TreePath::from_keys([ChildKey::new("second")])),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+
+        manager.next(&targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "second");
+
+        manager.previous(&targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+    }
+
+    #[test]
+    fn next_from_container_focuses_first_child() {
+        let targets = [
+            target_at_path(
+                "first",
+                TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("first")]),
+            ),
+            target_at_path(
+                "second",
+                TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("second")]),
+            ),
+            target_at_path("dialog", TreePath::from_keys([ChildKey::new("dialog")])),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: TreePath::from_keys([ChildKey::new("dialog")]),
+                id: FocusId::new("dialog"),
+            },
+            &targets,
+        );
+        manager.next(&targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+    }
+
+    #[test]
+    fn missing_focus_repairs_to_leaf_target_before_container_shell() {
+        let old_targets = [FocusTarget {
+            id: FocusId::new("launcher"),
+            path: TreePath::from_keys([ChildKey::new("base")]),
+            area: Rect::new(80, 30, 10, 1),
+            enabled: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+        }];
+        let new_targets = [
+            FocusTarget {
+                id: FocusId::new("toggle"),
+                path: TreePath::from_keys([
+                    ChildKey::new("dialog"),
+                    ChildKey::new("body"),
+                    ChildKey::new("tabs"),
+                    ChildKey::new("toggle"),
+                ]),
+                area: Rect::new(0, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("input"),
+                path: TreePath::from_keys([
+                    ChildKey::new("dialog"),
+                    ChildKey::new("body"),
+                    ChildKey::new("tabs"),
+                    ChildKey::new("input"),
+                ]),
+                area: Rect::new(80, 30, 10, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("tabs"),
+                path: TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("body")]),
+                area: Rect::new(0, 0, 100, 40),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("dialog"),
+                path: TreePath::from_keys([ChildKey::new("dialog")]),
+                area: Rect::new(0, 0, 100, 40),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&old_targets);
+        manager.validate(&new_targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "toggle");
+    }
+
+    #[test]
+    fn validation_after_selected_child_changes_focuses_first_leaf_under_parent() {
+        let old_targets = [
+            target_at_path("input", TreePath::from_keys([ChildKey::new("tab-0")])),
+            target_at_path("tabs", TreePath::new()),
+        ];
+        let new_targets = [
+            target_at_path("toggle", TreePath::from_keys([ChildKey::new("tab-1")])),
+            target_at_path("input", TreePath::from_keys([ChildKey::new("tab-1-input")])),
+            target_at_path("tabs", TreePath::new()),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&old_targets);
+        manager.validate(&new_targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "toggle");
+    }
+
+    #[test]
+    fn next_from_missing_current_anchors_on_nearest_surviving_target() {
+        let old_targets = [FocusTarget {
+            id: FocusId::new("search"),
+            path: TreePath::from_keys([ChildKey::new("dropdown")]),
+            area: Rect::new(10, 0, 1, 1),
+            enabled: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+        }];
+        let new_targets = [
+            FocusTarget {
+                id: FocusId::new("before"),
+                path: TreePath::from_keys([ChildKey::new("before")]),
+                area: Rect::new(0, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("field"),
+                path: TreePath::from_keys([ChildKey::new("dropdown")]),
+                area: Rect::new(10, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("after"),
+                path: TreePath::from_keys([ChildKey::new("after")]),
+                area: Rect::new(20, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&old_targets);
+        manager.next(&new_targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "after");
+    }
+
+    #[test]
+    fn next_from_missing_current_anchors_on_same_path_replacement() {
+        let old_targets = [FocusTarget {
+            id: FocusId::new("input"),
+            path: TreePath::from_keys([ChildKey::new("dropdown")]),
+            area: Rect::new(10, 0, 1, 1),
+            enabled: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+        }];
+        let new_targets = [
+            FocusTarget {
+                id: FocusId::new("before"),
+                path: TreePath::from_keys([ChildKey::new("before")]),
+                area: Rect::new(0, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("field"),
+                path: TreePath::from_keys([ChildKey::new("dropdown")]),
+                area: Rect::new(10, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+            FocusTarget {
+                id: FocusId::new("after"),
+                path: TreePath::from_keys([ChildKey::new("after")]),
+                area: Rect::new(20, 0, 1, 1),
+                enabled: true,
+                hotkey: None,
+                hotkeys: Vec::new(),
+            },
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&old_targets);
+        manager.next(&new_targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "after");
     }
 
     #[test]

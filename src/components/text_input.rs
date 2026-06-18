@@ -292,22 +292,13 @@ impl<M> TextInput<M> {
         let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
-            if self.focused {
-                let mut spans = vec![Span::styled(" ", cursor_style)];
-                let hint: String = self
-                    .placeholder
-                    .chars()
-                    .take(width.saturating_sub(1))
-                    .collect();
-                if !hint.is_empty() {
-                    spans.push(Span::styled(hint, placeholder_style));
-                }
-                return Line::from(spans);
-            }
-            return Line::from(Span::styled(
-                self.placeholder.chars().take(width).collect::<String>(),
+            return placeholder_line(
+                &self.placeholder,
+                width,
+                self.focused,
+                self.cursor_fade.style(placeholder_style),
                 placeholder_style,
-            ));
+            );
         }
 
         let len = self.len_chars();
@@ -567,6 +558,34 @@ impl<M> Animated for TextInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.cursor_fade.tick(self.focused, dt, settings)
     }
+}
+
+pub(crate) fn placeholder_line(
+    placeholder: &str,
+    width: usize,
+    focused: bool,
+    cursor_style: Style,
+    placeholder_style: Style,
+) -> Line<'static> {
+    if width == 0 {
+        return Line::default();
+    }
+
+    let mut chars = placeholder.chars();
+    if !focused {
+        return Line::from(Span::styled(
+            chars.take(width).collect::<String>(),
+            placeholder_style,
+        ));
+    }
+
+    let first = chars.next().unwrap_or(' ');
+    let mut spans = vec![Span::styled(first.to_string(), cursor_style)];
+    let hint: String = chars.take(width.saturating_sub(1)).collect();
+    if !hint.is_empty() {
+        spans.push(Span::styled(hint, placeholder_style));
+    }
+    Line::from(spans)
 }
 
 #[derive(Debug, Clone)]
@@ -830,6 +849,16 @@ mod tests {
     }
 
     #[test]
+    fn focused_placeholder_draws_cursor_over_first_character() {
+        let input = TextInput::<()>::new().placeholder("Ask").focused(true);
+
+        let line = input.line(3);
+
+        assert_eq!(line.spans[0].content.as_ref(), "A");
+        assert_eq!(line_text(&line), "Ask");
+    }
+
+    #[test]
     fn escape_bubbles_to_parent_policy() {
         let mut input = TextInput::<()>::new();
         let mut ctx = EventCtx::<()>::default();
@@ -980,5 +1009,12 @@ mod tests {
             ctx.drain_messages().collect::<Vec<_>>(),
             vec!["blur:hello".to_string()]
         );
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 }

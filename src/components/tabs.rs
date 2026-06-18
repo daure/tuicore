@@ -941,14 +941,14 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.body_area = self.calculate_body_area(area);
+        if let Some(key) = self.selected_key().cloned() {
+            self.bodies.layout_child(&key, self.body_area, ctx);
+        }
         let hotkeys = self.hotkey_events();
         if hotkeys.is_empty() {
             ctx.register_focusable(FocusId::new(TABS_FOCUS), area, true);
         } else {
             ctx.register_focusable_with_hotkeys(FocusId::new(TABS_FOCUS), area, true, hotkeys);
-        }
-        if let Some(key) = self.selected_key().cloned() {
-            self.bodies.layout_child(&key, self.body_area, ctx);
         }
         LayoutResult::new(area)
     }
@@ -1200,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn tabs_layout_uses_children_for_selected_body_path() {
+    fn tabs_layout_registers_selected_body_before_shell_focus() {
         let ticks = Rc::new(RefCell::new(0));
         let mut tabs = Tabs::<()>::new(vec![
             Tab::new(
@@ -1215,11 +1215,11 @@ mod tests {
 
         tabs.layout(Rect::new(0, 0, 20, 5), &mut ctx);
 
-        assert_eq!(ctx.focus_targets()[0].path, TreePath::new());
         assert_eq!(
-            ctx.focus_targets()[1].path,
+            ctx.focus_targets()[0].path,
             TreePath::from_keys([ChildKey::new("tab-0")])
         );
+        assert_eq!(ctx.focus_targets()[1].path, TreePath::new());
     }
 
     #[test]

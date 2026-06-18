@@ -249,6 +249,7 @@ pub enum FocusRequest {
     Next,
     Previous,
     Unfocus,
+    Last,
     Target(FocusId),
     Path(TreePath),
     TargetAt { path: TreePath, id: FocusId },

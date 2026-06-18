@@ -232,7 +232,9 @@ where
         layout_engine.layout(&mut self.root, area);
         flags.layout = false;
         flags.redraw = true;
-        let transition = if let Some(repair) = flags.focus_repair.take() {
+        let transition = if flags.focus_request.is_some() {
+            None
+        } else if let Some(repair) = flags.focus_repair.take() {
             focus_manager.repair(&repair, layout_engine.focus_targets())
         } else {
             focus_manager.validate(layout_engine.focus_targets())
@@ -507,6 +509,12 @@ mod tests {
         removed: bool,
     }
 
+    #[derive(Default)]
+    struct ModalRestoreNode {
+        active: bool,
+        focused: Vec<String>,
+    }
+
     struct FocusProbe {
         name: &'static str,
         focus_log: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
@@ -678,6 +686,55 @@ mod tests {
         }
     }
 
+    impl TuiNode<()> for ModalRestoreNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            if self.active {
+                ctx.register_focusable(FocusId::new("dialog"), area, true);
+            } else {
+                let left = Rect::new(area.x, area.y, 1, area.height);
+                let right = Rect::new(area.x.saturating_add(1), area.y, 1, area.height);
+                ctx.register_focusable(FocusId::new("one"), left, true);
+                ctx.register_focusable(FocusId::new("two"), right, true);
+            }
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+
+        fn dispatch_event(
+            &mut self,
+            _route: &EventRoute,
+            event: &TuiEvent,
+            ctx: &mut EventCtx<()>,
+        ) -> EventOutcome {
+            let TuiEvent::Key(key) = event else {
+                return EventOutcome::Ignored;
+            };
+            if !self.active && key.code == Key::Enter {
+                self.active = true;
+                ctx.request_layout();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            if self.active && key.code == Key::Char('x') {
+                self.active = false;
+                ctx.focus(FocusRequest::Last);
+                ctx.request_layout();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            EventOutcome::Ignored
+        }
+
+        fn focus(&mut self, target: Option<&FocusId>, focused: bool, _ctx: &mut FocusCtx<()>) {
+            if focused {
+                if let Some(target) = target {
+                    self.focused.push(target.as_str().to_owned());
+                }
+            }
+        }
+    }
+
     impl MouseRouteNode {
         fn new() -> Self {
             let event_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -790,6 +847,21 @@ mod tests {
     }
 
     #[test]
+    fn pending_last_focus_request_restores_focus_after_modal_layout() {
+        let app = TreeApp::new(ModalRestoreNode::default());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Tab)),
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 20, 5));
+
+        assert_eq!(app.root.focused.last().map(String::as_str), Some("two"));
+    }
+
+    #[test]
     fn removing_focused_middle_child_repairs_focus_to_next_child() {
         let app = TreeApp::new(RemoveFocusedMiddleNode::new());
         let tab = TuiEvent::Key(KeyEvent::from(Key::Tab));
@@ -823,8 +895,8 @@ mod tests {
         let next = TuiEvent::Key(KeyEvent::from(Key::Tab));
         let previous = TuiEvent::Key(KeyEvent::from(Key::BackTab));
         let esc_unfocus = TuiEvent::Key(KeyEvent::from(Key::Esc));
-        let ctrl_slash_unfocus = TuiEvent::Key(KeyEvent {
-            code: Key::Char('/'),
+        let ctrl_left_bracket_unfocus = TuiEvent::Key(KeyEvent {
+            code: Key::Char('['),
             modifiers: KeyModifiers::CONTROL,
         });
         let bindings = FocusKeyBindings::default();
@@ -855,7 +927,7 @@ mod tests {
         );
         assert_eq!(
             focus_request_from_event_with_bindings(
-                &ctrl_slash_unfocus,
+                &ctrl_left_bracket_unfocus,
                 &effects(Propagation::Continue),
                 &bindings
             ),

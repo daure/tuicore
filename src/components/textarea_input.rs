@@ -12,7 +12,7 @@ use crate::theme;
 use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
 use super::text_input::{
-    CursorFade, InputOutcome, edit_in_external_editor, is_alt, is_ctrl, text_char,
+    CursorFade, InputOutcome, edit_in_external_editor, is_alt, is_ctrl, placeholder_line, text_char,
 };
 
 const TEXTAREA_FOCUS: &str = "textarea";
@@ -238,17 +238,13 @@ impl<M> TextareaInput<M> {
         let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
-            let mut first = if self.focused {
-                vec![Span::styled(" ", cursor_style)]
-            } else {
-                Vec::new()
-            };
-            let hint_width = width.saturating_sub(first.len());
-            let hint: String = self.placeholder.chars().take(hint_width).collect();
-            if !hint.is_empty() {
-                first.push(Span::styled(hint, placeholder_style));
-            }
-            let mut lines = vec![Line::from(first)];
+            let mut lines = vec![placeholder_line(
+                &self.placeholder,
+                width,
+                self.focused,
+                self.cursor_fade.style(placeholder_style),
+                placeholder_style,
+            )];
             lines.resize_with(height.min(1), Line::default);
             return lines;
         }
@@ -702,6 +698,18 @@ mod tests {
     }
 
     #[test]
+    fn focused_placeholder_draws_cursor_over_first_character() {
+        let input = TextareaInput::<()>::new()
+            .placeholder("Write multiple lines...")
+            .focused(true);
+
+        let lines = input.visible_lines(8, 1);
+
+        assert_eq!(lines[0].spans[0].content.as_ref(), "W");
+        assert_eq!(line_text(&lines[0]), "Write mu");
+    }
+
+    #[test]
     fn escape_bubbles_to_parent_policy() {
         let mut input = TextareaInput::<()>::new();
         let mut ctx = EventCtx::<()>::default();
@@ -825,5 +833,12 @@ mod tests {
             ctx.drain_messages().collect::<Vec<_>>(),
             vec!["blur:hello".to_string()]
         );
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 }

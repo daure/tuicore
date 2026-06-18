@@ -109,7 +109,7 @@ impl Default for FocusKeyBindings {
             previous: vec![KeySpec::key(Key::BackTab)],
             unfocus: vec![
                 KeySpec::key(Key::Esc),
-                KeySpec::key_with_modifiers(Key::Char('/'), KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
             ],
         }
     }
