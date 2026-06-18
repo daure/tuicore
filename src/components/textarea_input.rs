@@ -11,7 +11,7 @@ use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
 use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
-use super::text_input::{CursorFade, InputOutcome, is_ctrl, text_char};
+use super::text_input::{CursorFade, InputOutcome, is_ctrl, is_alt, text_char, edit_in_external_editor};
 
 const TEXTAREA_FOCUS: &str = "textarea";
 
@@ -97,6 +97,33 @@ impl<M> TextareaInput<M> {
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
+        if is_ctrl(key, 'o') {
+            let ranges = self.line_ranges();
+            let (line, col) = self.cursor_line_col(&ranges);
+            if let Ok(Some((new_value, exit_line, exit_col))) = edit_in_external_editor(&self.value, line + 1, col + 1) {
+                self.value = new_value;
+                self.clamp_lines();
+                let ranges = self.line_ranges();
+                let line_idx = exit_line.saturating_sub(1).min(ranges.len().saturating_sub(1));
+                let range = ranges[line_idx];
+                self.cursor = (range.start + exit_col.saturating_sub(1)).min(self.len_chars());
+                return InputOutcome {
+                    handled: true,
+                    changed: true,
+                    submitted: false,
+                    canceled: false,
+                    clear: true,
+                };
+            } else {
+                return InputOutcome {
+                    handled: true,
+                    changed: false,
+                    submitted: false,
+                    canceled: false,
+                    clear: true,
+                };
+            }
+        }
         if is_ctrl(key, 'd') || (matches!(key.code, Key::Enter) && is_control(key)) {
             return InputOutcome::SUBMITTED;
         }
@@ -118,14 +145,53 @@ impl<M> TextareaInput<M> {
         if is_ctrl(key, 'w') {
             return self.delete_previous_word();
         }
+        if is_alt(key, 'b') {
+            return self.move_previous_word();
+        }
+        if is_alt(key, 'f') {
+            return self.move_next_word();
+        }
+        if is_alt(key, 'd') {
+            return self.delete_next_word();
+        }
+        if is_ctrl(key, 'p') {
+            return self.move_vertical(-1);
+        }
+        if is_ctrl(key, 'n') {
+            return self.move_vertical(1);
+        }
 
         match key.code {
             Key::Char(value) if text_char(key) => self.insert_char(value),
             Key::Enter => self.insert_newline(),
-            Key::Backspace => self.backspace(),
-            Key::Delete => self.delete_next(),
-            Key::Left => self.move_left(),
-            Key::Right => self.move_right(),
+            Key::Backspace => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.delete_previous_word()
+                } else {
+                    self.backspace()
+                }
+            }
+            Key::Delete => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.delete_next_word()
+                } else {
+                    self.delete_next()
+                }
+            }
+            Key::Left => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.move_previous_word()
+                } else {
+                    self.move_left()
+                }
+            }
+            Key::Right => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.move_next_word()
+                } else {
+                    self.move_right()
+                }
+            }
             Key::Up => self.move_vertical(-1),
             Key::Down => self.move_vertical(1),
             Key::Home => self.move_to(self.current_line().start),
@@ -352,6 +418,60 @@ impl<M> TextareaInput<M> {
         InputOutcome::CHANGED
     }
 
+    fn move_previous_word(&mut self) -> InputOutcome {
+        if self.cursor == 0 {
+            return InputOutcome::HANDLED;
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut start = self.cursor;
+        while start > 0 && chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+
+        self.move_to(start)
+    }
+
+    fn move_next_word(&mut self) -> InputOutcome {
+        let len = self.len_chars();
+        if self.cursor >= len {
+            return InputOutcome::HANDLED;
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut end = self.cursor;
+        while end < len && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        while end < len && chars[end].is_whitespace() {
+            end += 1;
+        }
+
+        self.move_to(end)
+    }
+
+    fn delete_next_word(&mut self) -> InputOutcome {
+        let len = self.len_chars();
+        if self.cursor >= len {
+            return InputOutcome::HANDLED;
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut end = self.cursor;
+        while end < len && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        while end < len && chars[end].is_whitespace() {
+            end += 1;
+        }
+
+        self.remove_range(self.cursor, end);
+        InputOutcome::CHANGED
+    }
+
     fn current_line(&self) -> LineRange {
         let ranges = self.line_ranges();
         let (line, _) = self.cursor_line_col(&ranges);
@@ -445,6 +565,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             && let Some(on_submit) = &self.on_submit
         {
             ctx.emit(on_submit(self.value.clone()));
+        }
+        if outcome.clear {
+            ctx.request_clear();
         }
         if outcome.needs_redraw() {
             ctx.request_redraw();
@@ -580,5 +703,92 @@ mod tests {
         assert!(parent_observed);
         assert_eq!(ctx.propagation(), Propagation::Continue);
         assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn word_navigation_and_deletion() {
+        let mut input = TextareaInput::<()>::new().value("hello world example");
+        // Start cursor is at the end (19)
+        assert_eq!(input.cursor, 19);
+
+        // Ctrl+Left jumps to the start of "example" (12)
+        input.on_key(KeyEvent {
+            code: Key::Left,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 12);
+
+        // Ctrl+Left jumps to the start of "world" (6)
+        input.on_key(KeyEvent {
+            code: Key::Left,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 6);
+
+        // Ctrl+Right jumps to the start of "example" (12)
+        input.on_key(KeyEvent {
+            code: Key::Right,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 12);
+
+        // Ctrl+Right jumps to the end of input (19)
+        input.on_key(KeyEvent {
+            code: Key::Right,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 19);
+
+        // Move cursor back to "world" (6)
+        input.cursor = 6;
+
+        // Ctrl+Backspace deletes "hello " (before cursor)
+        input.on_key(KeyEvent {
+            code: Key::Backspace,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.current_value(), "world example");
+        assert_eq!(input.cursor, 0);
+
+        // Reset text and delete next word (Ctrl+Delete)
+        input.set_value("hello world example");
+        input.cursor = 6; // start of "world"
+        input.on_key(KeyEvent {
+            code: Key::Delete,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        // Deletes "world " (from cursor to start of next word)
+        assert_eq!(input.current_value(), "hello example");
+        assert_eq!(input.cursor, 6);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ctrl_o_opens_external_editor() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        let old_editor = std::env::var("EDITOR").ok();
+        unsafe { std::env::set_var("EDITOR", "sh -c 'for last; do true; done; printf \"edited\\nlines\\n\" > \"$last\"' --"); }
+
+        let mut input = TextareaInput::<()>::new().value("initial");
+        let mut ctx = EventCtx::default();
+        let key = KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "edited\nlines\n");
+        assert!(ctx.redraw_requested());
+        assert!(ctx.clear_requested());
+
+        unsafe {
+            if let Some(val) = old_editor {
+                std::env::set_var("EDITOR", val);
+            } else {
+                std::env::remove_var("EDITOR");
+            }
+        }
     }
 }

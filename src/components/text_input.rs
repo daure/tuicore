@@ -20,6 +20,7 @@ pub struct InputOutcome {
     pub changed: bool,
     pub submitted: bool,
     pub canceled: bool,
+    pub clear: bool,
 }
 
 impl InputOutcome {
@@ -28,6 +29,7 @@ impl InputOutcome {
         changed: false,
         submitted: false,
         canceled: false,
+        clear: false,
     };
 
     pub const HANDLED: Self = Self {
@@ -35,6 +37,7 @@ impl InputOutcome {
         changed: false,
         submitted: false,
         canceled: false,
+        clear: false,
     };
 
     pub const CHANGED: Self = Self {
@@ -42,6 +45,7 @@ impl InputOutcome {
         changed: true,
         submitted: false,
         canceled: false,
+        clear: false,
     };
 
     pub const SUBMITTED: Self = Self {
@@ -49,6 +53,7 @@ impl InputOutcome {
         changed: false,
         submitted: true,
         canceled: false,
+        clear: false,
     };
 
     pub const CANCELED: Self = Self {
@@ -56,10 +61,11 @@ impl InputOutcome {
         changed: false,
         submitted: false,
         canceled: true,
+        clear: false,
     };
 
     pub fn needs_redraw(self) -> bool {
-        self.handled || self.changed || self.submitted || self.canceled
+        self.handled || self.changed || self.submitted || self.canceled || self.clear
     }
 }
 
@@ -145,6 +151,40 @@ impl<M> TextInput<M> {
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
+        if is_ctrl(key, 'o') {
+            if let Ok(Some((new_value, exit_line, exit_col))) = edit_in_external_editor(&self.value, 1, self.cursor + 1) {
+                let mut collapsed_cursor = 0;
+                let lines: Vec<&str> = new_value.split('\n').collect();
+                let target_line_idx = exit_line.saturating_sub(1).min(lines.len().saturating_sub(1));
+                
+                for i in 0..target_line_idx {
+                    collapsed_cursor += lines[i].chars().count() + 1;
+                }
+                
+                let col_idx = exit_col.saturating_sub(1);
+                let target_line_chars = lines[target_line_idx].chars().count();
+                collapsed_cursor += col_idx.min(target_line_chars);
+
+                self.value = new_value.replace('\n', " ");
+                self.clamp_value();
+                self.cursor = collapsed_cursor.min(self.len_chars());
+                return InputOutcome {
+                    handled: true,
+                    changed: true,
+                    submitted: false,
+                    canceled: false,
+                    clear: true,
+                };
+            } else {
+                return InputOutcome {
+                    handled: true,
+                    changed: false,
+                    submitted: false,
+                    canceled: false,
+                    clear: true,
+                };
+            }
+        }
         if is_ctrl(key, 'a') {
             return self.move_to(0);
         }
@@ -163,13 +203,46 @@ impl<M> TextInput<M> {
         if is_ctrl(key, 'w') {
             return self.delete_previous_word();
         }
+        if is_alt(key, 'b') {
+            return self.move_previous_word();
+        }
+        if is_alt(key, 'f') {
+            return self.move_next_word();
+        }
+        if is_alt(key, 'd') {
+            return self.delete_next_word();
+        }
 
         match key.code {
             Key::Char(value) if text_char(key) => self.insert_char(value),
-            Key::Backspace => self.backspace(),
-            Key::Delete => self.delete_next(),
-            Key::Left => self.move_left(),
-            Key::Right => self.move_right(),
+            Key::Backspace => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.delete_previous_word()
+                } else {
+                    self.backspace()
+                }
+            }
+            Key::Delete => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.delete_next_word()
+                } else {
+                    self.delete_next()
+                }
+            }
+            Key::Left => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.move_previous_word()
+                } else {
+                    self.move_left()
+                }
+            }
+            Key::Right => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.move_next_word()
+                } else {
+                    self.move_right()
+                }
+            }
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.len_chars()),
             Key::Enter => InputOutcome::SUBMITTED,
@@ -348,6 +421,60 @@ impl<M> TextInput<M> {
         InputOutcome::CHANGED
     }
 
+    fn move_previous_word(&mut self) -> InputOutcome {
+        if self.cursor == 0 {
+            return InputOutcome::HANDLED;
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut start = self.cursor;
+        while start > 0 && chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+
+        self.move_to(start)
+    }
+
+    fn move_next_word(&mut self) -> InputOutcome {
+        let len = self.len_chars();
+        if self.cursor >= len {
+            return InputOutcome::HANDLED;
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut end = self.cursor;
+        while end < len && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        while end < len && chars[end].is_whitespace() {
+            end += 1;
+        }
+
+        self.move_to(end)
+    }
+
+    fn delete_next_word(&mut self) -> InputOutcome {
+        let len = self.len_chars();
+        if self.cursor >= len {
+            return InputOutcome::HANDLED;
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut end = self.cursor;
+        while end < len && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        while end < len && chars[end].is_whitespace() {
+            end += 1;
+        }
+
+        self.remove_range(self.cursor, end);
+        InputOutcome::CHANGED
+    }
+
     fn len_chars(&self) -> usize {
         self.value.chars().count()
     }
@@ -395,6 +522,9 @@ impl<M> TuiNode<M> for TextInput<M> {
             && let Some(on_submit) = &self.on_submit
         {
             ctx.emit(on_submit(self.value.clone()));
+        }
+        if outcome.clear {
+            ctx.request_clear();
         }
         if outcome.needs_redraw() {
             ctx.request_redraw();
@@ -512,8 +642,108 @@ pub(crate) fn is_ctrl(key: KeyEvent, value: char) -> bool {
         && matches!(key.code, Key::Char(key_value) if key_value.eq_ignore_ascii_case(&value))
 }
 
+pub(crate) fn is_alt(key: KeyEvent, value: char) -> bool {
+    key.modifiers.contains(KeyModifiers::ALT)
+        && matches!(key.code, Key::Char(key_value) if key_value.eq_ignore_ascii_case(&value))
+}
+
 pub(crate) fn text_char(key: KeyEvent) -> bool {
     !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT)
+}
+
+pub(crate) fn edit_in_external_editor(
+    value: &str,
+    line: usize,
+    col: usize,
+) -> std::io::Result<Option<(String, usize, usize)>> {
+    let temp_path = std::env::temp_dir().join(format!("tuicore-edit-{}.txt", std::process::id()));
+    let pos_path = std::env::temp_dir().join(format!("tuicore-edit-pos-{}.txt", std::process::id()));
+    std::fs::write(&temp_path, value)?;
+
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    let mut stdout = std::io::stdout();
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);
+    let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
+
+    let editor_bin = std::path::Path::new(&editor)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| editor.clone());
+
+    let status = if cfg!(unix) {
+        let mut cmd = std::process::Command::new("sh");
+        let args = if editor_bin.contains("nano") {
+            format!("{} +{},{} '{}'", editor, line, col, temp_path.to_string_lossy())
+        } else if editor_bin.contains("emacs") {
+            format!("{} +{}:{} '{}'", editor, line, col, temp_path.to_string_lossy())
+        } else if editor_bin.contains("vim") || editor_bin.contains("nvim") || editor_bin.contains("vi") {
+            format!(
+                "{} +{} -c 'autocmd VimLeavePre * call writefile([string(line(\".\")), string(col(\".\"))], \"{}\")' -c 'normal! {}|' '{}'",
+                editor,
+                line,
+                pos_path.to_string_lossy(),
+                col,
+                temp_path.to_string_lossy()
+            )
+        } else {
+            format!("{} +{} '{}'", editor, line, temp_path.to_string_lossy())
+        };
+        cmd.arg("-c").arg(args).status()
+    } else {
+        let mut cmd = std::process::Command::new(&editor);
+        if editor_bin.contains("nano") {
+            cmd.arg(format!("+{},{}", line, col));
+        } else if editor_bin.contains("emacs") {
+            cmd.arg(format!("+{}:{}", line, col));
+        } else if editor_bin.contains("vim") || editor_bin.contains("nvim") || editor_bin.contains("vi") {
+            cmd.arg(format!("+{}", line));
+            cmd.arg("-c");
+            cmd.arg(format!("autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')", pos_path.to_string_lossy()));
+            cmd.arg("-c");
+            cmd.arg(format!("normal! {}|", col));
+        } else {
+            cmd.arg(format!("+{}", line));
+        }
+        cmd.arg(&temp_path).status()
+    };
+
+    let _ = crossterm::terminal::enable_raw_mode();
+    let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
+    let _ = crossterm::execute!(stdout, crossterm::event::EnableMouseCapture);
+    let _ = crossterm::execute!(stdout, crossterm::cursor::Hide);
+
+    let result = match status {
+        Ok(s) if s.success() => {
+            let content = std::fs::read_to_string(&temp_path)?;
+            let mut exit_line = line;
+            let mut exit_col = col;
+
+            if let Ok(pos_content) = std::fs::read_to_string(&pos_path) {
+                let mut lines = pos_content.lines();
+                if let Some(l_str) = lines.next() {
+                    if let Ok(l) = l_str.parse::<usize>() {
+                        exit_line = l;
+                    }
+                }
+                if let Some(c_str) = lines.next() {
+                    if let Ok(c) = c_str.parse::<usize>() {
+                        exit_col = c;
+                    }
+                }
+            }
+            Some((content, exit_line, exit_col))
+        }
+        _ => None,
+    };
+
+    let _ = std::fs::remove_file(temp_path);
+    let _ = std::fs::remove_file(pos_path);
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -581,5 +811,119 @@ mod tests {
         assert!(parent_observed);
         assert_eq!(ctx.propagation(), Propagation::Continue);
         assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn word_navigation_and_deletion() {
+        let mut input = TextInput::<()>::new().value("hello world example");
+        // Start cursor is at the end (19)
+        assert_eq!(input.cursor, 19);
+
+        // Ctrl+Left jumps to the start of "example" (12)
+        input.on_key(KeyEvent {
+            code: Key::Left,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 12);
+
+        // Ctrl+Left jumps to the start of "world" (6)
+        input.on_key(KeyEvent {
+            code: Key::Left,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 6);
+
+        // Ctrl+Right jumps to the start of "example" (12)
+        input.on_key(KeyEvent {
+            code: Key::Right,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 12);
+
+        // Ctrl+Right jumps to the end of input (19)
+        input.on_key(KeyEvent {
+            code: Key::Right,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.cursor, 19);
+
+        // Move cursor back to "world" (6)
+        input.cursor = 6;
+
+        // Ctrl+Backspace deletes "hello " (before cursor)
+        input.on_key(KeyEvent {
+            code: Key::Backspace,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        assert_eq!(input.current_value(), "world example");
+        assert_eq!(input.cursor, 0);
+
+        // Reset text and delete next word (Ctrl+Delete)
+        input.set_value("hello world example");
+        input.cursor = 6; // start of "world"
+        input.on_key(KeyEvent {
+            code: Key::Delete,
+            modifiers: KeyModifiers::CONTROL,
+        });
+        // Deletes "world " (from cursor to start of next word)
+        assert_eq!(input.current_value(), "hello example");
+        assert_eq!(input.cursor, 6);
+
+        // Test Alt+b (word backward)
+        input.set_value("hello world example");
+        input.cursor = 19;
+        input.on_key(KeyEvent {
+            code: Key::Char('b'),
+            modifiers: KeyModifiers::ALT,
+        });
+        assert_eq!(input.cursor, 12);
+
+        // Test Alt+f (word forward)
+        input.cursor = 6;
+        input.on_key(KeyEvent {
+            code: Key::Char('f'),
+            modifiers: KeyModifiers::ALT,
+        });
+        assert_eq!(input.cursor, 12);
+
+        // Test Alt+d (delete word forward)
+        input.set_value("hello world example");
+        input.cursor = 6;
+        input.on_key(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::ALT,
+        });
+        assert_eq!(input.current_value(), "hello example");
+        assert_eq!(input.cursor, 6);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ctrl_o_opens_external_editor() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        let old_editor = std::env::var("EDITOR").ok();
+        unsafe { std::env::set_var("EDITOR", "sh -c 'for last; do true; done; echo \"edited value\" > \"$last\"' --"); }
+
+        let mut input = TextInput::<()>::new().value("initial");
+        let mut ctx = EventCtx::default();
+        let key = KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "edited value ");
+        assert!(ctx.redraw_requested());
+        assert!(ctx.clear_requested());
+
+        unsafe {
+            if let Some(val) = old_editor {
+                std::env::set_var("EDITOR", val);
+            } else {
+                std::env::remove_var("EDITOR");
+            }
+        }
     }
 }

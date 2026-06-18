@@ -68,3 +68,6 @@ pub use ui::{
     animation_settings, init, init_from_dir, keybindings, preset, set_keybindings, set_preset,
     set_theme, theme,
 };
+
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -17,6 +17,7 @@ pub struct DispatchEffects<M> {
     pub focus_request: Option<FocusRequest>,
     pub focus_repair: Option<FocusRepair>,
     pub propagation: Propagation,
+    pub clear: bool,
 }
 
 #[derive(Debug, Default)]
@@ -81,6 +82,7 @@ impl TreeDispatcher {
             focus_request: ctx.focus_request().cloned(),
             focus_repair: None,
             propagation: Propagation::Continue,
+            clear: false,
         }
     }
 }
@@ -96,6 +98,7 @@ impl<M> DispatchEffects<M> {
             focus_request: None,
             focus_repair: None,
             propagation: Propagation::Continue,
+            clear: false,
         }
     }
 
@@ -107,6 +110,7 @@ impl<M> DispatchEffects<M> {
         let focus_repair = ctx.focus_repair();
         let propagation = ctx.propagation();
         let messages = ctx.drain_messages().collect();
+        let clear = ctx.clear_requested();
 
         Self {
             outcome,
@@ -117,6 +121,7 @@ impl<M> DispatchEffects<M> {
             focus_request,
             focus_repair,
             propagation,
+            clear,
         }
     }
 }

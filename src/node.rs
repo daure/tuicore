@@ -120,6 +120,7 @@ pub struct EventCtx<M> {
     focus_repair: Option<FocusRepair>,
     propagation: Propagation,
     animation: AnimationSettings,
+    clear: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,6 +285,7 @@ impl<M> EventCtx<M> {
             focus_repair: None,
             propagation: Propagation::Continue,
             animation,
+            clear: false,
         }
     }
 
@@ -292,6 +294,11 @@ impl<M> EventCtx<M> {
     }
 
     pub fn request_redraw(&mut self) {
+        self.redraw = true;
+    }
+
+    pub fn request_clear(&mut self) {
+        self.clear = true;
         self.redraw = true;
     }
 
@@ -337,6 +344,10 @@ impl<M> EventCtx<M> {
 
     pub fn redraw_requested(&self) -> bool {
         self.redraw
+    }
+
+    pub fn clear_requested(&self) -> bool {
+        self.clear
     }
 
     pub fn layout_requested(&self) -> bool {

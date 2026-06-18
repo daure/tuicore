@@ -708,6 +708,9 @@ impl PreviewState {
         match preview {
             PreviewKind::TextInput => {
                 let outcome = self.text_input.on_key(key);
+                if outcome.clear {
+                    ctx.request_clear();
+                }
                 if outcome.needs_redraw() {
                     ctx.request_redraw();
                 }
@@ -715,6 +718,9 @@ impl PreviewState {
             }
             PreviewKind::TextareaInput => {
                 let outcome = self.textarea_input.on_key(key);
+                if outcome.clear {
+                    ctx.request_clear();
+                }
                 if outcome.needs_redraw() {
                     ctx.request_redraw();
                 }
@@ -1363,7 +1369,15 @@ impl PreviewState {
         let [instructions, input] = input_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter submits. Tab returns to list. Ctrl+Q quits from gallery root.",
+                "Type text. Enter submits. Tab returns to list. Ctrl+Q quits from gallery root.\n\
+                 Shortcuts:\n\
+                 • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
+                 • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
+                 • Ctrl+Delete / Alt+D                    : Delete word forward\n\
+                 • Ctrl+A / Ctrl+E                        : Move cursor to start / end of line\n\
+                 • Ctrl+U / Ctrl+K                        : Delete to start / end of line\n\
+                 • Ctrl+C                                 : Clear input\n\
+                 • Ctrl+O                                 : Edit in external editor ($EDITOR)",
             ),
             instructions,
         );
@@ -1374,7 +1388,16 @@ impl PreviewState {
         let [instructions, input] = textarea_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab returns to list. Ctrl+Q quits from gallery root.",
+                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab returns to list. Ctrl+Q quits from gallery root.\n\
+                 Shortcuts:\n\
+                 • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
+                 • Ctrl+P / Ctrl+N                        : Move cursor up / down a line\n\
+                 • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
+                 • Ctrl+Delete / Alt+D                    : Delete word forward\n\
+                 • Ctrl+A / Ctrl+E                        : Move cursor to start / end of line\n\
+                 • Ctrl+U / Ctrl+K                        : Delete to start / end of line\n\
+                 • Ctrl+C                                 : Clear input\n\
+                 • Ctrl+O                                 : Edit in external editor ($EDITOR)",
             ),
             instructions,
         );
@@ -2436,14 +2459,14 @@ fn dropdown_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
 fn input_layout(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Length(1)])
+        .constraints([Constraint::Length(11), Constraint::Length(1)])
         .areas(area)
 }
 
 fn textarea_layout(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Fill(1)])
+        .constraints([Constraint::Length(12), Constraint::Fill(1)])
         .areas(area)
 }
 

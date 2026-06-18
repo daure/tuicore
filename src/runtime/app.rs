@@ -26,6 +26,7 @@ struct RuntimeFlags {
     quit: bool,
     focus_request: Option<FocusRequest>,
     focus_repair: Option<FocusRepair>,
+    clear: bool,
 }
 
 pub fn run<N>(root: N) -> Result<()>
@@ -76,6 +77,7 @@ where
             quit: false,
             focus_request: None,
             focus_repair: None,
+            clear: false,
         };
 
         flags.merge(self.mount_root());
@@ -112,6 +114,13 @@ where
         flags: &mut RuntimeFlags,
     ) -> Result<()> {
         while !flags.quit {
+            if flags.clear {
+                terminal.terminal_mut().clear()?;
+                flags.clear = false;
+                flags.layout = true;
+                flags.redraw = true;
+            }
+
             self.layout_if_pending(flags, focus_manager, layout_engine, dispatcher, terminal)?;
 
             self.apply_pending_focus(flags, focus_manager, layout_engine, dispatcher);
@@ -162,6 +171,7 @@ where
             quit: false,
             focus_request: None,
             focus_repair: None,
+            clear: false,
         };
         let messages = ctx.drain_messages().collect();
         self.handle_messages(&mut flags, messages);
@@ -295,6 +305,7 @@ where
             quit: false,
             focus_request: None,
             focus_repair: None,
+            clear: false,
         };
 
         flags.merge(self.mount_root());
@@ -400,6 +411,7 @@ impl RuntimeFlags {
             quit: effects.quit,
             focus_request: effects.focus_request.clone(),
             focus_repair: effects.focus_repair,
+            clear: effects.clear,
         }
     }
 
@@ -407,6 +419,7 @@ impl RuntimeFlags {
         self.redraw |= other.redraw;
         self.layout |= other.layout;
         self.quit |= other.quit;
+        self.clear |= other.clear;
         if other.focus_request.is_some() {
             self.focus_request = other.focus_request;
         }
@@ -695,6 +708,7 @@ mod tests {
             focus_request: None,
             focus_repair: None,
             propagation,
+            clear: false,
         }
     }
 
