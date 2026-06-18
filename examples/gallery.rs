@@ -6,15 +6,15 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use tuicore::{
-    ActivationMode, Animated, AnimationSettings, BorderKind, CellContext, ChildKey, Column,
+    ActivationMode, Animated, AnimationSettings, BorderKind, Button, CellContext, ChildKey, Column,
     DataView, DataViewTypedEvent, Dropdown, DropdownCommitMode, DropdownSearchMode,
     DropdownVariant, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
     FocusRequest, FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource, Key, KeyEvent,
     KeyModifiers, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, Overlay,
     OverlayAnchor, OverlaySize, Panel, PanelTitlePosition, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, Separator, SeparatorColorRole, Spinner, Split, Stack,
-    StackAlign, StackItem, Tabs, TabsVariant, TextInput, TextareaInput, TickResult, TreeAdapter,
-    TreeGlyphs, TreePath, TuiEvent, TuiNode,
+    StackAlign, StackItem, Tab, Tabs, TabsVariant, TextInput, TextareaInput, TickResult, Toggle,
+    TreeAdapter, TreeGlyphs, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -75,7 +75,10 @@ impl Gallery {
             selected: ComponentKind::Tabs,
             focus: GalleryFocus::List,
             areas: GalleryAreas::default(),
-            list_panel: Panel::new().top_left("Components").focused(true),
+            list_panel: Panel::new()
+                .top_left("Components")
+                .hotkey("c")
+                .focused(true),
             preview_panel: Panel::new().top_left(ComponentKind::Tabs.preview().title()),
             previews: PreviewState::new(),
         }
@@ -124,12 +127,21 @@ impl Gallery {
                 PreviewKind::Dropdown => {
                     self.previews.focus_dropdown_node(0, ctx);
                 }
+                PreviewKind::Toggle => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("toggle")));
+                }
+                PreviewKind::Button => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("button")));
+                }
                 _ => {
                     ctx.focus(FocusRequest::Target(FocusId::new("preview")));
                 }
             }
         } else {
-            ctx.focus(FocusRequest::Target(FocusId::new("data-view")));
+            ctx.focus(FocusRequest::TargetAt {
+                path: TreePath::from_keys([gallery_list_child_key()]),
+                id: FocusId::new("data-view"),
+            });
         }
     }
 
@@ -167,12 +179,21 @@ impl Gallery {
                     self.previews
                         .focus_dropdown_node(self.previews.focused_dropdown, ctx);
                 }
+                PreviewKind::Toggle => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("toggle")));
+                }
+                PreviewKind::Button => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("button")));
+                }
                 _ => {
                     ctx.focus(FocusRequest::Target(FocusId::new("preview")));
                 }
             }
         } else {
-            ctx.focus(FocusRequest::Target(FocusId::new("data-view")));
+            ctx.focus(FocusRequest::TargetAt {
+                path: TreePath::from_keys([gallery_list_child_key()]),
+                id: FocusId::new("data-view"),
+            });
         }
     }
 
@@ -192,6 +213,12 @@ impl Gallery {
                 }
                 PreviewKind::Panel => {
                     self.previews.focus_panel_title_node(0, ctx);
+                }
+                PreviewKind::Toggle => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("toggle")));
+                }
+                PreviewKind::Button => {
+                    ctx.focus(FocusRequest::Target(FocusId::new("button")));
                 }
                 _ => {
                     ctx.focus(FocusRequest::Target(FocusId::new("preview")));
@@ -252,7 +279,7 @@ impl Gallery {
         } else {
             self.previews.close_panel_title_dropdowns();
             ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::new(),
+                path: TreePath::from_keys([gallery_list_child_key()]),
                 id: FocusId::new("data-view"),
             });
         }
@@ -267,7 +294,7 @@ impl Gallery {
         } else {
             self.previews.close_panel_title_dropdowns();
             ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::new(),
+                path: TreePath::from_keys([gallery_list_child_key()]),
                 id: FocusId::new("data-view"),
             });
         }
@@ -282,7 +309,7 @@ impl Gallery {
         } else {
             self.previews.close_dropdowns();
             ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::new(),
+                path: TreePath::from_keys([gallery_list_child_key()]),
                 id: FocusId::new("data-view"),
             });
         }
@@ -297,7 +324,7 @@ impl Gallery {
         } else {
             self.previews.close_dropdowns();
             ctx.focus(FocusRequest::TargetAt {
-                path: TreePath::new(),
+                path: TreePath::from_keys([gallery_list_child_key()]),
                 id: FocusId::new("data-view"),
             });
         }
@@ -325,21 +352,30 @@ impl TuiNode<Msg> for Gallery {
             preview_panel,
             preview_body: Panel::inner_area(preview_panel),
         };
-        <DataView<ComponentKind, ComponentKind> as TuiNode<Msg>>::layout(
-            &mut self.component_list,
-            self.areas.list_body,
-            ctx,
+        ctx.push_slot(gallery_list_child_key(), self.areas.list_body, |ctx| {
+            <DataView<ComponentKind, ComponentKind> as TuiNode<Msg>>::layout(
+                &mut self.component_list,
+                self.areas.list_body,
+                ctx,
+            );
+            ctx.set_focus_hotkey(
+                FocusId::new("data-view"),
+                KeyEvent {
+                    code: Key::Char('c'),
+                    modifiers: KeyModifiers::NONE,
+                },
+            );
+        });
+        ctx.push_slot(
+            gallery_preview_child_key(),
+            self.areas.preview_body,
+            |ctx| {
+                ctx.with_focus_fallback(FocusId::new("preview"), self.areas.preview_body, |ctx| {
+                    self.previews
+                        .layout(self.selected.preview(), self.areas.preview_body, ctx);
+                });
+            },
         );
-        self.previews
-            .layout(self.selected.preview(), self.areas.preview_body, ctx);
-
-        let has_sub_focusables = matches!(
-            self.selected.preview(),
-            PreviewKind::Panel | PreviewKind::Dropdown
-        );
-        if !has_sub_focusables {
-            ctx.register_focusable(FocusId::new("preview"), self.areas.preview_body, true);
-        }
         LayoutResult::new(area)
     }
 
@@ -425,32 +461,38 @@ impl TuiNode<Msg> for Gallery {
             return self.event(event, ctx);
         }
 
-        let child = self
-            .previews
-            .dispatch_event(self.selected.preview(), route, event, ctx);
-        child.bubble(ctx, |ctx| self.event(event, ctx))
+        if let Some(route) = route
+            .path
+            .without_first_if(&gallery_list_child_key())
+            .map(EventRoute::new)
+        {
+            let child = self.component_list.dispatch_event(&route, event, ctx);
+            if let Some(selected) = self.selected_from_list_events() {
+                self.select(selected);
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
+            return child.bubble(ctx, |ctx| self.event(event, ctx));
+        }
+
+        if let Some(route) = route
+            .path
+            .without_first_if(&gallery_preview_child_key())
+            .map(EventRoute::new)
+        {
+            let child = self
+                .previews
+                .dispatch_event(self.selected.preview(), &route, event, ctx);
+            return child.bubble(ctx, |ctx| self.event(event, ctx));
+        }
+
+        EventOutcome::Ignored
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<Msg>) {
-        if target.id.as_str() == "preview" {
-            if focused {
-                self.focus = GalleryFocus::Preview;
-                self.list_panel.set_focused(false, ctx.animation());
-                self.component_list.set_focused(false);
-                self.preview_panel.set_focused(true, ctx.animation());
-                self.previews
-                    .set_focused(self.selected.preview(), true, ctx.animation());
-            } else {
-                self.preview_panel.set_focused(false, ctx.animation());
-                self.previews
-                    .set_focused(self.selected.preview(), false, ctx.animation());
-            }
-            ctx.request_redraw();
-            return;
-        }
-
-        if target.path.is_empty() {
-            self.component_list.dispatch_focus(target, focused, ctx);
+        if let Some(child_target) = target.for_child(&gallery_list_child_key()) {
+            self.component_list
+                .dispatch_focus(&child_target, focused, ctx);
             self.list_panel.set_focused(focused, ctx.animation());
             if focused {
                 self.focus = GalleryFocus::List;
@@ -466,9 +508,14 @@ impl TuiNode<Msg> for Gallery {
             return;
         }
 
-        if self
-            .previews
-            .dispatch_focus(self.selected.preview(), target, focused, ctx)
+        let Some(child_target) = target.for_child(&gallery_preview_child_key()) else {
+            return;
+        };
+
+        if child_target.id.as_str() == "preview"
+            || self
+                .previews
+                .dispatch_focus(self.selected.preview(), &child_target, focused, ctx)
         {
             if focused {
                 self.focus = GalleryFocus::Preview;
@@ -488,6 +535,9 @@ impl TuiNode<Msg> for Gallery {
 struct PreviewState {
     text_input: TextInput<Msg>,
     textarea_input: TextareaInput<Msg>,
+    button: Button<Msg>,
+    button_presses: u32,
+    toggle: Toggle<Msg>,
     spinner: Spinner,
     focused_panel: usize,
     panel_demo: Panel,
@@ -533,12 +583,21 @@ impl PreviewState {
                 .placeholder("Write multiple lines...")
                 .value("First line\nSecond line")
                 .max_lines(8),
+            button: Button::new("button").hotkey("b"),
+            button_presses: 0,
+            toggle: Toggle::new("Telemetry").hotkey("x"),
             spinner: Spinner::new(),
             focused_panel: 0,
             panel_demo: Panel::new(),
             tabs_minimal: Tabs::default().variant(TabsVariant::Minimal).hotkey("m"),
-            tabs_underline: Tabs::default().variant(TabsVariant::Underline).hotkey("u"),
-            tabs_boxed: Tabs::default().variant(TabsVariant::Boxed).hotkey("b"),
+            tabs_underline: Tabs::default().variant(TabsVariant::Underline).hotkey("l"),
+            tabs_boxed: Tabs::new(vec![
+                Tab::text("Overview", "Simple tabs component for tuicore.").hotkey("o"),
+                Tab::text("Usage", "Use Tab::new(title, node), then Tabs::new(tabs).").hotkey("u"),
+                Tab::text("State", "The selected tab is a plain index.").hotkey("s"),
+            ])
+            .variant(TabsVariant::Boxed)
+            .hotkey("b"),
             focused_tab_demo: 0,
             data_list: DataViewMode::List.data_view(),
             data_table: DataViewMode::Table.data_view(),
@@ -571,6 +630,10 @@ impl PreviewState {
     fn set_focused(&mut self, preview: PreviewKind, focused: bool, settings: AnimationSettings) {
         self.text_input.set_focused(focused);
         self.textarea_input.set_focused(focused);
+        self.button
+            .set_focused(focused && preview == PreviewKind::Button, settings);
+        self.toggle
+            .set_focused(focused && preview == PreviewKind::Toggle, settings);
         self.tabs_minimal.set_focused(
             focused && preview == PreviewKind::Tabs && self.focused_tab_demo == 0,
             settings,
@@ -639,6 +702,8 @@ impl PreviewState {
         match preview {
             PreviewKind::Tabs => self.layout_tabs(area, ctx),
             PreviewKind::Panel => self.layout_panel_preview(area, ctx),
+            PreviewKind::Button => self.layout_button(area, ctx),
+            PreviewKind::Toggle => self.layout_toggle(area, ctx),
             PreviewKind::DataList
             | PreviewKind::DataTable
             | PreviewKind::DataListTree
@@ -681,6 +746,8 @@ impl PreviewState {
             PreviewKind::Spinner => self.render_spinner(frame, area),
             PreviewKind::TextInput => self.render_text_input(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
+            PreviewKind::Button => self.render_button(frame, area),
+            PreviewKind::Toggle => self.render_toggle(frame, area),
             PreviewKind::DataList
             | PreviewKind::DataTable
             | PreviewKind::DataListTree
@@ -727,6 +794,8 @@ impl PreviewState {
                 outcome.handled
             }
             PreviewKind::Tabs => self.tabs_on_key(key, ctx),
+            PreviewKind::Button => self.button_on_key(key, ctx),
+            PreviewKind::Toggle => self.toggle.event(&TuiEvent::Key(key), ctx).handled(),
             PreviewKind::DataTable | PreviewKind::DataTableTree
                 if matches!(key.code, Key::Char('s')) && key.modifiers == KeyModifiers::NONE =>
             {
@@ -778,6 +847,12 @@ impl PreviewState {
             };
             return self.tab_demo_mut(index).dispatch_event(&route, event, ctx);
         }
+        if preview == PreviewKind::Toggle {
+            return self.toggle.dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::Button {
+            return self.button_dispatch_event(route, event, ctx);
+        }
         if preview == PreviewKind::Panel {
             if let Some(route) = panel_demo_child_route(route) {
                 return self.panel_demo.dispatch_event(&route, event, ctx);
@@ -815,6 +890,14 @@ impl PreviewState {
             }
             self.tab_demo_mut(index)
                 .dispatch_focus(&target, focused, ctx);
+            return true;
+        }
+        if preview == PreviewKind::Toggle {
+            self.toggle.dispatch_focus(target, focused, ctx);
+            return true;
+        }
+        if preview == PreviewKind::Button {
+            self.button.dispatch_focus(target, focused, ctx);
             return true;
         }
         if preview == PreviewKind::Panel {
@@ -855,6 +938,8 @@ impl PreviewState {
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         Animated::tick(&mut self.spinner, dt, settings)
+            .merge(Animated::tick(&mut self.button, dt, settings))
+            .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(<Tabs<Msg> as TuiNode<Msg>>::tick(
                 &mut self.tabs_minimal,
                 dt,
@@ -1268,7 +1353,7 @@ impl PreviewState {
         self.focused_dropdown = index;
         self.close_dropdowns();
         ctx.focus(FocusRequest::TargetAt {
-            path: TreePath::from_keys([dropdown_child_key(index)]),
+            path: TreePath::from_keys([gallery_preview_child_key(), dropdown_child_key(index)]),
             id: FocusId::new("field"),
         });
         true
@@ -1362,7 +1447,7 @@ impl PreviewState {
         self.focused_panel = index;
         self.close_panel_title_dropdowns();
         ctx.focus(FocusRequest::TargetAt {
-            path: TreePath::from_keys([panel_title_child_key(index)]),
+            path: TreePath::from_keys([gallery_preview_child_key(), panel_title_child_key(index)]),
             id: FocusId::new("field"),
         });
         true
@@ -1372,7 +1457,7 @@ impl PreviewState {
         self.focused_panel = PANEL_DEMO_FOCUS_INDEX;
         self.close_panel_title_dropdowns();
         ctx.focus(FocusRequest::TargetAt {
-            path: TreePath::from_keys([panel_demo_child_key()]),
+            path: TreePath::from_keys([gallery_preview_child_key(), panel_demo_child_key()]),
             id: FocusId::new("panel"),
         });
         true
@@ -1415,6 +1500,66 @@ impl PreviewState {
             instructions,
         );
         self.textarea_input.render(frame, input);
+    }
+
+    fn layout_button(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let [_, button_area, _] = button_layout(area);
+        self.button.layout(button_area, ctx);
+    }
+
+    fn render_button(&self, frame: &mut Frame, area: Rect) {
+        let [instructions, button_area, status] = button_layout(area);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{} presses. Press b from anywhere in this preview to focus and press.",
+                tuicore::keybindings().button().press_label()
+            )),
+            instructions,
+        );
+        self.button.render(frame, button_area);
+        frame.render_widget(
+            Paragraph::new(format!("Pressed {} times", self.button_presses)),
+            status,
+        );
+    }
+
+    fn button_on_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<Msg>) -> bool {
+        let outcome = self.button.on_key_with_settings(key, ctx.animation());
+        if outcome.pressed {
+            self.button_presses += 1;
+            ctx.request_redraw();
+        }
+        outcome.handled
+    }
+
+    fn button_dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> EventOutcome {
+        let before = ctx.messages().len();
+        let outcome = self.button.dispatch_event(route, event, ctx);
+        if outcome.handled() && ctx.messages().len() == before {
+            self.button_presses += 1;
+        }
+        outcome
+    }
+
+    fn layout_toggle(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let [_, toggle_area] = toggle_layout(area);
+        self.toggle.layout(toggle_area, ctx);
+    }
+
+    fn render_toggle(&self, frame: &mut Frame, area: Rect) {
+        let [instructions, toggle_area] = toggle_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "Enter/Space toggles. Press x from anywhere in this preview to focus and toggle.",
+            ),
+            instructions,
+        );
+        self.toggle.render(frame, toggle_area);
     }
 
     fn render_spinner(&self, frame: &mut Frame, area: Rect) {
@@ -1495,7 +1640,7 @@ impl PreviewState {
 
         frame.render_widget(Paragraph::new("Style 1: minimal (m)"), minimal_label);
         self.tabs_minimal.render(frame, minimal_tabs);
-        frame.render_widget(Paragraph::new("Style 2: underline (u)"), underline_label);
+        frame.render_widget(Paragraph::new("Style 2: underline (l)"), underline_label);
         self.tabs_underline.render(frame, underline_tabs);
         frame.render_widget(Paragraph::new("Style 3: boxed (b)"), boxed_label);
         self.tabs_boxed.render(frame, boxed_tabs);
@@ -1720,6 +1865,14 @@ fn layout_demo_body(area: Rect) -> Rect {
     layout_demo_areas(area)[1]
 }
 
+fn gallery_list_child_key() -> ChildKey {
+    ChildKey::new("component-list")
+}
+
+fn gallery_preview_child_key() -> ChildKey {
+    ChildKey::new("preview")
+}
+
 fn layout_demo_areas(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
@@ -1739,8 +1892,10 @@ enum ComponentKind {
     LayoutOverlay,
     LayoutGrid,
     Inputs,
+    Button,
     TextInput,
     TextareaInput,
+    Toggle,
     Dropdown,
     DataView,
     DataViewList,
@@ -1754,7 +1909,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 24] = [
         Self::Tabs,
         Self::Panel,
         Self::Spinner,
@@ -1765,8 +1920,10 @@ impl ComponentKind {
         Self::LayoutOverlay,
         Self::LayoutGrid,
         Self::Inputs,
+        Self::Button,
         Self::TextInput,
         Self::TextareaInput,
+        Self::Toggle,
         Self::Dropdown,
         Self::DataView,
         Self::DataViewList,
@@ -1791,8 +1948,10 @@ impl ComponentKind {
             Self::LayoutOverlay => "Overlay",
             Self::LayoutGrid => "Grid",
             Self::Inputs => "Inputs",
+            Self::Button => "Button",
             Self::TextInput => "Text",
             Self::TextareaInput => "Textarea",
+            Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
             Self::DataView => "DataView",
             Self::DataViewList => "List",
@@ -1816,7 +1975,11 @@ impl ComponentKind {
             | Self::DataViewMultiSelect
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
-            Self::TextInput | Self::TextareaInput | Self::Dropdown => Some(Self::Inputs),
+            Self::Button
+            | Self::TextInput
+            | Self::TextareaInput
+            | Self::Toggle
+            | Self::Dropdown => Some(Self::Inputs),
             Self::LayoutFlex
             | Self::LayoutSplit
             | Self::LayoutStack
@@ -1837,7 +2000,9 @@ impl ComponentKind {
             Self::LayoutOverlay => PreviewKind::LayoutOverlay,
             Self::LayoutGrid => PreviewKind::LayoutGrid,
             Self::Inputs | Self::TextInput => PreviewKind::TextInput,
+            Self::Button => PreviewKind::Button,
             Self::TextareaInput => PreviewKind::TextareaInput,
+            Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
             Self::DataView | Self::DataViewList => PreviewKind::DataList,
             Self::DataViewTable => PreviewKind::DataTable,
@@ -1863,6 +2028,8 @@ enum PreviewKind {
     LayoutGrid,
     TextInput,
     TextareaInput,
+    Button,
+    Toggle,
     Dropdown,
     DataList,
     DataTable,
@@ -1887,6 +2054,8 @@ impl PreviewKind {
             Self::LayoutGrid => "Grid Layout",
             Self::TextInput => "Text",
             Self::TextareaInput => "Textarea",
+            Self::Button => "Button",
+            Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
             Self::DataList => "List",
             Self::DataTable => "Table",
@@ -2424,6 +2593,7 @@ fn panel_title_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)
         area: target.area,
         enabled: target.enabled,
         hotkey: target.hotkey.clone(),
+        hotkeys: target.hotkeys.clone(),
     };
     Some((index, child_target))
 }
@@ -2435,6 +2605,7 @@ fn panel_demo_child_target(target: &FocusTarget) -> Option<FocusTarget> {
         area: target.area,
         enabled: target.enabled,
         hotkey: target.hotkey.clone(),
+        hotkeys: target.hotkeys.clone(),
     })
 }
 
@@ -2515,6 +2686,7 @@ fn tab_demo_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
         area: target.area,
         enabled: target.enabled,
         hotkey: target.hotkey.clone(),
+        hotkeys: target.hotkeys.clone(),
     };
     Some((index, child_target))
 }
@@ -2546,6 +2718,7 @@ fn dropdown_child_target(target: &FocusTarget) -> Option<(usize, FocusTarget)> {
         area: target.area,
         enabled: target.enabled,
         hotkey: target.hotkey.clone(),
+        hotkeys: target.hotkeys.clone(),
     };
     Some((index, child_target))
 }
@@ -2554,6 +2727,24 @@ fn input_layout(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(11), Constraint::Length(1)])
+        .areas(area)
+}
+
+fn toggle_layout(area: Rect) -> [Rect; 2] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Length(1)])
+        .areas(area)
+}
+
+fn button_layout(area: Rect) -> [Rect; 3] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .areas(area)
 }
 

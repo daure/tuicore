@@ -18,11 +18,13 @@ const TABS_FOCUS: &str = "tabs";
 
 pub struct Tab<M = ()> {
     title: String,
+    hotkey: Option<String>,
     body: Box<dyn TuiNode<M>>,
 }
 
 pub struct Tabs<M = ()> {
     titles: Vec<String>,
+    tab_hotkeys: Vec<Option<String>>,
     bodies: Children<M>,
     body_keys: Vec<ChildKey>,
     selected: usize,
@@ -51,12 +53,18 @@ where
     {
         Self {
             title: title.into(),
+            hotkey: None,
             body: Box::new(body),
         }
     }
 
     pub fn text(title: impl Into<String>, body: impl Into<String>) -> Self {
         Self::new(title, TextTabBody::new(body))
+    }
+
+    pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.hotkey = Some(hotkey.into());
+        self
     }
 }
 
@@ -67,18 +75,21 @@ where
     pub fn new(tabs: Vec<Tab<M>>) -> Self {
         let theme = theme();
         let mut titles = Vec::with_capacity(tabs.len());
+        let mut tab_hotkeys = Vec::with_capacity(tabs.len());
         let mut body_keys = Vec::with_capacity(tabs.len());
         let mut bodies = Children::new();
 
         for (index, tab) in tabs.into_iter().enumerate() {
             let key = ChildKey::new(format!("tab-{index}"));
             titles.push(tab.title);
+            tab_hotkeys.push(tab.hotkey);
             body_keys.push(key.clone());
             bodies = bodies.child(key, tab.body);
         }
 
         Self {
             titles,
+            tab_hotkeys,
             bodies,
             body_keys,
             selected: 0,
@@ -465,7 +476,7 @@ where
 
     fn title_line(&self, selected: usize, separator: &'static str) -> Line<'static> {
         let mut spans = Vec::new();
-        for (index, title) in self.titles.iter().enumerate() {
+        for (index, _) in self.titles.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::styled(separator, self.border_style()));
             }
@@ -474,7 +485,7 @@ where
             } else {
                 self.tab_style()
             };
-            spans.extend(self.tab_title_spans(index, title, selected, style));
+            spans.extend(self.tab_title_spans(index, &self.tab_label(index), selected, style));
         }
         Line::from(spans)
     }
@@ -541,11 +552,7 @@ where
     fn underline_line(&self, selected: usize, width: u16) -> Line<'static> {
         let theme = theme();
         let selected_start = self.underline_start(selected);
-        let selected_width = self
-            .titles
-            .get(selected)
-            .map(|title| text_width(title))
-            .unwrap_or_default();
+        let selected_width = self.tab_label_width(selected);
         let width = width as usize;
         let mut spans = Vec::new();
         let before = selected_start.min(width);
@@ -581,16 +588,8 @@ where
             self.underline_start(selected),
             self.transition.value(),
         );
-        let previous_width = self
-            .titles
-            .get(self.previous_selected)
-            .map(|title| text_width(title))
-            .unwrap_or_default();
-        let selected_width = self
-            .titles
-            .get(selected)
-            .map(|title| text_width(title))
-            .unwrap_or_default();
+        let previous_width = self.tab_label_width(self.previous_selected);
+        let selected_width = self.tab_label_width(selected);
         self.underline_segment_line(
             start,
             lerp_usize(previous_width, selected_width, self.transition.value()).max(1),
@@ -610,10 +609,7 @@ where
         let inner = if !self.transition.is_active() || self.previous_selected == selected {
             self.underline_segment_line(
                 self.underline_start(selected).saturating_sub(1),
-                self.titles
-                    .get(selected)
-                    .map(|title| text_width(title))
-                    .unwrap_or_default(),
+                self.tab_label_width(selected),
                 inner_width,
             )
         } else {
@@ -623,16 +619,8 @@ where
                 self.transition.value(),
             )
             .saturating_sub(1);
-            let previous_width = self
-                .titles
-                .get(self.previous_selected)
-                .map(|title| text_width(title))
-                .unwrap_or_default();
-            let selected_width = self
-                .titles
-                .get(selected)
-                .map(|title| text_width(title))
-                .unwrap_or_default();
+            let previous_width = self.tab_label_width(self.previous_selected);
+            let selected_width = self.tab_label_width(selected);
             self.underline_segment_line(
                 start,
                 lerp_usize(previous_width, selected_width, self.transition.value()).max(1),
@@ -717,7 +705,8 @@ where
             .titles
             .iter()
             .take(selected)
-            .map(|title| text_width(title) + 2)
+            .enumerate()
+            .map(|(index, _)| self.tab_label_width(index) + 2)
             .sum::<usize>()
     }
 
@@ -733,7 +722,8 @@ where
         let mut widths = self
             .titles
             .iter()
-            .map(|title| text_width(title) + 2)
+            .enumerate()
+            .map(|(index, _)| self.tab_label_width(index) + 2)
             .collect::<Vec<_>>();
         let used = 2 + widths.iter().sum::<usize>() + tab_count.saturating_sub(1);
         if let Some(last) = widths.last_mut() {
@@ -744,7 +734,8 @@ where
         let mut middle = vec![Span::styled(chars.vertical, border_style)];
         let mut bottom = vec![Span::styled(chars.left_join, border_style)];
 
-        for (index, title) in self.titles.iter().enumerate() {
+        for (index, _) in self.titles.iter().enumerate() {
+            let label = self.tab_label(index);
             let cell_width = widths[index];
             top.push(Span::styled(
                 chars.horizontal.repeat(cell_width),
@@ -759,9 +750,9 @@ where
             } else {
                 self.tab_style()
             };
-            let right_pad = cell_width.saturating_sub(text_width(title) + 1);
+            let right_pad = cell_width.saturating_sub(text_width(&label) + 1);
             middle.push(Span::raw(" "));
-            middle.extend(self.tab_title_spans(index, title, selected, title_style));
+            middle.extend(self.tab_title_spans(index, &label, selected, title_style));
             middle.push(Span::raw(" ".repeat(right_pad)));
             if index + 1 == tab_count {
                 top.push(Span::styled(chars.top_right, border_style));
@@ -779,7 +770,7 @@ where
 
     fn minimal_title_line(&self, selected: usize, width: u16) -> Line<'static> {
         let mut spans = vec![Span::styled("─ ", self.border_style())];
-        for (index, title) in self.titles.iter().enumerate() {
+        for (index, _) in self.titles.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::styled(" · ", self.border_style()));
             }
@@ -788,7 +779,7 @@ where
             } else {
                 self.tab_style()
             };
-            spans.extend(self.tab_title_spans(index, title, selected, style));
+            spans.extend(self.tab_title_spans(index, &self.tab_label(index), selected, style));
         }
         let used = spans
             .iter()
@@ -854,6 +845,48 @@ where
             modifiers: KeyModifiers::NONE,
         })
     }
+
+    fn hotkey_events(&self) -> Vec<KeyEvent> {
+        self.hotkey_event()
+            .into_iter()
+            .chain(self.tab_hotkeys.iter().filter_map(|hotkey| {
+                hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
+                    code: Key::Char(c),
+                    modifiers: KeyModifiers::NONE,
+                })
+            }))
+            .collect()
+    }
+
+    fn tab_hotkey_index(&self, key: KeyEvent) -> Option<usize> {
+        self.tab_hotkeys.iter().position(|hotkey| {
+            hotkey
+                .as_ref()
+                .and_then(|hotkey| hotkey.chars().next())
+                .map(|c| KeyEvent {
+                    code: Key::Char(c),
+                    modifiers: KeyModifiers::NONE,
+                })
+                .is_some_and(|hotkey| tab_hotkey_matches(hotkey, key))
+        })
+    }
+
+    fn tab_label(&self, index: usize) -> String {
+        let Some(title) = self.titles.get(index) else {
+            return String::new();
+        };
+        match self.tab_hotkeys.get(index).and_then(Option::as_ref) {
+            Some(hotkey) => format!("{title} ({hotkey})"),
+            None => title.clone(),
+        }
+    }
+
+    fn tab_label_width(&self, index: usize) -> usize {
+        self.titles
+            .get(index)
+            .map(|_| text_width(&self.tab_label(index)))
+            .unwrap_or_default()
+    }
 }
 
 impl<M> Default for Tabs<M>
@@ -875,10 +908,11 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.body_area = self.calculate_body_area(area);
-        if let Some(hotkey) = self.hotkey_event() {
-            ctx.register_focusable_with_hotkey(FocusId::new(TABS_FOCUS), area, true, hotkey);
-        } else {
+        let hotkeys = self.hotkey_events();
+        if hotkeys.is_empty() {
             ctx.register_focusable(FocusId::new(TABS_FOCUS), area, true);
+        } else {
+            ctx.register_focusable_with_hotkeys(FocusId::new(TABS_FOCUS), area, true, hotkeys);
         }
         if let Some(key) = self.selected_key().cloned() {
             self.bodies.layout_child(&key, self.body_area, ctx);
@@ -895,6 +929,13 @@ where
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if let Some(index) = self.tab_hotkey_index(*key) {
+            self.select_index_with_settings(index, ctx.animation());
+            ctx.request_redraw();
+            ctx.request_layout();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         if self
             .hotkey_event()
             .is_some_and(|hotkey| tab_hotkey_matches(hotkey, *key))
@@ -1190,6 +1231,25 @@ mod tests {
     }
 
     #[test]
+    fn tabs_registers_tab_hotkeys_with_focus_target() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("One", "").hotkey("o"),
+            Tab::text("Two", "").hotkey("t"),
+        ]);
+        let mut ctx = LayoutCtx::new();
+
+        tabs.layout(Rect::new(0, 0, 20, 5), &mut ctx);
+
+        assert_eq!(
+            ctx.focus_targets()[0].hotkeys,
+            vec![
+                KeyEvent::from(Key::Char('o')),
+                KeyEvent::from(Key::Char('t')),
+            ]
+        );
+    }
+
+    #[test]
     fn tabs_hotkey_event_is_consumed_when_focused() {
         let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "")]).hotkey("m");
         let mut ctx = EventCtx::default();
@@ -1198,6 +1258,43 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn tab_hotkey_switches_to_matching_tab() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", "").hotkey("o"),
+            Tab::text("Usage", "").hotkey("u"),
+        ]);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('u'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.layout_requested());
+    }
+
+    #[test]
+    fn tab_hotkey_renders_next_to_label() {
+        let tabs = Tabs::<()>::new(vec![Tab::text("Overview", "Body").hotkey("o")]);
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..6)
+            .map(|y| {
+                (0..24)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Overview (o)"));
     }
 
     #[test]

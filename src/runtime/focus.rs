@@ -293,6 +293,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             hotkey: None,
+            hotkeys: Vec::new(),
         }
     }
 
@@ -307,6 +308,7 @@ mod tests {
             area,
             enabled: true,
             hotkey: None,
+            hotkeys: Vec::new(),
         }
     }
 
@@ -408,6 +410,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -415,6 +418,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -455,6 +459,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -462,6 +467,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -491,6 +497,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -498,6 +505,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();

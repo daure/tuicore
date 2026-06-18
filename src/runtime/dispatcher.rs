@@ -271,6 +271,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             hotkey: None,
+            hotkeys: Vec::new(),
         };
         let transition = FocusTransition {
             previous: None,
@@ -298,6 +299,7 @@ mod tests {
                 area: Rect::default(),
                 enabled: true,
                 hotkey: None,
+                hotkeys: Vec::new(),
             }),
         };
         let mut settings = AnimationSettings::default();

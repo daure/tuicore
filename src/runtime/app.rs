@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
-    HitRegion, Key, KeyEvent, LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode,
+    FocusTarget, HitRegion, Key, KeyEvent, LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode,
     animation_settings, keybindings,
 };
 
@@ -281,13 +281,9 @@ where
             if !current_is_input {
                 let mut hotkey_target = None;
                 for target in layout_engine.focus_targets() {
-                    if target.enabled {
-                        if let Some(ref hk) = target.hotkey {
-                            if keys_match(hk, key) {
-                                hotkey_target = Some(target.clone());
-                                break;
-                            }
-                        }
+                    if target.enabled && focus_target_matches_hotkey(target, key) {
+                        hotkey_target = Some(target.clone());
+                        break;
                     }
                 }
                 if let Some(target) = hotkey_target {
@@ -465,6 +461,14 @@ fn keys_match(a: &KeyEvent, b: &KeyEvent) -> bool {
         (Key::Char(c1), Key::Char(c2)) => c1.to_ascii_lowercase() == c2.to_ascii_lowercase(),
         (code_a, code_b) => code_a == code_b,
     }
+}
+
+fn focus_target_matches_hotkey(target: &FocusTarget, key: &KeyEvent) -> bool {
+    target
+        .hotkey
+        .as_ref()
+        .is_some_and(|hotkey| keys_match(hotkey, key))
+        || target.hotkeys.iter().any(|hotkey| keys_match(hotkey, key))
 }
 
 #[cfg(test)]

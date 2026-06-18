@@ -896,6 +896,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             hotkey: None,
+            hotkeys: Vec::new(),
         };
         let mut ctx = FocusCtx::default();
 

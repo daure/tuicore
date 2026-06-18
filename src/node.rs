@@ -241,6 +241,7 @@ pub struct FocusTarget {
     pub area: Rect,
     pub enabled: bool,
     pub hotkey: Option<KeyEvent>,
+    pub hotkeys: Vec<KeyEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,6 +422,20 @@ impl LayoutCtx {
         result
     }
 
+    pub fn with_focus_fallback<R>(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let focus_count = self.focus_paths.len();
+        let result = layout(self);
+        if self.focus_paths.len() == focus_count {
+            self.register_focusable(id, area, true);
+        }
+        result
+    }
+
     pub fn focus_disabled(&self) -> bool {
         self.focus_disabled
     }
@@ -439,6 +454,7 @@ impl LayoutCtx {
             area,
             enabled,
             hotkey: None,
+            hotkeys: Vec::new(),
         });
     }
 
@@ -458,7 +474,42 @@ impl LayoutCtx {
             area,
             enabled,
             hotkey: Some(hotkey),
+            hotkeys: Vec::new(),
         });
+    }
+
+    pub fn register_focusable_with_hotkeys(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        enabled: bool,
+        hotkeys: Vec<KeyEvent>,
+    ) {
+        if self.focus_disabled {
+            return;
+        }
+        self.focus_paths.push(FocusTarget {
+            id,
+            path: self.current_path(),
+            area,
+            enabled,
+            hotkey: hotkeys.first().copied(),
+            hotkeys,
+        });
+    }
+
+    pub fn set_focus_hotkey(&mut self, id: FocusId, hotkey: KeyEvent) -> bool {
+        let path = self.current_path();
+        let Some(target) = self
+            .focus_paths
+            .iter_mut()
+            .rev()
+            .find(|target| target.id == id && target.path == path)
+        else {
+            return false;
+        };
+        target.hotkey = Some(hotkey);
+        true
     }
 
     pub fn register_hit_region(&mut self, region: HitRegion) {
@@ -731,6 +782,7 @@ impl FocusTarget {
             area: self.area,
             enabled: self.enabled,
             hotkey: self.hotkey.clone(),
+            hotkeys: self.hotkeys.clone(),
         })
     }
 }
@@ -826,6 +878,41 @@ mod tests {
         let mut ctx = LayoutCtx::new();
         non_focusable.layout(Rect::new(0, 0, 10, 10), &mut ctx);
         assert_eq!(ctx.focus_paths.len(), 0);
+    }
+
+    #[test]
+    fn focus_fallback_registers_only_when_child_has_no_focus_target() {
+        let mut ctx = LayoutCtx::new();
+
+        ctx.with_focus_fallback(FocusId::new("fallback"), Rect::new(0, 0, 10, 1), |_ctx| {});
+
+        assert_eq!(ctx.focus_targets().len(), 1);
+        assert_eq!(ctx.focus_targets()[0].id.as_str(), "fallback");
+
+        let mut ctx = LayoutCtx::new();
+        ctx.with_focus_fallback(FocusId::new("fallback"), Rect::new(0, 0, 10, 1), |ctx| {
+            ctx.register_focusable(FocusId::new("child"), Rect::new(0, 0, 10, 1), true);
+        });
+
+        assert_eq!(ctx.focus_targets().len(), 1);
+        assert_eq!(ctx.focus_targets()[0].id.as_str(), "child");
+    }
+
+    #[test]
+    fn set_focus_hotkey_updates_target_on_current_path() {
+        let mut ctx = LayoutCtx::new();
+
+        ctx.push_slot(ChildKey::new("slot"), Rect::new(0, 0, 10, 1), |ctx| {
+            ctx.register_focusable(FocusId::new("child"), Rect::new(0, 0, 10, 1), true);
+            assert!(
+                ctx.set_focus_hotkey(FocusId::new("child"), KeyEvent::from(crate::Key::Char('c')),)
+            );
+        });
+
+        assert_eq!(
+            ctx.focus_targets()[0].hotkey,
+            Some(KeyEvent::from(crate::Key::Char('c')))
+        );
     }
 
     #[test]

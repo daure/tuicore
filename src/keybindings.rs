@@ -8,7 +8,9 @@ use crate::event::{Key, KeyEvent, KeyModifiers};
 pub struct KeyBindings {
     nav: NavKeyBindings,
     focus: FocusKeyBindings,
+    button: ButtonKeyBindings,
     tabs: TabsKeyBindings,
+    toggle: ToggleKeyBindings,
     data_view: DataViewKeyBindings,
     dropdown: DropdownKeyBindings,
 }
@@ -33,9 +35,19 @@ pub struct FocusKeyBindings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ButtonKeyBindings {
+    press: Vec<KeySpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabsKeyBindings {
     previous: KeySpec,
     next: KeySpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToggleKeyBindings {
+    toggle: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +115,22 @@ impl Default for FocusKeyBindings {
     }
 }
 
+impl Default for ButtonKeyBindings {
+    fn default() -> Self {
+        Self {
+            press: vec![KeySpec::key(Key::Enter), KeySpec::plain(' ')],
+        }
+    }
+}
+
+impl Default for ToggleKeyBindings {
+    fn default() -> Self {
+        Self {
+            toggle: vec![KeySpec::key(Key::Enter), KeySpec::plain(' ')],
+        }
+    }
+}
+
 impl Default for DataViewKeyBindings {
     fn default() -> Self {
         Self {
@@ -151,7 +179,9 @@ impl Default for KeyBindings {
         Self {
             nav: NavKeyBindings::default(),
             focus: FocusKeyBindings::default(),
+            button: ButtonKeyBindings::default(),
             tabs: TabsKeyBindings::default(),
+            toggle: ToggleKeyBindings::default(),
             data_view: DataViewKeyBindings::default(),
             dropdown: DropdownKeyBindings::default(),
         }
@@ -193,8 +223,10 @@ impl KeyBindings {
         set_keys(&value, "focus", "next", &mut bindings.focus.next);
         set_keys(&value, "focus", "previous", &mut bindings.focus.previous);
         set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus);
+        set_keys(&value, "button", "press", &mut bindings.button.press);
         set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous);
         set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next);
+        set_keys(&value, "toggle", "toggle", &mut bindings.toggle.toggle);
         set_keys(
             &value,
             "data_view",
@@ -285,8 +317,16 @@ impl KeyBindings {
         &self.data_view
     }
 
+    pub fn button(&self) -> &ButtonKeyBindings {
+        &self.button
+    }
+
     pub fn dropdown(&self) -> &DropdownKeyBindings {
         &self.dropdown
+    }
+
+    pub fn toggle(&self) -> &ToggleKeyBindings {
+        &self.toggle
     }
 
     pub fn set_tabs_previous(&mut self, key: KeySpec) {
@@ -331,6 +371,15 @@ impl KeyBindings {
 
     pub fn with_focus_unfocus(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_focus_unfocus(keys);
+        self
+    }
+
+    pub fn set_button_press(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.button.press = keys.into_iter().collect();
+    }
+
+    pub fn with_button_press(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_button_press(keys);
         self
     }
 
@@ -642,6 +691,16 @@ impl FocusKeyBindings {
     }
 }
 
+impl ButtonKeyBindings {
+    pub fn press_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.press, key.into())
+    }
+
+    pub fn press_label(&self) -> String {
+        labels(&self.press)
+    }
+}
+
 impl DataViewKeyBindings {
     pub fn activate_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.activate, key.into())
@@ -788,6 +847,25 @@ impl DropdownKeyBindings {
 
     pub fn select_label(&self) -> String {
         labels(&self.select)
+    }
+}
+
+impl ToggleKeyBindings {
+    pub fn set_toggle(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.toggle = keys.into_iter().collect();
+    }
+
+    pub fn with_toggle(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_toggle(keys);
+        self
+    }
+
+    pub fn toggle_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.toggle, key.into())
+    }
+
+    pub fn toggle_label(&self) -> String {
+        labels(&self.toggle)
     }
 }
 
