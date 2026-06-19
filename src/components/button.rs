@@ -7,11 +7,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::animation::{Easing, Tween};
-use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{Key, KeyEvent, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, ColorTween, EventCtx, EventOutcome, FocusCtx,
-    FocusId, HintSource, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
-    TickResult, TuiNode, keybindings, line_width, theme,
+    FocusId, HintSource, HotkeyEvent, HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TuiNode,
+    hotkey_label_spans, hotkey_sequence_to_event, keybindings, line_width, theme,
 };
 
 const BUTTON_FOCUS: &str = "button";
@@ -38,6 +39,9 @@ impl ButtonOutcome {
 pub struct Button<M = ()> {
     label: String,
     hotkey: Option<String>,
+    hotkey_label_mode: HotkeyLabelMode,
+    hotkey_matcher: HotkeySequenceMatcher,
+    pending_hotkey_prefix: Option<String>,
     focused: bool,
     on_press: Option<Box<dyn Fn() -> M>>,
     background_color: ColorTween,
@@ -51,6 +55,9 @@ impl<M> Button<M> {
         Self {
             label: label.into(),
             hotkey: None,
+            hotkey_label_mode: HotkeyLabelMode::PreferMnemonic,
+            hotkey_matcher: HotkeySequenceMatcher::default(),
+            pending_hotkey_prefix: None,
             focused: false,
             on_press: None,
             background_color: ColorTween::idle(theme.border_fg()),
@@ -69,16 +76,28 @@ impl<M> Button<M> {
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
-        self.hotkey = Some(hotkey.into());
+        self.set_hotkey(hotkey);
         self
     }
 
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
-        self.hotkey = Some(hotkey.into());
+        let hotkey = hotkey.into();
+        self.hotkey = Some(hotkey.clone());
+        self.hotkey_matcher = HotkeySequenceMatcher::new([hotkey]);
     }
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
+        self.hotkey_matcher = HotkeySequenceMatcher::default();
+    }
+
+    pub fn hotkey_label_mode(mut self, mode: HotkeyLabelMode) -> Self {
+        self.hotkey_label_mode = mode;
+        self
+    }
+
+    pub fn set_hotkey_label_mode(&mut self, mode: HotkeyLabelMode) {
+        self.hotkey_label_mode = mode;
     }
 
     pub fn on_press(mut self, handler: impl Fn() -> M + 'static) -> Self {
@@ -122,6 +141,16 @@ impl<M> Button<M> {
         settings: AnimationSettings,
     ) -> ButtonOutcome {
         let key = key.into();
+        match self.hotkey_matcher.on_key(key) {
+            HotkeyMatch::Matched(_) => return self.press(settings),
+            HotkeyMatch::Pending | HotkeyMatch::Canceled => {
+                return ButtonOutcome {
+                    handled: true,
+                    pressed: false,
+                };
+            }
+            HotkeyMatch::Ignored => {}
+        }
         if self
             .hotkey_event()
             .is_some_and(|hotkey| keys_match(hotkey, key))
@@ -143,23 +172,28 @@ impl<M> Button<M> {
         let background = self.visible_background_color();
         let cap_style = Style::default().fg(background);
         let text_style = Style::default()
-            .fg(self.text_color.value())
+            .fg(self.visible_text_color())
             .bg(background)
             .add_modifier(if self.focused {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
             });
-        let label = match &self.hotkey {
-            Some(hotkey) => format!("{} ({hotkey})", self.label),
-            None => self.label.clone(),
+        let mut spans = vec![Span::styled("", cap_style)];
+        let active_prefix = if self.hotkey_matcher.prefix().is_empty() {
+            self.pending_hotkey_prefix.as_deref().unwrap_or("")
+        } else {
+            self.hotkey_matcher.prefix()
         };
-
-        let mut spans = vec![
-            Span::styled("", cap_style),
-            Span::styled(label, text_style),
-            Span::styled("", cap_style),
-        ];
+        spans.extend(hotkey_label_spans(
+            &self.label,
+            self.hotkey.as_deref(),
+            self.hotkey_label_mode,
+            Some(active_prefix),
+            text_style,
+            crate::hotkey_underline_style(text_style),
+        ));
+        spans.push(Span::styled("", cap_style));
 
         if self.is_showing_press_feedback() {
             spans.push(Span::raw(" ← pressed"));
@@ -169,10 +203,7 @@ impl<M> Button<M> {
     }
 
     fn hotkey_event(&self) -> Option<KeyEvent> {
-        self.hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
-            code: Key::Char(c),
-            modifiers: KeyModifiers::NONE,
-        })
+        self.hotkey.as_deref().and_then(hotkey_sequence_to_event)
     }
 
     fn sync_idle_colors(&mut self) {
@@ -218,8 +249,22 @@ impl<M> Button<M> {
     fn visible_background_color(&self) -> Color {
         if self.is_showing_press_feedback() {
             theme().success_fg()
-        } else {
+        } else if self.background_color.is_active() {
             self.background_color.value()
+        } else if self.focused {
+            theme().highlight_bg()
+        } else {
+            theme().border_fg()
+        }
+    }
+
+    fn visible_text_color(&self) -> Color {
+        if self.text_color.is_active() {
+            self.text_color.value()
+        } else if self.focused {
+            theme().highlight_fg()
+        } else {
+            theme().text_fg()
         }
     }
 }
@@ -249,8 +294,13 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        if let Some(hotkey) = self.hotkey_event() {
-            ctx.register_focusable_with_hotkey(FocusId::new(BUTTON_FOCUS), area, true, hotkey);
+        if let Some(hotkey) = self.hotkey.clone() {
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new(BUTTON_FOCUS),
+                area,
+                true,
+                vec![hotkey],
+            );
         } else {
             ctx.register_focusable(FocusId::new(BUTTON_FOCUS), area, true);
         }
@@ -262,6 +312,38 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Hotkey(hotkey) = event {
+            match hotkey {
+                HotkeyEvent::Pending(prefix) => {
+                    self.pending_hotkey_prefix = Some(prefix.clone());
+                    ctx.request_redraw();
+                    return EventOutcome::Ignored;
+                }
+                HotkeyEvent::Canceled => {
+                    if self.pending_hotkey_prefix.take().is_some() {
+                        ctx.request_redraw();
+                    }
+                    return EventOutcome::Ignored;
+                }
+                HotkeyEvent::Commit(sequence) => {
+                    self.pending_hotkey_prefix = None;
+                    if self
+                        .hotkey
+                        .as_deref()
+                        .is_some_and(|hotkey| hotkey_matches_sequence(hotkey, sequence))
+                    {
+                        self.press(ctx.animation());
+                        if let Some(on_press) = &self.on_press {
+                            ctx.emit(on_press());
+                        }
+                        ctx.request_redraw();
+                        ctx.stop_propagation();
+                        return EventOutcome::Handled;
+                    }
+                    return EventOutcome::Ignored;
+                }
+            }
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -292,10 +374,16 @@ where
 
 impl<M> Animated for Button<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        let hotkey_tick = if self.hotkey_matcher.tick(dt) {
+            TickResult::CHANGED
+        } else {
+            TickResult::IDLE
+        };
         self.background_color
             .tick(dt, settings)
             .merge(self.text_color.tick(dt, settings))
             .merge(self.press_feedback.tick(dt, settings))
+            .merge(hotkey_tick)
     }
 }
 
@@ -311,6 +399,10 @@ fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
         (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
         (a, b) => a == b,
     }
+}
+
+fn hotkey_matches_sequence(hotkey: &str, sequence: &str) -> bool {
+    crate::hotkey::normalize_hotkey(hotkey) == crate::hotkey::normalize_hotkey(sequence)
 }
 
 #[cfg(test)]
@@ -338,15 +430,70 @@ mod tests {
         let mut layout = LayoutCtx::new();
         button.layout(Rect::new(0, 0, 20, 1), &mut layout);
 
-        assert_eq!(
-            layout.focus_targets()[0].hotkey,
-            Some(KeyEvent::from(Key::Char('b')))
-        );
+        assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["b"]);
 
         let outcome = button.on_key(KeyEvent::from(Key::Char('b')));
 
         assert!(outcome.handled);
         assert!(outcome.pressed);
+    }
+
+    #[test]
+    fn visual_hotkey_events_do_not_count_as_button_presses() {
+        let mut button = Button::<()>::new("Run").hotkey("b");
+        let mut ctx = EventCtx::default();
+
+        let pending = button.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Pending("b".to_string())),
+            &mut ctx,
+        );
+        let canceled = button.event(&TuiEvent::Hotkey(HotkeyEvent::Canceled), &mut ctx);
+
+        assert_eq!(pending, EventOutcome::Ignored);
+        assert_eq!(canceled, EventOutcome::Ignored);
+        assert_eq!(ctx.propagation(), Propagation::Continue);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn multiletter_hotkey_waits_for_completion() {
+        let mut button = Button::<()>::new("Open").hotkey("op");
+
+        let pending = button.on_key(KeyEvent::from(Key::Char('o')));
+        let matched = button.on_key(KeyEvent::from(Key::Char('p')));
+
+        assert!(pending.handled);
+        assert!(!pending.pressed);
+        assert!(matched.handled);
+        assert!(matched.pressed);
+    }
+
+    #[test]
+    fn normalized_hotkey_commit_presses_button() {
+        let mut button = Button::<()>::new("Save").hotkey("S");
+        let mut ctx = EventCtx::default();
+
+        let outcome = button.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("s".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn whitespace_hotkey_commit_presses_button() {
+        let mut button = Button::<()>::new("Go").hotkey("g g");
+        let mut ctx = EventCtx::default();
+
+        let outcome = button.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("gg".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
     }
 
     #[test]
@@ -362,7 +509,25 @@ mod tests {
         let row = (0..32)
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
-        assert!(row.contains("button (b)"));
+        assert!(row.contains("button"));
+    }
+
+    #[test]
+    fn inline_hotkey_mode_keeps_suffix() {
+        let button = Button::<()>::new("button")
+            .hotkey("b")
+            .hotkey_label_mode(HotkeyLabelMode::Inline);
+        let mut terminal = Terminal::new(TestBackend::new(32, 1)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| button.render(frame, frame.area()))
+            .expect("button should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = (0..32)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row.contains("button |b|"));
     }
 
     #[test]

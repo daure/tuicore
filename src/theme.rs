@@ -4,7 +4,7 @@ use ratatui::style::Color;
 
 use crate::keybindings::config_dir;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThemeName {
     Amoled,
     Aura,

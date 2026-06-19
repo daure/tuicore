@@ -12,11 +12,12 @@ use crate::{
     EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HitRegion, LayoutCtx,
     LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
     ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode,
-    border_chars, border_set, keybindings, line_width, paragraph_scroll, preset, theme,
+    border_chars, border_set, hotkey_edge_spans, keybindings, line_width, paragraph_scroll, preset,
+    theme,
 };
 
 const DIALOG_FOCUS: &str = "dialog";
-const CLOSE_TEXT: &str = " x ";
+const CLOSE_TEXT: &str = "x";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogTitlePosition {
@@ -106,8 +107,8 @@ impl<M> Dialog<M> {
         self
     }
 
-    pub fn set_top_right(&mut self, title: impl Into<String>) {
-        self.top_right = Some(DialogTitle::standard(title));
+    pub fn set_top_right(&mut self, _title: impl Into<String>) {
+        self.top_right = None;
     }
 
     pub fn bottom_left(mut self, title: impl Into<String>) -> Self {
@@ -307,7 +308,7 @@ impl<M> Dialog<M> {
 
         frame.render_widget(Clear, area);
         let border = self.border.unwrap_or_else(|| preset().border());
-        let border_style = Style::default().fg(self.border_color.value());
+        let border_style = Style::default().fg(self.visible_border_color());
         let block = Block::default()
             .borders(Borders::ALL)
             .border_set(border_set(border))
@@ -359,7 +360,6 @@ impl<M> Dialog<M> {
 
     fn render_titles(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
         self.render_top_left_title(frame, area);
-        self.render_top_right_title(frame, area);
         self.render_bottom_title(frame, area, DialogTitlePosition::BottomLeft);
         self.render_bottom_title(frame, area, DialogTitlePosition::BottomRight);
         self.render_close_label(frame, area, border);
@@ -440,7 +440,7 @@ impl<M> Dialog<M> {
             ),
         };
         let style = Style::default()
-            .fg(self.title_color.value())
+            .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(title, style))),
@@ -453,20 +453,46 @@ impl<M> Dialog<M> {
         if area.width <= width + 2 {
             return;
         }
-        let chars = border_chars(border);
-        let border_style = Style::default().fg(self.border_color.value());
+        let border_style = Style::default().fg(self.visible_border_color());
         let title_style = Style::default()
-            .fg(self.title_color.value())
+            .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
-        let line = Line::from(vec![
-            Span::styled(chars.horizontal, border_style),
-            Span::styled(chars.right_join, border_style),
-            Span::styled(CLOSE_TEXT, title_style),
-            Span::styled(chars.left_join, border_style),
-            Span::styled(chars.horizontal, border_style),
-        ]);
-        let x = area.x + area.width.saturating_sub(width).saturating_sub(1);
+        let line = Line::from(hotkey_edge_spans(
+            CLOSE_TEXT,
+            None,
+            border,
+            border_style,
+            title_style,
+            title_style,
+        ));
+        let x = area.x + area.width.saturating_sub(width);
         frame.render_widget(Paragraph::new(line), Rect::new(x, area.y, width, 1));
+    }
+
+    fn visible_border_color(&self) -> ratatui::style::Color {
+        if self.border_color.is_active() {
+            return self.border_color.value();
+        }
+
+        let theme = theme();
+        if self.focused {
+            theme.accent_fg()
+        } else {
+            theme.border_fg()
+        }
+    }
+
+    fn visible_title_color(&self) -> ratatui::style::Color {
+        if self.title_color.is_active() {
+            return self.title_color.value();
+        }
+
+        let theme = theme();
+        if self.focused {
+            theme.accent_fg()
+        } else {
+            theme.muted_fg()
+        }
     }
 
     fn title_slot(&self, position: DialogTitlePosition) -> Option<&DialogTitle> {
@@ -597,13 +623,14 @@ where
         self.dialog.area = area;
         let inner = Dialog::<M>::inner_area(area);
         self.child_area = inner;
-        let focus_count = ctx.focus_targets().len();
-        ctx.with_focus_fallback(FocusId::new(DIALOG_FOCUS), area, |ctx| {
-            ctx.push_slot(ChildKey::body(), inner, |ctx| {
-                self.child.layout(inner, ctx);
-            });
-        });
-        if ctx.focus_targets().len() > focus_count {
+        let fallback_inserted = ctx
+            .with_focus_fallback_status(FocusId::new(DIALOG_FOCUS), area, |ctx| {
+                ctx.push_slot(ChildKey::body(), inner, |ctx| {
+                    self.child.layout(inner, ctx);
+                });
+            })
+            .1;
+        if !fallback_inserted {
             ctx.register_focusable(FocusId::new(DIALOG_FOCUS), area, true);
         }
         LayoutResult::new(area)
@@ -843,7 +870,7 @@ fn focus_color_animation() -> AnimationSpec {
 }
 
 fn close_label_width() -> u16 {
-    line_width(&Line::from(format!("-|-{CLOSE_TEXT}-|-"))).min(u16::MAX as usize) as u16
+    line_width(&Line::from(format!("┤{CLOSE_TEXT}│"))).min(u16::MAX as usize) as u16
 }
 
 fn centered_percent_rect(area: Rect, percent: u16) -> Rect {
@@ -925,6 +952,16 @@ mod tests {
     use super::*;
     use crate::{Button, FocusManager, TextInput, TreePath, animation_settings};
 
+    struct StaticBody;
+
+    impl TuiNode<()> for StaticBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+    }
+
     #[test]
     fn dialog_renders_all_title_slots_and_fixed_close_label() {
         let dialog = Dialog::<()>::new()
@@ -944,10 +981,43 @@ mod tests {
             .flat_map(|y| (0..40).map(move |x| buffer.cell((x, y)).unwrap().symbol()))
             .collect::<String>();
         assert!(rendered.contains("Title"));
-        assert!(rendered.contains("State"));
+        assert!(!rendered.contains("State"));
         assert!(rendered.contains("Help"));
         assert!(rendered.contains("Enter OK"));
-        assert!(rendered.contains("x"));
+        assert!(rendered.contains("┤x│"));
+    }
+
+    #[test]
+    fn dialog_top_right_close_hotkey_aligns_with_border_snapshot() {
+        let dialog = Dialog::<()>::new()
+            .top_left("Prompt")
+            .top_right("Ready")
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..5)
+            .map(|y| {
+                (0..40)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected = [
+            "╭─ Prompt ───────────────────────────┤x│",
+            "│Body                                  │",
+            "│                                      │",
+            "│                                      │",
+            "╰──────────────────────────────────────╯",
+        ]
+        .join("\n");
+        assert_eq!(rendered, expected);
     }
 
     #[test]
@@ -1072,5 +1142,17 @@ mod tests {
             targets[1].path,
             TreePath::default().child(ChildKey::second())
         );
+    }
+
+    #[test]
+    fn dialog_host_registers_single_fallback_focus_when_child_has_none() {
+        let mut host = Dialog::<()>::new().host(StaticBody);
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 24, 5), &mut layout);
+
+        assert_eq!(layout.focus_targets().len(), 1);
+        assert_eq!(layout.focus_targets()[0].id.as_str(), "dialog");
+        assert!(layout.focus_targets()[0].path.is_empty());
     }
 }

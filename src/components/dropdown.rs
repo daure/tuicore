@@ -14,9 +14,11 @@ use crate::event::{Key, KeyEvent};
 use crate::search::{SearchMode, search_ranked};
 use crate::{
     Animated, AnimationSettings, BorderKind, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusTarget, HintSource, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
-    TickResult, TuiEvent, TuiNode, border_chars, border_set, keybindings, line_width, preset,
-    theme,
+    FocusRequest, FocusTarget, HintSource, HotkeyEvent, HotkeyLabelMode, HotkeyMatch,
+    HotkeySequenceMatcher, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
+    TickResult, TuiEvent, TuiNode, border_chars, border_set, hotkey_badge_width, hotkey_edge_spans,
+    hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width,
+    preset, theme,
 };
 
 use super::text_input::{CursorFade, placeholder_line};
@@ -49,6 +51,20 @@ pub enum DropdownVariant {
     #[default]
     Bordered,
     Filled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DropdownLabelPosition {
+    #[default]
+    Top,
+    Inline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DropdownPopupDirection {
+    #[default]
+    Down,
+    Up,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +111,7 @@ pub struct Dropdown<T, Id> {
     ids: Vec<Id>,
     labels: Vec<String>,
     committed: Vec<Id>,
+    opened_committed: Vec<Id>,
     draft: Vec<Id>,
     filtered: Vec<Id>,
     multi: bool,
@@ -106,14 +123,21 @@ pub struct Dropdown<T, Id> {
     auto_focus_search: bool,
     placeholder: String,
     variant: DropdownVariant,
+    popup_direction: DropdownPopupDirection,
     centered: bool,
     field_area: Rect,
     overlay_bounds: Rect,
     focus_region: Option<DropdownFocusRegion>,
     label: Option<String>,
     hotkey: Option<String>,
+    hotkey_matcher: HotkeySequenceMatcher,
+    tab_stop: bool,
     alt_style: bool,
+    label_position: DropdownLabelPosition,
+    no_selection_text: Option<String>,
+    no_selection_highlighted: bool,
     field_cursor_fade: CursorFade,
+    pending_hotkey_prefix: Option<String>,
 }
 
 impl<T, Id> Dropdown<T, Id>
@@ -172,6 +196,7 @@ where
             ids,
             labels,
             committed: Vec::new(),
+            opened_committed: Vec::new(),
             draft: Vec::new(),
             multi,
             open: false,
@@ -182,14 +207,21 @@ where
             auto_focus_search: true,
             placeholder: String::from("Select..."),
             variant: DropdownVariant::Bordered,
+            popup_direction: DropdownPopupDirection::Down,
             centered: false,
             field_area: Rect::default(),
             overlay_bounds: Rect::default(),
             focus_region: None,
             label: None,
             hotkey: None,
+            hotkey_matcher: HotkeySequenceMatcher::default(),
+            tab_stop: true,
             alt_style: false,
+            label_position: DropdownLabelPosition::Top,
+            no_selection_text: None,
+            no_selection_highlighted: false,
             field_cursor_fade: CursorFade::default(),
+            pending_hotkey_prefix: None,
         }
     }
 
@@ -202,6 +234,20 @@ where
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn no_selection_text(mut self, text: impl Into<String>) -> Self {
+        self.no_selection_text = Some(text.into());
+        self
+    }
+
+    pub fn set_no_selection_text(&mut self, text: impl Into<String>) {
+        self.no_selection_text = Some(text.into());
+    }
+
+    pub fn clear_no_selection_text(&mut self) {
+        self.no_selection_text = None;
+        self.no_selection_highlighted = false;
     }
 
     pub fn commit_mode(mut self, mode: DropdownCommitMode) -> Self {
@@ -242,17 +288,38 @@ where
         self.label = None;
     }
 
+    pub fn label_position(mut self, position: DropdownLabelPosition) -> Self {
+        self.label_position = position;
+        self
+    }
+
+    pub fn set_label_position(&mut self, position: DropdownLabelPosition) {
+        self.label_position = position;
+    }
+
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
-        self.hotkey = Some(hotkey.into());
+        self.set_hotkey(hotkey);
         self
     }
 
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
-        self.hotkey = Some(hotkey.into());
+        let hotkey = hotkey.into();
+        self.hotkey = Some(hotkey.clone());
+        self.hotkey_matcher = HotkeySequenceMatcher::new([hotkey]);
     }
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
+        self.hotkey_matcher = HotkeySequenceMatcher::default();
+    }
+
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    pub fn set_tab_stop(&mut self, tab_stop: bool) {
+        self.tab_stop = tab_stop;
     }
 
     pub fn alt_style(mut self, alt_style: bool) -> Self {
@@ -269,12 +336,22 @@ where
         self
     }
 
+    pub fn popup_direction(mut self, direction: DropdownPopupDirection) -> Self {
+        self.popup_direction = direction;
+        self
+    }
+
+    pub fn set_popup_direction(&mut self, direction: DropdownPopupDirection) {
+        self.popup_direction = direction;
+    }
+
     pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
         self.committed = self.known_ids(ids);
         if !self.multi {
             self.committed.truncate(1);
         }
         self.draft = self.committed.clone();
+        self.no_selection_highlighted = false;
         self.sync_view_selection();
         self
     }
@@ -309,12 +386,14 @@ where
         }
 
         self.open = true;
+        self.opened_committed = self.committed.clone();
         self.draft = self.committed.clone();
         self.highlight_committed();
-        if !self.multi && self.draft.is_empty() {
+        if !self.multi && self.draft.is_empty() && self.no_selection_text.is_none() {
             self.set_single_draft_from_highlight();
         }
         self.refresh_filter();
+        self.no_selection_highlighted = self.show_no_selection_row() && self.committed.is_empty();
         self.sync_view_selection();
         self.sync_child_focus();
         DropdownOutcome {
@@ -331,6 +410,8 @@ where
         }
         let had_focus = self.is_focused();
         self.open = false;
+        self.no_selection_highlighted = false;
+        self.opened_committed.clear();
         self.clear_search_query();
         if had_focus {
             self.sync_child_focus();
@@ -353,6 +434,9 @@ where
     }
 
     pub fn cancel(&mut self) -> DropdownOutcome {
+        if !self.opened_committed.is_empty() || !self.committed.is_empty() {
+            self.committed = self.opened_committed.clone();
+        }
         self.draft = self.committed.clone();
         self.sync_view_selection();
         let mut outcome = self.close();
@@ -363,7 +447,7 @@ where
     }
 
     pub fn commit(&mut self) -> DropdownOutcome {
-        if !self.multi && self.draft.is_empty() {
+        if !self.multi && self.draft.is_empty() && self.no_selection_text.is_none() {
             self.set_single_draft_from_highlight();
         }
         let changed = self.committed != self.draft;
@@ -380,8 +464,12 @@ where
             return self.on_closed_key(key, area);
         }
 
+        if self.is_cancel_key(key) {
+            return self.cancel();
+        }
+
         match key.code {
-            Key::Esc => return self.cancel(),
+            Key::Enter if self.commit_mode == DropdownCommitMode::Immediate => return self.close(),
             Key::Enter => return self.commit(),
             Key::Char(' ') if self.multi && key.modifiers.is_empty() => {
                 return self.toggle_highlighted();
@@ -413,18 +501,30 @@ where
                 if !self.multi {
                     self.set_single_draft_from_highlight();
                     self.sync_view_selection();
+                    if self.commit_mode == DropdownCommitMode::Immediate {
+                        self.committed = self.draft.clone();
+                    }
                 }
             }
             if input.needs_redraw() {
                 return DropdownOutcome {
                     handled: true,
                     changed: input.changed,
+                    committed: input.changed
+                        && !self.multi
+                        && self.commit_mode == DropdownCommitMode::Immediate,
                     ..DropdownOutcome::IDLE
                 };
             }
         }
 
         DropdownOutcome::IDLE
+    }
+
+    fn is_cancel_key(&self, key: KeyEvent) -> bool {
+        key.code == Key::Esc
+            || (key.code == Key::Char('[')
+                && key.modifiers.contains(crate::event::KeyModifiers::CONTROL))
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -462,35 +562,32 @@ where
         self.overlay_bounds = overlay_bounds;
         if !self.open {
             if let Some(ref h) = self.hotkey {
-                if let Some(c) = h.chars().next() {
-                    let key = KeyEvent {
-                        code: Key::Char(c),
-                        modifiers: crate::event::KeyModifiers::NONE,
-                    };
-                    ctx.register_focusable_with_hotkey(
-                        FocusId::new(FIELD_FOCUS),
-                        self.field_area,
-                        true,
-                        key,
-                    );
-                } else {
-                    ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
-                }
+                ctx.register_focusable_with_hotkey_sequences(
+                    FocusId::new(FIELD_FOCUS),
+                    self.field_area,
+                    true,
+                    vec![h.clone()],
+                );
+                ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
             } else {
                 ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
+                ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
             }
             return LayoutResult::new(self.field_area);
         }
 
         let popup_area = self.popup_area_for(self.field_area, overlay_bounds);
         let [search_area, list_area] = self.popup_inner_areas(popup_area);
+        let rows_area = self.popup_rows_area(list_area);
         if self.search_enabled() && self.auto_focus_search {
             ctx.register_focusable(FocusId::new(SEARCH_FOCUS), search_area, true);
+            ctx.set_focus_tab_stop(FocusId::new(SEARCH_FOCUS), self.tab_stop);
         } else {
             ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
+            ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
         }
         let mut child_ctx = LayoutCtx::new();
-        <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, list_area, &mut child_ctx);
+        <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, rows_area, &mut child_ctx);
         LayoutResult::new(self.field_area)
     }
 
@@ -511,16 +608,19 @@ where
             return outcome;
         }
 
-        if let Key::Char(c) = key.code {
-            if key.modifiers.is_empty() {
-                if let Some(ref h) = self.hotkey {
-                    if h.chars().next().map(|hc| hc.to_ascii_lowercase())
-                        == Some(c.to_ascii_lowercase())
-                    {
-                        return self.open();
-                    }
-                }
-            }
+        match self.hotkey_matcher.on_key(key) {
+            HotkeyMatch::Matched(_) => return self.open(),
+            HotkeyMatch::Pending | HotkeyMatch::Canceled => return DropdownOutcome::HANDLED,
+            HotkeyMatch::Ignored => {}
+        }
+
+        if self
+            .hotkey
+            .as_deref()
+            .and_then(hotkey_sequence_to_event)
+            .is_some_and(|hotkey| keys_match(hotkey, key))
+        {
+            return self.open();
         }
 
         match key.code {
@@ -530,9 +630,21 @@ where
     }
 
     fn navigate(&mut self, key: Key, area: Rect) -> DropdownOutcome {
+        if let Some(outcome) = self.navigate_no_selection_row(key) {
+            return outcome;
+        }
+
+        let moved_to_no_selection = self.should_move_to_no_selection(key);
         let outcome = self
             .data_view
             .on_key(KeyEvent::from(key), self.list_area(area));
+        if moved_to_no_selection {
+            self.draft.clear();
+            self.sync_view_selection();
+            self.set_no_selection_highlighted(true);
+            return DropdownOutcome::changed();
+        }
+        self.set_no_selection_highlighted(false);
         if !self.multi {
             self.set_single_draft_from_highlight();
             self.sync_view_selection();
@@ -564,6 +676,12 @@ where
     }
 
     fn select_highlighted(&mut self) -> DropdownOutcome {
+        if self.no_selection_highlighted {
+            self.draft.clear();
+            self.sync_view_selection();
+            return self.commit();
+        }
+
         if self.multi {
             return self.toggle_highlighted();
         }
@@ -575,17 +693,21 @@ where
 
     fn refresh_filter(&mut self) {
         let query = self.search_input.current_value();
+        let query_empty = query.is_empty();
         let filtered = match self.search_mode {
-            DropdownSearchMode::None if query.is_empty() => self.ids.clone(),
+            DropdownSearchMode::None if query_empty => self.ids.clone(),
             DropdownSearchMode::None => self.ids.clone(),
-            DropdownSearchMode::Contains if query.is_empty() => self.ids.clone(),
-            DropdownSearchMode::Fuzzy if query.is_empty() => self.ids.clone(),
+            DropdownSearchMode::Contains if query_empty => self.ids.clone(),
+            DropdownSearchMode::Fuzzy if query_empty => self.ids.clone(),
             DropdownSearchMode::Contains => self.search(SearchMode::Contains),
             DropdownSearchMode::Fuzzy => self.search(SearchMode::Fuzzy),
         };
 
         self.filtered = filtered;
-        if self.search_mode == DropdownSearchMode::None || query.is_empty() {
+        if !self.show_no_selection_row() {
+            self.set_no_selection_highlighted(false);
+        }
+        if self.search_mode == DropdownSearchMode::None || query_empty {
             self.data_view.clear_visible_row_ids();
         } else {
             self.data_view.set_visible_row_ids(self.filtered.clone());
@@ -647,8 +769,50 @@ where
     fn sync_child_focus(&mut self) {
         self.search_input
             .set_focused(self.open && self.focus_region == Some(DropdownFocusRegion::Search));
-        self.data_view
-            .set_focused(self.open && self.focus_region.is_some());
+        self.data_view.set_focused(
+            self.open && self.focus_region.is_some() && !self.no_selection_highlighted,
+        );
+    }
+
+    fn set_no_selection_highlighted(&mut self, highlighted: bool) {
+        if self.no_selection_highlighted == highlighted {
+            return;
+        }
+        self.no_selection_highlighted = highlighted;
+        self.sync_child_focus();
+    }
+
+    fn navigate_no_selection_row(&mut self, key: Key) -> Option<DropdownOutcome> {
+        if !self.no_selection_highlighted {
+            return None;
+        }
+        if matches!(key, Key::Down | Key::PageDown) {
+            self.set_no_selection_highlighted(false);
+            if !self.multi {
+                self.set_single_draft_from_highlight();
+                self.sync_view_selection();
+                if self.commit_mode == DropdownCommitMode::Immediate {
+                    self.committed = self.draft.clone();
+                }
+            }
+            return Some(DropdownOutcome::changed());
+        }
+        if matches!(key, Key::Up | Key::PageUp) {
+            return Some(DropdownOutcome::HANDLED);
+        }
+        None
+    }
+
+    fn should_move_to_no_selection(&self, key: Key) -> bool {
+        matches!(key, Key::Up | Key::PageUp)
+            && self.show_no_selection_row()
+            && self.first_visible_is_highlighted()
+    }
+
+    fn first_visible_is_highlighted(&self) -> bool {
+        self.filtered
+            .first()
+            .is_some_and(|first| self.data_view.highlighted_id().as_ref() == Some(first))
     }
 
     fn target_matches_focus_region(&self, target: Option<&FocusId>) -> bool {
@@ -686,13 +850,23 @@ where
     fn selected_summary(&self) -> String {
         let ids = &self.committed;
         if ids.is_empty() {
-            return self.placeholder.clone();
+            return self.empty_summary();
         }
         if self.multi && ids.len() > 1 {
             return format!("{} selected", ids.len());
         }
         self.label_for(&ids[0])
             .unwrap_or_else(|| self.placeholder.clone())
+    }
+
+    fn empty_summary(&self) -> String {
+        self.no_selection_text
+            .clone()
+            .unwrap_or_else(|| self.placeholder.clone())
+    }
+
+    fn show_no_selection_row(&self) -> bool {
+        self.no_selection_text.is_some() && self.search_input.current_value().is_empty()
     }
 
     fn label_for(&self, id: &Id) -> Option<String> {
@@ -740,18 +914,25 @@ where
             return clip_rect(popup_area, bounds);
         }
 
-        let popup_y = field_area
-            .y
-            .saturating_add(field_area.height)
-            .saturating_sub(self.popup_overlap());
-        let available_height = bounds
-            .y
-            .saturating_add(bounds.height)
-            .saturating_sub(popup_y);
-        let popup_height = self
+        let desired_height = self
             .popup_content_height(field_area.width)
-            .min(self.effective_max_popup_height())
-            .min(available_height);
+            .min(self.effective_max_popup_height());
+        let (popup_y, available_height) = match self.popup_direction {
+            DropdownPopupDirection::Down => {
+                let y = field_area
+                    .y
+                    .saturating_add(field_area.height)
+                    .saturating_sub(self.popup_overlap());
+                let available = bounds.y.saturating_add(bounds.height).saturating_sub(y);
+                (y, available)
+            }
+            DropdownPopupDirection::Up => {
+                let available = field_area.y.saturating_sub(bounds.y);
+                let height = desired_height.min(available);
+                (field_area.y.saturating_sub(height), available)
+            }
+        };
+        let popup_height = desired_height.min(available_height);
         let popup_area = Rect::new(field_area.x, popup_y, field_area.width, popup_height);
 
         clip_rect(popup_area, bounds)
@@ -763,7 +944,8 @@ where
             DropdownVariant::Filled => 1,
         };
         if self.alt_style {
-            area.height.min(base_height + 1)
+            let label_height = u16::from(self.label_position == DropdownLabelPosition::Top);
+            area.height.min(base_height + label_height)
         } else {
             area.height.min(base_height)
         }
@@ -796,7 +978,11 @@ where
         if self.filtered.is_empty() {
             return 1;
         }
-        self.filtered.len().min(usize::from(u16::MAX)) as u16
+        let no_selection_row = usize::from(self.show_no_selection_row());
+        self.filtered
+            .len()
+            .saturating_add(no_selection_row)
+            .min(usize::from(u16::MAX)) as u16
     }
 
     fn needs_horizontal_scrollbar(&self, width: u16) -> bool {
@@ -824,7 +1010,17 @@ where
             return popup_area;
         }
         let [_, list_area] = self.popup_inner_areas(popup_area);
-        list_area
+        self.popup_rows_area(list_area)
+    }
+
+    fn popup_rows_area(&self, list_area: Rect) -> Rect {
+        let no_selection_height = u16::from(self.show_no_selection_row());
+        Rect::new(
+            list_area.x,
+            list_area.y.saturating_add(no_selection_height),
+            list_area.width,
+            list_area.height.saturating_sub(no_selection_height),
+        )
     }
 
     fn render_field(&self, frame: &mut Frame, area: Rect) {
@@ -832,7 +1028,7 @@ where
             return;
         }
 
-        if self.alt_style {
+        if self.alt_style && self.label_position == DropdownLabelPosition::Top {
             let label_area = Rect::new(area.x, area.y, area.width, area.height.min(1));
             let mut text = String::new();
             if let Some(ref l) = self.label {
@@ -842,7 +1038,7 @@ where
                 if !text.is_empty() {
                     text.push(' ');
                 }
-                text.push_str(&format!("({h})"));
+                text.push_str(&format!("|{h}|"));
             }
             if !text.is_empty() && !label_area.is_empty() {
                 let theme = theme();
@@ -853,7 +1049,20 @@ where
                         theme.muted_fg()
                     })
                     .add_modifier(Modifier::BOLD);
-                frame.render_widget(Paragraph::new(text).style(style), label_area);
+                if let Some(ref h) = self.hotkey {
+                    let label = self.label.clone().unwrap_or_default();
+                    let spans = hotkey_label_spans(
+                        &label,
+                        Some(h.as_str()),
+                        HotkeyLabelMode::Inline,
+                        self.pending_hotkey_prefix.as_deref(),
+                        style,
+                        hotkey_underline_style(style),
+                    );
+                    frame.render_widget(Paragraph::new(Line::from(spans)), label_area);
+                } else {
+                    frame.render_widget(Paragraph::new(text).style(style), label_area);
+                }
             }
             let dropdown_area = Rect::new(
                 area.x,
@@ -891,7 +1100,7 @@ where
         let text = if self.committed.is_empty() {
             let placeholder_style = Style::default().fg(theme.muted_fg());
             placeholder_line(
-                &self.placeholder,
+                &self.empty_summary(),
                 inner.width as usize,
                 self.focus_region == Some(DropdownFocusRegion::Field),
                 self.field_cursor_fade.style(placeholder_style),
@@ -935,16 +1144,21 @@ where
 
         frame.render_widget(Paragraph::new("").style(base_style), area);
 
+        let arrow_x = area.x + area.width.saturating_sub(2);
         let text_area = Rect::new(
             area.x.saturating_add(1),
             area.y,
-            area.width.saturating_sub(2),
+            area.width.saturating_sub(3),
             1,
         );
         if !text_area.is_empty() {
-            let text = if self.committed.is_empty() {
+            let text = if self.alt_style && self.label_position == DropdownLabelPosition::Inline {
+                self.inline_filled_line(text_style)
+            } else if self.committed.is_empty() && self.no_selection_text.is_some() {
+                Line::from(Span::styled(self.empty_summary(), text_style))
+            } else if self.committed.is_empty() {
                 placeholder_line(
-                    &self.placeholder,
+                    &self.empty_summary(),
                     text_area.width as usize,
                     self.focus_region == Some(DropdownFocusRegion::Field),
                     self.field_cursor_fade.style(text_style),
@@ -956,7 +1170,7 @@ where
             frame.render_widget(Paragraph::new(text), text_area);
         }
 
-        let arrow_area = Rect::new(area.x + area.width.saturating_sub(1), area.y, 1, 1);
+        let arrow_area = Rect::new(arrow_x, area.y, 1, 1);
         frame.render_widget(
             Paragraph::new("")
                 .style(base_style)
@@ -1007,6 +1221,23 @@ where
                 self.search_input.render(frame, search_area);
             }
         }
+        let no_selection_height = u16::from(self.show_no_selection_row());
+        let no_selection_area = Rect::new(
+            list_area.x,
+            list_area.y,
+            list_area.width,
+            no_selection_height,
+        );
+        let rows_area = Rect::new(
+            list_area.x,
+            list_area.y.saturating_add(no_selection_height),
+            list_area.width,
+            list_area.height.saturating_sub(no_selection_height),
+        );
+        if self.show_no_selection_row() {
+            self.render_no_selection_row(frame, no_selection_area, popup_content_style);
+        }
+
         if self.filtered.is_empty() {
             let line = Line::styled(
                 "No results",
@@ -1017,12 +1248,67 @@ where
             );
             frame.render_widget(
                 Paragraph::new(line).style(popup_content_style.unwrap_or_default()),
-                list_area,
+                rows_area,
             );
         } else {
             self.data_view
-                .render_with_row_style(frame, list_area, popup_content_style);
+                .render_with_row_style(frame, rows_area, popup_content_style);
         }
+    }
+
+    fn inline_filled_line(&self, base_style: Style) -> Line<'static> {
+        let mut spans = Vec::new();
+        if let Some(label) = &self.label {
+            spans.push(Span::styled(format!("{label}: "), base_style));
+        }
+
+        let value_style = if self.committed.is_empty() {
+            base_style.add_modifier(Modifier::DIM)
+        } else {
+            base_style.add_modifier(Modifier::BOLD)
+        };
+        spans.push(Span::styled(self.selected_summary(), value_style));
+
+        if let Some(hotkey) = &self.hotkey {
+            spans.extend(hotkey_label_spans(
+                "",
+                Some(hotkey.as_str()),
+                HotkeyLabelMode::Inline,
+                self.pending_hotkey_prefix.as_deref(),
+                base_style,
+                hotkey_underline_style(base_style),
+            ));
+        }
+
+        Line::from(spans)
+    }
+
+    fn render_no_selection_row(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        popup_content_style: Option<Style>,
+    ) {
+        let Some(text) = &self.no_selection_text else {
+            return;
+        };
+        if area.is_empty() {
+            return;
+        }
+
+        let theme = theme();
+        let style = if self.no_selection_highlighted {
+            Style::default()
+                .fg(theme.selected_fg())
+                .bg(theme.selected_bg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            popup_content_style.unwrap_or_default().fg(theme.muted_fg())
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(text.clone(), style))),
+            area,
+        );
     }
 
     fn popup_content_style(&self) -> Option<Style> {
@@ -1080,7 +1366,6 @@ where
             return;
         }
 
-        let chars = border_chars(border);
         let theme = theme();
         let border_style = Style::default().fg(if self.is_focused() {
             theme.accent_fg()
@@ -1092,21 +1377,22 @@ where
         } else {
             theme.muted_fg()
         });
-        let title = bounded_title(title, area.width.saturating_sub(5) as usize);
-        let title_width = line_width(&Line::from(title.as_str())).min(area.width as usize);
-        if title_width == 0 {
+        let width = hotkey_badge_width(title).min(u16::MAX as usize) as u16;
+        if width == 0 {
             return;
         }
 
-        let line = Line::from(vec![
-            Span::styled(chars.right_join, border_style),
-            Span::styled(title, title_style),
-            Span::styled(chars.left_join, border_style),
-        ]);
-        let width = (title_width + 2).min(u16::MAX as usize) as u16;
+        let line = Line::from(hotkey_edge_spans(
+            title,
+            self.pending_hotkey_prefix.as_deref(),
+            border,
+            border_style,
+            title_style,
+            hotkey_underline_style(title_style),
+        ));
         let x = match alignment {
             Alignment::Left | Alignment::Center => area.x.saturating_add(1),
-            Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(1),
+            Alignment::Right => area.x + area.width.saturating_sub(width),
         };
 
         frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
@@ -1123,7 +1409,7 @@ where
             DropdownVariant::Bordered => 3,
             DropdownVariant::Filled => 1,
         };
-        if self.alt_style {
+        if self.alt_style && self.label_position == DropdownLabelPosition::Top {
             height += 1;
         }
         let width = (self.selected_summary().chars().count() as u16).saturating_add(2);
@@ -1148,6 +1434,41 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Hotkey(hotkey) = event {
+            match hotkey {
+                HotkeyEvent::Pending(prefix) => {
+                    self.pending_hotkey_prefix = Some(prefix.clone());
+                    ctx.request_redraw();
+                    return EventOutcome::Ignored;
+                }
+                HotkeyEvent::Canceled => {
+                    if self.pending_hotkey_prefix.take().is_some() {
+                        ctx.request_redraw();
+                    }
+                    return EventOutcome::Ignored;
+                }
+                HotkeyEvent::Commit(sequence) => {
+                    self.pending_hotkey_prefix = None;
+                    if self
+                        .hotkey
+                        .as_deref()
+                        .is_some_and(|hotkey| hotkey_matches_sequence(hotkey, sequence))
+                    {
+                        let outcome = self.open();
+                        if outcome.opened {
+                            ctx.request_layout();
+                            if self.search_enabled() && self.auto_focus_search {
+                                ctx.focus(FocusRequest::Target(FocusId::new(SEARCH_FOCUS)));
+                            }
+                        }
+                        ctx.request_redraw();
+                        ctx.stop_propagation();
+                        return EventOutcome::Handled;
+                    }
+                    return EventOutcome::Ignored;
+                }
+            }
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -1226,6 +1547,11 @@ where
     Id: Clone + Eq + Hash,
 {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        let hotkey_tick = if self.hotkey_matcher.tick(dt) {
+            TickResult::CHANGED
+        } else {
+            TickResult::IDLE
+        };
         Animated::tick(&mut self.data_view, dt, settings)
             .merge(Animated::tick(&mut self.search_input, dt, settings))
             .merge(self.field_cursor_fade.tick(
@@ -1233,6 +1559,7 @@ where
                 dt,
                 settings,
             ))
+            .merge(hotkey_tick)
     }
 }
 
@@ -1296,6 +1623,20 @@ fn char_width(ch: char) -> usize {
     let mut value = String::new();
     value.push(ch);
     line_width(&Line::from(value))
+}
+
+fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
+    if hotkey.modifiers != key.modifiers {
+        return false;
+    }
+    match (hotkey.code, key.code) {
+        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (a, b) => a == b,
+    }
+}
+
+fn hotkey_matches_sequence(hotkey: &str, sequence: &str) -> bool {
+    crate::hotkey::normalize_hotkey(hotkey) == crate::hotkey::normalize_hotkey(sequence)
 }
 
 #[cfg(test)]
@@ -1520,6 +1861,63 @@ mod tests {
     }
 
     #[test]
+    fn immediate_commit_updates_selection_while_filtering() {
+        let mut dropdown = single_dropdown()
+            .commit_mode(DropdownCommitMode::Immediate)
+            .selected_one("Alpha");
+
+        dropdown.open();
+        let outcome = dropdown.on_key(char_key('g'), AREA);
+
+        assert!(outcome.committed);
+        assert!(dropdown.is_open());
+        assert_eq!(dropdown.selected_id(), Some("Gamma"));
+    }
+
+    #[test]
+    fn immediate_enter_closes_without_changing_current_selection() {
+        let mut dropdown = single_dropdown()
+            .commit_mode(DropdownCommitMode::Immediate)
+            .selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(char_key('g'), AREA);
+        let outcome = dropdown.on_key(Key::Enter, AREA);
+
+        assert!(outcome.closed);
+        assert!(!dropdown.is_open());
+        assert_eq!(dropdown.selected_id(), Some("Gamma"));
+    }
+
+    #[test]
+    fn immediate_escape_restores_value_from_before_open() {
+        let mut dropdown = single_dropdown()
+            .commit_mode(DropdownCommitMode::Immediate)
+            .selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(char_key('g'), AREA);
+        dropdown.on_key(Key::Esc, AREA);
+
+        assert!(!dropdown.is_open());
+        assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    }
+
+    #[test]
+    fn immediate_ctrl_left_bracket_restores_value_from_before_open() {
+        let mut dropdown = single_dropdown()
+            .commit_mode(DropdownCommitMode::Immediate)
+            .selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(char_key('g'), AREA);
+        dropdown.on_key(ctrl('['), AREA);
+
+        assert!(!dropdown.is_open());
+        assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    }
+
+    #[test]
     fn explicit_single_keeps_trigger_value_until_commit() {
         let mut dropdown = single_dropdown().selected_one("Alpha");
 
@@ -1731,7 +2129,81 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().highlight_bg());
         assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "B");
-        assert_eq!(buffer.cell((11, 0)).unwrap().symbol(), "");
+        assert_eq!(buffer.cell((10, 0)).unwrap().symbol(), "");
+    }
+
+    #[test]
+    fn filled_inline_label_renders_label_value_and_hotkey_on_one_line() {
+        let dropdown = single_dropdown()
+            .variant(DropdownVariant::Filled)
+            .label("Lane")
+            .hotkey("4")
+            .alt_style(true)
+            .label_position(DropdownLabelPosition::Inline)
+            .selected_one("Gamma");
+        let mut terminal = Terminal::new(TestBackend::new(24, 1)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dropdown.render(frame, frame.area()))
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = (0..24)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row.contains("Lane: Gamma |4|"));
+        assert!(
+            buffer
+                .cell((7, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn no_selection_text_renders_empty_value_and_popup_option() {
+        let mut dropdown = single_dropdown()
+            .variant(DropdownVariant::Filled)
+            .no_selection_text("--None--");
+        dropdown.open();
+        dropdown.layout_overlay::<()>(
+            Rect::new(0, 0, 16, 1),
+            Rect::new(0, 0, 16, 8),
+            &mut LayoutCtx::new(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(16, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                dropdown.render(frame, Rect::new(0, 0, 16, 1));
+                dropdown.render_popup_overlay(frame, frame.area());
+            })
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        let field = (0..16)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        let option = (0..16)
+            .map(|x| buffer.cell((x, 2)).unwrap().symbol())
+            .collect::<String>();
+        assert!(field.contains("--None--"));
+        assert!(option.contains("--None--"));
+    }
+
+    #[test]
+    fn no_selection_text_can_be_selected_to_clear_value() {
+        let mut dropdown = single_dropdown()
+            .variant(DropdownVariant::Filled)
+            .no_selection_text("--None--")
+            .selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(ctrl('k'), AREA);
+        dropdown.on_key(Key::Enter, AREA);
+
+        assert_eq!(dropdown.selected_id(), None);
     }
 
     #[test]
@@ -1952,6 +2424,21 @@ mod tests {
     }
 
     #[test]
+    fn upward_popup_opens_above_trigger() {
+        let mut dropdown = single_dropdown().popup_direction(DropdownPopupDirection::Up);
+        dropdown.open();
+        dropdown.layout_overlay::<()>(
+            Rect::new(0, 10, 24, 1),
+            Rect::new(0, 0, 24, 12),
+            &mut LayoutCtx::new(),
+        );
+
+        let popup_area = dropdown.popup_overlay_area(Rect::new(0, 0, 24, 12));
+
+        assert_eq!(popup_area.y + popup_area.height, 10);
+    }
+
+    #[test]
     fn filled_popup_layout_has_no_border_offset() {
         let mut dropdown = single_dropdown().variant(DropdownVariant::Filled);
         dropdown.open();
@@ -2070,6 +2557,71 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_hotkey_commit_opens_dropdown() {
+        let mut dropdown = single_dropdown().hotkey("D");
+        let mut event = EventCtx::<()>::default();
+
+        let outcome = dropdown.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("d".to_string())),
+            &mut event,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(dropdown.is_open());
+        assert!(event.layout_requested());
+    }
+
+    #[test]
+    fn hotkey_commit_focuses_search_when_auto_focus_is_enabled() {
+        let mut dropdown = single_dropdown().hotkey("db");
+        let mut event = EventCtx::<()>::default();
+
+        let outcome = dropdown.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("db".to_string())),
+            &mut event,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(dropdown.is_open());
+        assert_eq!(
+            event.focus_request(),
+            Some(&FocusRequest::Target(FocusId::new(SEARCH_FOCUS)))
+        );
+    }
+
+    #[test]
+    fn multiletter_hotkey_opens_after_direct_sequence() {
+        let mut dropdown = single_dropdown().hotkey("db");
+
+        let pending = dropdown.on_key(KeyEvent::from(Key::Char('d')), AREA);
+        let matched = dropdown.on_key(KeyEvent::from(Key::Char('b')), AREA);
+
+        assert!(pending.handled);
+        assert!(!pending.opened);
+        assert!(matched.handled);
+        assert!(matched.opened);
+        assert!(dropdown.is_open());
+    }
+
+    #[test]
+    fn focused_multiletter_hotkey_opens_from_key_events() {
+        let mut dropdown = single_dropdown().hotkey("db");
+        let mut layout = LayoutCtx::new();
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+        let target = layout.focus_targets()[0].clone();
+        let mut focus = FocusCtx::<()>::default();
+        dropdown.dispatch_focus(&target, true, &mut focus);
+        let mut event = EventCtx::<()>::default();
+
+        let pending = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut event);
+        let matched = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Char('b'))), &mut event);
+
+        assert_eq!(pending, EventOutcome::Handled);
+        assert_eq!(matched, EventOutcome::Handled);
+        assert!(dropdown.is_open());
+    }
+
+    #[test]
     fn dropdown_with_label_and_hotkey_renders_in_borders() {
         let dropdown = single_dropdown().label("Database").hotkey("d");
         let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
@@ -2087,7 +2639,7 @@ mod tests {
         let bottom = (0..24)
             .map(|x| buffer.cell((x, 2)).unwrap().symbol())
             .collect::<String>();
-        assert!(bottom.contains("┤ d ├"));
+        assert!(bottom.contains("┤d│"));
     }
 
     #[test]
@@ -2113,7 +2665,7 @@ mod tests {
         let row0 = (0..24)
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
-        assert!(row0.contains("Search (s)"));
+        assert!(row0.contains("Search |s|"));
 
         let row1 = (0..24)
             .map(|x| buffer.cell((x, 1)).unwrap().symbol())

@@ -25,7 +25,8 @@ pub use data_view::{
 };
 pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogLayer, DialogTitlePosition};
 pub use dropdown::{
-    Dropdown, DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant,
+    Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownPopupDirection,
+    DropdownSearchMode, DropdownVariant,
 };
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use grid::{Grid, GridItem, GridTrack};

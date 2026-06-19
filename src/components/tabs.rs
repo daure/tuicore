@@ -6,12 +6,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use crate::event::{Key, KeyEvent, KeyModifiers};
+use crate::event::{Key, KeyEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, Children, ColorTween,
-    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, LayoutCtx, LayoutResult,
-    LifecycleCtx, TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_chars, border_set,
-    keybindings, line_width, preset, theme,
+    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, HotkeyEvent,
+    HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutResult, LifecycleCtx,
+    TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_chars, border_set,
+    hotkey_badge_spans, hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans,
+    hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width, preset, theme,
 };
 
 const TABS_FOCUS: &str = "tabs";
@@ -41,6 +43,8 @@ pub struct Tabs<M = ()> {
     selected_color: ColorTween,
     body_area: Rect,
     hotkey: Option<String>,
+    hotkey_matcher: HotkeySequenceMatcher,
+    pending_hotkey_prefix: Option<String>,
 }
 
 impl<M> Tab<M>
@@ -87,6 +91,10 @@ where
             bodies = bodies.child(key, tab.body);
         }
 
+        let hotkey_entries = tab_hotkey_entries(&tab_hotkeys);
+        let hotkey_matcher =
+            HotkeySequenceMatcher::new(hotkey_entries.iter().map(|(_, hotkey)| hotkey.as_str()));
+
         Self {
             titles,
             tab_hotkeys,
@@ -106,6 +114,8 @@ where
             selected_color: ColorTween::idle(theme.muted_fg()),
             body_area: Rect::default(),
             hotkey: None,
+            hotkey_matcher,
+            pending_hotkey_prefix: None,
         }
     }
 
@@ -485,9 +495,34 @@ where
             } else {
                 self.tab_style()
             };
-            spans.extend(self.tab_title_spans(index, &self.tab_label(index), selected, style));
+            spans.extend(self.tab_label_spans(index, selected, style));
         }
         Line::from(spans)
+    }
+
+    fn tab_label_spans(
+        &self,
+        index: usize,
+        selected: usize,
+        base_style: Style,
+    ) -> Vec<Span<'static>> {
+        if self.transition.is_active() && !(index == selected && self.transition.progress() >= 1.0)
+        {
+            return self.tab_title_spans(index, &self.tab_label(index), selected, base_style);
+        }
+
+        let Some(title) = self.titles.get(index) else {
+            return Vec::new();
+        };
+        let active_prefix = self.active_hotkey_prefix(index);
+        hotkey_label_spans(
+            title,
+            self.tab_hotkeys.get(index).and_then(Option::as_deref),
+            HotkeyLabelMode::Inline,
+            active_prefix.as_deref(),
+            base_style,
+            hotkey_underline_style(base_style),
+        )
     }
 
     fn tab_title_spans(
@@ -567,12 +602,14 @@ where
     }
 
     fn transition_path_width(&self, start: usize, end: usize) -> usize {
-        (start..=end).map(|index| self.tab_label_width(index)).sum()
+        (start..=end)
+            .map(|index| self.rendered_tab_label_width(index))
+            .sum()
     }
 
     fn transition_path_offset(&self, start: usize, index: usize) -> usize {
         (start..index)
-            .map(|index| self.tab_label_width(index))
+            .map(|index| self.rendered_tab_label_width(index))
             .sum()
     }
 
@@ -585,7 +622,7 @@ where
     fn underline_line(&self, selected: usize, width: u16) -> Line<'static> {
         let theme = theme();
         let selected_start = self.underline_start(selected);
-        let selected_width = self.tab_label_width(selected);
+        let selected_width = self.rendered_tab_label_width(selected);
         let width = width as usize;
         let mut spans = Vec::new();
         let before = selected_start.min(width);
@@ -621,8 +658,8 @@ where
             self.underline_start(selected),
             self.transition.value(),
         );
-        let previous_width = self.tab_label_width(self.previous_selected);
-        let selected_width = self.tab_label_width(selected);
+        let previous_width = self.rendered_tab_label_width(self.previous_selected);
+        let selected_width = self.rendered_tab_label_width(selected);
         self.underline_segment_line(
             start,
             lerp_usize(previous_width, selected_width, self.transition.value()).max(1),
@@ -642,7 +679,7 @@ where
         let inner = if !self.transition.is_active() || self.previous_selected == selected {
             self.underline_segment_line(
                 self.underline_start(selected).saturating_sub(1),
-                self.tab_label_width(selected),
+                self.rendered_tab_label_width(selected),
                 inner_width,
             )
         } else {
@@ -652,8 +689,8 @@ where
                 self.transition.value(),
             )
             .saturating_sub(1);
-            let previous_width = self.tab_label_width(self.previous_selected);
-            let selected_width = self.tab_label_width(selected);
+            let previous_width = self.rendered_tab_label_width(self.previous_selected);
+            let selected_width = self.rendered_tab_label_width(selected);
             self.underline_segment_line(
                 start,
                 lerp_usize(previous_width, selected_width, self.transition.value()).max(1),
@@ -739,7 +776,7 @@ where
             .iter()
             .take(selected)
             .enumerate()
-            .map(|(index, _)| self.tab_label_width(index) + 2)
+            .map(|(index, _)| self.rendered_tab_label_width(index) + 2)
             .sum::<usize>()
     }
 
@@ -752,29 +789,25 @@ where
         let chars = crate::border_chars(border);
         let border_style = self.border_style();
         let tab_count = self.titles.len();
-        let mut widths = self
+        let widths = self
             .titles
             .iter()
             .enumerate()
-            .map(|(index, _)| self.tab_label_width(index) + 2)
+            .map(|(index, _)| self.boxed_tab_width(index))
             .collect::<Vec<_>>();
-        let used = 2 + widths.iter().sum::<usize>() + tab_count.saturating_sub(1);
-        if let Some(last) = widths.last_mut() {
-            *last += (width as usize).saturating_sub(used);
-        }
-
+        let used = 2 + widths.iter().sum::<usize>() + tab_count;
+        let fill = (width as usize).saturating_sub(used);
+        let bottom_fill = fill.saturating_sub(usize::from(
+            self.tab_hotkeys.first().and_then(Option::as_ref).is_some(),
+        ));
         let mut top = vec![Span::styled(chars.top_left, border_style)];
         let mut middle = vec![Span::styled(chars.vertical, border_style)];
         let mut bottom = vec![Span::styled(chars.left_join, border_style)];
 
         for (index, _) in self.titles.iter().enumerate() {
-            let label = self.tab_label(index);
+            let label = self.titles[index].clone();
             let cell_width = widths[index];
             top.push(Span::styled(
-                chars.horizontal.repeat(cell_width),
-                border_style,
-            ));
-            bottom.push(Span::styled(
                 chars.horizontal.repeat(cell_width),
                 border_style,
             ));
@@ -783,22 +816,98 @@ where
             } else {
                 self.tab_style()
             };
-            let right_pad = cell_width.saturating_sub(text_width(&label) + 1);
+            bottom.extend(self.boxed_tab_bottom_spans(index, &label, cell_width, title_style));
             middle.push(Span::raw(" "));
             middle.extend(self.tab_title_spans(index, &label, selected, title_style));
+            let right_pad = cell_width.saturating_sub(text_width(&label) + 1);
             middle.push(Span::raw(" ".repeat(right_pad)));
             if index + 1 == tab_count {
+                top.push(Span::styled(chars.top_join, border_style));
+                middle.push(Span::styled(chars.vertical, border_style));
+                bottom.push(Span::styled(chars.horizontal, border_style));
+                if fill > 0 {
+                    top.push(Span::styled(chars.horizontal.repeat(fill), border_style));
+                    bottom.push(Span::styled(
+                        chars.horizontal.repeat(bottom_fill),
+                        border_style,
+                    ));
+                }
+                middle.push(Span::raw(" ".repeat(fill)));
                 top.push(Span::styled(chars.top_right, border_style));
                 middle.push(Span::styled(chars.vertical, border_style));
                 bottom.push(Span::styled(chars.right_join, border_style));
             } else {
                 top.push(Span::styled(chars.top_join, border_style));
                 middle.push(Span::styled(chars.vertical, border_style));
-                bottom.push(Span::styled(chars.bottom_join, border_style));
+                bottom.push(Span::styled(chars.horizontal, border_style));
             }
         }
 
         [Line::from(top), Line::from(middle), Line::from(bottom)]
+    }
+
+    fn boxed_tab_width(&self, index: usize) -> usize {
+        let title_width = self
+            .titles
+            .get(index)
+            .map(|title| text_width(title))
+            .unwrap_or_default();
+        let hotkey_width = self
+            .tab_hotkeys
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|hotkey| hotkey_badge_width(hotkey))
+            .unwrap_or_default();
+
+        title_width
+            + if hotkey_width > 0 {
+                hotkey_width + 1
+            } else {
+                2
+            }
+    }
+
+    fn boxed_tab_bottom_spans(
+        &self,
+        index: usize,
+        title: &str,
+        cell_width: usize,
+        title_style: Style,
+    ) -> Vec<Span<'static>> {
+        let border = self.border.unwrap_or_else(|| preset().border());
+        let chars = border_chars(border);
+        let border_style = self.border_style();
+        let Some(hotkey) = self.tab_hotkeys.get(index).and_then(Option::as_ref) else {
+            return vec![Span::styled(
+                chars.horizontal.repeat(cell_width),
+                border_style,
+            )];
+        };
+
+        let title_width = text_width(title);
+        let badge_width = hotkey_badge_width(hotkey);
+        let base_left_width = title_width.saturating_add(1).min(cell_width);
+        let base_right_width = cell_width.saturating_sub(base_left_width + badge_width);
+        let shift = usize::from(index == 0) + usize::from(base_right_width > 0);
+        let left_width = base_left_width.saturating_add(shift).min(cell_width);
+        let right_width = base_right_width.saturating_sub(shift);
+        let mut spans = vec![Span::styled(
+            chars.horizontal.repeat(left_width),
+            border_style,
+        )];
+        spans.extend(hotkey_badge_spans(
+            hotkey,
+            self.active_hotkey_prefix(index).as_deref(),
+            border,
+            border_style,
+            title_style,
+            hotkey_underline_style(title_style),
+        ));
+        spans.push(Span::styled(
+            chars.horizontal.repeat(right_width),
+            border_style,
+        ));
+        spans
     }
 
     fn minimal_title_line(&self, selected: usize, width: u16) -> Line<'static> {
@@ -812,7 +921,7 @@ where
             } else {
                 self.tab_style()
             };
-            spans.extend(self.tab_title_spans(index, &self.tab_label(index), selected, style));
+            spans.extend(self.tab_label_spans(index, selected, style));
         }
         let used = spans
             .iter()
@@ -827,21 +936,60 @@ where
     }
 
     fn border_style(&self) -> Style {
-        Style::default().fg(self.border_color.value())
+        Style::default().fg(self.visible_border_color())
     }
 
     fn tab_style(&self) -> Style {
-        Style::default().fg(self.tab_color.value())
+        Style::default().fg(self.visible_tab_color())
     }
 
     fn selected_tab_style(&self) -> Style {
         Style::default()
-            .fg(self.selected_color.value())
+            .fg(self.visible_selected_color())
             .add_modifier(Modifier::BOLD)
     }
 
     fn selected_underline_style(&self) -> Style {
-        Style::default().fg(self.selected_color.value())
+        Style::default().fg(self.visible_selected_color())
+    }
+
+    fn visible_border_color(&self) -> ratatui::style::Color {
+        if self.border_color.is_active() {
+            return self.border_color.value();
+        }
+
+        let theme = theme();
+        if self.focused {
+            theme.accent_fg()
+        } else {
+            theme.border_fg()
+        }
+    }
+
+    fn visible_tab_color(&self) -> ratatui::style::Color {
+        if self.tab_color.is_active() {
+            return self.tab_color.value();
+        }
+
+        let theme = theme();
+        if self.focused {
+            theme.muted_fg()
+        } else {
+            theme.border_fg()
+        }
+    }
+
+    fn visible_selected_color(&self) -> ratatui::style::Color {
+        if self.selected_color.is_active() {
+            return self.selected_color.value();
+        }
+
+        let theme = theme();
+        if self.focused {
+            theme.accent_fg()
+        } else {
+            theme.muted_fg()
+        }
     }
 
     fn render_hotkey(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
@@ -852,56 +1000,79 @@ where
             return;
         }
 
-        let chars = border_chars(border);
         let border_style = self.border_style();
-        let title_style = self.selected_tab_style();
-        let title = bounded_hotkey_title(hotkey, area.width.saturating_sub(5) as usize);
-        let title_width = text_width(&title).min(area.width as usize);
-        if title_width == 0 {
+        let width = hotkey_badge_width(hotkey).min(u16::MAX as usize) as u16;
+        if width == 0 {
             return;
         }
-
-        let line = Line::from(vec![
-            Span::styled(chars.right_join, border_style),
-            Span::styled(title, title_style),
-            Span::styled(chars.left_join, border_style),
-        ]);
-        let width = (title_width + 2).min(u16::MAX as usize) as u16;
-        let x = area.x + area.width.saturating_sub(width).saturating_sub(1);
+        let line = Line::from(hotkey_edge_spans(
+            hotkey,
+            self.active_component_hotkey_prefix().as_deref(),
+            border,
+            border_style,
+            self.selected_tab_style(),
+            hotkey_underline_style(self.selected_tab_style()),
+        ));
+        let x = area.x + area.width.saturating_sub(width);
         let y = area.y + area.height.saturating_sub(1);
         frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
     }
 
     fn hotkey_event(&self) -> Option<KeyEvent> {
-        self.hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
-            code: Key::Char(c),
-            modifiers: KeyModifiers::NONE,
-        })
+        self.hotkey.as_deref().and_then(hotkey_sequence_to_event)
     }
 
-    fn hotkey_events(&self) -> Vec<KeyEvent> {
-        self.hotkey_event()
-            .into_iter()
-            .chain(self.tab_hotkeys.iter().filter_map(|hotkey| {
-                hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
-                    code: Key::Char(c),
-                    modifiers: KeyModifiers::NONE,
-                })
-            }))
+    fn hotkey_sequences(&self) -> Vec<String> {
+        self.hotkey
+            .iter()
+            .chain(self.tab_hotkeys.iter().flatten())
+            .cloned()
             .collect()
     }
 
-    fn tab_hotkey_index(&self, key: KeyEvent) -> Option<usize> {
+    fn active_hotkey_prefix(&self, index: usize) -> Option<String> {
+        let prefix = if self.hotkey_matcher.prefix().is_empty() {
+            self.pending_hotkey_prefix.as_deref().unwrap_or("")
+        } else {
+            self.hotkey_matcher.prefix()
+        };
+        if prefix.is_empty() {
+            return None;
+        }
+        self.tab_hotkeys
+            .get(index)
+            .and_then(Option::as_deref)
+            .filter(|hotkey| crate::hotkey::normalize_hotkey(hotkey).starts_with(prefix))
+            .map(|_| prefix.to_string())
+    }
+
+    fn active_component_hotkey_prefix(&self) -> Option<String> {
+        let prefix = if self.hotkey_matcher.prefix().is_empty() {
+            self.pending_hotkey_prefix.as_deref().unwrap_or("")
+        } else {
+            self.hotkey_matcher.prefix()
+        };
+        if prefix.is_empty() {
+            return None;
+        }
+        self.hotkey
+            .as_deref()
+            .filter(|hotkey| crate::hotkey::normalize_hotkey(hotkey).starts_with(prefix))
+            .map(|_| prefix.to_string())
+    }
+
+    fn hotkey_index_for_sequence(&self, sequence: &str) -> Option<usize> {
         self.tab_hotkeys.iter().position(|hotkey| {
-            hotkey
-                .as_ref()
-                .and_then(|hotkey| hotkey.chars().next())
-                .map(|c| KeyEvent {
-                    code: Key::Char(c),
-                    modifiers: KeyModifiers::NONE,
-                })
-                .is_some_and(|hotkey| tab_hotkey_matches(hotkey, key))
+            hotkey.as_deref().is_some_and(|hotkey| {
+                crate::hotkey::normalize_hotkey(hotkey) == crate::hotkey::normalize_hotkey(sequence)
+            })
         })
+    }
+
+    fn tab_index_for_hotkey_match(&self, match_index: usize) -> Option<usize> {
+        tab_hotkey_entries(&self.tab_hotkeys)
+            .get(match_index)
+            .map(|(index, _)| *index)
     }
 
     fn tab_label(&self, index: usize) -> String {
@@ -909,7 +1080,7 @@ where
             return String::new();
         };
         match self.tab_hotkeys.get(index).and_then(Option::as_ref) {
-            Some(hotkey) => format!("{title} ({hotkey})"),
+            Some(hotkey) => format!("{title} |{}|", crate::hotkey::normalize_hotkey(hotkey)),
             None => title.clone(),
         }
     }
@@ -919,6 +1090,10 @@ where
             .get(index)
             .map(|_| text_width(&self.tab_label(index)))
             .unwrap_or_default()
+    }
+
+    fn rendered_tab_label_width(&self, index: usize) -> usize {
+        self.tab_label_width(index)
     }
 }
 
@@ -944,11 +1119,16 @@ where
         if let Some(key) = self.selected_key().cloned() {
             self.bodies.layout_child(&key, self.body_area, ctx);
         }
-        let hotkeys = self.hotkey_events();
-        if hotkeys.is_empty() {
+        let hotkey_sequences = self.hotkey_sequences();
+        if hotkey_sequences.is_empty() {
             ctx.register_focusable(FocusId::new(TABS_FOCUS), area, true);
         } else {
-            ctx.register_focusable_with_hotkeys(FocusId::new(TABS_FOCUS), area, true, hotkeys);
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new(TABS_FOCUS),
+                area,
+                true,
+                hotkey_sequences,
+            );
         }
         LayoutResult::new(area)
     }
@@ -959,15 +1139,52 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Hotkey(hotkey) = event {
+            match hotkey {
+                HotkeyEvent::Pending(prefix) => {
+                    self.pending_hotkey_prefix = Some(prefix.clone());
+                    ctx.request_redraw();
+                    return EventOutcome::Ignored;
+                }
+                HotkeyEvent::Canceled => {
+                    if self.pending_hotkey_prefix.take().is_some() {
+                        ctx.request_redraw();
+                    }
+                    return EventOutcome::Ignored;
+                }
+                HotkeyEvent::Commit(sequence) => {
+                    self.pending_hotkey_prefix = None;
+                    if let Some(index) = self.hotkey_index_for_sequence(sequence) {
+                        self.select_index_with_settings(index, ctx.animation());
+                        ctx.request_redraw();
+                        ctx.request_layout();
+                        ctx.stop_propagation();
+                        return EventOutcome::Handled;
+                    }
+                    return EventOutcome::Ignored;
+                }
+            }
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
-        if let Some(index) = self.tab_hotkey_index(*key) {
-            self.select_index_with_settings(index, ctx.animation());
-            ctx.request_redraw();
-            ctx.request_layout();
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
+        match self.hotkey_matcher.on_key(*key) {
+            HotkeyMatch::Matched(index) => {
+                let Some(index) = self.tab_index_for_hotkey_match(index) else {
+                    return EventOutcome::Ignored;
+                };
+                self.select_index_with_settings(index, ctx.animation());
+                ctx.request_redraw();
+                ctx.request_layout();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            HotkeyMatch::Pending | HotkeyMatch::Canceled => {
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            HotkeyMatch::Ignored => {}
         }
         if self
             .hotkey_event()
@@ -1008,7 +1225,14 @@ where
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        Animated::tick(self, dt, settings).merge(self.bodies.tick(dt, settings))
+        let hotkey_tick = if self.hotkey_matcher.tick(dt) {
+            TickResult::CHANGED
+        } else {
+            TickResult::IDLE
+        };
+        Animated::tick(self, dt, settings)
+            .merge(self.bodies.tick(dt, settings))
+            .merge(hotkey_tick)
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
@@ -1073,36 +1297,19 @@ fn tab_hotkey_matches(hotkey: KeyEvent, key: KeyEvent) -> bool {
     }
 }
 
+fn tab_hotkey_entries(tab_hotkeys: &[Option<String>]) -> Vec<(usize, String)> {
+    tab_hotkeys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hotkey)| {
+            let hotkey = crate::hotkey::normalize_hotkey(hotkey.as_deref()?);
+            (!hotkey.is_empty()).then_some((index, hotkey))
+        })
+        .collect()
+}
+
 fn text_width(value: &str) -> usize {
     line_width(&Line::from(value))
-}
-
-fn bounded_hotkey_title(title: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-
-    let mut value = format!(" {title} ");
-    if text_width(&value) > max_width {
-        value = truncate_cells(&value, max_width);
-    }
-    value
-}
-
-fn truncate_cells(value: &str, max_width: usize) -> String {
-    let mut width = 0;
-    let mut truncated = String::new();
-
-    for ch in value.chars() {
-        let ch_width = char_width(ch);
-        if ch_width > 0 && width + ch_width > max_width {
-            break;
-        }
-        width += ch_width;
-        truncated.push(ch);
-    }
-
-    truncated
 }
 
 fn char_width(ch: char) -> usize {
@@ -1305,10 +1512,11 @@ mod tests {
             ctx.focus_targets()[0].hotkey,
             Some(KeyEvent::from(Key::Char('m')))
         );
+        assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["m"]);
     }
 
     #[test]
-    fn tabs_registers_tab_hotkeys_with_focus_target() {
+    fn tabs_registers_tab_hotkey_sequences_with_focus_target() {
         let mut tabs = Tabs::<()>::new(vec![
             Tab::text("One", "").hotkey("o"),
             Tab::text("Two", "").hotkey("t"),
@@ -1318,12 +1526,17 @@ mod tests {
         tabs.layout(Rect::new(0, 0, 20, 5), &mut ctx);
 
         assert_eq!(
+            ctx.focus_targets()[0].hotkey,
+            Some(KeyEvent::from(Key::Char('o')))
+        );
+        assert_eq!(
             ctx.focus_targets()[0].hotkeys,
             vec![
                 KeyEvent::from(Key::Char('o')),
-                KeyEvent::from(Key::Char('t')),
+                KeyEvent::from(Key::Char('t'))
             ]
         );
+        assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["o", "t"]);
     }
 
     #[test]
@@ -1354,6 +1567,102 @@ mod tests {
     }
 
     #[test]
+    fn tab_hotkey_match_uses_tab_index_when_earlier_tab_has_no_hotkey() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", ""),
+            Tab::text("Usage", "").hotkey("u"),
+        ]);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('u'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn normalized_tab_hotkey_commit_switches_tab() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", "").hotkey("O"),
+            Tab::text("Go", "").hotkey("g g"),
+        ]);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("gg".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.layout_requested());
+    }
+
+    #[test]
+    fn tab_hotkey_renders_inline_in_title_variants() {
+        let tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", "").hotkey("o"),
+            Tab::text("Usage", "").hotkey("u"),
+        ]);
+
+        let title = tabs
+            .underline_title_line(0)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(title.contains("Overview |o|"));
+        assert!(title.contains("Usage |u|"));
+    }
+
+    #[test]
+    fn multiletter_tab_hotkey_waits_for_completion() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("Open", "").hotkey("op"),
+            Tab::text("Overview", "").hotkey("ov"),
+        ]);
+        let mut ctx = EventCtx::default();
+
+        let pending = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('o'))), &mut ctx);
+
+        assert_eq!(pending, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 0);
+        assert_eq!(tabs.hotkey_matcher.prefix(), "o");
+
+        let mut ctx = EventCtx::default();
+        let matched = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('v'))), &mut ctx);
+
+        assert_eq!(matched, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(tabs.hotkey_matcher.prefix(), "");
+    }
+
+    #[test]
+    fn multiletter_tab_hotkey_can_timeout_or_cancel() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("Overview", "").hotkey("ov")]);
+        let mut ctx = EventCtx::default();
+
+        tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('o'))), &mut ctx);
+        assert_eq!(tabs.hotkey_matcher.prefix(), "o");
+
+        <Tabs<()> as TuiNode<()>>::tick(
+            &mut tabs,
+            Duration::from_secs(2),
+            AnimationSettings::default(),
+        );
+        assert_eq!(tabs.hotkey_matcher.prefix(), "");
+
+        let mut ctx = EventCtx::default();
+        tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('o'))), &mut ctx);
+        let mut ctx = EventCtx::default();
+        tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx);
+        assert_eq!(tabs.hotkey_matcher.prefix(), "");
+    }
+
+    #[test]
     fn tab_hotkey_jump_animates_intermediate_tab_title() {
         let mut tabs = Tabs::<()>::new(vec![
             Tab::text("AA", "").hotkey("a"),
@@ -1374,7 +1683,7 @@ mod tests {
             AnimationSettings::default(),
         );
 
-        let spans = tabs.tab_title_spans(1, "BB (b)", tabs.selected_index(), tabs.tab_style());
+        let spans = tabs.tab_title_spans(1, "BB |b|", tabs.selected_index(), tabs.tab_style());
         assert_eq!(outcome, EventOutcome::Handled);
         assert!(
             spans
@@ -1405,7 +1714,7 @@ mod tests {
             AnimationSettings::default(),
         );
 
-        let spans = tabs.tab_title_spans(1, "BB (b)", tabs.selected_index(), tabs.tab_style());
+        let spans = tabs.tab_title_spans(1, "BB |b|", tabs.selected_index(), tabs.tab_style());
         assert_eq!(outcome, EventOutcome::Handled);
         assert!(
             spans
@@ -1415,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_hotkey_renders_next_to_label() {
+    fn tab_hotkey_renders_on_boxed_tab_bottom_border() {
         let tabs = Tabs::<()>::new(vec![Tab::text("Overview", "Body").hotkey("o")]);
         let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
 
@@ -1432,7 +1741,65 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Overview (o)"));
+        assert!(rendered.contains("Overview"));
+        assert!(rendered.contains("┤o├"));
+        assert!(!rendered.contains("Overview |o|"));
+    }
+
+    #[test]
+    fn boxed_tab_hotkeys_align_with_tab_boundaries() {
+        let tabs = Tabs::<()>::new(vec![
+            Tab::text("Intro", "Body").hotkey("i"),
+            Tab::text("Overview", "Body").hotkey("w"),
+            Tab::text("Usage", "Body").hotkey("e"),
+            Tab::text("State", "Body").hotkey("tat"),
+            Tab::text("Logs", "Body").hotkey("l"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(80, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..3)
+            .map(|y| {
+                (0..80)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected = [
+            "╭─────────┬────────────┬─────────┬───────────┬────────┬────────────────────────╮",
+            "│ Intro   │ Overview   │ Usage   │ State     │ Logs   │                        │",
+            "├───────┤i├──────────┤w├───────┤e├───────┤tat├──────┤l├────────────────────────┤",
+        ]
+        .join("\n");
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn boxed_last_tab_title_keeps_right_border_at_minimum_width() {
+        let tabs = Tabs::<()>::new(vec![Tab::text("State", "Body").hotkey("tat")]);
+        let mut terminal = Terminal::new(TestBackend::new(16, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let title = (0..16)
+            .map(|x| buffer.cell((x, 1)).unwrap().symbol())
+            .collect::<String>();
+        let bottom = (0..16)
+            .map(|x| buffer.cell((x, 2)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(title, "│ State     │  │");
+        assert!(bottom.contains("┤tat├─"), "{bottom}");
+        assert!(!bottom.contains("┤tat├┴"), "{bottom}");
     }
 
     #[test]
@@ -1448,7 +1815,42 @@ mod tests {
         let bottom = (0..24)
             .map(|x| buffer.cell((x, 5)).unwrap().symbol())
             .collect::<String>();
-        assert!(bottom.contains("┤ m ├"));
+        assert!(bottom.contains("┤m│"));
+    }
+
+    #[test]
+    fn whole_tabs_bottom_right_hotkey_aligns_with_border_snapshot() {
+        let tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", "Body"),
+            Tab::text("Usage", "Body"),
+        ])
+        .hotkey("nav");
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..6)
+            .map(|y| {
+                (0..40)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected = [
+            "╭──────────┬───────┬───────────────────╮",
+            "│ Overview │ Usage │                   │",
+            "├──────────────────────────────────────┤",
+            "│                                      │",
+            "│                                      │",
+            "╰──────────────────────────────────┤nav│",
+        ]
+        .join("\n");
+        assert_eq!(rendered, expected);
     }
 
     #[test]

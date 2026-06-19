@@ -782,7 +782,7 @@ fn manual_activation_mode_still_applies_activate_selection() {
 }
 
 #[test]
-fn default_selection_key_is_not_handled_when_selection_is_disabled() {
+fn unbound_selection_key_is_not_handled_when_selection_is_disabled() {
     let mut view = DataView::list(
         [Row::new(1, "one")],
         |row| row.id,

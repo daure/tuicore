@@ -1,9 +1,12 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
-    FocusTarget, HitRegion, Key, KeyEvent, LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode,
-    animation_settings, keybindings,
+    FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
+    Propagation, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
 };
 
 use super::{
@@ -71,6 +74,7 @@ where
         let mut focus_manager = FocusManager::new();
         let mut dispatcher = TreeDispatcher::new();
         let mut renderer = Renderer::new();
+        let mut global_hotkeys = HotkeySequenceMatcher::default();
         let mut flags = RuntimeFlags {
             redraw: true,
             layout: true,
@@ -90,6 +94,7 @@ where
             &mut focus_manager,
             &mut dispatcher,
             &mut renderer,
+            &mut global_hotkeys,
             &mut flags,
         );
 
@@ -111,8 +116,10 @@ where
         focus_manager: &mut FocusManager,
         dispatcher: &mut TreeDispatcher,
         renderer: &mut Renderer,
+        global_hotkeys: &mut HotkeySequenceMatcher,
         flags: &mut RuntimeFlags,
     ) -> Result<()> {
+        let mut global_hotkey_tick = Instant::now();
         while !flags.quit {
             if flags.clear {
                 terminal.terminal_mut().clear()?;
@@ -136,9 +143,31 @@ where
                 flags.redraw = false;
             }
 
-            if let Some(event) = event_source.poll(scheduler.timeout())? {
-                self.dispatch_runtime_event(flags, focus_manager, layout_engine, dispatcher, event);
+            let hotkey_pending_before_poll = global_hotkeys.is_pending();
+            if let Some(event) =
+                event_source.poll(runtime_poll_timeout(scheduler, global_hotkeys))?
+            {
+                self.dispatch_runtime_event(
+                    flags,
+                    focus_manager,
+                    layout_engine,
+                    dispatcher,
+                    global_hotkeys,
+                    event,
+                );
             }
+
+            let now = Instant::now();
+            let global_hotkey_dt = now.duration_since(global_hotkey_tick);
+            global_hotkey_tick = now;
+            self.dispatch_global_hotkey_tick_after_poll(
+                flags,
+                dispatcher,
+                layout_engine.focus_targets(),
+                global_hotkeys,
+                hotkey_pending_before_poll,
+                global_hotkey_dt,
+            );
 
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
@@ -195,6 +224,7 @@ where
 
             flags.redraw |= ctx.redraw_requested();
             flags.layout |= ctx.layout_requested();
+            flags.clear |= ctx.clear_requested();
             flags.quit |= ctx.quit_requested();
             if let Some(request) = ctx.focus_request().cloned() {
                 flags.focus_request = Some(request);
@@ -233,6 +263,7 @@ where
         flags.layout = false;
         flags.redraw = true;
         let transition = if flags.focus_request.is_some() {
+            flags.focus_repair = None;
             None
         } else if let Some(repair) = flags.focus_repair.take() {
             focus_manager.repair(&repair, layout_engine.focus_targets())
@@ -256,6 +287,7 @@ where
         let Some(request) = flags.focus_request.take() else {
             return;
         };
+        flags.focus_repair = None;
 
         if let Some(transition) =
             focus_manager.apply_request(&request, layout_engine.focus_targets())
@@ -266,12 +298,81 @@ where
         }
     }
 
+    fn dispatch_hotkey_event_to_targets(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        dispatcher: &mut TreeDispatcher,
+        targets: &[FocusTarget],
+        hotkey: HotkeyEvent,
+    ) {
+        let mut seen = Vec::<(TreePath, crate::FocusId)>::new();
+        for target in targets.iter().filter(|target| target.enabled) {
+            let key = (target.path.clone(), target.id.clone());
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            self.dispatch_hotkey_event_to_target(flags, dispatcher, target, hotkey.clone());
+        }
+    }
+
+    fn dispatch_hotkey_event_to_target(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        dispatcher: &mut TreeDispatcher,
+        target: &FocusTarget,
+        hotkey: HotkeyEvent,
+    ) {
+        let route = EventRoute::new(target.path.clone());
+        let effects = dispatcher.dispatch_event(
+            &mut self.root,
+            &route,
+            &TuiEvent::Hotkey(hotkey),
+            self.animation_settings,
+        );
+        flags.merge(self.handle_effects(effects));
+    }
+
+    fn dispatch_global_hotkey_tick(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        dispatcher: &mut TreeDispatcher,
+        targets: &[FocusTarget],
+        global_hotkeys: &mut HotkeySequenceMatcher,
+        dt: Duration,
+    ) {
+        if global_hotkeys.tick(dt) {
+            self.dispatch_hotkey_event_to_targets(
+                flags,
+                dispatcher,
+                targets,
+                HotkeyEvent::Canceled,
+            );
+            flags.redraw = true;
+        }
+    }
+
+    fn dispatch_global_hotkey_tick_after_poll(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        dispatcher: &mut TreeDispatcher,
+        targets: &[FocusTarget],
+        global_hotkeys: &mut HotkeySequenceMatcher,
+        was_pending_before_poll: bool,
+        dt: Duration,
+    ) {
+        if was_pending_before_poll {
+            self.dispatch_global_hotkey_tick(flags, dispatcher, targets, global_hotkeys, dt);
+        }
+    }
+
     fn dispatch_runtime_event(
         &mut self,
         flags: &mut RuntimeFlags,
         focus_manager: &mut FocusManager,
         layout_engine: &LayoutEngine,
         dispatcher: &mut TreeDispatcher,
+        global_hotkeys: &mut HotkeySequenceMatcher,
         event: TuiEvent,
     ) {
         let event = event;
@@ -281,19 +382,73 @@ where
                 .map(|t| t.id.as_str() == "input" || t.id.as_str() == "textarea")
                 .unwrap_or(false);
             if !current_is_input {
-                let mut hotkey_target = None;
-                for target in layout_engine.focus_targets() {
-                    if target.enabled && focus_target_matches_hotkey(target, key) {
-                        hotkey_target = Some(target.clone());
-                        break;
+                let sequence_targets = hotkey_sequence_targets(layout_engine.focus_targets());
+                global_hotkeys.set_hotkeys(sequence_targets.iter().map(|(hotkey, _)| hotkey));
+                match global_hotkeys.on_key(*key) {
+                    HotkeyMatch::Matched(index) => {
+                        self.dispatch_hotkey_event_to_targets(
+                            flags,
+                            dispatcher,
+                            layout_engine.focus_targets(),
+                            HotkeyEvent::Canceled,
+                        );
+                        if let Some((sequence, target)) = sequence_targets.get(index) {
+                            self.dispatch_hotkey_event_to_target(
+                                flags,
+                                dispatcher,
+                                target,
+                                HotkeyEvent::Commit(sequence.clone()),
+                            );
+                            if flags.focus_request.is_none() {
+                                flags.focus_request = Some(FocusRequest::TargetAt {
+                                    path: target.path.clone(),
+                                    id: target.id.clone(),
+                                });
+                            }
+                            if !flags.layout {
+                                self.apply_pending_focus(
+                                    flags,
+                                    focus_manager,
+                                    layout_engine,
+                                    dispatcher,
+                                );
+                            }
+                        }
+                        return;
                     }
-                }
-                if let Some(target) = hotkey_target {
-                    flags.focus_request = Some(FocusRequest::TargetAt {
-                        path: target.path.clone(),
-                        id: target.id.clone(),
-                    });
-                    self.apply_pending_focus(flags, focus_manager, layout_engine, dispatcher);
+                    HotkeyMatch::Pending => {
+                        self.dispatch_hotkey_event_to_targets(
+                            flags,
+                            dispatcher,
+                            layout_engine.focus_targets(),
+                            HotkeyEvent::Canceled,
+                        );
+                        let pending_targets =
+                            targets_for_prefix(&sequence_targets, global_hotkeys.prefix());
+                        self.dispatch_hotkey_event_to_targets(
+                            flags,
+                            dispatcher,
+                            &pending_targets,
+                            HotkeyEvent::Pending(global_hotkeys.prefix().to_string()),
+                        );
+                        flags.redraw = true;
+                        return;
+                    }
+                    HotkeyMatch::Canceled => {
+                        self.dispatch_hotkey_event_to_targets(
+                            flags,
+                            dispatcher,
+                            layout_engine.focus_targets(),
+                            HotkeyEvent::Canceled,
+                        );
+                        flags.redraw = true;
+                        return;
+                    }
+                    HotkeyMatch::Ignored => {
+                        if global_hotkeys.is_pending() {
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -325,6 +480,7 @@ where
         let mut layout_engine = LayoutEngine::new();
         let mut focus_manager = FocusManager::new();
         let mut dispatcher = TreeDispatcher::new();
+        let mut global_hotkeys = HotkeySequenceMatcher::default();
         let mut flags = RuntimeFlags {
             redraw: true,
             layout: true,
@@ -367,6 +523,7 @@ where
                 &mut focus_manager,
                 &layout_engine,
                 &mut dispatcher,
+                &mut global_hotkeys,
                 event,
             );
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
@@ -396,6 +553,13 @@ fn route_path_for_event(
         .find(|region| region.contains(mouse.column, mouse.row))
         .map(|region| region.path.clone())
         .unwrap_or(focused_path)
+}
+
+fn runtime_poll_timeout(scheduler: &Scheduler, global_hotkeys: &HotkeySequenceMatcher) -> Duration {
+    global_hotkeys
+        .remaining_timeout()
+        .map(|timeout| timeout.min(scheduler.timeout()))
+        .unwrap_or_else(|| scheduler.timeout())
 }
 
 fn focus_request_from_event<M>(
@@ -455,22 +619,35 @@ impl RuntimeFlags {
     }
 }
 
-fn keys_match(a: &KeyEvent, b: &KeyEvent) -> bool {
-    if a.modifiers != b.modifiers {
-        return false;
-    }
-    match (a.code, b.code) {
-        (Key::Char(c1), Key::Char(c2)) => c1.to_ascii_lowercase() == c2.to_ascii_lowercase(),
-        (code_a, code_b) => code_a == code_b,
-    }
+fn hotkey_sequence_targets(targets: &[FocusTarget]) -> Vec<(String, FocusTarget)> {
+    targets
+        .iter()
+        .filter(|target| target.enabled)
+        .flat_map(|target| {
+            target
+                .hotkey_sequences
+                .iter()
+                .cloned()
+                .map(|hotkey| (hotkey, target.clone()))
+        })
+        .collect()
 }
 
-fn focus_target_matches_hotkey(target: &FocusTarget, key: &KeyEvent) -> bool {
-    target
-        .hotkey
-        .as_ref()
-        .is_some_and(|hotkey| keys_match(hotkey, key))
-        || target.hotkeys.iter().any(|hotkey| keys_match(hotkey, key))
+fn targets_for_prefix(targets: &[(String, FocusTarget)], prefix: &str) -> Vec<FocusTarget> {
+    let mut found = Vec::new();
+    for (_, target) in targets
+        .iter()
+        .filter(|(hotkey, _)| hotkey.starts_with(prefix))
+    {
+        if !found.iter().any(|other| same_focus_target(other, target)) {
+            found.push(target.clone());
+        }
+    }
+    found
+}
+
+fn same_focus_target(a: &FocusTarget, b: &FocusTarget) -> bool {
+    a.id == b.id && a.path == b.path
 }
 
 #[cfg(test)]
@@ -527,6 +704,23 @@ mod tests {
 
     struct MouseRouteNode {
         flex: Flex,
+        event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    struct HotkeyRouteNode {
+        flex: Flex,
+        event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    #[derive(Default)]
+    struct HotkeyLayoutFocusNode {
+        show_new: bool,
+        focused: Option<String>,
+    }
+
+    struct HotkeyProbe {
+        name: &'static str,
+        hotkey: &'static str,
         event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
     }
 
@@ -797,6 +991,112 @@ mod tests {
         }
     }
 
+    impl HotkeyRouteNode {
+        fn new() -> Self {
+            let event_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let flex = Flex::row()
+                .child(
+                    "save",
+                    HotkeyProbe {
+                        name: "save",
+                        hotkey: "sa",
+                        event_log: std::rc::Rc::clone(&event_log),
+                    },
+                    FlexItem::fixed(5),
+                )
+                .child(
+                    "settings",
+                    HotkeyProbe {
+                        name: "settings",
+                        hotkey: "st",
+                        event_log: std::rc::Rc::clone(&event_log),
+                    },
+                    FlexItem::fixed(5),
+                );
+
+            Self { flex, event_log }
+        }
+    }
+
+    impl TuiNode<()> for HotkeyRouteNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            self.flex.layout(area, ctx)
+        }
+
+        fn render(&self, frame: &mut Frame, area: Rect) {
+            self.flex.render(frame, area);
+        }
+
+        fn dispatch_event(
+            &mut self,
+            route: &EventRoute,
+            event: &TuiEvent,
+            ctx: &mut EventCtx<()>,
+        ) -> EventOutcome {
+            self.flex.dispatch_event(route, event, ctx)
+        }
+    }
+
+    impl TuiNode<()> for HotkeyProbe {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new(self.name),
+                area,
+                true,
+                vec![self.hotkey.to_string()],
+            );
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+
+        fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
+            if let TuiEvent::Hotkey(hotkey) = event {
+                self.event_log
+                    .borrow_mut()
+                    .push(format!("{}:{hotkey:?}", self.name));
+            }
+            EventOutcome::Ignored
+        }
+    }
+
+    impl TuiNode<()> for HotkeyLayoutFocusNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new("trigger"),
+                area,
+                true,
+                vec!["sa".to_string()],
+            );
+            if self.show_new {
+                ctx.register_focusable(FocusId::new("new"), area, true);
+            }
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+
+        fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
+            if matches!(event, TuiEvent::Hotkey(HotkeyEvent::Commit(sequence)) if sequence == "sa")
+            {
+                self.show_new = true;
+                ctx.request_layout();
+                ctx.focus(FocusRequest::TargetAt {
+                    path: TreePath::new(),
+                    id: FocusId::new("new"),
+                });
+                return EventOutcome::Handled;
+            }
+            EventOutcome::Ignored
+        }
+
+        fn focus(&mut self, target: Option<&FocusId>, focused: bool, _ctx: &mut FocusCtx<()>) {
+            if focused {
+                self.focused = target.map(|target| target.as_str().to_owned());
+            }
+        }
+    }
+
     fn effects(propagation: Propagation) -> DispatchEffects<()> {
         DispatchEffects {
             outcome: EventOutcome::Ignored,
@@ -837,6 +1137,20 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_message_clear_request_reaches_runtime_flags() {
+        let mut app =
+            TreeApp::new(LifecycleMessageNode::default()).on_message(|root, message, ctx| {
+                root.messages.push(message);
+                ctx.request_clear();
+            });
+
+        let flags = app.mount_root();
+
+        assert!(flags.clear);
+        assert!(flags.redraw);
+    }
+
+    #[test]
     fn pending_layout_runs_before_pending_focus_request() {
         let app = TreeApp::new(DynamicFocusNode::default());
         let event = TuiEvent::Key(KeyEvent::from(Key::Enter));
@@ -844,6 +1158,31 @@ mod tests {
         let app = app.run_test_events([event.clone(), event], Rect::new(0, 0, 20, 5));
 
         assert_eq!(app.root.focused.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn explicit_focus_request_clears_pending_focus_repair() {
+        let mut app = TreeApp::new(QuitNode::default());
+        let mut flags = RuntimeFlags {
+            redraw: false,
+            layout: false,
+            quit: false,
+            focus_request: Some(FocusRequest::Unfocus),
+            focus_repair: Some(FocusRepair::RemovedChild { index: 0 }),
+            clear: false,
+        };
+        let mut focus_manager = FocusManager::new();
+        let layout_engine = LayoutEngine::new();
+        let mut dispatcher = TreeDispatcher::new();
+
+        app.apply_pending_focus(
+            &mut flags,
+            &mut focus_manager,
+            &layout_engine,
+            &mut dispatcher,
+        );
+
+        assert_eq!(flags.focus_repair, None);
     }
 
     #[test]
@@ -1033,6 +1372,204 @@ mod tests {
         let app = app.run_test_events([event], Rect::new(0, 0, 10, 1));
 
         assert_eq!(app.root.event_log.borrow().as_slice(), ["right"]);
+    }
+
+    #[test]
+    fn pending_global_hotkey_finds_all_matching_targets() {
+        let current = FocusTarget {
+            id: FocusId::new("tabs"),
+            path: TreePath::from_keys([ChildKey::new("first")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: vec!["s".to_string()],
+        };
+        let other = FocusTarget {
+            id: FocusId::new("tabs"),
+            path: TreePath::from_keys([ChildKey::new("second")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: vec!["sa".to_string()],
+        };
+        let targets = hotkey_sequence_targets(&[current.clone(), other]);
+
+        let targets = targets_for_prefix(&targets, "s");
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].path, current.path);
+    }
+
+    #[test]
+    fn pending_global_hotkey_includes_exact_and_longer_targets() {
+        let exact = FocusTarget {
+            id: FocusId::new("toggle"),
+            path: TreePath::from_keys([ChildKey::new("theme")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: vec!["t".to_string()],
+        };
+        let longer = FocusTarget {
+            id: FocusId::new("tabs"),
+            path: TreePath::from_keys([ChildKey::new("tabs")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: vec!["ta".to_string()],
+        };
+        let targets = hotkey_sequence_targets(&[exact, longer.clone()]);
+
+        let targets = targets_for_prefix(&targets, "t");
+
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().any(|target| target.path == longer.path));
+    }
+
+    #[test]
+    fn pending_global_hotkey_times_out_when_animations_are_disabled() {
+        let mut animation = AnimationSettings::default();
+        animation.enabled = false;
+        let mut app = TreeApp::new(HotkeyRouteNode::new()).animation_settings(animation);
+        let mut scheduler = Scheduler::new(animation);
+        let mut layout_engine = LayoutEngine::new();
+        let mut focus_manager = FocusManager::new();
+        let mut dispatcher = TreeDispatcher::new();
+        let mut global_hotkeys = HotkeySequenceMatcher::default();
+        let mut flags = RuntimeFlags {
+            redraw: true,
+            layout: true,
+            quit: false,
+            focus_request: None,
+            focus_repair: None,
+            clear: false,
+        };
+
+        flags.merge(app.mount_root());
+        app.layout_root(
+            &mut flags,
+            &mut focus_manager,
+            &mut layout_engine,
+            &mut dispatcher,
+            Rect::new(0, 0, 10, 1),
+        );
+        app.dispatch_runtime_event(
+            &mut flags,
+            &mut focus_manager,
+            &layout_engine,
+            &mut dispatcher,
+            &mut global_hotkeys,
+            TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
+        );
+
+        assert!(runtime_poll_timeout(&scheduler, &global_hotkeys) <= crate::hotkey::HOTKEY_TIMEOUT);
+        app.dispatch_global_hotkey_tick(
+            &mut flags,
+            &mut dispatcher,
+            layout_engine.focus_targets(),
+            &mut global_hotkeys,
+            crate::hotkey::HOTKEY_TIMEOUT,
+        );
+
+        let events = app.root.event_log.borrow();
+        assert!(events.iter().any(|event| event == "save:Pending(\"s\")"));
+        assert!(events.iter().any(|event| event == "save:Canceled"));
+        assert!(!global_hotkeys.is_pending());
+        assert_eq!(scheduler.tick(animation.max_dt), None);
+    }
+
+    #[test]
+    fn disabled_animation_idle_before_first_pending_key_does_not_cancel_hotkey() {
+        let mut animation = AnimationSettings::default();
+        animation.enabled = false;
+        let mut app = TreeApp::new(HotkeyRouteNode::new()).animation_settings(animation);
+        let mut scheduler = Scheduler::new(animation);
+        let mut layout_engine = LayoutEngine::new();
+        let mut focus_manager = FocusManager::new();
+        let mut dispatcher = TreeDispatcher::new();
+        let mut global_hotkeys = HotkeySequenceMatcher::default();
+        let mut flags = RuntimeFlags {
+            redraw: true,
+            layout: true,
+            quit: false,
+            focus_request: None,
+            focus_repair: None,
+            clear: false,
+        };
+
+        flags.merge(app.mount_root());
+        app.layout_root(
+            &mut flags,
+            &mut focus_manager,
+            &mut layout_engine,
+            &mut dispatcher,
+            Rect::new(0, 0, 10, 1),
+        );
+        app.dispatch_runtime_event(
+            &mut flags,
+            &mut focus_manager,
+            &layout_engine,
+            &mut dispatcher,
+            &mut global_hotkeys,
+            TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
+        );
+        let events_before_idle_tick = app.root.event_log.borrow().len();
+
+        app.dispatch_global_hotkey_tick_after_poll(
+            &mut flags,
+            &mut dispatcher,
+            layout_engine.focus_targets(),
+            &mut global_hotkeys,
+            false,
+            crate::hotkey::HOTKEY_TIMEOUT,
+        );
+
+        assert!(global_hotkeys.is_pending());
+        assert_eq!(global_hotkeys.prefix(), "s");
+        assert_eq!(scheduler.tick(animation.max_dt), None);
+        assert_eq!(app.root.event_log.borrow().len(), events_before_idle_tick);
+    }
+
+    #[test]
+    fn hotkey_commit_focus_request_waits_for_requested_layout() {
+        let app = TreeApp::new(HotkeyLayoutFocusNode::default());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 20, 5));
+
+        assert_eq!(app.root.focused.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn diverging_hotkey_prefix_cancels_previous_pending_targets() {
+        let app = TreeApp::new(HotkeyRouteNode::new());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+        let events = app.root.event_log.borrow();
+
+        assert!(
+            events
+                .iter()
+                .any(|event| event == "settings:Pending(\"s\")")
+        );
+        assert!(events.iter().any(|event| event == "settings:Canceled"));
+        assert!(events.iter().any(|event| event == "save:Commit(\"sa\")"));
     }
 
     struct PresetGuard(Preset);

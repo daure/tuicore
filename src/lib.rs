@@ -4,6 +4,7 @@ pub mod children;
 pub mod components;
 pub mod event;
 pub mod focus;
+pub mod hotkey;
 pub mod keybindings;
 pub mod node;
 pub mod preset;
@@ -25,19 +26,23 @@ pub use components::{
     ActivationMode, Button, ButtonOutcome, CellContext, CheckState, Column, CrossAlign, CrossSize,
     DataView, DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTypedEvent,
     Dialog, DialogCloseReason, DialogHost, DialogLayer, DialogTitlePosition, Dropdown,
-    DropdownCommitMode, DropdownOutcome, DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid,
-    GridItem, GridTrack, InputOutcome, List, ListOutcome, MainAlign, Overlay, OverlayAnchor,
-    OverlaySize, Panel, PanelHost, PanelTitlePosition, SelectionGlyphs, SelectionMode,
-    SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack, StackAlign,
-    StackItem, StackSize, Tab, Tabs, TextInput, TextareaInput, Toggle, ToggleOutcome, TreeAdapter,
-    TreeGlyphs,
+    DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownPopupDirection,
+    DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid, GridItem, GridTrack, InputOutcome,
+    List, ListOutcome, MainAlign, Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost,
+    PanelTitlePosition, SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger,
+    SortDirection, Spinner, Split, Stack, StackAlign, StackItem, StackSize, Tab, Tabs, TextInput,
+    TextareaInput, Toggle, ToggleOutcome, TreeAdapter, TreeGlyphs,
 };
 pub use event::{
-    Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
+    HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
     UnsupportedEvent,
 };
 pub use focus::{
     FocusChain, FocusDirection, FocusOutcome, FocusRouter, FocusRouterError, FocusWrap,
+};
+pub use hotkey::{
+    HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, hotkey_badge_spans, hotkey_badge_width,
+    hotkey_edge_spans, hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style,
 };
 pub use keybindings::{
     ButtonKeyBindings, DataViewKeyBindings, DropdownKeyBindings, FocusKeyBindings, KeyBindings,

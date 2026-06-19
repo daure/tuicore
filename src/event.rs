@@ -5,9 +5,17 @@ use crossterm::event as crossterm_event;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiEvent {
     Key(KeyEvent),
+    Hotkey(HotkeyEvent),
     Mouse(MouseEvent),
     Resize(u16, u16),
     Paste(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotkeyEvent {
+    Pending(String),
+    Canceled,
+    Commit(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

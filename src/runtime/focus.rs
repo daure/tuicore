@@ -253,7 +253,9 @@ fn enabled_targets(targets: &[FocusTarget]) -> Vec<&FocusTarget> {
 fn traversal_targets(targets: &[FocusTarget]) -> Vec<&FocusTarget> {
     let leaves = targets
         .iter()
-        .filter(|target| target.enabled && !has_enabled_descendant(target, targets))
+        .filter(|target| {
+            target.enabled && target.tab_stop && !has_enabled_tab_stop_descendant(target, targets)
+        })
         .collect::<Vec<_>>();
     if leaves.is_empty() {
         enabled_targets(targets)
@@ -385,9 +387,10 @@ fn first_leaf_descendant(parent: &FocusTarget, targets: &[FocusTarget]) -> Optio
         .iter()
         .find(|target| {
             target.enabled
+                && target.tab_stop
                 && target.path != parent.path
                 && target.path.keys().starts_with(parent.path.keys())
-                && !has_enabled_descendant(target, targets)
+                && !has_enabled_tab_stop_descendant(target, targets)
         })
         .cloned()
 }
@@ -398,9 +401,10 @@ fn last_leaf_descendant(parent: &FocusTarget, targets: &[FocusTarget]) -> Option
         .rev()
         .find(|target| {
             target.enabled
+                && target.tab_stop
                 && target.path != parent.path
                 && target.path.keys().starts_with(parent.path.keys())
-                && !has_enabled_descendant(target, targets)
+                && !has_enabled_tab_stop_descendant(target, targets)
         })
         .cloned()
 }
@@ -419,6 +423,15 @@ fn nearest_traversal_target(
 fn has_enabled_descendant(target: &FocusTarget, targets: &[FocusTarget]) -> bool {
     targets.iter().any(|other| {
         other.enabled
+            && other.path != target.path
+            && other.path.keys().starts_with(target.path.keys())
+    })
+}
+
+fn has_enabled_tab_stop_descendant(target: &FocusTarget, targets: &[FocusTarget]) -> bool {
+    targets.iter().any(|other| {
+        other.enabled
+            && other.tab_stop
             && other.path != target.path
             && other.path.keys().starts_with(target.path.keys())
     })
@@ -474,8 +487,10 @@ mod tests {
             path: TreePath::from_keys([ChildKey::new(id)]),
             area: Rect::default(),
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         }
     }
 
@@ -485,8 +500,10 @@ mod tests {
             path,
             area: Rect::default(),
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         }
     }
 
@@ -500,8 +517,10 @@ mod tests {
             path,
             area,
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         }
     }
 
@@ -662,14 +681,42 @@ mod tests {
     }
 
     #[test]
+    fn next_from_container_skips_non_tab_stop_child() {
+        let mut child = target_at_path(
+            "child",
+            TreePath::from_keys([ChildKey::new("panel"), ChildKey::new("child")]),
+        );
+        child.tab_stop = false;
+        let targets = [
+            target_at_path("panel", TreePath::from_keys([ChildKey::new("panel")])),
+            child,
+            target_at_path("after", TreePath::from_keys([ChildKey::new("after")])),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: TreePath::from_keys([ChildKey::new("panel")]),
+                id: FocusId::new("panel"),
+            },
+            &targets,
+        );
+        manager.next(&targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "after");
+    }
+
+    #[test]
     fn missing_focus_repairs_to_leaf_target_before_container_shell() {
         let old_targets = [FocusTarget {
             id: FocusId::new("launcher"),
             path: TreePath::from_keys([ChildKey::new("base")]),
             area: Rect::new(80, 30, 10, 1),
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         }];
         let new_targets = [
             FocusTarget {
@@ -682,8 +729,10 @@ mod tests {
                 ]),
                 area: Rect::new(0, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -695,24 +744,30 @@ mod tests {
                 ]),
                 area: Rect::new(80, 30, 10, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("tabs"),
                 path: TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("body")]),
                 area: Rect::new(0, 0, 100, 40),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("dialog"),
                 path: TreePath::from_keys([ChildKey::new("dialog")]),
                 area: Rect::new(0, 0, 100, 40),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -749,8 +804,10 @@ mod tests {
             path: TreePath::from_keys([ChildKey::new("dropdown")]),
             area: Rect::new(10, 0, 1, 1),
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         }];
         let new_targets = [
             FocusTarget {
@@ -758,24 +815,30 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("before")]),
                 area: Rect::new(0, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("field"),
                 path: TreePath::from_keys([ChildKey::new("dropdown")]),
                 area: Rect::new(10, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("after"),
                 path: TreePath::from_keys([ChildKey::new("after")]),
                 area: Rect::new(20, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -793,8 +856,10 @@ mod tests {
             path: TreePath::from_keys([ChildKey::new("dropdown")]),
             area: Rect::new(10, 0, 1, 1),
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         }];
         let new_targets = [
             FocusTarget {
@@ -802,24 +867,30 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("before")]),
                 area: Rect::new(0, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("field"),
                 path: TreePath::from_keys([ChildKey::new("dropdown")]),
                 area: Rect::new(10, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("after"),
                 path: TreePath::from_keys([ChildKey::new("after")]),
                 area: Rect::new(20, 0, 1, 1),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -885,16 +956,20 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("one")]),
                 area: Rect::default(),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
                 path: TreePath::from_keys([ChildKey::new("two")]),
                 area: Rect::default(),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -934,16 +1009,20 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("shared")]),
                 area: Rect::default(),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
                 path: TreePath::from_keys([ChildKey::new("shared")]),
                 area: Rect::default(),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();
@@ -972,16 +1051,20 @@ mod tests {
                 path: TreePath::from_keys([ChildKey::new("one")]),
                 area: Rect::default(),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
             FocusTarget {
                 id: FocusId::new("input"),
                 path: TreePath::from_keys([ChildKey::new("two")]),
                 area: Rect::default(),
                 enabled: true,
+                tab_stop: true,
                 hotkey: None,
                 hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
             },
         ];
         let mut manager = FocusManager::new();

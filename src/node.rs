@@ -240,8 +240,10 @@ pub struct FocusTarget {
     pub path: TreePath,
     pub area: Rect,
     pub enabled: bool,
+    pub tab_stop: bool,
     pub hotkey: Option<KeyEvent>,
     pub hotkeys: Vec<KeyEvent>,
+    pub hotkey_sequences: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,12 +431,22 @@ impl LayoutCtx {
         area: Rect,
         layout: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        self.with_focus_fallback_status(id, area, layout).0
+    }
+
+    pub fn with_focus_fallback_status<R>(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> (R, bool) {
         let focus_count = self.focus_paths.len();
         let result = layout(self);
-        if self.focus_paths.len() == focus_count {
+        let inserted = self.focus_paths.len() == focus_count;
+        if inserted {
             self.register_focusable(id, area, true);
         }
-        result
+        (result, inserted)
     }
 
     pub fn with_focus_fallback_hotkey<R>(
@@ -444,9 +456,21 @@ impl LayoutCtx {
         hotkey: KeyEvent,
         layout: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        self.with_focus_fallback_hotkey_status(id, area, hotkey, layout)
+            .0
+    }
+
+    pub fn with_focus_fallback_hotkey_status<R>(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        hotkey: KeyEvent,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> (R, bool) {
         let focus_count = self.focus_paths.len();
         let result = layout(self);
-        if self.focus_paths.len() == focus_count {
+        let inserted = self.focus_paths.len() == focus_count;
+        if inserted {
             self.register_focusable_with_hotkey(id, area, true, hotkey);
         } else if let Some(target) = self.focus_paths.get_mut(focus_count) {
             if target.hotkey.is_none() {
@@ -454,8 +478,31 @@ impl LayoutCtx {
             } else if target.hotkey != Some(hotkey) && !target.hotkeys.contains(&hotkey) {
                 target.hotkeys.push(hotkey);
             }
+            if let Some(sequence) = hotkey_sequence_from_event(hotkey)
+                && !target.hotkey_sequences.contains(&sequence)
+            {
+                target.hotkey_sequences.push(sequence);
+            }
         }
-        result
+        (result, inserted)
+    }
+
+    pub fn with_focus_fallback_hotkey_sequence_status<R>(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        hotkey: impl Into<String>,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> (R, bool) {
+        let focus_count = self.focus_paths.len();
+        let result = layout(self);
+        let inserted = self.focus_paths.len() == focus_count;
+        if inserted {
+            self.register_focusable_with_hotkey_sequences(id, area, true, vec![hotkey.into()]);
+        } else if let Some(target) = self.focus_paths.get_mut(focus_count) {
+            add_focus_hotkey_sequence(target, hotkey.into());
+        }
+        (result, inserted)
     }
 
     pub fn focus_disabled(&self) -> bool {
@@ -475,8 +522,10 @@ impl LayoutCtx {
             path: self.current_path(),
             area,
             enabled,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         });
     }
 
@@ -495,8 +544,10 @@ impl LayoutCtx {
             path: self.current_path(),
             area,
             enabled,
+            tab_stop: true,
             hotkey: Some(hotkey),
             hotkeys: Vec::new(),
+            hotkey_sequences: hotkey_sequence_from_event(hotkey).into_iter().collect(),
         });
     }
 
@@ -515,9 +566,54 @@ impl LayoutCtx {
             path: self.current_path(),
             area,
             enabled,
+            tab_stop: true,
             hotkey: hotkeys.first().copied(),
+            hotkey_sequences: hotkeys
+                .iter()
+                .filter_map(|hotkey| hotkey_sequence_from_event(*hotkey))
+                .collect(),
             hotkeys,
         });
+    }
+
+    pub fn register_focusable_with_hotkey_sequences(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        enabled: bool,
+        hotkey_sequences: Vec<String>,
+    ) {
+        if self.focus_disabled {
+            return;
+        }
+        let hotkey_sequences = normalized_hotkey_sequences(hotkey_sequences);
+        let hotkeys = hotkey_sequences
+            .iter()
+            .filter_map(|hotkey| crate::hotkey::hotkey_sequence_to_event(hotkey))
+            .collect::<Vec<_>>();
+        self.focus_paths.push(FocusTarget {
+            id,
+            path: self.current_path(),
+            area,
+            enabled,
+            tab_stop: true,
+            hotkey: hotkeys.first().copied(),
+            hotkeys,
+            hotkey_sequences,
+        });
+    }
+
+    pub fn set_focus_tab_stop(&mut self, id: FocusId, tab_stop: bool) -> bool {
+        let Some(target) = self
+            .focus_paths
+            .iter_mut()
+            .rev()
+            .find(|target| target.path == self.path && target.id == id)
+        else {
+            return false;
+        };
+        target.tab_stop = tab_stop;
+        true
     }
 
     pub fn set_focus_hotkey(&mut self, id: FocusId, hotkey: KeyEvent) -> bool {
@@ -530,7 +626,28 @@ impl LayoutCtx {
         else {
             return false;
         };
+        let old_sequence = target.hotkey.and_then(hotkey_sequence_from_event);
         target.hotkey = Some(hotkey);
+        if let Some(first) = target.hotkeys.first_mut() {
+            *first = hotkey;
+        } else {
+            target.hotkeys.push(hotkey);
+        }
+        let old_index = old_sequence.and_then(|sequence| {
+            target
+                .hotkey_sequences
+                .iter()
+                .position(|hotkey| hotkey == &sequence)
+        });
+        if let Some(index) = old_index {
+            target.hotkey_sequences.remove(index);
+        }
+        if let Some(sequence) = hotkey_sequence_from_event(hotkey) {
+            let index = old_index.unwrap_or(0).min(target.hotkey_sequences.len());
+            if !target.hotkey_sequences.contains(&sequence) {
+                target.hotkey_sequences.insert(index, sequence);
+            }
+        }
         true
     }
 
@@ -803,10 +920,48 @@ impl FocusTarget {
             path,
             area: self.area,
             enabled: self.enabled,
+            tab_stop: self.tab_stop,
             hotkey: self.hotkey.clone(),
             hotkeys: self.hotkeys.clone(),
+            hotkey_sequences: self.hotkey_sequences.clone(),
         })
     }
+}
+
+fn add_focus_hotkey_sequence(target: &mut FocusTarget, hotkey: String) {
+    let hotkey = crate::hotkey::normalize_hotkey(&hotkey);
+    if hotkey.is_empty() || target.hotkey_sequences.contains(&hotkey) {
+        return;
+    }
+    if let Some(event) = crate::hotkey::hotkey_sequence_to_event(&hotkey) {
+        if target.hotkey.is_none() {
+            target.hotkey = Some(event);
+        } else if target.hotkey != Some(event) && !target.hotkeys.contains(&event) {
+            target.hotkeys.push(event);
+        }
+    }
+    target.hotkey_sequences.push(hotkey);
+}
+
+fn normalized_hotkey_sequences(hotkey_sequences: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for hotkey in hotkey_sequences {
+        let hotkey = crate::hotkey::normalize_hotkey(&hotkey);
+        if !hotkey.is_empty() && !normalized.contains(&hotkey) {
+            normalized.push(hotkey);
+        }
+    }
+    normalized
+}
+
+fn hotkey_sequence_from_event(hotkey: KeyEvent) -> Option<String> {
+    let crate::Key::Char(ch) = hotkey.code else {
+        return None;
+    };
+    if hotkey.modifiers != crate::KeyModifiers::NONE {
+        return None;
+    }
+    Some(ch.to_ascii_lowercase().to_string())
 }
 
 impl ChildKey {
@@ -938,6 +1093,27 @@ mod tests {
     }
 
     #[test]
+    fn set_focus_hotkey_replaces_old_primary_sequence() {
+        let mut ctx = LayoutCtx::new();
+
+        ctx.register_focusable_with_hotkey(
+            FocusId::new("child"),
+            Rect::new(0, 0, 10, 1),
+            true,
+            KeyEvent::from(crate::Key::Char('a')),
+        );
+        assert!(
+            ctx.set_focus_hotkey(FocusId::new("child"), KeyEvent::from(crate::Key::Char('b')),)
+        );
+
+        assert_eq!(
+            ctx.focus_targets()[0].hotkey,
+            Some(KeyEvent::from(crate::Key::Char('b')))
+        );
+        assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["b"]);
+    }
+
+    #[test]
     fn on_blur_decorator_emits_message() {
         struct Probe;
         impl TuiNode<&'static str> for Probe {
@@ -970,8 +1146,10 @@ mod tests {
             path: TreePath::new(),
             area: Rect::default(),
             enabled: true,
+            tab_stop: true,
             hotkey: None,
             hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
         };
         let mut decorator = OnBlur::new(Probe, || "blurred");
         let mut dispatcher = crate::TreeDispatcher::new();

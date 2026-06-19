@@ -135,7 +135,7 @@ impl Default for DataViewKeyBindings {
     fn default() -> Self {
         Self {
             activate: vec![KeySpec::key(Key::Enter)],
-            toggle_selection: vec![KeySpec::plain('x')],
+            toggle_selection: Vec::new(),
             toggle_expansion: vec![KeySpec::plain(' ')],
             next_page: vec![KeySpec::plain('n')],
             previous_page: vec![KeySpec::plain('p')],
@@ -1397,6 +1397,17 @@ mod tests {
             code: Key::Char(' '),
             modifiers: KeyModifiers::CONTROL,
         }));
+    }
+
+    #[test]
+    fn default_data_view_has_no_separate_selection_toggle_key() {
+        let bindings = KeyBindings::default();
+
+        assert!(!bindings.data_view().toggle_selection_matches(KeyEvent {
+            code: Key::Char('x'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().toggle_selection_label().is_empty());
     }
 
     #[test]
