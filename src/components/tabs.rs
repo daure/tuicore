@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use crate::event::{Key, KeyEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, Children, ColorTween,
-    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, HotkeyEvent,
+    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HotkeyEvent,
     HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutResult, LifecycleCtx,
     TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_chars, border_set,
     hotkey_badge_spans, hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans,
@@ -1095,6 +1095,16 @@ where
     fn rendered_tab_label_width(&self, index: usize) -> usize {
         self.tab_label_width(index)
     }
+
+    fn select_index_from_event(&mut self, selected: usize, ctx: &mut EventCtx<M>) {
+        let previous = self.selected_index();
+        self.select_index_with_settings(selected, ctx.animation());
+        ctx.request_redraw();
+        ctx.request_layout();
+        if self.selected_index() != previous {
+            ctx.focus(FocusRequest::FirstChild);
+        }
+    }
 }
 
 impl<M> Default for Tabs<M>
@@ -1155,9 +1165,7 @@ where
                 HotkeyEvent::Commit(sequence) => {
                     self.pending_hotkey_prefix = None;
                     if let Some(index) = self.hotkey_index_for_sequence(sequence) {
-                        self.select_index_with_settings(index, ctx.animation());
-                        ctx.request_redraw();
-                        ctx.request_layout();
+                        self.select_index_from_event(index, ctx);
                         ctx.stop_propagation();
                         return EventOutcome::Handled;
                     }
@@ -1173,9 +1181,7 @@ where
                 let Some(index) = self.tab_index_for_hotkey_match(index) else {
                     return EventOutcome::Ignored;
                 };
-                self.select_index_with_settings(index, ctx.animation());
-                ctx.request_redraw();
-                ctx.request_layout();
+                self.select_index_from_event(index, ctx);
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
@@ -1195,15 +1201,11 @@ where
         }
         let bindings = keybindings();
         if bindings.tabs().previous_matches(*key) {
-            self.select_index_with_settings(self.previous_index(), ctx.animation());
-            ctx.request_redraw();
-            ctx.request_layout();
+            self.select_index_from_event(self.previous_index(), ctx);
             ctx.stop_propagation();
             EventOutcome::Handled
         } else if bindings.tabs().next_matches(*key) {
-            self.select_index_with_settings(self.next_index(), ctx.animation());
-            ctx.request_redraw();
-            ctx.request_layout();
+            self.select_index_from_event(self.next_index(), ctx);
             ctx.stop_propagation();
             EventOutcome::Handled
         } else {
@@ -1440,6 +1442,21 @@ mod tests {
         assert_eq!(tabs.selected_index(), 1);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.layout_requested());
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::FirstChild));
+    }
+
+    #[test]
+    fn tabs_key_does_not_request_child_focus_when_selection_stays_put() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .selected(1)
+            .allow_looping(false);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char(']'))), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(ctx.focus_request(), None);
     }
 
     #[test]

@@ -12,8 +12,7 @@ use crate::{
     EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HitRegion, LayoutCtx,
     LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
     ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode,
-    border_chars, border_set, hotkey_edge_spans, keybindings, line_width, paragraph_scroll, preset,
-    theme,
+    border_set, hotkey_edge_spans, keybindings, line_width, paragraph_scroll, preset, theme,
 };
 
 const DIALOG_FOCUS: &str = "dialog";
@@ -374,20 +373,6 @@ impl<M> Dialog<M> {
             area,
             title,
             Alignment::Left,
-            area.y,
-            close_label_width() + 1,
-        );
-    }
-
-    fn render_top_right_title(&self, frame: &mut Frame, area: Rect) {
-        let Some(title) = self.top_right.as_ref() else {
-            return;
-        };
-        self.render_plain_title(
-            frame,
-            area,
-            title,
-            Alignment::Right,
             area.y,
             close_label_width() + 1,
         );

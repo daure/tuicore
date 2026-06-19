@@ -56,6 +56,16 @@ impl TerminalGuard {
         &mut self.terminal
     }
 
+    pub fn suspend<R>(&mut self, action: impl FnOnce() -> io::Result<R>) -> Result<R> {
+        self.suspend_terminal()?;
+        let action_result = action();
+        let resume_result = self.resume_terminal();
+        match (action_result, resume_result) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
     pub fn restore(&mut self) -> Result<()> {
         if self.restored {
             return Ok(());
@@ -86,6 +96,62 @@ impl TerminalGuard {
             && !self.raw_enabled
             && !self.alternate_screen
             && !self.mouse_capture;
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn suspend_terminal(&mut self) -> Result<()> {
+        let mut first_error = None;
+        if self.mouse_capture {
+            match execute!(self.terminal.backend_mut(), DisableMouseCapture) {
+                Ok(()) => self.mouse_capture = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if self.raw_enabled {
+            match disable_raw_mode() {
+                Ok(()) => self.raw_enabled = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if self.alternate_screen {
+            match execute!(self.terminal.backend_mut(), LeaveAlternateScreen) {
+                Ok(()) => self.alternate_screen = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        capture_first(&mut first_error, self.terminal.show_cursor());
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn resume_terminal(&mut self) -> Result<()> {
+        let mut first_error = None;
+        if !self.raw_enabled {
+            match enable_raw_mode() {
+                Ok(()) => self.raw_enabled = true,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if !self.alternate_screen {
+            match execute!(self.terminal.backend_mut(), EnterAlternateScreen) {
+                Ok(()) => self.alternate_screen = true,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if !self.mouse_capture {
+            match execute!(self.terminal.backend_mut(), EnableMouseCapture) {
+                Ok(()) => self.mouse_capture = true,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        capture_first(&mut first_error, self.terminal.hide_cursor());
+
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),

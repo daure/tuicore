@@ -34,8 +34,8 @@ pub use components::{
     TextareaInput, Toggle, ToggleOutcome, TreeAdapter, TreeGlyphs,
 };
 pub use event::{
-    HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
-    UnsupportedEvent,
+    ExternalEditorRequest, ExternalEditorResponse, HotkeyEvent, Key, KeyEvent, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind, TuiEvent, UnsupportedEvent,
 };
 pub use focus::{
     FocusChain, FocusDirection, FocusOutcome, FocusRouter, FocusRouterError, FocusWrap,

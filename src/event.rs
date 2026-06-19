@@ -6,6 +6,7 @@ use crossterm::event as crossterm_event;
 pub enum TuiEvent {
     Key(KeyEvent),
     Hotkey(HotkeyEvent),
+    ExternalEditor(ExternalEditorResponse),
     Mouse(MouseEvent),
     Resize(u16, u16),
     Paste(String),
@@ -16,6 +17,20 @@ pub enum HotkeyEvent {
     Pending(String),
     Canceled,
     Commit(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalEditorRequest {
+    pub value: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalEditorResponse {
+    pub value: String,
+    pub line: usize,
+    pub col: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

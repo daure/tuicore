@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::{Frame, layout::Rect};
 
 use crate::animation::{AnimationSettings, TickResult};
-use crate::event::{KeyEvent, TuiEvent};
+use crate::event::{ExternalEditorRequest, KeyEvent, TuiEvent};
 
 pub trait TuiNode<M = ()> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
@@ -121,6 +121,7 @@ pub struct EventCtx<M> {
     propagation: Propagation,
     animation: AnimationSettings,
     clear: bool,
+    external_editor: Option<ExternalEditorRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +252,8 @@ pub enum FocusRequest {
     Next,
     Previous,
     Unfocus,
+    FirstChild,
+    FirstChildOf { path: TreePath, id: FocusId },
     Last,
     Target(FocusId),
     Path(TreePath),
@@ -291,6 +294,7 @@ impl<M> EventCtx<M> {
             propagation: Propagation::Continue,
             animation,
             clear: false,
+            external_editor: None,
         }
     }
 
@@ -304,6 +308,15 @@ impl<M> EventCtx<M> {
 
     pub fn request_clear(&mut self) {
         self.clear = true;
+        self.redraw = true;
+    }
+
+    pub fn request_external_editor(&mut self, value: impl Into<String>, line: usize, col: usize) {
+        self.external_editor = Some(ExternalEditorRequest {
+            value: value.into(),
+            line,
+            col,
+        });
         self.redraw = true;
     }
 
@@ -331,7 +344,7 @@ impl<M> EventCtx<M> {
         self.focus(FocusRequest::Unfocus);
     }
 
-    pub(crate) fn repair_focus(&mut self, repair: FocusRepair) {
+    pub fn repair_focus(&mut self, repair: FocusRepair) {
         self.focus_repair = Some(repair);
     }
 
@@ -353,6 +366,10 @@ impl<M> EventCtx<M> {
 
     pub fn clear_requested(&self) -> bool {
         self.clear
+    }
+
+    pub fn external_editor_request(&self) -> Option<&ExternalEditorRequest> {
+        self.external_editor.as_ref()
     }
 
     pub fn layout_requested(&self) -> bool {
@@ -377,6 +394,10 @@ impl<M> EventCtx<M> {
 
     pub fn animation(&self) -> AnimationSettings {
         self.animation
+    }
+
+    pub(crate) fn take_external_editor_request(&mut self) -> Option<ExternalEditorRequest> {
+        self.external_editor.take()
     }
 }
 

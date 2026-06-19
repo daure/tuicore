@@ -12,10 +12,11 @@ use crate::theme;
 use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
 
 use super::text_input::{
-    CursorFade, InputOutcome, edit_in_external_editor, is_alt, is_ctrl, placeholder_line, text_char,
+    CursorFade, InputOutcome, display_char, is_alt, is_ctrl, placeholder_line, tab_key, text_char,
 };
 
 const TEXTAREA_FOCUS: &str = "textarea";
+const TAB_INSERT: &str = "    ";
 
 pub struct TextareaInput<M = ()> {
     value: String,
@@ -25,6 +26,7 @@ pub struct TextareaInput<M = ()> {
     max_lines: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
+    external_editor_key: Option<KeyEvent>,
     cursor_fade: CursorFade,
 }
 
@@ -44,6 +46,7 @@ impl<M> TextareaInput<M> {
             max_lines: None,
             on_submit: None,
             on_blur: None,
+            external_editor_key: Some(ctrl_key('o')),
             cursor_fade: CursorFade::default(),
         }
     }
@@ -79,6 +82,11 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    pub fn external_editor_key(mut self, key: Option<KeyEvent>) -> Self {
+        self.external_editor_key = key;
+        self
+    }
+
     pub fn max_lines(mut self, max_lines: usize) -> Self {
         self.max_lines = Some(max_lines.max(1));
         self.clamp_lines();
@@ -106,37 +114,6 @@ impl<M> TextareaInput<M> {
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
-        if is_ctrl(key, 'o') {
-            let ranges = self.line_ranges();
-            let (line, col) = self.cursor_line_col(&ranges);
-            if let Ok(Some((new_value, exit_line, exit_col))) =
-                edit_in_external_editor(&self.value, line + 1, col + 1)
-            {
-                self.value = new_value;
-                self.clamp_lines();
-                let ranges = self.line_ranges();
-                let line_idx = exit_line
-                    .saturating_sub(1)
-                    .min(ranges.len().saturating_sub(1));
-                let range = ranges[line_idx];
-                self.cursor = (range.start + exit_col.saturating_sub(1)).min(self.len_chars());
-                return InputOutcome {
-                    handled: true,
-                    changed: true,
-                    submitted: false,
-                    canceled: false,
-                    clear: true,
-                };
-            } else {
-                return InputOutcome {
-                    handled: true,
-                    changed: false,
-                    submitted: false,
-                    canceled: false,
-                    clear: true,
-                };
-            }
-        }
         if is_ctrl(key, 'd') || (matches!(key.code, Key::Enter) && is_control(key)) {
             return InputOutcome::SUBMITTED;
         }
@@ -175,6 +152,7 @@ impl<M> TextareaInput<M> {
         }
 
         match key.code {
+            _ if tab_key(key) => self.insert_text(TAB_INSERT),
             Key::Char(value) if text_char(key) => self.insert_char(value),
             Key::Enter => self.insert_newline(),
             Key::Backspace => {
@@ -293,23 +271,25 @@ impl<M> TextareaInput<M> {
             if drawn >= width {
                 break;
             }
+            let remaining = width.saturating_sub(drawn);
             let position = range.start + col;
             if self.focused && cursor_line && position == self.cursor {
-                let text = if position < range.end {
+                let value = if position < range.end {
                     chars.get(position).copied().unwrap_or(' ')
                 } else {
                     ' '
-                }
-                .to_string();
+                };
+                let text = display_char(value, remaining);
+                drawn += text.len();
                 spans.push(Span::styled(text, cursor_style));
-                drawn += 1;
                 continue;
             }
             if position < range.end
                 && let Some(value) = chars.get(position)
             {
-                spans.push(Span::styled(value.to_string(), value_style));
-                drawn += 1;
+                let text = display_char(*value, remaining);
+                drawn += text.len();
+                spans.push(Span::styled(text, value_style));
             }
         }
 
@@ -317,8 +297,17 @@ impl<M> TextareaInput<M> {
     }
 
     fn insert_char(&mut self, value: char) -> InputOutcome {
-        self.value.insert(self.byte_index(self.cursor), value);
-        self.cursor += 1;
+        self.insert_text(value.to_string())
+    }
+
+    fn insert_text(&mut self, value: impl AsRef<str>) -> InputOutcome {
+        let value = value.as_ref();
+        if value.is_empty() {
+            return InputOutcome::HANDLED;
+        }
+        let len = value.chars().count();
+        self.value.insert_str(self.byte_index(self.cursor), value);
+        self.cursor += len;
         InputOutcome::CHANGED
     }
 
@@ -553,6 +542,30 @@ impl<M> TextareaInput<M> {
         }
         self.value = lines.drain(..).collect::<Vec<_>>().join("\n");
     }
+
+    fn external_editor_key_matches(&self, key: KeyEvent) -> bool {
+        self.external_editor_key
+            .is_some_and(|expected| key_matches(expected, key))
+    }
+
+    fn external_editor_request_position(&self) -> (usize, usize) {
+        let ranges = self.line_ranges();
+        let (line, col) = self.cursor_line_col(&ranges);
+        (line + 1, col + 1)
+    }
+
+    fn apply_external_editor_response(&mut self, response: &crate::ExternalEditorResponse) {
+        self.value = response.value.clone();
+        self.clamp_lines();
+        let ranges = self.line_ranges();
+        let line_idx = response
+            .line
+            .saturating_sub(1)
+            .min(ranges.len().saturating_sub(1));
+        let range = ranges[line_idx];
+        let col = response.col.saturating_sub(1).min(range.len());
+        self.cursor = (range.start + col).min(self.len_chars());
+    }
 }
 
 impl<M> TuiNode<M> for TextareaInput<M> {
@@ -566,9 +579,23 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::ExternalEditor(response) = event {
+            self.apply_external_editor_response(response);
+            self.cursor_fade.reset();
+            ctx.request_clear();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.external_editor_key_matches(*key) {
+            let (line, col) = self.external_editor_request_position();
+            ctx.request_external_editor(self.value.clone(), line, col);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.on_key(*key);
         if outcome.submitted
             && let Some(on_submit) = &self.on_submit
@@ -624,6 +651,21 @@ impl LineRange {
 
 fn is_control(key: KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn ctrl_key(value: char) -> KeyEvent {
+    KeyEvent {
+        code: Key::Char(value),
+        modifiers: KeyModifiers::CONTROL,
+    }
+}
+
+fn key_matches(expected: KeyEvent, actual: KeyEvent) -> bool {
+    expected.modifiers == actual.modifiers
+        && match (expected.code, actual.code) {
+            (Key::Char(expected), Key::Char(actual)) => expected.eq_ignore_ascii_case(&actual),
+            _ => expected.code == actual.code,
+        }
 }
 
 #[cfg(test)]
@@ -693,6 +735,38 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(input.current_value(), "");
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn tab_inserts_tab_character_and_stops_propagation() {
+        let mut input = TextareaInput::<()>::new().value("left");
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "left    ");
+        assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn control_i_inserts_tab_character_and_stops_propagation() {
+        let mut input = TextareaInput::<()>::new().value("left");
+        let mut ctx = EventCtx::<()>::default();
+        let key = KeyEvent {
+            code: Key::Char('i'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "left    ");
+        assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.redraw_requested());
     }
@@ -786,17 +860,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn ctrl_o_opens_external_editor() {
-        let _guard = crate::ENV_LOCK.lock().unwrap();
-        let old_editor = std::env::var("EDITOR").ok();
-        unsafe {
-            std::env::set_var(
-                "EDITOR",
-                "sh -c 'for last; do true; done; printf \"edited\\nlines\\n\" > \"$last\"' --",
-            );
-        }
-
+    fn ctrl_o_requests_external_editor() {
         let mut input = TextareaInput::<()>::new().value("initial");
         let mut ctx = EventCtx::default();
         let key = KeyEvent {
@@ -807,17 +871,38 @@ mod tests {
         let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "initial");
+        assert_eq!(
+            ctx.external_editor_request(),
+            Some(&crate::ExternalEditorRequest {
+                value: "initial".to_string(),
+                line: 1,
+                col: 8,
+            })
+        );
+        assert!(ctx.redraw_requested());
+        assert!(!ctx.clear_requested());
+    }
+
+    #[test]
+    fn external_editor_response_clamps_column_to_selected_line() {
+        let mut input = TextareaInput::<()>::new().value("initial");
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(
+            &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+                value: "edited\nlines\n".to_string(),
+                line: 2,
+                col: 99,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(input.current_value(), "edited\nlines\n");
+        assert_eq!(input.cursor, "edited\nlines".chars().count());
         assert!(ctx.redraw_requested());
         assert!(ctx.clear_requested());
-
-        unsafe {
-            if let Some(val) = old_editor {
-                std::env::set_var("EDITOR", val);
-            } else {
-                std::env::remove_var("EDITOR");
-            }
-        }
     }
 
     #[test]

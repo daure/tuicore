@@ -38,11 +38,11 @@ impl FocusManager {
                 self.current = Some(updated);
                 return None;
             }
-        } else if self
-            .last_focused
-            .as_ref()
-            .is_some_and(|last| targets.iter().any(|target| same_focus(target, last)))
-        {
+        } else if self.last_focused.as_ref().is_some_and(|last| {
+            targets
+                .iter()
+                .any(|target| target.enabled && same_focus(target, last))
+        }) {
             return None;
         }
 
@@ -63,11 +63,11 @@ impl FocusManager {
                 self.current = Some(updated);
                 return None;
             }
-        } else if self
-            .last_focused
-            .as_ref()
-            .is_some_and(|last| targets.iter().any(|target| same_focus(target, last)))
-        {
+        } else if self.last_focused.as_ref().is_some_and(|last| {
+            targets
+                .iter()
+                .any(|target| target.enabled && same_focus(target, last))
+        }) {
             return None;
         }
 
@@ -82,7 +82,16 @@ impl FocusManager {
         match request {
             FocusRequest::Next => self.set_current(self.next_target(targets)),
             FocusRequest::Previous => self.set_current(self.previous_target(targets)),
-            FocusRequest::Unfocus => self.set_current(self.parent_target(targets)),
+            FocusRequest::Unfocus => self.set_current_if_found(self.parent_target(targets)),
+            FocusRequest::FirstChild => self.set_current_if_found(
+                self.current
+                    .as_ref()
+                    .and_then(|current| first_leaf_descendant(current, targets)),
+            ),
+            FocusRequest::FirstChildOf { path, id } => self.set_current_if_found(
+                unique_enabled_target(targets, |target| &target.path == path && &target.id == id)
+                    .and_then(|target| first_leaf_descendant(&target, targets).or(Some(target))),
+            ),
             FocusRequest::Last => self.set_current_if_found(self.last_enabled_target(targets)),
             FocusRequest::Target(id) => {
                 self.set_current_if_found(unique_enabled_target(targets, |target| &target.id == id))
@@ -628,7 +637,24 @@ mod tests {
         assert_eq!(manager.current().unwrap().id.as_str(), "dialog");
 
         manager.apply_request(&FocusRequest::Unfocus, &targets);
-        assert!(manager.current().is_none());
+        assert_eq!(manager.current().unwrap().id.as_str(), "dialog");
+    }
+
+    #[test]
+    fn unfocus_request_keeps_root_target_focused() {
+        let targets = [target_at_path("root", TreePath::new())];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: TreePath::new(),
+                id: FocusId::new("root"),
+            },
+            &targets,
+        );
+        manager.apply_request(&FocusRequest::Unfocus, &targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "root");
     }
 
     #[test]
@@ -681,6 +707,65 @@ mod tests {
     }
 
     #[test]
+    fn first_child_request_focuses_first_child_of_current_container() {
+        let targets = [
+            target_at_path(
+                "first",
+                TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("first")]),
+            ),
+            target_at_path(
+                "second",
+                TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("second")]),
+            ),
+            target_at_path("dialog", TreePath::from_keys([ChildKey::new("dialog")])),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: TreePath::from_keys([ChildKey::new("dialog")]),
+                id: FocusId::new("dialog"),
+            },
+            &targets,
+        );
+        manager.apply_request(&FocusRequest::FirstChild, &targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+    }
+
+    #[test]
+    fn first_child_of_request_focuses_child_of_target_container() {
+        let dialog_path = TreePath::from_keys([ChildKey::new("dialog")]);
+        let other_path = TreePath::from_keys([ChildKey::new("other")]);
+        let targets = [
+            target_at_path("other", other_path.clone()),
+            target_at_path(
+                "first",
+                TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("first")]),
+            ),
+            target_at_path("dialog", dialog_path.clone()),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: other_path,
+                id: FocusId::new("other"),
+            },
+            &targets,
+        );
+        manager.apply_request(
+            &FocusRequest::FirstChildOf {
+                path: dialog_path,
+                id: FocusId::new("dialog"),
+            },
+            &targets,
+        );
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+    }
+
+    #[test]
     fn next_from_container_skips_non_tab_stop_child() {
         let mut child = target_at_path(
             "child",
@@ -704,6 +789,36 @@ mod tests {
         manager.next(&targets);
 
         assert_eq!(manager.current().unwrap().id.as_str(), "after");
+    }
+
+    #[test]
+    fn validate_does_not_restore_disabled_last_focus() {
+        let initial = [target("one")];
+        let mut disabled_last = target("one");
+        disabled_last.enabled = false;
+        let targets = [disabled_last, target("two")];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&initial);
+        manager.validate(&[]);
+        manager.validate(&targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
+    }
+
+    #[test]
+    fn repair_does_not_restore_disabled_last_focus() {
+        let initial = [target("one")];
+        let mut disabled_last = target("one");
+        disabled_last.enabled = false;
+        let targets = [disabled_last, target("two")];
+        let mut manager = FocusManager::new();
+
+        manager.validate(&initial);
+        manager.validate(&[]);
+        manager.repair(&FocusRepair::RemovedChild { index: 0 }, &targets);
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
     }
 
     #[test]
@@ -1084,36 +1199,29 @@ mod tests {
     }
 
     #[test]
-    fn unfocus_and_restore_focus_via_next_previous() {
+    fn unfocus_without_parent_keeps_current_focus() {
         let targets = [target("one"), target("two"), target("three")];
         let mut manager = FocusManager::new();
 
-        // 1. Initial validation focuses first target.
         manager.validate(&targets);
         assert_eq!(manager.current().unwrap().id.as_str(), "one");
 
-        // 2. Move focus to "two".
         manager.apply_request(&FocusRequest::Next, &targets);
         assert_eq!(manager.current().unwrap().id.as_str(), "two");
 
-        // 3. Request unfocus.
         let transition = manager.apply_request(&FocusRequest::Unfocus, &targets);
-        assert!(transition.is_some());
-        assert!(manager.current().is_none());
-        assert_eq!(manager.last_focused.as_ref().unwrap().id.as_str(), "two");
-
-        // 4. Validate should keep us unfocused.
-        manager.validate(&targets);
-        assert!(manager.current().is_none());
-
-        // 5. Pressing next/previous should restore focus back to the last focused element ("two").
-        let transition_next = manager.apply_request(&FocusRequest::Next, &targets);
-        assert!(transition_next.is_some());
+        assert!(transition.is_none());
         assert_eq!(manager.current().unwrap().id.as_str(), "two");
 
-        // 6. Unfocus again and test with Previous request.
+        manager.validate(&targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
+
+        let transition_next = manager.apply_request(&FocusRequest::Next, &targets);
+        assert!(transition_next.is_some());
+        assert_eq!(manager.current().unwrap().id.as_str(), "three");
+
         manager.apply_request(&FocusRequest::Unfocus, &targets);
-        assert!(manager.current().is_none());
+        assert_eq!(manager.current().unwrap().id.as_str(), "three");
 
         let transition_prev = manager.apply_request(&FocusRequest::Previous, &targets);
         assert!(transition_prev.is_some());

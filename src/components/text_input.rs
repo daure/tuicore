@@ -13,6 +13,8 @@ use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, 
 
 const INPUT_FOCUS: &str = "input";
 const CURSOR_FADE_HALF: Duration = Duration::from_millis(600);
+const TAB_WIDTH: usize = 4;
+const TAB_INSERT: &str = "    ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputOutcome {
@@ -77,6 +79,7 @@ pub struct TextInput<M = ()> {
     max_len: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
+    external_editor_key: Option<KeyEvent>,
     cursor_fade: CursorFade,
 }
 
@@ -96,6 +99,7 @@ impl<M> TextInput<M> {
             max_len: None,
             on_submit: None,
             on_blur: None,
+            external_editor_key: Some(ctrl_key('o')),
             cursor_fade: CursorFade::default(),
         }
     }
@@ -131,6 +135,11 @@ impl<M> TextInput<M> {
         self
     }
 
+    pub fn external_editor_key(mut self, key: Option<KeyEvent>) -> Self {
+        self.external_editor_key = key;
+        self
+    }
+
     pub fn max_len(mut self, max_len: usize) -> Self {
         self.max_len = Some(max_len);
         self.clamp_value();
@@ -158,44 +167,6 @@ impl<M> TextInput<M> {
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
         let key = key.into();
-        if is_ctrl(key, 'o') {
-            if let Ok(Some((new_value, exit_line, exit_col))) =
-                edit_in_external_editor(&self.value, 1, self.cursor + 1)
-            {
-                let mut collapsed_cursor = 0;
-                let lines: Vec<&str> = new_value.split('\n').collect();
-                let target_line_idx = exit_line
-                    .saturating_sub(1)
-                    .min(lines.len().saturating_sub(1));
-
-                for i in 0..target_line_idx {
-                    collapsed_cursor += lines[i].chars().count() + 1;
-                }
-
-                let col_idx = exit_col.saturating_sub(1);
-                let target_line_chars = lines[target_line_idx].chars().count();
-                collapsed_cursor += col_idx.min(target_line_chars);
-
-                self.value = new_value.replace('\n', " ");
-                self.clamp_value();
-                self.cursor = collapsed_cursor.min(self.len_chars());
-                return InputOutcome {
-                    handled: true,
-                    changed: true,
-                    submitted: false,
-                    canceled: false,
-                    clear: true,
-                };
-            } else {
-                return InputOutcome {
-                    handled: true,
-                    changed: false,
-                    submitted: false,
-                    canceled: false,
-                    clear: true,
-                };
-            }
-        }
         if is_ctrl(key, 'a') {
             return self.move_to(0);
         }
@@ -225,6 +196,7 @@ impl<M> TextInput<M> {
         }
 
         match key.code {
+            _ if tab_key(key) => self.insert_text(TAB_INSERT),
             Key::Char(value) if text_char(key) => self.insert_char(value),
             Key::Backspace => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -315,15 +287,17 @@ impl<M> TextInput<M> {
             if drawn >= width {
                 break;
             }
+            let remaining = width.saturating_sub(drawn);
             if self.focused && position == self.cursor {
-                let text = chars.get(position).copied().unwrap_or(' ').to_string();
+                let text = display_char(chars.get(position).copied().unwrap_or(' '), remaining);
+                drawn += text.len();
                 spans.push(Span::styled(text, cursor_style));
-                drawn += 1;
                 continue;
             }
             if let Some(value) = chars.get(position) {
-                spans.push(Span::styled(value.to_string(), value_style));
-                drawn += 1;
+                let text = display_char(*value, remaining);
+                drawn += text.len();
+                spans.push(Span::styled(text, value_style));
             }
         }
 
@@ -331,14 +305,31 @@ impl<M> TextInput<M> {
     }
 
     fn insert_char(&mut self, value: char) -> InputOutcome {
+        self.insert_text(value.to_string())
+    }
+
+    fn insert_text(&mut self, value: impl AsRef<str>) -> InputOutcome {
+        let value = value.as_ref();
         if self
             .max_len
             .is_some_and(|max_len| self.len_chars() >= max_len)
         {
             return InputOutcome::HANDLED;
         }
-        self.value.insert(self.byte_index(self.cursor), value);
-        self.cursor += 1;
+        let text = if let Some(max_len) = self.max_len {
+            value
+                .chars()
+                .take(max_len.saturating_sub(self.len_chars()))
+                .collect::<String>()
+        } else {
+            value.to_owned()
+        };
+        if text.is_empty() {
+            return InputOutcome::HANDLED;
+        }
+        let len = text.chars().count();
+        self.value.insert_str(self.byte_index(self.cursor), &text);
+        self.cursor += len;
         InputOutcome::CHANGED
     }
 
@@ -503,6 +494,32 @@ impl<M> TextInput<M> {
             self.value = self.value.chars().take(max_len).collect();
         }
     }
+
+    fn external_editor_key_matches(&self, key: KeyEvent) -> bool {
+        self.external_editor_key
+            .is_some_and(|expected| key_matches(expected, key))
+    }
+
+    fn apply_external_editor_response(&mut self, response: &crate::ExternalEditorResponse) {
+        let mut collapsed_cursor = 0;
+        let lines: Vec<&str> = response.value.split('\n').collect();
+        let target_line_idx = response
+            .line
+            .saturating_sub(1)
+            .min(lines.len().saturating_sub(1));
+
+        for line in lines.iter().take(target_line_idx) {
+            collapsed_cursor += line.chars().count() + 1;
+        }
+
+        let col_idx = response.col.saturating_sub(1);
+        let target_line_chars = lines[target_line_idx].chars().count();
+        collapsed_cursor += col_idx.min(target_line_chars);
+
+        self.value = response.value.replace('\n', " ");
+        self.clamp_value();
+        self.cursor = collapsed_cursor.min(self.len_chars());
+    }
 }
 
 impl<M> TuiNode<M> for TextInput<M> {
@@ -516,9 +533,22 @@ impl<M> TuiNode<M> for TextInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::ExternalEditor(response) = event {
+            self.apply_external_editor_response(response);
+            self.cursor_fade.reset();
+            ctx.request_clear();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.external_editor_key_matches(*key) {
+            ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.on_key(*key);
         if outcome.submitted
             && let Some(on_submit) = &self.on_submit
@@ -683,121 +713,34 @@ pub(crate) fn text_char(key: KeyEvent) -> bool {
     !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT)
 }
 
-pub(crate) fn edit_in_external_editor(
-    value: &str,
-    line: usize,
-    col: usize,
-) -> std::io::Result<Option<(String, usize, usize)>> {
-    let temp_path = std::env::temp_dir().join(format!("tuicore-edit-{}.txt", std::process::id()));
-    let pos_path =
-        std::env::temp_dir().join(format!("tuicore-edit-pos-{}.txt", std::process::id()));
-    std::fs::write(&temp_path, value)?;
+pub(crate) fn tab_key(key: KeyEvent) -> bool {
+    matches!(key.code, Key::Tab)
+        || (matches!(key.code, Key::Char('i') | Key::Char('I'))
+            && key.modifiers.contains(KeyModifiers::CONTROL))
+}
 
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| "vi".to_string());
+fn ctrl_key(value: char) -> KeyEvent {
+    KeyEvent {
+        code: Key::Char(value),
+        modifiers: KeyModifiers::CONTROL,
+    }
+}
 
-    let mut stdout = std::io::stdout();
-    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
-    let _ = crossterm::terminal::disable_raw_mode();
-    let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);
-    let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
+fn key_matches(expected: KeyEvent, actual: KeyEvent) -> bool {
+    expected.modifiers == actual.modifiers
+        && match (expected.code, actual.code) {
+            (Key::Char(expected), Key::Char(actual)) => expected.eq_ignore_ascii_case(&actual),
+            _ => expected.code == actual.code,
+        }
+}
 
-    let editor_bin = std::path::Path::new(&editor)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| editor.clone());
-
-    let status = if cfg!(unix) {
-        let mut cmd = std::process::Command::new("sh");
-        let args = if editor_bin.contains("nano") {
-            format!(
-                "{} +{},{} '{}'",
-                editor,
-                line,
-                col,
-                temp_path.to_string_lossy()
-            )
-        } else if editor_bin.contains("emacs") {
-            format!(
-                "{} +{}:{} '{}'",
-                editor,
-                line,
-                col,
-                temp_path.to_string_lossy()
-            )
-        } else if editor_bin.contains("vim")
-            || editor_bin.contains("nvim")
-            || editor_bin.contains("vi")
-        {
-            format!(
-                "{} +{} -c 'autocmd VimLeavePre * call writefile([string(line(\".\")), string(col(\".\"))], \"{}\")' -c 'normal! {}|' '{}'",
-                editor,
-                line,
-                pos_path.to_string_lossy(),
-                col,
-                temp_path.to_string_lossy()
-            )
-        } else {
-            format!("{} +{} '{}'", editor, line, temp_path.to_string_lossy())
-        };
-        cmd.arg("-c").arg(args).status()
+pub(crate) fn display_char(value: char, max_width: usize) -> String {
+    let text = if value == '\t' {
+        " ".repeat(TAB_WIDTH)
     } else {
-        let mut cmd = std::process::Command::new(&editor);
-        if editor_bin.contains("nano") {
-            cmd.arg(format!("+{},{}", line, col));
-        } else if editor_bin.contains("emacs") {
-            cmd.arg(format!("+{}:{}", line, col));
-        } else if editor_bin.contains("vim")
-            || editor_bin.contains("nvim")
-            || editor_bin.contains("vi")
-        {
-            cmd.arg(format!("+{}", line));
-            cmd.arg("-c");
-            cmd.arg(format!(
-                "autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')",
-                pos_path.to_string_lossy()
-            ));
-            cmd.arg("-c");
-            cmd.arg(format!("normal! {}|", col));
-        } else {
-            cmd.arg(format!("+{}", line));
-        }
-        cmd.arg(&temp_path).status()
+        value.to_string()
     };
-
-    let _ = crossterm::terminal::enable_raw_mode();
-    let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
-    let _ = crossterm::execute!(stdout, crossterm::event::EnableMouseCapture);
-    let _ = crossterm::execute!(stdout, crossterm::cursor::Hide);
-
-    let result = match status {
-        Ok(s) if s.success() => {
-            let content = std::fs::read_to_string(&temp_path)?;
-            let mut exit_line = line;
-            let mut exit_col = col;
-
-            if let Ok(pos_content) = std::fs::read_to_string(&pos_path) {
-                let mut lines = pos_content.lines();
-                if let Some(l_str) = lines.next() {
-                    if let Ok(l) = l_str.parse::<usize>() {
-                        exit_line = l;
-                    }
-                }
-                if let Some(c_str) = lines.next() {
-                    if let Ok(c) = c_str.parse::<usize>() {
-                        exit_col = c;
-                    }
-                }
-            }
-            Some((content, exit_line, exit_col))
-        }
-        _ => None,
-    };
-
-    let _ = std::fs::remove_file(temp_path);
-    let _ = std::fs::remove_file(pos_path);
-    Ok(result)
+    text.chars().take(max_width).collect()
 }
 
 #[cfg(test)]
@@ -844,6 +787,38 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(input.current_value(), "");
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn tab_inserts_tab_character_and_stops_propagation() {
+        let mut input = TextInput::<()>::new().value("left");
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "left    ");
+        assert_eq!(line_text(&input.line(10)), "left    ");
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn control_i_inserts_tab_character_and_stops_propagation() {
+        let mut input = TextInput::<()>::new().value("left");
+        let mut ctx = EventCtx::<()>::default();
+        let key = KeyEvent {
+            code: Key::Char('i'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "left    ");
+        assert_eq!(line_text(&input.line(10)), "left    ");
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.redraw_requested());
     }
@@ -962,17 +937,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn ctrl_o_opens_external_editor() {
-        let _guard = crate::ENV_LOCK.lock().unwrap();
-        let old_editor = std::env::var("EDITOR").ok();
-        unsafe {
-            std::env::set_var(
-                "EDITOR",
-                "sh -c 'for last; do true; done; echo \"edited value\" > \"$last\"' --",
-            );
-        }
-
+    fn ctrl_o_requests_external_editor() {
         let mut input = TextInput::<()>::new().value("initial");
         let mut ctx = EventCtx::default();
         let key = KeyEvent {
@@ -983,17 +948,38 @@ mod tests {
         let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "edited value ");
+        assert_eq!(input.current_value(), "initial");
+        assert_eq!(
+            ctx.external_editor_request(),
+            Some(&crate::ExternalEditorRequest {
+                value: "initial".to_string(),
+                line: 1,
+                col: 8,
+            })
+        );
+        assert!(ctx.redraw_requested());
+        assert!(!ctx.clear_requested());
+    }
+
+    #[test]
+    fn external_editor_response_updates_value_and_clamps_cursor() {
+        let mut input = TextInput::<()>::new().value("initial");
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(
+            &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+                value: "edited\nvalue".to_string(),
+                line: 2,
+                col: 99,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "edited value");
+        assert_eq!(input.cursor, input.len_chars());
         assert!(ctx.redraw_requested());
         assert!(ctx.clear_requested());
-
-        unsafe {
-            if let Some(val) = old_editor {
-                std::env::set_var("EDITOR", val);
-            } else {
-                std::env::remove_var("EDITOR");
-            }
-        }
     }
 
     #[test]

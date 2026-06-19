@@ -18,6 +18,7 @@ pub struct DispatchEffects<M> {
     pub focus_repair: Option<FocusRepair>,
     pub propagation: Propagation,
     pub clear: bool,
+    pub external_editor: Option<crate::ExternalEditorRequest>,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +84,7 @@ impl TreeDispatcher {
             focus_repair: None,
             propagation: Propagation::Continue,
             clear: false,
+            external_editor: None,
         }
     }
 }
@@ -99,6 +101,7 @@ impl<M> DispatchEffects<M> {
             focus_repair: None,
             propagation: Propagation::Continue,
             clear: false,
+            external_editor: None,
         }
     }
 
@@ -109,6 +112,7 @@ impl<M> DispatchEffects<M> {
         let focus_request = ctx.focus_request().cloned();
         let focus_repair = ctx.focus_repair();
         let propagation = ctx.propagation();
+        let external_editor = ctx.take_external_editor_request();
         let messages = ctx.drain_messages().collect();
         let clear = ctx.clear_requested();
 
@@ -122,6 +126,7 @@ impl<M> DispatchEffects<M> {
             focus_repair,
             propagation,
             clear,
+            external_editor,
         }
     }
 }

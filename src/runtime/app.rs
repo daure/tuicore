@@ -1,12 +1,14 @@
 use std::{
     collections::VecDeque,
+    path::Path,
+    process::Command,
     time::{Duration, Instant},
 };
 
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
-    FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
-    Propagation, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
+    FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, Key, KeyModifiers,
+    LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
 };
 
 use super::{
@@ -148,6 +150,7 @@ where
                 event_source.poll(runtime_poll_timeout(scheduler, global_hotkeys))?
             {
                 self.dispatch_runtime_event(
+                    Some(terminal),
                     flags,
                     focus_manager,
                     layout_engine,
@@ -368,6 +371,7 @@ where
 
     fn dispatch_runtime_event(
         &mut self,
+        terminal: Option<&mut TerminalGuard>,
         flags: &mut RuntimeFlags,
         focus_manager: &mut FocusManager,
         layout_engine: &LayoutEngine,
@@ -377,6 +381,10 @@ where
     ) {
         let event = event;
         if let TuiEvent::Key(key) = &event {
+            if is_global_quit_key(*key) {
+                flags.quit = true;
+                return;
+            }
             let current_is_input = focus_manager
                 .current()
                 .map(|t| t.id.as_str() == "input" || t.id.as_str() == "textarea")
@@ -399,6 +407,12 @@ where
                                 target,
                                 HotkeyEvent::Commit(sequence.clone()),
                             );
+                            if flags.focus_request == Some(FocusRequest::FirstChild) {
+                                flags.focus_request = Some(FocusRequest::FirstChildOf {
+                                    path: target.path.clone(),
+                                    id: target.id.clone(),
+                                });
+                            }
                             if flags.focus_request.is_none() {
                                 flags.focus_request = Some(FocusRequest::TargetAt {
                                     path: target.path.clone(),
@@ -463,10 +477,31 @@ where
         }
         let effects =
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
+        let external_editor = effects.external_editor.clone();
         let focus_request = focus_request_from_event(&event, &effects);
         flags.merge(self.handle_effects(effects));
         if flags.focus_request.is_none() {
             flags.focus_request = focus_request;
+        }
+        if let (Some(terminal), Some(request)) = (terminal, external_editor) {
+            self.handle_external_editor(flags, dispatcher, terminal, route, request);
+        }
+    }
+
+    fn handle_external_editor(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        dispatcher: &mut TreeDispatcher,
+        terminal: &mut TerminalGuard,
+        route: EventRoute,
+        request: crate::ExternalEditorRequest,
+    ) {
+        flags.clear = true;
+        if let Ok(Some(response)) = edit_in_external_editor(terminal, request) {
+            let event = TuiEvent::ExternalEditor(response);
+            let effects =
+                dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
+            flags.merge(self.handle_effects(effects));
         }
     }
 
@@ -519,6 +554,7 @@ where
                 &mut dispatcher,
             );
             self.dispatch_runtime_event(
+                None,
                 &mut flags,
                 &mut focus_manager,
                 &layout_engine,
@@ -560,6 +596,148 @@ fn runtime_poll_timeout(scheduler: &Scheduler, global_hotkeys: &HotkeySequenceMa
         .remaining_timeout()
         .map(|timeout| timeout.min(scheduler.timeout()))
         .unwrap_or_else(|| scheduler.timeout())
+}
+
+fn is_global_quit_key(key: crate::KeyEvent) -> bool {
+    key.code == Key::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn edit_in_external_editor(
+    terminal: &mut TerminalGuard,
+    request: crate::ExternalEditorRequest,
+) -> std::io::Result<Option<crate::ExternalEditorResponse>> {
+    let temp_path = std::env::temp_dir().join(format!("tuicore-edit-{}.txt", std::process::id()));
+    let pos_path =
+        std::env::temp_dir().join(format!("tuicore-edit-pos-{}.txt", std::process::id()));
+    std::fs::write(&temp_path, &request.value)?;
+
+    let status = terminal.suspend(|| run_editor(&temp_path, &pos_path, request.line, request.col));
+    let result = match status {
+        Ok(status) if status.success() => {
+            let content = std::fs::read_to_string(&temp_path)?;
+            let (line, col) = editor_exit_position(&pos_path, request.line, request.col);
+            Some(crate::ExternalEditorResponse {
+                value: content,
+                line,
+                col,
+            })
+        }
+        _ => None,
+    };
+
+    let _ = std::fs::remove_file(temp_path);
+    let _ = std::fs::remove_file(pos_path);
+    Ok(result)
+}
+
+fn run_editor(
+    temp_path: &Path,
+    pos_path: &Path,
+    line: usize,
+    col: usize,
+) -> std::io::Result<std::process::ExitStatus> {
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let editor_bin = Path::new(&editor)
+        .file_name()
+        .map(|file| file.to_string_lossy().to_string())
+        .unwrap_or_else(|| editor.clone());
+
+    if cfg!(unix) {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(editor_shell_args(
+                &editor,
+                &editor_bin,
+                temp_path,
+                pos_path,
+                line,
+                col,
+            ))
+            .status()
+    } else {
+        let mut cmd = Command::new(&editor);
+        if editor_bin.contains("nano") {
+            cmd.arg(format!("+{},{}", line, col));
+        } else if editor_bin.contains("emacs") {
+            cmd.arg(format!("+{}:{}", line, col));
+        } else if is_vi_editor(&editor_bin) {
+            cmd.arg(format!("+{}", line));
+            cmd.arg("-c");
+            cmd.arg(format!(
+                "autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')",
+                pos_path.to_string_lossy()
+            ));
+            cmd.arg("-c");
+            cmd.arg(format!("normal! {}|", col));
+        } else {
+            cmd.arg(format!("+{}", line));
+        }
+        cmd.arg(temp_path).status()
+    }
+}
+
+fn editor_shell_args(
+    editor: &str,
+    editor_bin: &str,
+    temp_path: &Path,
+    pos_path: &Path,
+    line: usize,
+    col: usize,
+) -> String {
+    if editor_bin.contains("nano") {
+        format!(
+            "{} +{},{} '{}'",
+            editor,
+            line,
+            col,
+            temp_path.to_string_lossy()
+        )
+    } else if editor_bin.contains("emacs") {
+        format!(
+            "{} +{}:{} '{}'",
+            editor,
+            line,
+            col,
+            temp_path.to_string_lossy()
+        )
+    } else if is_vi_editor(editor_bin) {
+        format!(
+            "{} +{} -c 'autocmd VimLeavePre * call writefile([string(line(\".\")), string(col(\".\"))], \"{}\")' -c 'normal! {}|' '{}'",
+            editor,
+            line,
+            pos_path.to_string_lossy(),
+            col,
+            temp_path.to_string_lossy()
+        )
+    } else {
+        format!("{} +{} '{}'", editor, line, temp_path.to_string_lossy())
+    }
+}
+
+fn is_vi_editor(editor_bin: &str) -> bool {
+    editor_bin.contains("vim") || editor_bin.contains("nvim") || editor_bin.contains("vi")
+}
+
+fn editor_exit_position(
+    pos_path: &Path,
+    default_line: usize,
+    default_col: usize,
+) -> (usize, usize) {
+    let Ok(pos_content) = std::fs::read_to_string(pos_path) else {
+        return (default_line, default_col);
+    };
+    let mut lines = pos_content.lines();
+    let line = lines
+        .next()
+        .and_then(|line| line.parse::<usize>().ok())
+        .unwrap_or(default_line);
+    let col = lines
+        .next()
+        .and_then(|col| col.parse::<usize>().ok())
+        .unwrap_or(default_col);
+    (line, col)
 }
 
 fn focus_request_from_event<M>(
@@ -1108,6 +1286,7 @@ mod tests {
             focus_repair: None,
             propagation,
             clear: false,
+            external_editor: None,
         }
     }
 
@@ -1198,6 +1377,23 @@ mod tests {
         let app = app.run_test_events(events, Rect::new(0, 0, 20, 5));
 
         assert_eq!(app.root.focused.last().map(String::as_str), Some("two"));
+    }
+
+    #[test]
+    fn ctrl_q_quits_even_when_modal_handles_other_keys() {
+        let app = TreeApp::new(ModalRestoreNode::default());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent {
+                code: Key::Char('q'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 20, 5));
+
+        assert!(app.root.active);
     }
 
     #[test]
@@ -1462,6 +1658,7 @@ mod tests {
             Rect::new(0, 0, 10, 1),
         );
         app.dispatch_runtime_event(
+            None,
             &mut flags,
             &mut focus_manager,
             &layout_engine,
@@ -1514,6 +1711,7 @@ mod tests {
             Rect::new(0, 0, 10, 1),
         );
         app.dispatch_runtime_event(
+            None,
             &mut flags,
             &mut focus_manager,
             &layout_engine,
