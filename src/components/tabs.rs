@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::event::{Key, KeyEvent};
 use crate::{
@@ -22,6 +22,12 @@ pub struct Tab<M = ()> {
     title: String,
     hotkey: Option<String>,
     body: Box<dyn TuiNode<M>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalCloseReason {
+    CloseKey,
+    Escape,
 }
 
 pub struct Tabs<M = ()> {
@@ -45,6 +51,8 @@ pub struct Tabs<M = ()> {
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
+    modal: bool,
+    on_close: Option<Box<dyn Fn(ModalCloseReason) -> M>>,
 }
 
 impl<M> Tab<M>
@@ -116,7 +124,19 @@ where
             hotkey: None,
             hotkey_matcher,
             pending_hotkey_prefix: None,
+            modal: false,
+            on_close: None,
         }
+    }
+
+    pub fn modal(mut self) -> Self {
+        self.modal = true;
+        self
+    }
+
+    pub fn on_close(mut self, handler: impl Fn(ModalCloseReason) -> M + 'static) -> Self {
+        self.on_close = Some(Box::new(handler));
+        self
     }
 
     pub fn selected(mut self, selected: usize) -> Self {
@@ -134,6 +154,10 @@ where
     pub fn variant(mut self, variant: TabsVariant) -> Self {
         self.variant = Some(variant);
         self
+    }
+
+    pub fn set_variant(&mut self, variant: TabsVariant) {
+        self.variant = Some(variant);
     }
 
     pub fn border(mut self, border: BorderKind) -> Self {
@@ -298,6 +322,7 @@ where
     }
 
     fn calculate_body_area(&self, area: Rect) -> Rect {
+        let area = self.modal_render_area(area);
         let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
         let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
         if self.titles.is_empty() {
@@ -1096,6 +1121,40 @@ where
         self.tab_label_width(index)
     }
 
+    fn render_modal_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+        if self.on_close.is_none() {
+            return;
+        }
+        let width = line_width(&Line::from("┤x│")).min(u16::MAX as usize) as u16;
+        let y = self.modal_close_label_y(area);
+        if area.width <= width + 2 || y >= area.bottom() {
+            return;
+        }
+        let style = self.selected_tab_style().add_modifier(Modifier::BOLD);
+        let line = Line::from(hotkey_edge_spans(
+            "x",
+            None,
+            border,
+            self.border_style(),
+            style,
+            style,
+        ));
+        let x = area.x + area.width.saturating_sub(width);
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+    }
+
+    fn modal_close_label_y(&self, area: Rect) -> u16 {
+        let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
+        if self.modal && variant == TabsVariant::Underline {
+            return area.y.saturating_add(1);
+        }
+        area.y
+    }
+
+    fn modal_render_area(&self, area: Rect) -> Rect {
+        area
+    }
+
     fn select_index_from_event(&mut self, selected: usize, ctx: &mut EventCtx<M>) {
         let previous = self.selected_index();
         self.select_index_with_settings(selected, ctx.animation());
@@ -1104,6 +1163,20 @@ where
         if self.selected_index() != previous {
             ctx.focus(FocusRequest::FirstChild);
         }
+    }
+
+    fn close_from_event(
+        &mut self,
+        reason: ModalCloseReason,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        let Some(handler) = &self.on_close else {
+            return EventOutcome::Ignored;
+        };
+        ctx.emit(handler(reason));
+        ctx.stop_propagation();
+        ctx.request_redraw();
+        EventOutcome::Handled
     }
 }
 
@@ -1144,8 +1217,23 @@ where
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        self.render_tabs(frame, area);
+        if self.modal {
+            frame.render_widget(Clear, area);
+        }
+        let tabs_area = self.modal_render_area(area);
+        self.render_tabs(frame, tabs_area);
         self.render_selected_body(frame);
+        if self.modal {
+            let border = self.border.unwrap_or_else(|| preset().border());
+            self.render_modal_close_label(frame, tabs_area, border);
+            crate::separator::patch_border_joins(
+                frame,
+                tabs_area,
+                self.body_area,
+                border,
+                self.border_style(),
+            );
+        }
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -1208,6 +1296,10 @@ where
             self.select_index_from_event(self.next_index(), ctx);
             ctx.stop_propagation();
             EventOutcome::Handled
+        } else if self.modal && bindings.tabs().close_matches(*key) {
+            self.close_from_event(ModalCloseReason::CloseKey, ctx)
+        } else if self.modal && keybindings().focus().unfocus_matches(*key) {
+            self.close_from_event(ModalCloseReason::Escape, ctx)
         } else {
             EventOutcome::Ignored
         }
@@ -1868,6 +1960,34 @@ mod tests {
         ]
         .join("\n");
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn underline_modal_tabs_put_close_label_on_body_border_without_extra_padding() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", "Body").hotkey("o"),
+            Tab::text("Usage", "Body").hotkey("u"),
+        ])
+        .variant(TabsVariant::Underline)
+        .modal()
+        .on_close(|_| ());
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 32, 8), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(32, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..32)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert!(!row(0).contains('x'), "{}", row(0));
+        assert!(row(1).ends_with("┤x│"), "{}", row(1));
     }
 
     #[test]

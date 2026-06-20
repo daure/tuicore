@@ -121,6 +121,7 @@ pub enum Easing {
     EaseInOut,
     EaseOutQuad,
     EaseOutCubic,
+    EaseOutBack,
 }
 
 impl Easing {
@@ -137,6 +138,11 @@ impl Easing {
             }
             Self::EaseOutQuad => 1.0 - (1.0 - t).powi(2),
             Self::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
+            Self::EaseOutBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+            }
         }
     }
 }
@@ -243,6 +249,20 @@ impl Tween {
         let changed = self.current != self.to || self.active;
         self.current = self.to;
         self.elapsed = self.duration;
+        self.active = false;
+        TickResult {
+            changed,
+            active: false,
+        }
+    }
+
+    pub fn snap_to(&mut self, value: f64) -> TickResult {
+        let changed = self.current != value || self.active;
+        self.from = value;
+        self.to = value;
+        self.current = value;
+        self.elapsed = Duration::ZERO;
+        self.duration = Duration::ZERO;
         self.active = false;
         TickResult {
             changed,
@@ -358,6 +378,7 @@ fn lerp_u8(from: u8, to: u8, progress: f64) -> u8 {
 pub struct ScrollAnimator {
     current: f64,
     target: f64,
+    tween: Tween,
 }
 
 impl ScrollAnimator {
@@ -365,29 +386,40 @@ impl ScrollAnimator {
         Self {
             current: value,
             target: value,
+            tween: Tween::idle(value),
         }
     }
 
     pub fn set_target(&mut self, target: f64) {
+        self.animate_to(target, Duration::from_millis(250), Easing::EaseInOut);
+    }
+
+    pub fn animate_to(&mut self, target: f64, duration: Duration, easing: Easing) {
         self.target = target;
+        self.tween.start(self.current, target, duration, easing);
     }
 
     pub fn snap_to(&mut self, target: f64) {
         self.current = target;
         self.target = target;
+        self.tween.snap_to(target);
     }
 
     pub fn current(&self) -> f64 {
         self.current
     }
 
+    pub fn is_active(&self) -> bool {
+        self.tween.is_active() || self.current != self.target
+    }
+
     pub fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        if self.current == self.target {
+        if !self.is_active() {
             return TickResult::IDLE;
         }
         if !settings.enabled {
             let changed = self.current != self.target;
-            self.current = self.target;
+            self.snap_to(self.target);
             return TickResult {
                 changed,
                 active: false,
@@ -395,15 +427,17 @@ impl ScrollAnimator {
         }
 
         let before = self.current;
-        let speed = 24.0 * dt.min(settings.max_dt).as_secs_f64();
-        self.current += (self.target - self.current) * speed.clamp(0.0, 1.0);
-        if (self.target - self.current).abs() < 0.5 {
+        let tick = self.tween.tick(dt, settings);
+        if tick.changed {
+            self.current = self.tween.value();
+        }
+        if !self.tween.is_active() {
             self.current = self.target;
         }
 
         TickResult {
             changed: before != self.current,
-            active: self.current != self.target,
+            active: self.is_active(),
         }
     }
 }

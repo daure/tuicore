@@ -9,10 +9,11 @@ use ratatui::widgets::Paragraph;
 use crate::animation::{Animated, AnimationSettings, TickResult};
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
-use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
+use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutResult, TuiNode};
 
 use super::text_input::{
-    CursorFade, InputOutcome, display_char, is_alt, is_ctrl, placeholder_line, tab_key, text_char,
+    CursorFade, InputOutcome, cell_width, display_char, placeholder_line, text_char,
+    visible_start_for_cursor,
 };
 
 const TEXTAREA_FOCUS: &str = "textarea";
@@ -27,7 +28,102 @@ pub struct TextareaInput<M = ()> {
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
+    keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextareaInputKeyBindings {
+    pub submit: Vec<KeySpec>,
+    pub cancel: Vec<KeySpec>,
+    pub clear: Vec<KeySpec>,
+    pub move_line_start: Vec<KeySpec>,
+    pub move_line_end: Vec<KeySpec>,
+    pub move_left: Vec<KeySpec>,
+    pub move_right: Vec<KeySpec>,
+    pub move_up: Vec<KeySpec>,
+    pub move_down: Vec<KeySpec>,
+    pub move_previous_word: Vec<KeySpec>,
+    pub move_next_word: Vec<KeySpec>,
+    pub delete_before_line: Vec<KeySpec>,
+    pub delete_after_line: Vec<KeySpec>,
+    pub delete_previous_word: Vec<KeySpec>,
+    pub delete_next_word: Vec<KeySpec>,
+    pub backspace: Vec<KeySpec>,
+    pub delete_next: Vec<KeySpec>,
+    pub insert_tab: Vec<KeySpec>,
+    pub insert_newline: Vec<KeySpec>,
+}
+
+impl Default for TextareaInputKeyBindings {
+    fn default() -> Self {
+        Self {
+            submit: vec![
+                KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
+            ],
+            cancel: vec![KeySpec::key(Key::Esc)],
+            clear: vec![KeySpec::key_with_modifiers(
+                Key::Char('c'),
+                KeyModifiers::CONTROL,
+            )],
+            move_line_start: vec![
+                KeySpec::key_with_modifiers(Key::Char('a'), KeyModifiers::CONTROL),
+                KeySpec::key(Key::Home),
+            ],
+            move_line_end: vec![
+                KeySpec::key_with_modifiers(Key::Char('e'), KeyModifiers::CONTROL),
+                KeySpec::key(Key::End),
+            ],
+            move_left: vec![KeySpec::key(Key::Left)],
+            move_right: vec![KeySpec::key(Key::Right)],
+            move_up: vec![
+                KeySpec::key(Key::Up),
+                KeySpec::key_with_modifiers(Key::Char('p'), KeyModifiers::CONTROL),
+            ],
+            move_down: vec![
+                KeySpec::key(Key::Down),
+                KeySpec::key_with_modifiers(Key::Char('n'), KeyModifiers::CONTROL),
+            ],
+            move_previous_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('b'), KeyModifiers::ALT),
+                KeySpec::key_with_modifiers(Key::Left, KeyModifiers::CONTROL),
+            ],
+            move_next_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('f'), KeyModifiers::ALT),
+                KeySpec::key_with_modifiers(Key::Right, KeyModifiers::CONTROL),
+            ],
+            delete_before_line: vec![KeySpec::key_with_modifiers(
+                Key::Char('u'),
+                KeyModifiers::CONTROL,
+            )],
+            delete_after_line: vec![KeySpec::key_with_modifiers(
+                Key::Char('k'),
+                KeyModifiers::CONTROL,
+            )],
+            delete_previous_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('w'), KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Backspace, KeyModifiers::CONTROL),
+            ],
+            delete_next_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::ALT),
+                KeySpec::key_with_modifiers(Key::Delete, KeyModifiers::CONTROL),
+            ],
+            backspace: vec![KeySpec::key(Key::Backspace)],
+            delete_next: vec![KeySpec::key(Key::Delete)],
+            insert_tab: vec![
+                KeySpec::key(Key::Tab),
+                KeySpec::key_with_modifiers(Key::Char('i'), KeyModifiers::CONTROL),
+            ],
+            insert_newline: vec![KeySpec::key(Key::Enter)],
+        }
+    }
+}
+
+impl TextareaInputKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl<M> Default for TextareaInput<M> {
@@ -47,6 +143,7 @@ impl<M> TextareaInput<M> {
             on_submit: None,
             on_blur: None,
             external_editor_key: Some(ctrl_key('o')),
+            keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
         }
     }
@@ -87,6 +184,15 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    pub fn keybindings(mut self, keys: TextareaInputKeyBindings) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    pub fn set_keybindings(&mut self, keys: TextareaInputKeyBindings) {
+        self.keys = keys;
+    }
+
     pub fn max_lines(mut self, max_lines: usize) -> Self {
         self.max_lines = Some(max_lines.max(1));
         self.clamp_lines();
@@ -113,81 +219,66 @@ impl<M> TextareaInput<M> {
     }
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
-        let key = key.into();
-        if is_ctrl(key, 'd') || (matches!(key.code, Key::Enter) && is_control(key)) {
+        if matches_any(&self.keys.submit, key) {
             return InputOutcome::SUBMITTED;
         }
-        if is_ctrl(key, 'a') {
+        if matches_any(&self.keys.move_line_start, key) {
             return self.move_to(self.current_line().start);
         }
-        if is_ctrl(key, 'c') {
+        if matches_any(&self.keys.clear, key) {
             return self.clear();
         }
-        if is_ctrl(key, 'e') {
+        if matches_any(&self.keys.move_line_end, key) {
             return self.move_to(self.current_line().end);
         }
-        if is_ctrl(key, 'u') {
+        if matches_any(&self.keys.delete_before_line, key) {
             return self.delete_before_line();
         }
-        if is_ctrl(key, 'k') {
+        if matches_any(&self.keys.delete_after_line, key) {
             return self.delete_after_line();
         }
-        if is_ctrl(key, 'w') {
+        if matches_any(&self.keys.delete_previous_word, key) {
             return self.delete_previous_word();
         }
-        if is_alt(key, 'b') {
+        if matches_any(&self.keys.move_previous_word, key) {
             return self.move_previous_word();
         }
-        if is_alt(key, 'f') {
+        if matches_any(&self.keys.move_next_word, key) {
             return self.move_next_word();
         }
-        if is_alt(key, 'd') {
+        if matches_any(&self.keys.delete_next_word, key) {
             return self.delete_next_word();
         }
-        if is_ctrl(key, 'p') {
+        if matches_any(&self.keys.move_up, key) {
             return self.move_vertical(-1);
         }
-        if is_ctrl(key, 'n') {
+        if matches_any(&self.keys.move_down, key) {
             return self.move_vertical(1);
+        }
+        if matches_any(&self.keys.insert_tab, key) {
+            return self.insert_text(TAB_INSERT);
+        }
+        if matches_any(&self.keys.insert_newline, key) {
+            return self.insert_newline();
+        }
+        if matches_any(&self.keys.backspace, key) {
+            return self.backspace();
+        }
+        if matches_any(&self.keys.delete_next, key) {
+            return self.delete_next();
+        }
+        if matches_any(&self.keys.move_left, key) {
+            return self.move_left();
+        }
+        if matches_any(&self.keys.move_right, key) {
+            return self.move_right();
+        }
+        if matches_any(&self.keys.cancel, key) {
+            return InputOutcome::CANCELED;
         }
 
         match key.code {
-            _ if tab_key(key) => self.insert_text(TAB_INSERT),
             Key::Char(value) if text_char(key) => self.insert_char(value),
-            Key::Enter => self.insert_newline(),
-            Key::Backspace => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.delete_previous_word()
-                } else {
-                    self.backspace()
-                }
-            }
-            Key::Delete => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.delete_next_word()
-                } else {
-                    self.delete_next()
-                }
-            }
-            Key::Left => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.move_previous_word()
-                } else {
-                    self.move_left()
-                }
-            }
-            Key::Right => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.move_next_word()
-                } else {
-                    self.move_right()
-                }
-            }
-            Key::Up => self.move_vertical(-1),
-            Key::Down => self.move_vertical(1),
-            Key::Home => self.move_to(self.current_line().start),
-            Key::End => self.move_to(self.current_line().end),
-            Key::Esc => InputOutcome::CANCELED,
             _ => InputOutcome::IDLE,
         }
     }
@@ -236,9 +327,14 @@ impl<M> TextareaInput<M> {
             .skip(first_line)
             .take(height)
             .map(|(line_index, range)| {
-                let horizontal = if self.focused && line_index == cursor_line && cursor_col >= width
-                {
-                    cursor_col.saturating_add(1).saturating_sub(width)
+                let line_chars = self
+                    .value
+                    .chars()
+                    .skip(range.start)
+                    .take(range.len())
+                    .collect::<Vec<_>>();
+                let horizontal = if self.focused && line_index == cursor_line {
+                    visible_start_for_cursor(&line_chars, cursor_col, width)
                 } else {
                     0
                 };
@@ -280,7 +376,12 @@ impl<M> TextareaInput<M> {
                     ' '
                 };
                 let text = display_char(value, remaining);
-                drawn += text.len();
+                let text = if text.is_empty() && remaining > 0 {
+                    String::from(" ")
+                } else {
+                    text
+                };
+                drawn += cell_width(&text);
                 spans.push(Span::styled(text, cursor_style));
                 continue;
             }
@@ -288,7 +389,7 @@ impl<M> TextareaInput<M> {
                 && let Some(value) = chars.get(position)
             {
                 let text = display_char(*value, remaining);
-                drawn += text.len();
+                drawn += cell_width(&text);
                 spans.push(Span::styled(text, value_style));
             }
         }
@@ -571,6 +672,7 @@ impl<M> TextareaInput<M> {
 impl<M> TuiNode<M> for TextareaInput<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
+        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(TEXTAREA_FOCUS), true);
         LayoutResult::new(area)
     }
 
@@ -649,10 +751,6 @@ impl LineRange {
     }
 }
 
-fn is_control(key: KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL)
-}
-
 fn ctrl_key(value: char) -> KeyEvent {
     KeyEvent {
         code: Key::Char(value),
@@ -666,6 +764,10 @@ fn key_matches(expected: KeyEvent, actual: KeyEvent) -> bool {
             (Key::Char(expected), Key::Char(actual)) => expected.eq_ignore_ascii_case(&actual),
             _ => expected.code == actual.code,
         }
+}
+
+fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
+    bindings.iter().any(|binding| binding.matches(key))
 }
 
 #[cfg(test)]
@@ -769,6 +871,32 @@ mod tests {
         assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn visible_lines_clip_wide_unicode_by_terminal_width() {
+        let input = TextareaInput::<()>::new().value("ab界d");
+
+        let lines = input.visible_lines(4, 1);
+
+        assert_eq!(line_text(&lines[0]), "ab界");
+        assert_eq!(cell_width(&line_text(&lines[0])), 4);
+    }
+
+    #[test]
+    fn custom_submit_key_replaces_default_control_enter() {
+        let keys = TextareaInputKeyBindings {
+            submit: vec![KeySpec::plain('s')],
+            ..TextareaInputKeyBindings::default()
+        };
+        let mut input = TextareaInput::<()>::new().keybindings(keys);
+        let control_enter = KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        assert_eq!(input.on_key(control_enter), InputOutcome::IDLE);
+        assert!(input.on_key(KeyEvent::from(Key::Char('s'))).submitted);
     }
 
     #[test]

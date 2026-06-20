@@ -1,4 +1,4 @@
-use std::{env, fs, io, path::PathBuf};
+use std::{env, fmt, fs, io, path::PathBuf};
 
 use crate::event::{Key, KeyEvent, KeyModifiers};
 
@@ -6,6 +6,7 @@ use crate::event::{Key, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
+    runtime: RuntimeKeyBindings,
     nav: NavKeyBindings,
     focus: FocusKeyBindings,
     button: ButtonKeyBindings,
@@ -13,6 +14,11 @@ pub struct KeyBindings {
     toggle: ToggleKeyBindings,
     data_view: DataViewKeyBindings,
     dropdown: DropdownKeyBindings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeKeyBindings {
+    quit: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +49,7 @@ pub struct ButtonKeyBindings {
 pub struct TabsKeyBindings {
     previous: KeySpec,
     next: KeySpec,
+    close: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,11 +100,23 @@ impl Default for NavKeyBindings {
     }
 }
 
+impl Default for RuntimeKeyBindings {
+    fn default() -> Self {
+        Self {
+            quit: vec![KeySpec::key_with_modifiers(
+                Key::Char('q'),
+                KeyModifiers::CONTROL,
+            )],
+        }
+    }
+}
+
 impl Default for TabsKeyBindings {
     fn default() -> Self {
         Self {
             previous: KeySpec::plain('['),
             next: KeySpec::plain(']'),
+            close: vec![KeySpec::plain('x')],
         }
     }
 }
@@ -177,6 +196,7 @@ impl Default for DropdownKeyBindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
+            runtime: RuntimeKeyBindings::default(),
             nav: NavKeyBindings::default(),
             focus: FocusKeyBindings::default(),
             button: ButtonKeyBindings::default(),
@@ -201,112 +221,140 @@ impl KeyBindings {
         Self::load_from_path(path).unwrap_or_default()
     }
 
+    pub fn try_load() -> Result<Self, KeyBindingsError> {
+        let Some(path) = keybindings_path() else {
+            return Ok(Self::default());
+        };
+
+        Self::try_load_from_path(path)
+    }
+
     pub fn load_from_path(path: impl Into<PathBuf>) -> io::Result<Self> {
         let text = fs::read_to_string(path.into())?;
         Ok(Self::from_toml_str(&text))
     }
 
-    pub fn from_toml_str(text: &str) -> Self {
-        let mut bindings = Self::default();
-        let Ok(value) = toml::from_str::<toml::Table>(text) else {
-            return bindings;
-        };
+    pub fn try_load_from_path(path: impl Into<PathBuf>) -> Result<Self, KeyBindingsError> {
+        match fs::read_to_string(path.into()) {
+            Ok(text) => Self::try_from_toml_str(&text),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(KeyBindingsError(format!(
+                "Keybindings config could not be opened: {error}"
+            ))),
+        }
+    }
 
-        set_keys(&value, "nav", "line_up", &mut bindings.nav.line_up);
-        set_keys(&value, "nav", "line_down", &mut bindings.nav.line_down);
-        set_keys(&value, "nav", "line_left", &mut bindings.nav.line_left);
-        set_keys(&value, "nav", "line_right", &mut bindings.nav.line_right);
-        set_keys(&value, "nav", "page_up", &mut bindings.nav.page_up);
-        set_keys(&value, "nav", "page_down", &mut bindings.nav.page_down);
-        set_keys(&value, "nav", "home", &mut bindings.nav.home);
-        set_keys(&value, "nav", "end", &mut bindings.nav.end);
-        set_keys(&value, "focus", "next", &mut bindings.focus.next);
-        set_keys(&value, "focus", "previous", &mut bindings.focus.previous);
-        set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus);
-        set_keys(&value, "button", "press", &mut bindings.button.press);
-        set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous);
-        set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next);
-        set_keys(&value, "toggle", "toggle", &mut bindings.toggle.toggle);
+    pub fn from_toml_str(text: &str) -> Self {
+        Self::try_from_toml_str(text).unwrap_or_default()
+    }
+
+    pub fn try_from_toml_str(text: &str) -> Result<Self, KeyBindingsError> {
+        let mut bindings = Self::default();
+        let value = toml::from_str::<toml::Table>(text).map_err(|error| {
+            KeyBindingsError(format!("Keybindings config could not be read: {error}"))
+        })?;
+
+        set_keys(&value, "runtime", "quit", &mut bindings.runtime.quit)?;
+        set_keys(&value, "nav", "line_up", &mut bindings.nav.line_up)?;
+        set_keys(&value, "nav", "line_down", &mut bindings.nav.line_down)?;
+        set_keys(&value, "nav", "line_left", &mut bindings.nav.line_left)?;
+        set_keys(&value, "nav", "line_right", &mut bindings.nav.line_right)?;
+        set_keys(&value, "nav", "page_up", &mut bindings.nav.page_up)?;
+        set_keys(&value, "nav", "page_down", &mut bindings.nav.page_down)?;
+        set_keys(&value, "nav", "home", &mut bindings.nav.home)?;
+        set_keys(&value, "nav", "end", &mut bindings.nav.end)?;
+        set_keys(&value, "focus", "next", &mut bindings.focus.next)?;
+        set_keys(&value, "focus", "previous", &mut bindings.focus.previous)?;
+        set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus)?;
+        set_keys(&value, "button", "press", &mut bindings.button.press)?;
+        set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous)?;
+        set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next)?;
+        set_keys(&value, "tabs", "close", &mut bindings.tabs.close)?;
+        set_keys(&value, "toggle", "toggle", &mut bindings.toggle.toggle)?;
         set_keys(
             &value,
             "data_view",
             "activate",
             &mut bindings.data_view.activate,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "toggle_selection",
             &mut bindings.data_view.toggle_selection,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "toggle_expansion",
             &mut bindings.data_view.toggle_expansion,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "next_page",
             &mut bindings.data_view.next_page,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "previous_page",
             &mut bindings.data_view.previous_page,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "collapse_all",
             &mut bindings.data_view.collapse_all,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "expand_all",
             &mut bindings.data_view.expand_all,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "top_prefix",
             &mut bindings.data_view.top_prefix,
-        );
+        )?;
         set_keys(
             &value,
             "data_view",
             "bottom",
             &mut bindings.data_view.bottom,
-        );
-        set_keys(&value, "dropdown", "next", &mut bindings.dropdown.next);
+        )?;
+        set_keys(&value, "dropdown", "next", &mut bindings.dropdown.next)?;
         set_keys(
             &value,
             "dropdown",
             "previous",
             &mut bindings.dropdown.previous,
-        );
+        )?;
         set_keys(
             &value,
             "dropdown",
             "page_next",
             &mut bindings.dropdown.page_next,
-        );
+        )?;
         set_keys(
             &value,
             "dropdown",
             "page_previous",
             &mut bindings.dropdown.page_previous,
-        );
-        set_keys(&value, "dropdown", "select", &mut bindings.dropdown.select);
+        )?;
+        set_keys(&value, "dropdown", "select", &mut bindings.dropdown.select)?;
 
-        bindings
+        Ok(bindings)
     }
 
     pub fn tabs(&self) -> &TabsKeyBindings {
         &self.tabs
+    }
+
+    pub fn runtime(&self) -> &RuntimeKeyBindings {
+        &self.runtime
     }
 
     pub fn focus(&self) -> &FocusKeyBindings {
@@ -344,6 +392,24 @@ impl KeyBindings {
 
     pub fn with_tabs_next(mut self, key: KeySpec) -> Self {
         self.set_tabs_next(key);
+        self
+    }
+
+    pub fn set_tabs_close(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.tabs.close = keys.into_iter().collect();
+    }
+
+    pub fn with_tabs_close(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_tabs_close(keys);
+        self
+    }
+
+    pub fn set_runtime_quit(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.runtime.quit = keys.into_iter().collect();
+    }
+
+    pub fn with_runtime_quit(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_runtime_quit(keys);
         self
     }
 
@@ -628,6 +694,29 @@ impl KeyBindings {
     }
 }
 
+impl RuntimeKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_quit(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.quit = keys.into_iter().collect();
+    }
+
+    pub fn with_quit(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_quit(keys);
+        self
+    }
+
+    pub fn quit_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.quit, key.into())
+    }
+
+    pub fn quit_label(&self) -> String {
+        labels(&self.quit)
+    }
+}
+
 impl TabsKeyBindings {
     pub fn previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
         self.previous.matches(key)
@@ -635,6 +724,10 @@ impl TabsKeyBindings {
 
     pub fn next_matches(&self, key: impl Into<KeyEvent>) -> bool {
         self.next.matches(key)
+    }
+
+    pub fn close_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.close, key.into())
     }
 
     pub fn previous_label(&self) -> String {
@@ -988,6 +1081,17 @@ impl From<KeyEvent> for KeySpec {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyBindingsError(pub String);
+
+impl fmt::Display for KeyBindingsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for KeyBindingsError {}
+
 fn shifted_label(code: Key, fallback: &str) -> String {
     match code {
         Key::Char(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase().to_string(),
@@ -996,37 +1100,73 @@ fn shifted_label(code: Key, fallback: &str) -> String {
     }
 }
 
-fn set_key(value: &toml::Table, section: &str, key: &str, destination: &mut KeySpec) {
+fn set_key(
+    value: &toml::Table,
+    section: &str,
+    key: &str,
+    destination: &mut KeySpec,
+) -> Result<(), KeyBindingsError> {
     if let Some(configured) = value
         .get(section)
         .and_then(|section| section.get(key))
         .and_then(toml::Value::as_str)
-        .and_then(parse_key)
     {
-        *destination = configured;
+        *destination =
+            parse_key(configured).ok_or_else(|| invalid_key(section, key, configured))?;
+        return Ok(());
     }
+
+    if value
+        .get(section)
+        .and_then(|section| section.get(key))
+        .is_some()
+    {
+        return Err(KeyBindingsError(format!(
+            "Keybindings `{section}.{key}` must be a string"
+        )));
+    }
+
+    Ok(())
 }
 
-fn set_keys(value: &toml::Table, section: &str, key: &str, destination: &mut Vec<KeySpec>) {
+fn set_keys(
+    value: &toml::Table,
+    section: &str,
+    key: &str,
+    destination: &mut Vec<KeySpec>,
+) -> Result<(), KeyBindingsError> {
     let Some(configured) = value.get(section).and_then(|section| section.get(key)) else {
-        return;
+        return Ok(());
     };
 
     let keys = if let Some(text) = configured.as_str() {
-        parse_key(text).into_iter().collect::<Vec<_>>()
+        vec![parse_key(text).ok_or_else(|| invalid_key(section, key, text))?]
     } else if let Some(values) = configured.as_array() {
         values
             .iter()
-            .filter_map(toml::Value::as_str)
-            .filter_map(parse_key)
-            .collect::<Vec<_>>()
+            .map(|value| {
+                let text = value.as_str().ok_or_else(|| {
+                    KeyBindingsError(format!(
+                        "Keybindings `{section}.{key}` array entries must be strings"
+                    ))
+                })?;
+                parse_key(text).ok_or_else(|| invalid_key(section, key, text))
+            })
+            .collect::<Result<Vec<_>, _>>()?
     } else {
-        Vec::new()
+        return Err(KeyBindingsError(format!(
+            "Keybindings `{section}.{key}` must be a string or string array"
+        )));
     };
 
-    if !keys.is_empty() {
-        *destination = keys;
-    }
+    *destination = keys;
+    Ok(())
+}
+
+fn invalid_key(section: &str, key: &str, value: &str) -> KeyBindingsError {
+    KeyBindingsError(format!(
+        "Keybindings `{section}.{key}` contains unsupported key `{value}`"
+    ))
 }
 
 fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
@@ -1125,6 +1265,9 @@ mod tests {
             home = "g"
             end = "shift+g"
 
+            [runtime]
+            quit = "ctrl+x"
+
             [data_view]
             activate = "enter"
             toggle_selection = "x"
@@ -1180,6 +1323,14 @@ mod tests {
         assert!(bindings.end_matches(KeyEvent {
             code: Key::Char('G'),
             modifiers: KeyModifiers::SHIFT,
+        }));
+        assert!(bindings.runtime().quit_matches(KeyEvent {
+            code: Key::Char('x'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(!bindings.runtime().quit_matches(KeyEvent {
+            code: Key::Char('q'),
+            modifiers: KeyModifiers::CONTROL,
         }));
         assert!(bindings.data_view().activate_matches(KeyEvent {
             code: Key::Enter,
@@ -1242,6 +1393,7 @@ mod tests {
     #[test]
     fn builder_overrides_tabs_and_navigation_keys() {
         let bindings = KeyBindings::new()
+            .with_runtime_quit([KeySpec::plain('q')])
             .with_tabs_previous(KeySpec::plain('h'))
             .with_tabs_next(KeySpec::plain('l'))
             .with_nav_line_up([KeySpec::plain('k')])
@@ -1269,6 +1421,10 @@ mod tests {
 
         assert!(bindings.tabs().previous_matches(KeyEvent {
             code: Key::Char('h'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.runtime().quit_matches(KeyEvent {
+            code: Key::Char('q'),
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.tabs().next_matches(KeyEvent {
@@ -1408,6 +1564,36 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.data_view().toggle_selection_label().is_empty());
+    }
+
+    #[test]
+    fn empty_key_arrays_clear_defaults() {
+        let bindings = KeyBindings::try_from_toml_str(
+            r#"
+            [runtime]
+            quit = []
+            "#,
+        )
+        .expect("valid keybindings");
+
+        assert!(!bindings.runtime().quit_matches(KeyEvent {
+            code: Key::Char('q'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+        assert!(bindings.runtime().quit_label().is_empty());
+    }
+
+    #[test]
+    fn fallible_parse_reports_invalid_keys() {
+        let error = KeyBindings::try_from_toml_str(
+            r#"
+            [runtime]
+            quit = "ctrl+enter"
+            "#,
+        )
+        .expect_err("invalid key should fail");
+
+        assert!(error.to_string().contains("runtime.quit"));
     }
 
     #[test]

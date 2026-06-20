@@ -9,7 +9,10 @@ use ratatui::widgets::Paragraph;
 use crate::animation::{Animated, AnimationSettings, Easing, TickResult, lerp_color};
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
-use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutResult, TuiNode};
+use crate::{
+    EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutResult, TuiNode,
+    line_width,
+};
 
 const INPUT_FOCUS: &str = "input";
 const CURSOR_FADE_HALF: Duration = Duration::from_millis(600);
@@ -80,7 +83,87 @@ pub struct TextInput<M = ()> {
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
+    keys: TextInputKeyBindings,
     cursor_fade: CursorFade,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextInputKeyBindings {
+    pub submit: Vec<KeySpec>,
+    pub cancel: Vec<KeySpec>,
+    pub clear: Vec<KeySpec>,
+    pub move_start: Vec<KeySpec>,
+    pub move_end: Vec<KeySpec>,
+    pub move_left: Vec<KeySpec>,
+    pub move_right: Vec<KeySpec>,
+    pub move_previous_word: Vec<KeySpec>,
+    pub move_next_word: Vec<KeySpec>,
+    pub delete_before_cursor: Vec<KeySpec>,
+    pub delete_after_cursor: Vec<KeySpec>,
+    pub delete_previous_word: Vec<KeySpec>,
+    pub delete_next_word: Vec<KeySpec>,
+    pub backspace: Vec<KeySpec>,
+    pub delete_next: Vec<KeySpec>,
+    pub insert_tab: Vec<KeySpec>,
+}
+
+impl Default for TextInputKeyBindings {
+    fn default() -> Self {
+        Self {
+            submit: vec![KeySpec::key(Key::Enter)],
+            cancel: vec![KeySpec::key(Key::Esc)],
+            clear: vec![KeySpec::key_with_modifiers(
+                Key::Char('c'),
+                KeyModifiers::CONTROL,
+            )],
+            move_start: vec![
+                KeySpec::key_with_modifiers(Key::Char('a'), KeyModifiers::CONTROL),
+                KeySpec::key(Key::Home),
+            ],
+            move_end: vec![
+                KeySpec::key_with_modifiers(Key::Char('e'), KeyModifiers::CONTROL),
+                KeySpec::key(Key::End),
+            ],
+            move_left: vec![KeySpec::key(Key::Left)],
+            move_right: vec![KeySpec::key(Key::Right)],
+            move_previous_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('b'), KeyModifiers::ALT),
+                KeySpec::key_with_modifiers(Key::Left, KeyModifiers::CONTROL),
+            ],
+            move_next_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('f'), KeyModifiers::ALT),
+                KeySpec::key_with_modifiers(Key::Right, KeyModifiers::CONTROL),
+            ],
+            delete_before_cursor: vec![KeySpec::key_with_modifiers(
+                Key::Char('u'),
+                KeyModifiers::CONTROL,
+            )],
+            delete_after_cursor: vec![KeySpec::key_with_modifiers(
+                Key::Char('k'),
+                KeyModifiers::CONTROL,
+            )],
+            delete_previous_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('w'), KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Backspace, KeyModifiers::CONTROL),
+            ],
+            delete_next_word: vec![
+                KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::ALT),
+                KeySpec::key_with_modifiers(Key::Delete, KeyModifiers::CONTROL),
+            ],
+            backspace: vec![KeySpec::key(Key::Backspace)],
+            delete_next: vec![KeySpec::key(Key::Delete)],
+            insert_tab: vec![
+                KeySpec::key(Key::Tab),
+                KeySpec::key_with_modifiers(Key::Char('i'), KeyModifiers::CONTROL),
+            ],
+        }
+    }
+}
+
+impl TextInputKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl<M> Default for TextInput<M> {
@@ -100,6 +183,7 @@ impl<M> TextInput<M> {
             on_submit: None,
             on_blur: None,
             external_editor_key: Some(ctrl_key('o')),
+            keys: TextInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
         }
     }
@@ -140,6 +224,15 @@ impl<M> TextInput<M> {
         self
     }
 
+    pub fn keybindings(mut self, keys: TextInputKeyBindings) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    pub fn set_keybindings(&mut self, keys: TextInputKeyBindings) {
+        self.keys = keys;
+    }
+
     pub fn max_len(mut self, max_len: usize) -> Self {
         self.max_len = Some(max_len);
         self.clamp_value();
@@ -166,70 +259,57 @@ impl<M> TextInput<M> {
     }
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
-        let key = key.into();
-        if is_ctrl(key, 'a') {
+        if matches_any(&self.keys.move_start, key) {
             return self.move_to(0);
         }
-        if is_ctrl(key, 'c') {
+        if matches_any(&self.keys.clear, key) {
             return self.clear();
         }
-        if is_ctrl(key, 'e') {
+        if matches_any(&self.keys.move_end, key) {
             return self.move_to(self.len_chars());
         }
-        if is_ctrl(key, 'u') {
+        if matches_any(&self.keys.delete_before_cursor, key) {
             return self.delete_before_cursor();
         }
-        if is_ctrl(key, 'k') {
+        if matches_any(&self.keys.delete_after_cursor, key) {
             return self.delete_after_cursor();
         }
-        if is_ctrl(key, 'w') {
+        if matches_any(&self.keys.delete_previous_word, key) {
             return self.delete_previous_word();
         }
-        if is_alt(key, 'b') {
+        if matches_any(&self.keys.move_previous_word, key) {
             return self.move_previous_word();
         }
-        if is_alt(key, 'f') {
+        if matches_any(&self.keys.move_next_word, key) {
             return self.move_next_word();
         }
-        if is_alt(key, 'd') {
+        if matches_any(&self.keys.delete_next_word, key) {
             return self.delete_next_word();
+        }
+        if matches_any(&self.keys.insert_tab, key) {
+            return self.insert_text(TAB_INSERT);
+        }
+        if matches_any(&self.keys.backspace, key) {
+            return self.backspace();
+        }
+        if matches_any(&self.keys.delete_next, key) {
+            return self.delete_next();
+        }
+        if matches_any(&self.keys.move_left, key) {
+            return self.move_left();
+        }
+        if matches_any(&self.keys.move_right, key) {
+            return self.move_right();
+        }
+        if matches_any(&self.keys.submit, key) {
+            return InputOutcome::SUBMITTED;
+        }
+        if matches_any(&self.keys.cancel, key) {
+            return InputOutcome::CANCELED;
         }
 
         match key.code {
-            _ if tab_key(key) => self.insert_text(TAB_INSERT),
             Key::Char(value) if text_char(key) => self.insert_char(value),
-            Key::Backspace => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.delete_previous_word()
-                } else {
-                    self.backspace()
-                }
-            }
-            Key::Delete => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.delete_next_word()
-                } else {
-                    self.delete_next()
-                }
-            }
-            Key::Left => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.move_previous_word()
-                } else {
-                    self.move_left()
-                }
-            }
-            Key::Right => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.move_next_word()
-                } else {
-                    self.move_right()
-                }
-            }
-            Key::Home => self.move_to(0),
-            Key::End => self.move_to(self.len_chars()),
-            Key::Enter => InputOutcome::SUBMITTED,
-            Key::Esc => InputOutcome::CANCELED,
             _ => InputOutcome::IDLE,
         }
     }
@@ -273,13 +353,13 @@ impl<M> TextInput<M> {
             );
         }
 
-        let len = self.len_chars();
-        let start = if self.focused && self.cursor >= width {
-            self.cursor.saturating_add(1).saturating_sub(width)
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let len = chars.len();
+        let start = if self.focused {
+            visible_start_for_cursor(&chars, self.cursor, width)
         } else {
             0
         };
-        let chars = self.value.chars().collect::<Vec<_>>();
         let mut spans = Vec::new();
         let mut drawn = 0;
 
@@ -289,14 +369,17 @@ impl<M> TextInput<M> {
             }
             let remaining = width.saturating_sub(drawn);
             if self.focused && position == self.cursor {
-                let text = display_char(chars.get(position).copied().unwrap_or(' '), remaining);
-                drawn += text.len();
+                let mut text = display_char(chars.get(position).copied().unwrap_or(' '), remaining);
+                if text.is_empty() && remaining > 0 {
+                    text.push(' ');
+                }
+                drawn += cell_width(&text);
                 spans.push(Span::styled(text, cursor_style));
                 continue;
             }
             if let Some(value) = chars.get(position) {
                 let text = display_char(*value, remaining);
-                drawn += text.len();
+                drawn += cell_width(&text);
                 spans.push(Span::styled(text, value_style));
             }
         }
@@ -525,6 +608,7 @@ impl<M> TextInput<M> {
 impl<M> TuiNode<M> for TextInput<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         ctx.register_focusable(FocusId::new(INPUT_FOCUS), area, true);
+        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(INPUT_FOCUS), true);
         LayoutResult::new(area)
     }
 
@@ -604,14 +688,17 @@ pub(crate) fn placeholder_line(
     let mut chars = placeholder.chars();
     if !focused {
         return Line::from(Span::styled(
-            chars.take(width).collect::<String>(),
+            truncate_cells(&chars.collect::<String>(), width),
             placeholder_style,
         ));
     }
 
     let first = chars.next().unwrap_or(' ');
     let mut spans = vec![Span::styled(first.to_string(), cursor_style)];
-    let hint: String = chars.take(width.saturating_sub(1)).collect();
+    let hint = truncate_cells(
+        &chars.collect::<String>(),
+        width.saturating_sub(cell_width(&first.to_string())),
+    );
     if !hint.is_empty() {
         spans.push(Span::styled(hint, placeholder_style));
     }
@@ -699,24 +786,8 @@ fn duration_mod(value: Duration, modulus: Duration) -> Duration {
     Duration::from_secs_f64(value.as_secs_f64() % modulus.as_secs_f64())
 }
 
-pub(crate) fn is_ctrl(key: KeyEvent, value: char) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, Key::Char(key_value) if key_value.eq_ignore_ascii_case(&value))
-}
-
-pub(crate) fn is_alt(key: KeyEvent, value: char) -> bool {
-    key.modifiers.contains(KeyModifiers::ALT)
-        && matches!(key.code, Key::Char(key_value) if key_value.eq_ignore_ascii_case(&value))
-}
-
 pub(crate) fn text_char(key: KeyEvent) -> bool {
     !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT)
-}
-
-pub(crate) fn tab_key(key: KeyEvent) -> bool {
-    matches!(key.code, Key::Tab)
-        || (matches!(key.code, Key::Char('i') | Key::Char('I'))
-            && key.modifiers.contains(KeyModifiers::CONTROL))
 }
 
 fn ctrl_key(value: char) -> KeyEvent {
@@ -740,7 +811,43 @@ pub(crate) fn display_char(value: char, max_width: usize) -> String {
     } else {
         value.to_string()
     };
-    text.chars().take(max_width).collect()
+    truncate_cells(&text, max_width)
+}
+
+pub(crate) fn cell_width(value: &str) -> usize {
+    line_width(&Line::from(value))
+}
+
+pub(crate) fn visible_start_for_cursor(chars: &[char], cursor: usize, width: usize) -> usize {
+    let mut start = cursor.min(chars.len());
+    let mut drawn = 1;
+    while start > 0 {
+        let char_width = cell_width(&chars[start - 1].to_string()).max(1);
+        if drawn + char_width > width {
+            break;
+        }
+        drawn += char_width;
+        start -= 1;
+    }
+    start
+}
+
+fn truncate_cells(value: &str, max_width: usize) -> String {
+    let mut width = 0;
+    let mut truncated = String::new();
+    for ch in value.chars() {
+        let ch_width = cell_width(&ch.to_string());
+        if ch_width > 0 && width + ch_width > max_width {
+            break;
+        }
+        width += ch_width;
+        truncated.push(ch);
+    }
+    truncated
+}
+
+fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
+    bindings.iter().any(|binding| binding.matches(key))
 }
 
 #[cfg(test)]
@@ -821,6 +928,28 @@ mod tests {
         assert_eq!(line_text(&input.line(10)), "left    ");
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.redraw_requested());
+    }
+
+    #[test]
+    fn line_clips_wide_unicode_by_terminal_width() {
+        let input = TextInput::<()>::new().value("ab界d");
+
+        let line = input.line(4);
+
+        assert_eq!(line_text(&line), "ab界");
+        assert_eq!(cell_width(&line_text(&line)), 4);
+    }
+
+    #[test]
+    fn custom_submit_key_replaces_default_enter() {
+        let keys = TextInputKeyBindings {
+            submit: vec![KeySpec::plain('s')],
+            ..TextInputKeyBindings::default()
+        };
+        let mut input = TextInput::<()>::new().keybindings(keys);
+
+        assert_eq!(input.on_key(KeyEvent::from(Key::Enter)), InputOutcome::IDLE);
+        assert!(input.on_key(KeyEvent::from(Key::Char('s'))).submitted);
     }
 
     #[test]

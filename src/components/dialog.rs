@@ -2,21 +2,23 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{KeyEvent, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, ColorTween, EventCtx,
-    EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HitRegion, LayoutCtx,
-    LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
-    ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode,
-    border_set, hotkey_edge_spans, keybindings, line_width, paragraph_scroll, preset, theme,
+    EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HitRegion, KeySpec,
+    LayoutCtx, LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
+    ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode, Tween,
+    border_set, hotkey_edge_spans, keybindings, lerp_color, line_width, paragraph_scroll, preset,
+    theme,
 };
 
 const DIALOG_FOCUS: &str = "dialog";
 const CLOSE_TEXT: &str = "x";
+const BACKDROP_BACKGROUND_DIM_FACTOR: f64 = 0.35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogTitlePosition {
@@ -30,6 +32,66 @@ pub enum DialogTitlePosition {
 pub enum DialogCloseReason {
     CloseKey,
     Escape,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogKeyBindings {
+    pub close: Vec<KeySpec>,
+}
+
+impl Default for DialogKeyBindings {
+    fn default() -> Self {
+        Self {
+            close: vec![KeySpec::plain('x')],
+        }
+    }
+}
+
+impl DialogKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DialogBackdrop {
+    enabled: bool,
+    amount: f64,
+    animation: AnimationSpec,
+}
+
+impl DialogBackdrop {
+    pub fn none() -> Self {
+        Self {
+            enabled: false,
+            amount: 0.0,
+            animation: AnimationSpec::default(),
+        }
+    }
+
+    pub fn dim() -> Self {
+        Self {
+            enabled: true,
+            amount: 0.45,
+            animation: AnimationSpec::default(),
+        }
+    }
+
+    pub fn amount(mut self, amount: f64) -> Self {
+        self.amount = amount.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn animation(mut self, animation: AnimationSpec) -> Self {
+        self.animation = animation;
+        self
+    }
+}
+
+impl Default for DialogBackdrop {
+    fn default() -> Self {
+        Self::none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +112,7 @@ pub struct Dialog<M = ()> {
     border_color: ColorTween,
     title_color: ColorTween,
     area: Rect,
+    keys: DialogKeyBindings,
 }
 
 pub struct DialogHost<C, M = ()> {
@@ -65,6 +128,8 @@ pub struct DialogLayer<Base, Layer> {
     layer_percent: u16,
     base_rect: Rect,
     layer_rect: Rect,
+    backdrop: DialogBackdrop,
+    backdrop_tween: Tween,
 }
 
 impl<M> Default for Dialog<M> {
@@ -89,6 +154,7 @@ impl<M> Dialog<M> {
             border_color: ColorTween::idle(theme.border_fg()),
             title_color: ColorTween::idle(theme.muted_fg()),
             area: Rect::default(),
+            keys: DialogKeyBindings::default(),
         }
     }
 
@@ -106,8 +172,8 @@ impl<M> Dialog<M> {
         self
     }
 
-    pub fn set_top_right(&mut self, _title: impl Into<String>) {
-        self.top_right = None;
+    pub fn set_top_right(&mut self, title: impl Into<String>) {
+        self.top_right = Some(DialogTitle::standard(title));
     }
 
     pub fn bottom_left(mut self, title: impl Into<String>) -> Self {
@@ -162,6 +228,15 @@ impl<M> Dialog<M> {
     pub fn on_close(mut self, handler: impl Fn(DialogCloseReason) -> M + 'static) -> Self {
         self.on_close = Some(Box::new(handler));
         self
+    }
+
+    pub fn keybindings(mut self, keys: DialogKeyBindings) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    pub fn set_keybindings(&mut self, keys: DialogKeyBindings) {
+        self.keys = keys;
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -348,7 +423,7 @@ impl<M> Dialog<M> {
     }
 
     fn close_reason(&self, key: KeyEvent) -> Option<DialogCloseReason> {
-        if keys_match(close_key(), key) {
+        if matches_any(&self.keys.close, key) {
             Some(DialogCloseReason::CloseKey)
         } else if keybindings().focus().unfocus_matches(key) {
             Some(DialogCloseReason::Escape)
@@ -359,6 +434,7 @@ impl<M> Dialog<M> {
 
     fn render_titles(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
         self.render_top_left_title(frame, area);
+        self.render_top_right_title(frame, area);
         self.render_bottom_title(frame, area, DialogTitlePosition::BottomLeft);
         self.render_bottom_title(frame, area, DialogTitlePosition::BottomRight);
         self.render_close_label(frame, area, border);
@@ -373,6 +449,20 @@ impl<M> Dialog<M> {
             area,
             title,
             Alignment::Left,
+            area.y,
+            close_label_width() + 1,
+        );
+    }
+
+    fn render_top_right_title(&self, frame: &mut Frame, area: Rect) {
+        let Some(title) = self.top_right.as_ref() else {
+            return;
+        };
+        self.render_plain_title(
+            frame,
+            area,
+            title,
+            Alignment::Right,
             area.y,
             close_label_width() + 1,
         );
@@ -624,6 +714,13 @@ where
     fn render(&self, frame: &mut Frame, area: Rect) {
         self.dialog.render(frame, area);
         self.child.render(frame, self.child_area);
+        crate::separator::patch_border_joins(
+            frame,
+            area,
+            self.child_area,
+            self.dialog.border.unwrap_or_else(|| preset().border()),
+            Style::default().fg(self.dialog.visible_border_color()),
+        );
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -696,16 +793,30 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             layer_percent: 100,
             base_rect: Rect::default(),
             layer_rect: Rect::default(),
+            backdrop: DialogBackdrop::none(),
+            backdrop_tween: Tween::idle(0.0),
         }
     }
 
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self.backdrop_tween
+            .snap_to(if active { self.backdrop_target() } else { 0.0 });
         self
     }
 
     pub fn set_active(&mut self, active: bool) {
         self.active = active;
+        self.backdrop_tween
+            .snap_to(if active { self.backdrop_target() } else { 0.0 });
+    }
+
+    pub fn set_active_with_settings(&mut self, active: bool, settings: AnimationSettings) {
+        if self.active == active && !self.backdrop_tween.is_active() {
+            return;
+        }
+        self.active = active;
+        self.start_backdrop_tween(active, settings);
     }
 
     pub fn layer_percent(mut self, percent: u16) -> Self {
@@ -715,6 +826,25 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
 
     pub fn set_layer_percent(&mut self, percent: u16) {
         self.layer_percent = percent.clamp(1, 100);
+    }
+
+    pub fn backdrop(mut self, backdrop: DialogBackdrop) -> Self {
+        self.backdrop = backdrop;
+        self.backdrop_tween.snap_to(if self.active {
+            self.backdrop_target()
+        } else {
+            0.0
+        });
+        self
+    }
+
+    pub fn set_backdrop(&mut self, backdrop: DialogBackdrop) {
+        self.backdrop = backdrop;
+        self.backdrop_tween.snap_to(if self.active {
+            self.backdrop_target()
+        } else {
+            0.0
+        });
     }
 
     pub fn is_active(&self) -> bool {
@@ -735,6 +865,29 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
 
     pub fn layer_mut(&mut self) -> &mut Layer {
         &mut self.layer
+    }
+
+    fn backdrop_target(&self) -> f64 {
+        if self.backdrop.enabled {
+            self.backdrop.amount
+        } else {
+            0.0
+        }
+    }
+
+    fn start_backdrop_tween(&mut self, active: bool, settings: AnimationSettings) {
+        let target = if active { self.backdrop_target() } else { 0.0 };
+        let resolved = settings.resolve(self.backdrop.animation);
+        if !resolved.enabled || resolved.duration.is_zero() {
+            self.backdrop_tween.snap_to(target);
+        } else {
+            self.backdrop_tween.start(
+                self.backdrop_tween.value(),
+                target,
+                resolved.duration,
+                resolved.easing,
+            );
+        }
     }
 }
 
@@ -768,6 +921,10 @@ where
 
     fn render(&self, frame: &mut Frame, _area: Rect) {
         self.base.render(frame, self.base_rect);
+        let dim = self.backdrop_tween.value();
+        if dim > 0.0 {
+            dim_backdrop_buffer(frame, self.base_rect, dim);
+        }
         if self.active {
             self.layer.render(frame, self.layer_rect);
         }
@@ -808,10 +965,11 @@ where
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let base = self.base.tick(dt, settings);
+        let backdrop = self.backdrop_tween.tick(dt, settings);
         if self.active {
-            base.merge(self.layer.tick(dt, settings))
+            base.merge(self.layer.tick(dt, settings)).merge(backdrop)
         } else {
-            base
+            base.merge(backdrop)
         }
     }
 
@@ -854,6 +1012,69 @@ fn focus_color_animation() -> AnimationSpec {
     AnimationSpec::default()
 }
 
+pub(crate) fn dim_backdrop_buffer(frame: &mut Frame, area: Rect, amount: f64) {
+    dim_backdrop_buffer_except(frame, area, amount, &[]);
+}
+
+pub(crate) fn dim_backdrop_buffer_except(
+    frame: &mut Frame,
+    area: Rect,
+    amount: f64,
+    excluded: &[Rect],
+) {
+    let theme = theme();
+    let fallback_fg = theme.text_fg();
+    let fallback_bg = theme.background_bg();
+    let amount = amount.clamp(0.0, 1.0);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if excluded.iter().any(|rect| rect_contains(*rect, x, y)) {
+                continue;
+            }
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            let bg = if cell.bg == Color::Reset {
+                fallback_bg
+            } else {
+                cell.bg
+            };
+            let dimmed_bg = blend_cell_color(
+                bg,
+                fallback_bg,
+                fallback_bg,
+                amount * BACKDROP_BACKGROUND_DIM_FACTOR,
+            );
+            let target = if cell.bg == Color::Reset {
+                fallback_bg
+            } else {
+                dimmed_bg
+            };
+            let fg = blend_cell_color(cell.fg, fallback_fg, target, amount);
+            cell.set_fg(fg);
+            if cell.bg != Color::Reset {
+                cell.set_bg(dimmed_bg);
+            }
+            cell.modifier.insert(Modifier::DIM);
+        }
+    }
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
+}
+
+fn blend_cell_color(color: Color, fallback: Color, backdrop: Color, amount: f64) -> Color {
+    let color = if color == Color::Reset {
+        fallback
+    } else {
+        color
+    };
+    if matches!(color, Color::Rgb(_, _, _)) && matches!(backdrop, Color::Rgb(_, _, _)) {
+        lerp_color(color, backdrop, amount)
+    } else {
+        color
+    }
+}
+
 fn close_label_width() -> u16 {
     line_width(&Line::from(format!("┤{CLOSE_TEXT}│"))).min(u16::MAX as usize) as u16
 }
@@ -874,13 +1095,6 @@ fn scaled_dimension(value: u16, percent: u16) -> u16 {
     ((value as u32 * percent as u32) / 100).min(u16::MAX as u32) as u16
 }
 
-fn close_key() -> KeyEvent {
-    KeyEvent {
-        code: Key::Char('x'),
-        modifiers: KeyModifiers::NONE,
-    }
-}
-
 fn is_focus_unfocus_event(event: &TuiEvent) -> bool {
     let TuiEvent::Key(key) = event else {
         return false;
@@ -888,14 +1102,8 @@ fn is_focus_unfocus_event(event: &TuiEvent) -> bool {
     keybindings().focus().unfocus_matches(*key)
 }
 
-fn keys_match(a: KeyEvent, b: KeyEvent) -> bool {
-    if a.modifiers != b.modifiers {
-        return false;
-    }
-    match (a.code, b.code) {
-        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
-        (a, b) => a == b,
-    }
+fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
+    bindings.iter().any(|binding| binding.matches(key))
 }
 
 fn bounded_title(title: &str, max_width: usize) -> String {
@@ -935,9 +1143,11 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
-    use crate::{Button, FocusManager, TextInput, TreePath, animation_settings};
+    use crate::{Button, FocusManager, Key, TextInput, TreePath, animation_settings};
 
     struct StaticBody;
+
+    struct ColorBody;
 
     impl TuiNode<()> for StaticBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
@@ -945,6 +1155,58 @@ mod tests {
         }
 
         fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+    }
+
+    impl TuiNode<()> for ColorBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+            frame.buffer_mut().set_string(
+                area.x,
+                area.y,
+                "B",
+                Style::default()
+                    .fg(Color::Rgb(200, 200, 200))
+                    .bg(Color::Rgb(10, 20, 30)),
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_dim_softens_background_and_fades_foreground_to_it() {
+        let base = ColorBody;
+        let layer = StaticBody;
+        let mut dialog_layer =
+            DialogLayer::new(base, layer).backdrop(DialogBackdrop::dim().amount(1.0));
+        let mut layout = LayoutCtx::new();
+        dialog_layer.layout(Rect::new(0, 0, 10, 4), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog_layer.render(frame, frame.area()))
+            .expect("dialog layer should render");
+
+        let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+        let expected_bg = lerp_color(
+            Color::Rgb(10, 20, 30),
+            theme().background_bg(),
+            BACKDROP_BACKGROUND_DIM_FACTOR,
+        );
+        assert_eq!(cell.bg, expected_bg);
+        assert_eq!(cell.fg, expected_bg);
+    }
+
+    #[test]
+    fn set_backdrop_snaps_active_layer_to_new_amount() {
+        let base = StaticBody;
+        let layer = StaticBody;
+        let mut dialog_layer = DialogLayer::new(base, layer);
+
+        dialog_layer.set_backdrop(DialogBackdrop::dim().amount(0.7));
+
+        assert_eq!(dialog_layer.backdrop_tween.value(), 0.7);
     }
 
     #[test]
@@ -966,7 +1228,7 @@ mod tests {
             .flat_map(|y| (0..40).map(move |x| buffer.cell((x, y)).unwrap().symbol()))
             .collect::<String>();
         assert!(rendered.contains("Title"));
-        assert!(!rendered.contains("State"));
+        assert!(rendered.contains("State"));
         assert!(rendered.contains("Help"));
         assert!(rendered.contains("Enter OK"));
         assert!(rendered.contains("┤x│"));
@@ -995,7 +1257,7 @@ mod tests {
             .join("\n");
 
         let expected = [
-            "╭─ Prompt ───────────────────────────┤x│",
+            "╭─ Prompt ───────────────── Ready ───┤x│",
             "│Body                                  │",
             "│                                      │",
             "│                                      │",
@@ -1015,6 +1277,26 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.messages(), &[DialogCloseReason::CloseKey]);
         assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
+    fn custom_close_key_replaces_default_close_key() {
+        let mut dialog = Dialog::new()
+            .keybindings(DialogKeyBindings {
+                close: vec![KeySpec::plain('q')],
+            })
+            .on_close(|reason| reason);
+        let mut ctx = EventCtx::new(animation_settings());
+
+        assert_eq!(
+            dialog.event(&TuiEvent::Key(Key::Char('x').into()), &mut ctx),
+            EventOutcome::Ignored
+        );
+        assert_eq!(
+            dialog.event(&TuiEvent::Key(Key::Char('q').into()), &mut ctx),
+            EventOutcome::Handled
+        );
+        assert_eq!(ctx.messages(), &[DialogCloseReason::CloseKey]);
     }
 
     #[test]

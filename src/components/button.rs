@@ -170,7 +170,6 @@ impl<M> Button<M> {
 
     fn line(&self) -> Line<'static> {
         let background = self.visible_background_color();
-        let cap_style = Style::default().fg(background);
         let text_style = Style::default()
             .fg(self.visible_text_color())
             .bg(background)
@@ -179,7 +178,7 @@ impl<M> Button<M> {
             } else {
                 Modifier::empty()
             });
-        let mut spans = vec![Span::styled("", cap_style)];
+        let mut spans = vec![Span::styled(" ", text_style)];
         let active_prefix = if self.hotkey_matcher.prefix().is_empty() {
             self.pending_hotkey_prefix.as_deref().unwrap_or("")
         } else {
@@ -193,11 +192,7 @@ impl<M> Button<M> {
             text_style,
             crate::hotkey_underline_style(text_style),
         ));
-        spans.push(Span::styled("", cap_style));
-
-        if self.is_showing_press_feedback() {
-            spans.push(Span::raw(" ← pressed"));
-        }
+        spans.push(Span::styled(" ", text_style));
 
         Line::from(spans)
     }
@@ -509,7 +504,9 @@ mod tests {
         let row = (0..32)
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
-        assert!(row.contains("button"));
+        assert!(row.starts_with(" button "));
+        assert!(!row.contains(""));
+        assert!(!row.contains(""));
     }
 
     #[test]
@@ -527,16 +524,17 @@ mod tests {
         let row = (0..32)
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
-        assert!(row.contains("button |b|"));
+        assert!(row.starts_with(" button |b| "));
     }
 
     #[test]
-    fn pressed_button_shows_feedback_until_tick_completes() {
+    fn pressed_button_uses_color_feedback_without_text_suffix() {
         let mut button = Button::<()>::new("Run").hotkey("b");
 
         button.on_key(KeyEvent::from(Key::Char('b')));
 
-        assert!(line_text(button.line()).contains("pressed"));
+        assert!(button.is_showing_press_feedback());
+        assert!(!line_text(button.line()).contains("pressed"));
 
         Animated::tick(
             &mut button,
@@ -549,6 +547,7 @@ mod tests {
             AnimationSettings::default(),
         );
 
+        assert!(!button.is_showing_press_feedback());
         assert!(!line_text(button.line()).contains("pressed"));
     }
 

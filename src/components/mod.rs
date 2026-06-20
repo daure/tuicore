@@ -23,10 +23,13 @@ pub use data_view::{
     DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
-pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogLayer, DialogTitlePosition};
+pub use dialog::{
+    Dialog, DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings, DialogLayer,
+    DialogTitlePosition,
+};
 pub use dropdown::{
-    Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownPopupDirection,
-    DropdownSearchMode, DropdownVariant,
+    Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,
+    DropdownPopupDirection, DropdownSearchMode, DropdownVariant,
 };
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use grid::{Grid, GridItem, GridTrack};
@@ -36,7 +39,7 @@ pub use panel::{Panel, PanelHost, PanelTitlePosition};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};
-pub use tabs::{Tab, Tabs};
-pub use text_input::{InputOutcome, TextInput};
-pub use textarea_input::TextareaInput;
+pub use tabs::{ModalCloseReason, Tab, Tabs};
+pub use text_input::{InputOutcome, TextInput, TextInputKeyBindings};
+pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};
 pub use toggle::{Toggle, ToggleOutcome};

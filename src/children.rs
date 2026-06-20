@@ -899,6 +899,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
         };
         let mut ctx = FocusCtx::default();
 

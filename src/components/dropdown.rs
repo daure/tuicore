@@ -15,13 +15,15 @@ use crate::search::{SearchMode, search_ranked};
 use crate::{
     Animated, AnimationSettings, BorderKind, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
     FocusRequest, FocusTarget, HintSource, HotkeyEvent, HotkeyLabelMode, HotkeyMatch,
-    HotkeySequenceMatcher, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
-    TickResult, TuiEvent, TuiNode, border_chars, border_set, hotkey_badge_width, hotkey_edge_spans,
-    hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width,
-    preset, theme,
+    HotkeySequenceMatcher, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize,
+    LayoutSizeHint, TickResult, TreePath, TuiEvent, TuiNode, border_chars, border_set,
+    hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans, hotkey_sequence_to_event,
+    hotkey_underline_style, keybindings, line_width, preset, theme,
 };
 
 use super::text_input::{CursorFade, placeholder_line};
+
+const DROPDOWN_BACKDROP_AMOUNT: f64 = 0.55;
 
 const FIELD_FOCUS: &str = "field";
 const SEARCH_FOCUS: &str = "input";
@@ -65,6 +67,29 @@ pub enum DropdownPopupDirection {
     #[default]
     Down,
     Up,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropdownActionKeys {
+    pub open: Vec<KeySpec>,
+    pub commit: Vec<KeySpec>,
+    pub toggle: Vec<KeySpec>,
+}
+
+impl Default for DropdownActionKeys {
+    fn default() -> Self {
+        Self {
+            open: vec![KeySpec::key(Key::Enter), KeySpec::plain(' ')],
+            commit: vec![KeySpec::key(Key::Enter)],
+            toggle: vec![KeySpec::plain(' ')],
+        }
+    }
+}
+
+impl DropdownActionKeys {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +151,7 @@ pub struct Dropdown<T, Id> {
     popup_direction: DropdownPopupDirection,
     centered: bool,
     field_area: Rect,
+    focus_path: TreePath,
     overlay_bounds: Rect,
     focus_region: Option<DropdownFocusRegion>,
     label: Option<String>,
@@ -138,6 +164,7 @@ pub struct Dropdown<T, Id> {
     no_selection_highlighted: bool,
     field_cursor_fade: CursorFade,
     pending_hotkey_prefix: Option<String>,
+    action_keys: DropdownActionKeys,
 }
 
 impl<T, Id> Dropdown<T, Id>
@@ -210,6 +237,7 @@ where
             popup_direction: DropdownPopupDirection::Down,
             centered: false,
             field_area: Rect::default(),
+            focus_path: TreePath::default(),
             overlay_bounds: Rect::default(),
             focus_region: None,
             label: None,
@@ -222,6 +250,7 @@ where
             no_selection_highlighted: false,
             field_cursor_fade: CursorFade::default(),
             pending_hotkey_prefix: None,
+            action_keys: DropdownActionKeys::default(),
         }
     }
 
@@ -239,6 +268,15 @@ where
     pub fn no_selection_text(mut self, text: impl Into<String>) -> Self {
         self.no_selection_text = Some(text.into());
         self
+    }
+
+    pub fn action_keys(mut self, keys: DropdownActionKeys) -> Self {
+        self.action_keys = keys;
+        self
+    }
+
+    pub fn set_action_keys(&mut self, keys: DropdownActionKeys) {
+        self.action_keys = keys;
     }
 
     pub fn set_no_selection_text(&mut self, text: impl Into<String>) {
@@ -468,13 +506,14 @@ where
             return self.cancel();
         }
 
-        match key.code {
-            Key::Enter if self.commit_mode == DropdownCommitMode::Immediate => return self.close(),
-            Key::Enter => return self.commit(),
-            Key::Char(' ') if self.multi && key.modifiers.is_empty() => {
-                return self.toggle_highlighted();
+        if matches_any(&self.action_keys.commit, key) {
+            if self.commit_mode == DropdownCommitMode::Immediate {
+                return self.close();
             }
-            _ => {}
+            return self.commit();
+        }
+        if self.multi && matches_any(&self.action_keys.toggle, key) {
+            return self.toggle_highlighted();
         }
 
         let keys = keybindings();
@@ -522,9 +561,7 @@ where
     }
 
     fn is_cancel_key(&self, key: KeyEvent) -> bool {
-        key.code == Key::Esc
-            || (key.code == Key::Char('[')
-                && key.modifiers.contains(crate::event::KeyModifiers::CONTROL))
+        keybindings().focus().unfocus_matches(key)
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -543,6 +580,14 @@ where
 
         let popup_area = self.popup_overlay_area(bounds);
         if !popup_area.is_empty() {
+            let field_area = self.effective_field_area(bounds);
+            super::dialog::dim_backdrop_buffer_except(
+                frame,
+                bounds,
+                DROPDOWN_BACKDROP_AMOUNT,
+                &[field_area, popup_area],
+            );
+            self.render_field(frame, field_area);
             self.render_popup(frame, popup_area);
         }
     }
@@ -559,6 +604,7 @@ where
         ctx: &mut LayoutCtx,
     ) -> LayoutResult {
         self.field_area = self.field_area(area);
+        self.focus_path = ctx.current_path();
         self.overlay_bounds = overlay_bounds;
         if !self.open {
             if let Some(ref h) = self.hotkey {
@@ -582,6 +628,7 @@ where
         if self.search_enabled() && self.auto_focus_search {
             ctx.register_focusable(FocusId::new(SEARCH_FOCUS), search_area, true);
             ctx.set_focus_tab_stop(FocusId::new(SEARCH_FOCUS), self.tab_stop);
+            ctx.set_focus_suppresses_global_hotkeys(FocusId::new(SEARCH_FOCUS), true);
         } else {
             ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
             ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
@@ -623,9 +670,10 @@ where
             return self.open();
         }
 
-        match key.code {
-            Key::Enter | Key::Char(' ') if key.modifiers.is_empty() => self.open(),
-            _ => DropdownOutcome::IDLE,
+        if matches_any(&self.action_keys.open, key) {
+            self.open()
+        } else {
+            DropdownOutcome::IDLE
         }
     }
 
@@ -642,6 +690,9 @@ where
             self.draft.clear();
             self.sync_view_selection();
             self.set_no_selection_highlighted(true);
+            if self.commit_mode == DropdownCommitMode::Immediate {
+                self.committed.clear();
+            }
             return DropdownOutcome::changed();
         }
         self.set_no_selection_highlighted(false);
@@ -998,6 +1049,53 @@ where
         content_width > viewport_width as usize
     }
 
+    fn measured_field_width(&self) -> u16 {
+        let summary_width = line_width(&Line::from(self.selected_summary()));
+        let mut width = match self.variant {
+            DropdownVariant::Bordered => summary_width.saturating_add(2),
+            DropdownVariant::Filled
+                if self.alt_style && self.label_position == DropdownLabelPosition::Inline =>
+            {
+                line_width(&self.inline_filled_line(Style::default())).saturating_add(2)
+            }
+            DropdownVariant::Filled if self.alt_style => summary_width.saturating_add(2),
+            DropdownVariant::Filled => summary_width.saturating_add(3),
+        };
+
+        if self.variant == DropdownVariant::Bordered && !self.alt_style {
+            if let Some(label) = &self.label {
+                width = width.max(
+                    line_width(&Line::from(bounded_title(label, usize::MAX))).saturating_add(4),
+                );
+            }
+            if let Some(hotkey) = &self.hotkey {
+                width = width.max(hotkey_badge_width(hotkey));
+            }
+        }
+
+        if self.alt_style && self.label_position == DropdownLabelPosition::Top {
+            width = width.max(self.alt_label_line_width());
+        }
+
+        width.min(u16::MAX as usize) as u16
+    }
+
+    fn alt_label_line_width(&self) -> usize {
+        let label = self.label.clone().unwrap_or_default();
+        if let Some(hotkey) = &self.hotkey {
+            line_width(&Line::from(hotkey_label_spans(
+                &label,
+                Some(hotkey.as_str()),
+                HotkeyLabelMode::Inline,
+                None,
+                Style::default(),
+                Style::default(),
+            )))
+        } else {
+            line_width(&Line::from(label))
+        }
+    }
+
     fn effective_max_popup_height(&self) -> u16 {
         self.max_popup_height
             .unwrap_or_else(|| preset().dropdown().max_popup_height())
@@ -1145,14 +1243,20 @@ where
         frame.render_widget(Paragraph::new("").style(base_style), area);
 
         let arrow_x = area.x + area.width.saturating_sub(2);
-        let text_area = Rect::new(
-            area.x.saturating_add(1),
-            area.y,
-            area.width.saturating_sub(3),
-            1,
-        );
+        let alt_trigger = self.alt_style;
+        let inline_trigger = alt_trigger && self.label_position == DropdownLabelPosition::Inline;
+        let text_area = if alt_trigger {
+            Rect::new(area.x, area.y, area.width.saturating_sub(2), 1)
+        } else {
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y,
+                area.width.saturating_sub(3),
+                1,
+            )
+        };
         if !text_area.is_empty() {
-            let text = if self.alt_style && self.label_position == DropdownLabelPosition::Inline {
+            let text = if inline_trigger {
                 self.inline_filled_line(text_style)
             } else if self.committed.is_empty() && self.no_selection_text.is_some() {
                 Line::from(Span::styled(self.empty_summary(), text_style))
@@ -1299,14 +1403,14 @@ where
         let theme = theme();
         let style = if self.no_selection_highlighted {
             Style::default()
-                .fg(theme.selected_fg())
-                .bg(theme.selected_bg())
+                .fg(theme.highlight_fg())
+                .bg(theme.highlight_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
             popup_content_style.unwrap_or_default().fg(theme.muted_fg())
         };
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(text.clone(), style))),
+            Paragraph::new(Line::from(Span::styled(text.clone(), style))).style(style),
             area,
         );
     }
@@ -1397,6 +1501,15 @@ where
 
         frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
     }
+
+    fn request_open_focus<M>(&self, ctx: &mut EventCtx<M>) {
+        if self.search_enabled() && self.auto_focus_search {
+            ctx.focus(FocusRequest::TargetAt {
+                path: self.focus_path.clone(),
+                id: FocusId::new(SEARCH_FOCUS),
+            });
+        }
+    }
 }
 
 impl<T, Id, M> TuiNode<M> for Dropdown<T, Id>
@@ -1412,7 +1525,7 @@ where
         if self.alt_style && self.label_position == DropdownLabelPosition::Top {
             height += 1;
         }
-        let width = (self.selected_summary().chars().count() as u16).saturating_add(2);
+        let width = self.measured_field_width();
         LayoutSizeHint {
             source: HintSource::Measured,
             min: LayoutSize::new(width, height),
@@ -1457,9 +1570,7 @@ where
                         let outcome = self.open();
                         if outcome.opened {
                             ctx.request_layout();
-                            if self.search_enabled() && self.auto_focus_search {
-                                ctx.focus(FocusRequest::Target(FocusId::new(SEARCH_FOCUS)));
-                            }
+                            self.request_open_focus(ctx);
                         }
                         ctx.request_redraw();
                         ctx.stop_propagation();
@@ -1507,10 +1618,13 @@ where
 
     fn dispatch_event(
         &mut self,
-        _route: &EventRoute,
+        route: &EventRoute,
         event: &TuiEvent,
         ctx: &mut EventCtx<M>,
     ) -> EventOutcome {
+        if !route.path.is_empty() {
+            return EventOutcome::Ignored;
+        }
         self.event(event, ctx)
     }
 
@@ -1635,6 +1749,10 @@ fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
     }
 }
 
+fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
+    bindings.iter().any(|binding| binding.matches(key))
+}
+
 fn hotkey_matches_sequence(hotkey: &str, sequence: &str) -> bool {
     crate::hotkey::normalize_hotkey(hotkey) == crate::hotkey::normalize_hotkey(sequence)
 }
@@ -1646,12 +1764,13 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
+    use ratatui::style::{Color, Style};
 
     use super::*;
     use crate::event::KeyModifiers;
     use crate::{
-        ChildKey, EventCtx, Flex, FlexItem, FocusCtx, FocusRequest, LayoutCtx, LayoutProposal,
-        Propagation, TuiEvent, TuiNode,
+        ChildKey, EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusId, FocusRequest,
+        KeyBindings, KeySpec, LayoutCtx, LayoutProposal, Propagation, TuiEvent, TuiNode,
     };
 
     fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -1668,6 +1787,90 @@ mod tests {
 
     const ROWS: [&str; 3] = ["Alpha", "Beta", "Gamma"];
     const AREA: Rect = Rect::new(0, 0, 24, 10);
+
+    struct KeyBindingsGuard {
+        previous: KeyBindings,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl KeyBindingsGuard {
+        fn replace(next: KeyBindings) -> Self {
+            let lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
+            let previous = keybindings();
+            crate::set_keybindings(next);
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for KeyBindingsGuard {
+        fn drop(&mut self) {
+            crate::set_keybindings(self.previous.clone());
+        }
+    }
+
+    #[test]
+    fn custom_action_keys_open_and_commit_dropdown() {
+        let keys = DropdownActionKeys {
+            open: vec![KeySpec::plain('o')],
+            commit: vec![KeySpec::plain('c')],
+            toggle: vec![KeySpec::plain('t')],
+        };
+        let mut dropdown = single_dropdown().action_keys(keys);
+
+        assert!(!dropdown.on_key(KeyEvent::from(Key::Enter), AREA).handled);
+        assert!(dropdown.on_key(KeyEvent::from(Key::Char('o')), AREA).opened);
+        assert!(
+            dropdown
+                .on_key(KeyEvent::from(Key::Char('c')), AREA)
+                .committed
+        );
+    }
+
+    #[test]
+    fn open_popup_dims_backdrop_but_not_trigger() {
+        let mut dropdown = single_dropdown()
+            .selected_one("Beta")
+            .variant(DropdownVariant::Filled);
+        dropdown.open();
+        let mut layout = LayoutCtx::new();
+        dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 1), AREA, &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                frame.buffer_mut().set_string(
+                    0,
+                    9,
+                    "X",
+                    Style::default()
+                        .fg(Color::Rgb(200, 200, 200))
+                        .bg(Color::Rgb(10, 20, 30)),
+                );
+                dropdown.render(frame, Rect::new(0, 0, 12, 1));
+                dropdown.render_popup_overlay(frame, AREA);
+            })
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        let backdrop_cell = buffer.cell((0, 9)).unwrap();
+        assert_ne!(backdrop_cell.fg, Color::Rgb(200, 200, 200));
+        assert!(backdrop_cell.modifier.contains(Modifier::DIM));
+
+        let trigger_text = (0..12)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(trigger_text.contains("Beta"), "{trigger_text}");
+        assert!(
+            !buffer
+                .cell((1, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::DIM)
+        );
+    }
 
     #[test]
     fn open_clones_committed_selection_to_draft() {
@@ -1760,6 +1963,20 @@ mod tests {
     }
 
     #[test]
+    fn configured_unfocus_key_cancels_open_dropdown() {
+        let _guard =
+            KeyBindingsGuard::replace(KeyBindings::new().with_focus_unfocus([KeySpec::plain('q')]));
+        let mut dropdown = single_dropdown().selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(ctrl('j'), AREA);
+        dropdown.on_key(char_key('q'), AREA);
+
+        assert_eq!(dropdown.selected_id(), Some("Alpha"));
+        assert!(!dropdown.is_open());
+    }
+
+    #[test]
     fn typing_search_filters_rows_before_commit() {
         let mut dropdown = single_dropdown();
 
@@ -1809,6 +2026,37 @@ mod tests {
         assert_eq!(dropdown.search_query(), "");
         assert_eq!(ctx.focus_request(), Some(&FocusRequest::Next));
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn hotkey_open_requests_search_focus_at_dropdown_path() {
+        let mut flex: Flex<()> = Flex::row()
+            .child("first", single_dropdown().hotkey("f"), FlexItem::fixed(12))
+            .child("second", single_dropdown().hotkey("s"), FlexItem::fixed(12));
+        let mut layout = LayoutCtx::new();
+        flex.layout(AREA, &mut layout);
+        let target = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.hotkey_sequences == ["s".to_string()])
+            .expect("second dropdown target should exist")
+            .clone();
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = flex.dispatch_event(
+            &EventRoute::new(target.path.clone()),
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("s".into())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: target.path,
+                id: FocusId::new(SEARCH_FOCUS),
+            })
+        );
     }
 
     #[test]
@@ -2097,10 +2345,27 @@ mod tests {
 
         flex.layout(Rect::new(0, 0, 40, 3), &mut ctx);
 
-        // "Beta" is 4 chars, plus 2 chrome = 6 width.
+        // "Beta" is 4 cells, plus 2 border cells = 6 width.
         assert_eq!(
             flex.child_rect(&ChildKey::from("dropdown")).unwrap().width,
             6
+        );
+    }
+
+    #[test]
+    fn flex_fit_content_uses_display_width_for_dropdown_text() {
+        let mut flex: Flex<()> = Flex::row().child(
+            "dropdown",
+            Dropdown::single(["界"], |row| *row, |row| row.to_string()).selected_one("界"),
+            FlexItem::fit_content(),
+        );
+        let mut ctx = LayoutCtx::new();
+
+        flex.layout(Rect::new(0, 0, 40, 3), &mut ctx);
+
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("dropdown")).unwrap().width,
+            4
         );
     }
 
@@ -2151,6 +2416,7 @@ mod tests {
         let row = (0..24)
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
+        assert!(row.starts_with("Lane: Gamma |4|"));
         assert!(row.contains("Lane: Gamma |4|"));
         assert!(
             buffer
@@ -2159,6 +2425,27 @@ mod tests {
                 .modifier
                 .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn filled_alt_top_label_trigger_has_no_leading_padding() {
+        let dropdown = single_dropdown()
+            .variant(DropdownVariant::Filled)
+            .label("Work")
+            .hotkey("5")
+            .alt_style(true)
+            .selected_one("Gamma");
+        let mut terminal = Terminal::new(TestBackend::new(24, 2)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dropdown.render(frame, frame.area()))
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = (0..24)
+            .map(|x| buffer.cell((x, 1)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row.starts_with("Gamma"));
     }
 
     #[test]
@@ -2204,6 +2491,51 @@ mod tests {
         dropdown.on_key(Key::Enter, AREA);
 
         assert_eq!(dropdown.selected_id(), None);
+    }
+
+    #[test]
+    fn immediate_no_selection_text_clears_value_when_highlighted() {
+        let mut dropdown = single_dropdown()
+            .variant(DropdownVariant::Filled)
+            .search_mode(DropdownSearchMode::None)
+            .commit_mode(DropdownCommitMode::Immediate)
+            .no_selection_text("--None--")
+            .selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(ctrl('k'), AREA);
+
+        assert_eq!(dropdown.selected_id(), None);
+    }
+
+    #[test]
+    fn no_selection_highlight_uses_same_style_as_focused_rows() {
+        let mut dropdown = single_dropdown()
+            .variant(DropdownVariant::Filled)
+            .search_mode(DropdownSearchMode::None)
+            .no_selection_text("--None--")
+            .selected_one("Alpha");
+
+        dropdown.open();
+        dropdown.on_key(ctrl('k'), AREA);
+        dropdown.layout_overlay::<()>(
+            Rect::new(0, 0, 16, 1),
+            Rect::new(0, 0, 16, 8),
+            &mut LayoutCtx::new(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(16, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dropdown.render_popup_overlay(frame, frame.area()))
+            .expect("dropdown should render");
+
+        let cell = terminal.backend().buffer().cell((0, 1)).unwrap();
+        assert_eq!(cell.fg, theme().highlight_fg());
+        assert_eq!(cell.bg, theme().highlight_bg());
+        assert!(cell.modifier.contains(Modifier::BOLD));
+
+        let blank_cell = terminal.backend().buffer().cell((15, 1)).unwrap();
+        assert_eq!(blank_cell.bg, theme().highlight_bg());
     }
 
     #[test]
@@ -2585,7 +2917,10 @@ mod tests {
         assert!(dropdown.is_open());
         assert_eq!(
             event.focus_request(),
-            Some(&FocusRequest::Target(FocusId::new(SEARCH_FOCUS)))
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::default(),
+                id: FocusId::new(SEARCH_FOCUS),
+            })
         );
     }
 

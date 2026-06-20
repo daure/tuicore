@@ -890,13 +890,6 @@ where
         pagination.page = page;
         changed
     }
-
-    fn hotkey_event(&self) -> Option<KeyEvent> {
-        self.hotkey.as_ref()?.chars().next().map(|c| KeyEvent {
-            code: Key::Char(c),
-            modifiers: KeyModifiers::NONE,
-        })
-    }
 }
 
 fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
@@ -943,8 +936,13 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
-        if let Some(hotkey) = self.hotkey_event() {
-            ctx.register_focusable_with_hotkey(FocusId::new(DATA_VIEW_FOCUS), area, true, hotkey);
+        if let Some(hotkey) = &self.hotkey {
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new(DATA_VIEW_FOCUS),
+                area,
+                true,
+                vec![hotkey.clone()],
+            );
         } else {
             ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
         }

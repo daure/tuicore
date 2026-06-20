@@ -229,6 +229,9 @@ pub struct Theme {
     name: ThemeName,
     selected_fg: Color,
     selected_bg: Color,
+    background_bg: Color,
+    surface_bg: Color,
+    backdrop_bg: Color,
     text_fg: Color,
     muted_fg: Color,
     subtle_fg: Color,
@@ -256,6 +259,9 @@ impl Theme {
             name,
             selected_fg: palette.green,
             selected_bg: palette.surface,
+            background_bg: palette.base,
+            surface_bg: palette.surface,
+            backdrop_bg: palette.base,
             text_fg: palette.text,
             muted_fg: palette.muted,
             subtle_fg: palette.subtle,
@@ -318,6 +324,15 @@ impl Theme {
     pub fn selected_bg(&self) -> Color {
         self.selected_bg
     }
+    pub fn background_bg(&self) -> Color {
+        self.background_bg
+    }
+    pub fn surface_bg(&self) -> Color {
+        self.surface_bg
+    }
+    pub fn backdrop_bg(&self) -> Color {
+        self.backdrop_bg
+    }
     pub fn text_fg(&self) -> Color {
         self.text_fg
     }
@@ -357,6 +372,9 @@ impl Theme {
         match role {
             "selected_fg" => self.selected_fg = color,
             "selected_bg" => self.selected_bg = color,
+            "background_bg" => self.background_bg = color,
+            "surface_bg" => self.surface_bg = color,
+            "backdrop_bg" => self.backdrop_bg = color,
             "text_fg" => self.text_fg = color,
             "muted_fg" => self.muted_fg = color,
             "subtle_fg" => self.subtle_fg = color,
@@ -927,6 +945,11 @@ fn parse_hex_color(value: &str) -> Result<Color, ThemeError> {
     if hex.len() != 6 {
         return Err(ThemeError(format!("Theme color `{value}` must be #RRGGBB")));
     }
+    if !hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Err(ThemeError(format!(
+            "Theme color `{value}` contains invalid hex"
+        )));
+    }
     let red = parse_hex_pair(&hex[0..2], value)?;
     let green = parse_hex_pair(&hex[2..4], value)?;
     let blue = parse_hex_pair(&hex[4..6], value)?;
@@ -970,5 +993,16 @@ mod tests {
         for name in ThemeName::ALL {
             assert_eq!(ThemeName::from_str(name.id()).unwrap(), name);
         }
+    }
+
+    #[test]
+    fn non_ascii_invalid_color_returns_error() {
+        let mut theme = Theme::default();
+
+        let error = theme
+            .set_role("accent_fg", "#ééé")
+            .expect_err("non-ascii color should be rejected");
+
+        assert!(error.to_string().contains("invalid hex"));
     }
 }

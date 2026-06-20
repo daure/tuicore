@@ -7,6 +7,7 @@ const DISABLED_ANIMATION_TIMEOUT: Duration = Duration::from_millis(i32::MAX as u
 #[derive(Debug, Clone)]
 pub struct Scheduler {
     enabled: bool,
+    active: bool,
     frame_duration: Duration,
     last_tick: Instant,
 }
@@ -15,13 +16,14 @@ impl Scheduler {
     pub fn new(settings: AnimationSettings) -> Self {
         Self {
             enabled: settings.enabled,
+            active: false,
             frame_duration: settings.frame_duration(),
             last_tick: Instant::now(),
         }
     }
 
     pub fn timeout(&self) -> Duration {
-        if !self.enabled {
+        if !self.enabled || !self.active {
             return DISABLED_ANIMATION_TIMEOUT;
         }
 
@@ -29,11 +31,25 @@ impl Scheduler {
     }
 
     pub fn tick_due(&self) -> bool {
-        if !self.enabled {
+        if !self.enabled || !self.active {
             return false;
         }
 
         self.last_tick.elapsed() >= self.frame_duration
+    }
+
+    pub fn wake(&mut self) {
+        if self.enabled && !self.active {
+            self.active = true;
+            self.last_tick = Instant::now();
+        }
+    }
+
+    pub fn set_active(&mut self, active: bool) {
+        self.active = self.enabled && active;
+        if self.active {
+            self.last_tick = Instant::now();
+        }
     }
 
     pub fn tick(&mut self, max_dt: Duration) -> Option<Duration> {
@@ -65,15 +81,25 @@ mod tests {
             default_easing: Easing::Linear,
         };
 
-        let scheduler = Scheduler::new(settings);
+        let mut scheduler = Scheduler::new(settings);
+        scheduler.wake();
 
         assert!(scheduler.timeout() <= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn enabled_animation_stays_idle_until_woken() {
+        let scheduler = Scheduler::new(AnimationSettings::default());
+
+        assert!(!scheduler.tick_due());
+        assert_eq!(scheduler.timeout(), DISABLED_ANIMATION_TIMEOUT);
     }
 
     #[test]
     fn disabled_animation_never_produces_ticks() {
         let mut scheduler = Scheduler {
             enabled: false,
+            active: true,
             frame_duration: Duration::from_millis(16),
             last_tick: Instant::now() - Duration::from_secs(1),
         };

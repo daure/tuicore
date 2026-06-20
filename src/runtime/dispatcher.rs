@@ -107,7 +107,7 @@ impl<M> DispatchEffects<M> {
 
     pub fn from_event_ctx(outcome: EventOutcome, mut ctx: EventCtx<M>) -> Self {
         let redraw = outcome.handled() || ctx.redraw_requested();
-        let layout = outcome.handled() || ctx.layout_requested();
+        let layout = ctx.layout_requested();
         let quit = ctx.quit_requested();
         let focus_request = ctx.focus_request().cloned();
         let focus_repair = ctx.focus_repair();
@@ -243,7 +243,7 @@ mod tests {
 
         assert_eq!(root.events, 1);
         assert!(effects.redraw);
-        assert!(effects.layout);
+        assert!(!effects.layout);
         assert_eq!(effects.messages, vec!["event"]);
     }
 
@@ -279,6 +279,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
         };
         let transition = FocusTransition {
             previous: None,
@@ -309,6 +310,7 @@ mod tests {
                 hotkey: None,
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
+                suppress_global_hotkeys: false,
             }),
         };
         let mut settings = AnimationSettings::default();

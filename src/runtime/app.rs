@@ -1,14 +1,16 @@
 use std::{
     collections::VecDeque,
-    path::Path,
+    fs::{File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
     process::Command,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
-    FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, Key, KeyModifiers,
-    LifecycleCtx, Propagation, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
+    FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
+    Propagation, RuntimeKeyBindings, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
 };
 
 use super::{
@@ -21,6 +23,7 @@ type MessageHandler<N, M> = dyn FnMut(&mut N, M, &mut EventCtx<M>);
 pub struct TreeApp<N, M = ()> {
     root: N,
     animation_settings: AnimationSettings,
+    runtime_keybindings: RuntimeKeyBindings,
     on_message: Option<Box<MessageHandler<N, M>>>,
 }
 
@@ -32,6 +35,7 @@ struct RuntimeFlags {
     focus_request: Option<FocusRequest>,
     focus_repair: Option<FocusRepair>,
     clear: bool,
+    wake_animations: bool,
 }
 
 pub fn run<N>(root: N) -> Result<()>
@@ -46,12 +50,18 @@ impl<N, M> TreeApp<N, M> {
         Self {
             root,
             animation_settings: animation_settings(),
+            runtime_keybindings: keybindings().runtime().clone(),
             on_message: None,
         }
     }
 
     pub fn animation_settings(mut self, settings: AnimationSettings) -> Self {
         self.animation_settings = settings;
+        self
+    }
+
+    pub fn runtime_keybindings(mut self, keybindings: RuntimeKeyBindings) -> Self {
+        self.runtime_keybindings = keybindings;
         self
     }
 
@@ -84,6 +94,7 @@ where
             focus_request: None,
             focus_repair: None,
             clear: false,
+            wake_animations: false,
         };
 
         flags.merge(self.mount_root());
@@ -145,6 +156,11 @@ where
                 flags.redraw = false;
             }
 
+            if flags.wake_animations {
+                scheduler.wake();
+                flags.wake_animations = false;
+            }
+
             let hotkey_pending_before_poll = global_hotkeys.is_pending();
             if let Some(event) =
                 event_source.poll(runtime_poll_timeout(scheduler, global_hotkeys))?
@@ -172,10 +188,15 @@ where
                 global_hotkey_dt,
             );
 
+            if flags.wake_animations {
+                scheduler.wake();
+                flags.wake_animations = false;
+            }
+
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
                 flags.redraw |= tick.changed || tick.active;
-                flags.layout |= tick.changed || tick.active;
+                scheduler.set_active(tick.active);
             }
         }
 
@@ -204,6 +225,7 @@ where
             focus_request: None,
             focus_repair: None,
             clear: false,
+            wake_animations: ctx.redraw_requested() || ctx.layout_requested(),
         };
         let messages = ctx.drain_messages().collect();
         self.handle_messages(&mut flags, messages);
@@ -227,6 +249,7 @@ where
 
             flags.redraw |= ctx.redraw_requested();
             flags.layout |= ctx.layout_requested();
+            flags.wake_animations |= ctx.redraw_requested() || ctx.layout_requested();
             flags.clear |= ctx.clear_requested();
             flags.quit |= ctx.quit_requested();
             if let Some(request) = ctx.focus_request().cloned() {
@@ -381,15 +404,14 @@ where
     ) {
         let event = event;
         if let TuiEvent::Key(key) = &event {
-            if is_global_quit_key(*key) {
+            if is_global_quit_key(*key, &self.runtime_keybindings) {
                 flags.quit = true;
                 return;
             }
-            let current_is_input = focus_manager
+            let suppress_global_hotkeys = focus_manager
                 .current()
-                .map(|t| t.id.as_str() == "input" || t.id.as_str() == "textarea")
-                .unwrap_or(false);
-            if !current_is_input {
+                .is_some_and(|target| target.suppress_global_hotkeys);
+            if !suppress_global_hotkeys {
                 let sequence_targets = hotkey_sequence_targets(layout_engine.focus_targets());
                 global_hotkeys.set_hotkeys(sequence_targets.iter().map(|(hotkey, _)| hotkey));
                 match global_hotkeys.on_key(*key) {
@@ -523,6 +545,7 @@ where
             focus_request: None,
             focus_repair: None,
             clear: false,
+            wake_animations: false,
         };
 
         flags.merge(self.mount_root());
@@ -553,6 +576,10 @@ where
                 &layout_engine,
                 &mut dispatcher,
             );
+            if flags.wake_animations {
+                scheduler.wake();
+                flags.wake_animations = false;
+            }
             self.dispatch_runtime_event(
                 None,
                 &mut flags,
@@ -562,10 +589,14 @@ where
                 &mut global_hotkeys,
                 event,
             );
+            if flags.wake_animations {
+                scheduler.wake();
+                flags.wake_animations = false;
+            }
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
                 flags.redraw |= tick.changed || tick.active;
-                flags.layout |= tick.changed || tick.active;
+                scheduler.set_active(tick.active);
             }
         }
 
@@ -598,24 +629,28 @@ fn runtime_poll_timeout(scheduler: &Scheduler, global_hotkeys: &HotkeySequenceMa
         .unwrap_or_else(|| scheduler.timeout())
 }
 
-fn is_global_quit_key(key: crate::KeyEvent) -> bool {
-    key.code == Key::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL)
+fn is_global_quit_key(key: crate::KeyEvent, runtime: &RuntimeKeyBindings) -> bool {
+    runtime.quit_matches(key)
 }
 
 fn edit_in_external_editor(
     terminal: &mut TerminalGuard,
     request: crate::ExternalEditorRequest,
 ) -> std::io::Result<Option<crate::ExternalEditorResponse>> {
-    let temp_path = std::env::temp_dir().join(format!("tuicore-edit-{}.txt", std::process::id()));
-    let pos_path =
-        std::env::temp_dir().join(format!("tuicore-edit-pos-{}.txt", std::process::id()));
-    std::fs::write(&temp_path, &request.value)?;
+    let temp_files = create_editor_temp_files(&request.value)?;
 
-    let status = terminal.suspend(|| run_editor(&temp_path, &pos_path, request.line, request.col));
+    let status = terminal.suspend(|| {
+        run_editor(
+            &temp_files.text_path,
+            &temp_files.pos_path,
+            request.line,
+            request.col,
+        )
+    });
     let result = match status {
         Ok(status) if status.success() => {
-            let content = std::fs::read_to_string(&temp_path)?;
-            let (line, col) = editor_exit_position(&pos_path, request.line, request.col);
+            let content = std::fs::read_to_string(&temp_files.text_path)?;
+            let (line, col) = editor_exit_position(&temp_files.pos_path, request.line, request.col);
             Some(crate::ExternalEditorResponse {
                 value: content,
                 line,
@@ -625,9 +660,68 @@ fn edit_in_external_editor(
         _ => None,
     };
 
-    let _ = std::fs::remove_file(temp_path);
-    let _ = std::fs::remove_file(pos_path);
+    temp_files.cleanup();
     Ok(result)
+}
+
+struct EditorTempFiles {
+    text_path: PathBuf,
+    pos_path: PathBuf,
+}
+
+impl EditorTempFiles {
+    fn cleanup(self) {
+        let _ = std::fs::remove_file(self.text_path);
+        let _ = std::fs::remove_file(self.pos_path);
+    }
+}
+
+fn create_editor_temp_files(value: &str) -> std::io::Result<EditorTempFiles> {
+    let (text_path, mut file) = create_unique_temp_file("edit", "txt")?;
+    if let Err(error) = file.write_all(value.as_bytes()) {
+        let _ = std::fs::remove_file(&text_path);
+        return Err(error);
+    }
+    drop(file);
+
+    let (pos_path, pos_file) = match create_unique_temp_file("edit-pos", "txt") {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = std::fs::remove_file(&text_path);
+            return Err(error);
+        }
+    };
+    drop(pos_file);
+
+    Ok(EditorTempFiles {
+        text_path,
+        pos_path,
+    })
+}
+
+fn create_unique_temp_file(prefix: &str, extension: &str) -> std::io::Result<(PathBuf, File)> {
+    let temp_dir = std::env::temp_dir();
+    let process = std::process::id();
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..1000_u16 {
+        let path = temp_dir.join(format!(
+            "tuicore-{prefix}-{process}-{seed}-{attempt}.{extension}"
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to create unique tuicore editor temp file",
+    ))
 }
 
 fn run_editor(
@@ -639,81 +733,95 @@ fn run_editor(
     let editor = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
         .unwrap_or_else(|_| "vi".to_string());
-    let editor_bin = Path::new(&editor)
-        .file_name()
-        .map(|file| file.to_string_lossy().to_string())
-        .unwrap_or_else(|| editor.clone());
-
-    if cfg!(unix) {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(editor_shell_args(
-                &editor,
-                &editor_bin,
-                temp_path,
-                pos_path,
-                line,
-                col,
-            ))
-            .status()
-    } else {
-        let mut cmd = Command::new(&editor);
-        if editor_bin.contains("nano") {
-            cmd.arg(format!("+{},{}", line, col));
-        } else if editor_bin.contains("emacs") {
-            cmd.arg(format!("+{}:{}", line, col));
-        } else if is_vi_editor(&editor_bin) {
-            cmd.arg(format!("+{}", line));
-            cmd.arg("-c");
-            cmd.arg(format!(
-                "autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')",
-                pos_path.to_string_lossy()
-            ));
-            cmd.arg("-c");
-            cmd.arg(format!("normal! {}|", col));
-        } else {
-            cmd.arg(format!("+{}", line));
-        }
-        cmd.arg(temp_path).status()
-    }
+    let mut cmd = editor_command(&editor, temp_path, pos_path, line, col);
+    cmd.status()
 }
 
-fn editor_shell_args(
+fn editor_command(
     editor: &str,
-    editor_bin: &str,
     temp_path: &Path,
     pos_path: &Path,
     line: usize,
     col: usize,
-) -> String {
-    if editor_bin.contains("nano") {
-        format!(
-            "{} +{},{} '{}'",
-            editor,
-            line,
-            col,
-            temp_path.to_string_lossy()
-        )
-    } else if editor_bin.contains("emacs") {
-        format!(
-            "{} +{}:{} '{}'",
-            editor,
-            line,
-            col,
-            temp_path.to_string_lossy()
-        )
-    } else if is_vi_editor(editor_bin) {
-        format!(
-            "{} +{} -c 'autocmd VimLeavePre * call writefile([string(line(\".\")), string(col(\".\"))], \"{}\")' -c 'normal! {}|' '{}'",
-            editor,
-            line,
-            pos_path.to_string_lossy(),
-            col,
-            temp_path.to_string_lossy()
-        )
-    } else {
-        format!("{} +{} '{}'", editor, line, temp_path.to_string_lossy())
+) -> Command {
+    let mut editor_parts = split_editor_command(editor);
+    if editor_parts.is_empty() {
+        editor_parts.push("vi".to_string());
     }
+    let editor_program = editor_parts.remove(0);
+    let editor_bin = Path::new(&editor_program)
+        .file_name()
+        .map(|file| file.to_string_lossy().to_string())
+        .unwrap_or_else(|| editor_program.clone());
+    let mut cmd = Command::new(editor_program);
+    cmd.args(editor_parts);
+
+    if editor_bin.contains("nano") {
+        cmd.arg(format!("+{},{}", line, col));
+    } else if editor_bin.contains("emacs") {
+        cmd.arg(format!("+{}:{}", line, col));
+    } else if is_vi_editor(&editor_bin) {
+        cmd.arg(format!("+{}", line));
+        cmd.arg("-c");
+        cmd.arg(format!(
+            "autocmd VimLeavePre * call writefile([string(line('.')), string(col('.'))], '{}')",
+            vim_single_quoted_path(pos_path)
+        ));
+        cmd.arg("-c");
+        cmd.arg(format!("normal! {}|", col));
+    } else {
+        cmd.arg(format!("+{}", line));
+    }
+    cmd.arg(temp_path);
+    cmd
+}
+
+fn split_editor_command(editor: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for ch in editor.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(quote_char) = quote {
+            if ch == quote_char {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                parts.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+fn vim_single_quoted_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\'', "''")
 }
 
 fn is_vi_editor(editor_bin: &str) -> bool {
@@ -780,6 +888,7 @@ impl RuntimeFlags {
             focus_request: effects.focus_request.clone(),
             focus_repair: effects.focus_repair,
             clear: effects.clear,
+            wake_animations: effects.redraw || effects.layout,
         }
     }
 
@@ -788,6 +897,7 @@ impl RuntimeFlags {
         self.layout |= other.layout;
         self.quit |= other.quit;
         self.clear |= other.clear;
+        self.wake_animations |= other.wake_animations;
         if other.focus_request.is_some() {
             self.focus_request = other.focus_request;
         }
@@ -836,7 +946,7 @@ mod tests {
     use crate::{
         ChildKey, EventOutcome, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Key, KeyEvent,
         KeyModifiers, KeySpec, LayoutCtx, LayoutResult, MouseButton, MouseEvent, MouseEventKind,
-        Preset, TreePath, preset, set_preset,
+        Preset, RuntimeKeyBindings, TreePath, preset, set_preset,
     };
 
     #[derive(Default)]
@@ -900,6 +1010,12 @@ mod tests {
         name: &'static str,
         hotkey: &'static str,
         event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    #[derive(Default)]
+    struct SuppressedHotkeyNode {
+        key_events: usize,
+        hotkey_events: usize,
     }
 
     impl TuiNode<()> for QuitNode {
@@ -1238,6 +1354,31 @@ mod tests {
         }
     }
 
+    impl TuiNode<()> for SuppressedHotkeyNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable(FocusId::new("text"), area, true);
+            ctx.set_focus_suppresses_global_hotkeys(FocusId::new("text"), true);
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new("action"),
+                area,
+                true,
+                vec!["sa".to_string()],
+            );
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+
+        fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
+            match event {
+                TuiEvent::Key(_) => self.key_events += 1,
+                TuiEvent::Hotkey(_) => self.hotkey_events += 1,
+                _ => {}
+            }
+            EventOutcome::Ignored
+        }
+    }
+
     impl TuiNode<()> for HotkeyLayoutFocusNode {
         fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
             ctx.register_focusable_with_hotkey_sequences(
@@ -1349,6 +1490,7 @@ mod tests {
             focus_request: Some(FocusRequest::Unfocus),
             focus_repair: Some(FocusRepair::RemovedChild { index: 0 }),
             clear: false,
+            wake_animations: false,
         };
         let mut focus_manager = FocusManager::new();
         let layout_engine = LayoutEngine::new();
@@ -1382,6 +1524,24 @@ mod tests {
     #[test]
     fn ctrl_q_quits_even_when_modal_handles_other_keys() {
         let app = TreeApp::new(ModalRestoreNode::default());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent {
+                code: Key::Char('q'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 20, 5));
+
+        assert!(app.root.active);
+    }
+
+    #[test]
+    fn runtime_quit_keybinding_can_be_remapped() {
+        let app = TreeApp::new(ModalRestoreNode::default())
+            .runtime_keybindings(RuntimeKeyBindings::new().with_quit([KeySpec::plain('x')]));
         let events = [
             TuiEvent::Key(KeyEvent::from(Key::Enter)),
             TuiEvent::Key(KeyEvent {
@@ -1518,6 +1678,33 @@ mod tests {
     }
 
     #[test]
+    fn external_editor_command_uses_program_arguments_without_shell() {
+        let temp_path = Path::new("/tmp/tuicore edit.txt");
+        let pos_path = Path::new("/tmp/tuicore pos.txt");
+
+        let command = editor_command("vim -u NONE", temp_path, pos_path, 3, 4);
+
+        assert_eq!(command.get_program(), "vim");
+        assert!(command.get_args().any(|arg| arg == "-u"));
+        assert!(command.get_args().any(|arg| arg == "NONE"));
+        assert!(command.get_args().any(|arg| arg == temp_path.as_os_str()));
+    }
+
+    #[test]
+    fn editor_temp_files_are_unique_and_created_with_contents() {
+        let first = create_editor_temp_files("one").expect("first temp files should be created");
+        let second = create_editor_temp_files("two").expect("second temp files should be created");
+
+        assert_ne!(first.text_path, second.text_path);
+        assert_ne!(first.pos_path, second.pos_path);
+        assert_eq!(std::fs::read_to_string(&first.text_path).unwrap(), "one");
+        assert_eq!(std::fs::read_to_string(&second.text_path).unwrap(), "two");
+
+        first.cleanup();
+        second.cleanup();
+    }
+
+    #[test]
     fn custom_focus_keybinding_does_not_run_after_child_consumes_key() {
         let event = TuiEvent::Key(KeyEvent::from(Key::Char('x')));
         let bindings = FocusKeyBindings::new().with_next([KeySpec::plain('x')]);
@@ -1581,6 +1768,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["s".to_string()],
+            suppress_global_hotkeys: false,
         };
         let other = FocusTarget {
             id: FocusId::new("tabs"),
@@ -1591,6 +1779,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["sa".to_string()],
+            suppress_global_hotkeys: false,
         };
         let targets = hotkey_sequence_targets(&[current.clone(), other]);
 
@@ -1611,6 +1800,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["t".to_string()],
+            suppress_global_hotkeys: false,
         };
         let longer = FocusTarget {
             id: FocusId::new("tabs"),
@@ -1621,6 +1811,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["ta".to_string()],
+            suppress_global_hotkeys: false,
         };
         let targets = hotkey_sequence_targets(&[exact, longer.clone()]);
 
@@ -1628,6 +1819,20 @@ mod tests {
 
         assert_eq!(targets.len(), 2);
         assert!(targets.iter().any(|target| target.path == longer.path));
+    }
+
+    #[test]
+    fn focused_text_target_suppresses_global_hotkey_sequences() {
+        let app = TreeApp::new(SuppressedHotkeyNode::default());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.key_events, 2);
+        assert_eq!(app.root.hotkey_events, 0);
     }
 
     #[test]
@@ -1647,6 +1852,7 @@ mod tests {
             focus_request: None,
             focus_repair: None,
             clear: false,
+            wake_animations: false,
         };
 
         flags.merge(app.mount_root());
@@ -1700,6 +1906,7 @@ mod tests {
             focus_request: None,
             focus_repair: None,
             clear: false,
+            wake_animations: false,
         };
 
         flags.merge(app.mount_root());
@@ -1770,19 +1977,26 @@ mod tests {
         assert!(events.iter().any(|event| event == "save:Commit(\"sa\")"));
     }
 
-    struct PresetGuard(Preset);
+    struct PresetGuard {
+        previous: Preset,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl PresetGuard {
         fn replace(next: Preset) -> Self {
+            let lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
             let previous = preset();
             set_preset(next);
-            Self(previous)
+            Self {
+                previous,
+                _lock: lock,
+            }
         }
     }
 
     impl Drop for PresetGuard {
         fn drop(&mut self) {
-            set_preset(self.0.clone());
+            set_preset(self.previous.clone());
         }
     }
 }

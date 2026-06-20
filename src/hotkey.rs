@@ -193,7 +193,12 @@ pub fn hotkey_label_spans(
         .map(normalize_hotkey)
         .filter(|prefix| !prefix.is_empty() && hotkey.starts_with(prefix));
 
+    let active_prefix_is_partial = active_prefix
+        .as_deref()
+        .is_some_and(|prefix| prefix.len() < hotkey.len());
+
     if mode == HotkeyLabelMode::PreferMnemonic
+        && !active_prefix_is_partial
         && let Some(highlight) = active_prefix.as_deref().or(Some(&hotkey))
         && let Some((start, end)) = find_case_insensitive(label, highlight)
     {
@@ -412,6 +417,38 @@ mod tests {
                 .map(|span| span.content.as_ref())
                 .collect::<String>(),
             "Run |x|"
+        );
+    }
+
+    #[test]
+    fn prefer_mnemonic_keeps_suffix_for_partial_multiletter_prefix() {
+        let base_style = Style::default();
+        let hotkey_style = Style::default().add_modifier(ratatui::style::Modifier::UNDERLINED);
+        let spans = hotkey_label_spans(
+            "Open real tabs-as-dialog overlay",
+            Some("td"),
+            HotkeyLabelMode::PreferMnemonic,
+            Some("t"),
+            base_style,
+            hotkey_style,
+        );
+
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "Open real tabs-as-dialog overlay |td|"
+        );
+        let underlined_t = spans
+            .iter()
+            .find(|span| span.content.as_ref() == "t")
+            .expect("partial prefix should be rendered in hotkey suffix");
+        assert!(
+            underlined_t
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::UNDERLINED)
         );
     }
 

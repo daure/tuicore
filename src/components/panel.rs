@@ -38,6 +38,7 @@ pub struct Panel {
     top_left: Option<PanelTitle>,
     top_right: Option<PanelTitle>,
     bottom_left: Option<PanelTitle>,
+    bottom_right: Option<PanelTitle>,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     border: Option<BorderKind>,
@@ -69,6 +70,7 @@ impl Panel {
             top_left: None,
             top_right: None,
             bottom_left: None,
+            bottom_right: None,
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             border: None,
@@ -110,12 +112,12 @@ impl Panel {
     }
 
     pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
-        self.set_hotkey(title);
+        self.bottom_right = Some(PanelTitle::standard(title));
         self
     }
 
     pub fn set_bottom_right(&mut self, title: impl Into<String>) {
-        self.set_hotkey(title);
+        self.bottom_right = Some(PanelTitle::standard(title));
     }
 
     pub fn title(mut self, position: PanelTitlePosition, title: impl Into<String>) -> Self {
@@ -124,19 +126,11 @@ impl Panel {
     }
 
     pub fn set_title(&mut self, position: PanelTitlePosition, title: impl Into<String>) {
-        if position == PanelTitlePosition::BottomRight {
-            self.set_hotkey(title);
-        } else {
-            *self.title_slot_mut(position) = Some(PanelTitle { text: title.into() });
-        }
+        *self.title_slot_mut(position) = Some(PanelTitle { text: title.into() });
     }
 
     pub fn clear_title(&mut self, position: PanelTitlePosition) {
-        if position == PanelTitlePosition::BottomRight {
-            self.clear_hotkey();
-        } else {
-            *self.title_slot_mut(position) = None;
-        }
+        *self.title_slot_mut(position) = None;
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -327,6 +321,7 @@ impl Panel {
         self.render_panel_title(frame, area, border, PanelTitlePosition::TopLeft);
         self.render_panel_title(frame, area, border, PanelTitlePosition::TopRight);
         self.render_panel_title(frame, area, border, PanelTitlePosition::BottomLeft);
+        self.render_panel_title(frame, area, border, PanelTitlePosition::BottomRight);
         self.render_hotkey(frame, area, border);
 
         if !inner.is_empty() {
@@ -451,7 +446,15 @@ impl Panel {
         let chars = border_chars(border);
         let border_style = Style::default().fg(self.visible_border_color());
         let title_style = Style::default().fg(self.visible_title_color());
-        let title = bounded_title(&title.text, area.width.saturating_sub(5) as usize);
+        let reserved_right = self.reserved_bottom_right_width(position);
+        if area.width <= 4 + reserved_right {
+            return;
+        }
+
+        let title = bounded_title(
+            &title.text,
+            area.width.saturating_sub(5 + reserved_right) as usize,
+        );
         let title_width = line_width(&Line::from(title.as_str())).min(area.width as usize);
         if title_width == 0 {
             return;
@@ -465,7 +468,11 @@ impl Panel {
         let width = (title_width + 2).min(u16::MAX as usize) as u16;
         let x = match title_alignment(position) {
             Alignment::Left | Alignment::Center => area.x.saturating_add(1),
-            Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(1),
+            Alignment::Right => area.x.saturating_add(
+                area.width
+                    .saturating_sub(width)
+                    .saturating_sub(1 + reserved_right),
+            ),
         };
         let y = title_y(area, position);
 
@@ -511,7 +518,7 @@ impl Panel {
             PanelTitlePosition::TopLeft => self.top_left.as_ref(),
             PanelTitlePosition::TopRight => self.top_right.as_ref(),
             PanelTitlePosition::BottomLeft => self.bottom_left.as_ref(),
-            PanelTitlePosition::BottomRight => None,
+            PanelTitlePosition::BottomRight => self.bottom_right.as_ref(),
         }
     }
 
@@ -520,10 +527,18 @@ impl Panel {
             PanelTitlePosition::TopLeft => &mut self.top_left,
             PanelTitlePosition::TopRight => &mut self.top_right,
             PanelTitlePosition::BottomLeft => &mut self.bottom_left,
-            PanelTitlePosition::BottomRight => {
-                panic!("bottom-right panel slot is reserved for hotkeys")
-            }
+            PanelTitlePosition::BottomRight => &mut self.bottom_right,
         }
+    }
+
+    fn reserved_bottom_right_width(&self, position: PanelTitlePosition) -> u16 {
+        if position != PanelTitlePosition::BottomRight {
+            return 0;
+        }
+        self.hotkey
+            .as_ref()
+            .map(|hotkey| hotkey_badge_width(hotkey).min(u16::MAX as usize) as u16)
+            .unwrap_or(0)
     }
 }
 
@@ -674,6 +689,13 @@ where
     fn render(&self, frame: &mut Frame, area: Rect) {
         self.panel.render(frame, area);
         self.child.render(frame, self.child_area);
+        crate::separator::patch_border_joins(
+            frame,
+            area,
+            self.child_area,
+            self.panel.border.unwrap_or_else(|| preset().border()),
+            Style::default().fg(self.panel.visible_border_color()),
+        );
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -1283,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn panel_bottom_right_hotkey_aligns_with_border_snapshot() {
+    fn panel_bottom_right_title_and_hotkey_align_with_border_snapshot() {
         let panel = Panel::new()
             .top_left("Services")
             .bottom_right("Ready")
@@ -1311,10 +1333,20 @@ mod tests {
             "│Body                              │",
             "│                                  │",
             "│                                  │",
-            "└──────────────────────────────┤run│",
+            "└────────────────────┤ Ready ├─┤run│",
         ]
         .join("\n");
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn panel_bottom_right_title_slot_is_independent_from_hotkey() {
+        let mut panel = Panel::new().bottom_right("State").hotkey("r");
+
+        panel.clear_title(PanelTitlePosition::BottomRight);
+
+        assert!(panel.title_slot(PanelTitlePosition::BottomRight).is_none());
+        assert_eq!(panel.hotkey.as_deref(), Some("r"));
     }
 
     #[test]

@@ -602,7 +602,7 @@ impl AxisScroll {
     }
 
     fn is_active(&self) -> bool {
-        (self.animator.current() - self.target as f64).abs() >= 0.5
+        self.animator.is_active() || (self.animator.current() - self.target as f64).abs() >= 0.5
     }
 
     fn start_to(&mut self, target: usize, spec: ResolvedAnimationSpec) -> bool {
@@ -618,7 +618,8 @@ impl AxisScroll {
             return true;
         }
 
-        self.animator.set_target(target as f64);
+        self.animator
+            .animate_to(target as f64, spec.duration, spec.easing);
         true
     }
 
@@ -888,6 +889,36 @@ mod tests {
         assert!(outcome.changed);
         assert_eq!(scroll.offset().x, 1);
         assert_eq!(scroll.target_offset().x, 1);
+        assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn scroll_animation_uses_configured_duration_and_easing() {
+        let mut scroll = ScrollState::new(ScrollAxes::Vertical).behavior(ScrollBehavior {
+            line_step: 1,
+            page_overlap: 1,
+            animation: AnimationSpec {
+                enabled: None,
+                duration: Some(Duration::from_millis(100)),
+                easing: Some(crate::Easing::Linear),
+            },
+        });
+
+        let outcome = scroll.scroll_to(
+            ScrollOffset::new(0, 10),
+            ScrollSize::new(1, 5),
+            ScrollSize::new(1, 20),
+            AnimationSettings::default(),
+        );
+        let tick = scroll.tick(Duration::from_millis(50), AnimationSettings::default());
+
+        assert!(outcome.active);
+        assert!(tick.active);
+        assert_eq!(scroll.offset().y, 5);
+
+        scroll.tick(Duration::from_millis(50), AnimationSettings::default());
+
+        assert_eq!(scroll.offset().y, 10);
         assert!(!scroll.is_active());
     }
 

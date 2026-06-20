@@ -25,13 +25,14 @@ pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
     ActivationMode, Button, ButtonOutcome, CellContext, CheckState, Column, CrossAlign, CrossSize,
     DataView, DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTypedEvent,
-    Dialog, DialogCloseReason, DialogHost, DialogLayer, DialogTitlePosition, Dropdown,
-    DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownPopupDirection,
-    DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid, GridItem, GridTrack, InputOutcome,
-    List, ListOutcome, MainAlign, Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost,
-    PanelTitlePosition, SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger,
-    SortDirection, Spinner, Split, Stack, StackAlign, StackItem, StackSize, Tab, Tabs, TextInput,
-    TextareaInput, Toggle, ToggleOutcome, TreeAdapter, TreeGlyphs,
+    Dialog, DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings, DialogLayer,
+    DialogTitlePosition, Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition,
+    DropdownOutcome, DropdownPopupDirection, DropdownSearchMode, DropdownVariant, Flex, FlexItem,
+    Grid, GridItem, GridTrack, InputOutcome, List, ListOutcome, MainAlign, ModalCloseReason,
+    Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition, SelectionGlyphs,
+    SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack,
+    StackAlign, StackItem, StackSize, Tab, Tabs, TextInput, TextInputKeyBindings, TextareaInput,
+    TextareaInputKeyBindings, Toggle, ToggleOutcome, TreeAdapter, TreeGlyphs,
 };
 pub use event::{
     ExternalEditorRequest, ExternalEditorResponse, HotkeyEvent, Key, KeyEvent, KeyModifiers,
@@ -46,7 +47,7 @@ pub use hotkey::{
 };
 pub use keybindings::{
     ButtonKeyBindings, DataViewKeyBindings, DropdownKeyBindings, FocusKeyBindings, KeyBindings,
-    KeySpec, TabsKeyBindings, ToggleKeyBindings,
+    KeyBindingsError, KeySpec, RuntimeKeyBindings, TabsKeyBindings, ToggleKeyBindings,
 };
 pub use node::{
     AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
@@ -71,8 +72,8 @@ pub use separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColor
 pub use spacing::{Gap, Padding};
 pub use theme::{Theme, ThemeName};
 pub use ui::{
-    animation_settings, init, init_from_dir, keybindings, preset, set_keybindings, set_preset,
-    set_theme, theme,
+    UiInitError, animation_settings, init, init_from_dir, keybindings, preset, set_keybindings,
+    set_preset, set_theme, theme, try_init, try_init_from_dir,
 };
 
 #[cfg(test)]

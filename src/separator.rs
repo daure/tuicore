@@ -170,6 +170,53 @@ pub(crate) fn draw_cross(frame: &mut Frame, x: u16, y: u16, separator: Separator
         .set_string(x, y, cross(separator.resolved_kind()), separator.style());
 }
 
+pub(crate) fn patch_border_joins(
+    frame: &mut Frame,
+    outer: Rect,
+    inner: Rect,
+    kind: BorderKind,
+    style: Style,
+) {
+    if outer.width < 2 || outer.height < 2 || inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let chars = border_chars(kind);
+    let bottom_y = outer.bottom().saturating_sub(1);
+    let right_x = outer.right().saturating_sub(1);
+
+    for x in inner.x..inner.right() {
+        if cell_symbol_is(frame, x, inner.y, chars.vertical) {
+            frame
+                .buffer_mut()
+                .set_string(x, outer.y, chars.top_join, style);
+        }
+        let y = inner.bottom().saturating_sub(1);
+        if cell_symbol_is(frame, x, y, chars.vertical) {
+            frame
+                .buffer_mut()
+                .set_string(x, bottom_y, chars.bottom_join, style);
+        }
+    }
+
+    for y in inner.y..inner.bottom() {
+        if cell_symbol_is(frame, inner.x, y, chars.horizontal) {
+            frame
+                .buffer_mut()
+                .set_string(outer.x, y, chars.left_join, style);
+        }
+        let x = inner.right().saturating_sub(1);
+        if cell_symbol_is(frame, x, y, chars.horizontal) {
+            frame
+                .buffer_mut()
+                .set_string(right_x, y, chars.right_join, style);
+        }
+    }
+}
+
+fn cell_symbol_is(frame: &mut Frame, x: u16, y: u16, expected: &str) -> bool {
+    frame.buffer_mut()[(x, y)].symbol() == expected
+}
+
 fn draw_line(frame: &mut Frame, rect: Rect, symbol: &str, style: Style) {
     for y in rect.y..rect.y.saturating_add(rect.height) {
         for x in rect.x..rect.x.saturating_add(rect.width) {

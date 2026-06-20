@@ -245,6 +245,7 @@ pub struct FocusTarget {
     pub hotkey: Option<KeyEvent>,
     pub hotkeys: Vec<KeyEvent>,
     pub hotkey_sequences: Vec<String>,
+    pub suppress_global_hotkeys: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,6 +548,7 @@ impl LayoutCtx {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
         });
     }
 
@@ -569,6 +571,7 @@ impl LayoutCtx {
             hotkey: Some(hotkey),
             hotkeys: Vec::new(),
             hotkey_sequences: hotkey_sequence_from_event(hotkey).into_iter().collect(),
+            suppress_global_hotkeys: false,
         });
     }
 
@@ -594,6 +597,7 @@ impl LayoutCtx {
                 .filter_map(|hotkey| hotkey_sequence_from_event(*hotkey))
                 .collect(),
             hotkeys,
+            suppress_global_hotkeys: false,
         });
     }
 
@@ -621,7 +625,22 @@ impl LayoutCtx {
             hotkey: hotkeys.first().copied(),
             hotkeys,
             hotkey_sequences,
+            suppress_global_hotkeys: false,
         });
+    }
+
+    pub fn set_focus_suppresses_global_hotkeys(&mut self, id: FocusId, suppress: bool) -> bool {
+        let path = self.current_path();
+        let Some(target) = self
+            .focus_paths
+            .iter_mut()
+            .rev()
+            .find(|target| target.id == id && target.path == path)
+        else {
+            return false;
+        };
+        target.suppress_global_hotkeys = suppress;
+        true
     }
 
     pub fn set_focus_tab_stop(&mut self, id: FocusId, tab_stop: bool) -> bool {
@@ -945,6 +964,7 @@ impl FocusTarget {
             hotkey: self.hotkey.clone(),
             hotkeys: self.hotkeys.clone(),
             hotkey_sequences: self.hotkey_sequences.clone(),
+            suppress_global_hotkeys: self.suppress_global_hotkeys,
         })
     }
 }
@@ -1171,6 +1191,7 @@ mod tests {
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
         };
         let mut decorator = OnBlur::new(Probe, || "blurred");
         let mut dispatcher = crate::TreeDispatcher::new();

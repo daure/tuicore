@@ -222,6 +222,19 @@ fn configured_hotkey_is_registered_on_focus_target() {
         layout.focus_targets()[0].hotkey,
         Some(KeyEvent::from(Key::Char('c')))
     );
+    assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["c"]);
+}
+
+#[test]
+fn multiletter_hotkey_is_registered_as_sequence() {
+    let mut view =
+        DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string()).hotkey("G G");
+    let mut layout = LayoutCtx::new();
+
+    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
+
+    assert_eq!(layout.focus_targets()[0].hotkey, None);
+    assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["gg"]);
 }
 
 #[test]
