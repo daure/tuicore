@@ -11,13 +11,12 @@ use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, ColorTween, EventCtx,
     EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HitRegion, KeySpec,
     LayoutCtx, LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
-    ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode, Tween,
-    border_set, hotkey_edge_spans, keybindings, lerp_color, line_width, paragraph_scroll, preset,
-    theme,
+    ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TreePath,
+    TuiNode, Tween, border_set, hotkey_edge_spans, keybindings, lerp_color, line_width,
+    paragraph_scroll, preset, theme,
 };
 
 const DIALOG_FOCUS: &str = "dialog";
-const CLOSE_TEXT: &str = "x";
 const BACKDROP_BACKGROUND_DIM_FACTOR: f64 = 0.35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +49,10 @@ impl Default for DialogKeyBindings {
 impl DialogKeyBindings {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn close_label(&self) -> Option<String> {
+        self.close.first().map(|key| key.label())
     }
 }
 
@@ -130,6 +133,8 @@ pub struct DialogLayer<Base, Layer> {
     layer_rect: Rect,
     backdrop: DialogBackdrop,
     backdrop_tween: Tween,
+    restore_focus_on_close: bool,
+    layer_focus_origin: Option<(TreePath, FocusId)>,
 }
 
 impl<M> Default for Dialog<M> {
@@ -444,28 +449,30 @@ impl<M> Dialog<M> {
         let Some(title) = self.top_left.as_ref() else {
             return;
         };
-        self.render_plain_title(
-            frame,
-            area,
-            title,
-            Alignment::Left,
-            area.y,
-            close_label_width() + 1,
-        );
+        let close_width = self.close_label_width();
+        self.render_plain_title(frame, area, title, Alignment::Left, area.y, close_width + 1);
     }
 
     fn render_top_right_title(&self, frame: &mut Frame, area: Rect) {
         let Some(title) = self.top_right.as_ref() else {
             return;
         };
+        let close_width = self.close_label_width();
         self.render_plain_title(
             frame,
             area,
             title,
             Alignment::Right,
             area.y,
-            close_label_width() + 1,
+            close_width + 1,
         );
+    }
+
+    fn close_label_width(&self) -> u16 {
+        self.keys
+            .close_label()
+            .map(|label| close_label_width(&label))
+            .unwrap_or_default()
     }
 
     fn render_bottom_title(&self, frame: &mut Frame, area: Rect, position: DialogTitlePosition) {
@@ -524,7 +531,10 @@ impl<M> Dialog<M> {
     }
 
     fn render_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        let width = close_label_width();
+        let Some(label) = self.keys.close_label() else {
+            return;
+        };
+        let width = close_label_width(&label);
         if area.width <= width + 2 {
             return;
         }
@@ -533,7 +543,7 @@ impl<M> Dialog<M> {
             .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
         let line = Line::from(hotkey_edge_spans(
-            CLOSE_TEXT,
+            &label,
             None,
             border,
             border_style,
@@ -795,6 +805,8 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             layer_rect: Rect::default(),
             backdrop: DialogBackdrop::none(),
             backdrop_tween: Tween::idle(0.0),
+            restore_focus_on_close: true,
+            layer_focus_origin: None,
         }
     }
 
@@ -817,6 +829,48 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
         }
         self.active = active;
         self.start_backdrop_tween(active, settings);
+    }
+
+    pub fn set_active_with_context<M>(&mut self, active: bool, ctx: &mut EventCtx<M>) {
+        self.set_active_with_settings(active, ctx.animation());
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(self.focus_request_for_active_change(active));
+    }
+
+    pub fn set_active_with_dialog_focus<M>(&mut self, active: bool, ctx: &mut EventCtx<M>) {
+        self.set_active_with_settings(active, ctx.animation());
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(if active {
+            FocusRequest::Target(FocusId::new(DIALOG_FOCUS))
+        } else {
+            self.focus_request_for_active_change(false)
+        });
+    }
+
+    fn focus_request_for_active_change(&mut self, active: bool) -> FocusRequest {
+        if active {
+            self.restore_focus_on_close = true;
+            self.layer_focus_origin = None;
+            FocusRequest::Next
+        } else if self.restore_focus_on_close {
+            FocusRequest::Last
+        } else {
+            FocusRequest::Next
+        }
+    }
+
+    fn record_layer_focus(&mut self, target: &FocusTarget, focused: bool) {
+        if !focused {
+            return;
+        }
+        let current = (target.path.clone(), target.id.clone());
+        if self.layer_focus_origin.is_none() {
+            self.layer_focus_origin = Some(current);
+        } else if self.layer_focus_origin.as_ref() != Some(&current) {
+            self.restore_focus_on_close = false;
+        }
     }
 
     pub fn layer_percent(mut self, percent: u16) -> Self {
@@ -982,6 +1036,7 @@ where
         let second = ChildKey::second();
         if self.active {
             if let Some(target) = target.for_child(&second) {
+                self.record_layer_focus(&target, focused);
                 self.layer.dispatch_focus(&target, focused, ctx);
             }
         }
@@ -1075,8 +1130,8 @@ fn blend_cell_color(color: Color, fallback: Color, backdrop: Color, amount: f64)
     }
 }
 
-fn close_label_width() -> u16 {
-    line_width(&Line::from(format!("┤{CLOSE_TEXT}│"))).min(u16::MAX as usize) as u16
+fn close_label_width(label: &str) -> u16 {
+    line_width(&Line::from(format!("┤{label}│"))).min(u16::MAX as usize) as u16
 }
 
 fn centered_percent_rect(area: Rect, percent: u16) -> Rect {
@@ -1149,6 +1204,10 @@ mod tests {
 
     struct ColorBody;
 
+    struct TopRightVerticalBody;
+
+    struct BottomRightVerticalBody;
+
     impl TuiNode<()> for StaticBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
@@ -1170,6 +1229,36 @@ mod tests {
                 Style::default()
                     .fg(Color::Rgb(200, 200, 200))
                     .bg(Color::Rgb(10, 20, 30)),
+            );
+        }
+    }
+
+    impl TuiNode<()> for TopRightVerticalBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+            frame.buffer_mut().set_string(
+                area.right().saturating_sub(1),
+                area.y,
+                "│",
+                Style::default(),
+            );
+        }
+    }
+
+    impl TuiNode<()> for BottomRightVerticalBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+            frame.buffer_mut().set_string(
+                area.right().saturating_sub(1),
+                area.bottom().saturating_sub(1),
+                "│",
+                Style::default(),
             );
         }
     }
@@ -1207,6 +1296,102 @@ mod tests {
         dialog_layer.set_backdrop(DialogBackdrop::dim().amount(0.7));
 
         assert_eq!(dialog_layer.backdrop_tween.value(), 0.7);
+    }
+
+    #[test]
+    fn set_active_with_context_requests_layout_redraw_and_focus() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
+        let mut ctx = EventCtx::<()>::default();
+
+        dialog_layer.set_active_with_context(true, &mut ctx);
+
+        assert!(dialog_layer.is_active());
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Next));
+    }
+
+    #[test]
+    fn set_active_with_dialog_focus_targets_dialog_chrome() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
+        let mut ctx = EventCtx::<()>::default();
+
+        dialog_layer.set_active_with_dialog_focus(true, &mut ctx);
+
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::Target(FocusId::new(DIALOG_FOCUS)))
+        );
+    }
+
+    #[test]
+    fn closing_immediately_restores_previous_focus() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
+        let mut ctx = EventCtx::<()>::default();
+
+        dialog_layer.set_active_with_context(true, &mut ctx);
+        dialog_layer.set_active_with_context(false, &mut ctx);
+
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Last));
+    }
+
+    #[test]
+    fn closing_after_navigation_does_not_restore_previous_focus() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
+        let mut ctx = EventCtx::<()>::default();
+        let focus_target = FocusTarget {
+            id: FocusId::new("child"),
+            path: TreePath::from_keys([ChildKey::second(), ChildKey::new("child")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
+        };
+        let other_focus_target = FocusTarget {
+            id: FocusId::new("other"),
+            path: TreePath::from_keys([ChildKey::second(), ChildKey::new("other")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
+        };
+
+        dialog_layer.set_active_with_context(true, &mut ctx);
+        dialog_layer.dispatch_focus(&focus_target, true, &mut FocusCtx::<()>::default());
+        dialog_layer.dispatch_focus(&other_focus_target, true, &mut FocusCtx::<()>::default());
+        dialog_layer.set_active_with_context(false, &mut ctx);
+
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Next));
+    }
+
+    #[test]
+    fn repeated_initial_focus_still_restores_previous_focus_on_close() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
+        let mut ctx = EventCtx::<()>::default();
+        let focus_target = FocusTarget {
+            id: FocusId::new("child"),
+            path: TreePath::from_keys([ChildKey::second(), ChildKey::new("child")]),
+            area: Rect::default(),
+            enabled: true,
+            tab_stop: true,
+            hotkey: None,
+            hotkeys: Vec::new(),
+            hotkey_sequences: Vec::new(),
+            suppress_global_hotkeys: false,
+        };
+
+        dialog_layer.set_active_with_context(true, &mut ctx);
+        dialog_layer.dispatch_focus(&focus_target, true, &mut FocusCtx::<()>::default());
+        dialog_layer.dispatch_focus(&focus_target, true, &mut FocusCtx::<()>::default());
+        dialog_layer.set_active_with_context(false, &mut ctx);
+
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Last));
     }
 
     #[test]
@@ -1265,6 +1450,42 @@ mod tests {
         ]
         .join("\n");
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn dialog_host_join_patch_does_not_overwrite_close_label() {
+        let mut host = Dialog::<()>::new().host(TopRightVerticalBody);
+        let mut layout = LayoutCtx::new();
+        host.layout(Rect::new(0, 0, 20, 6), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| host.render(frame, frame.area()))
+            .expect("dialog host should render");
+
+        let buffer = terminal.backend().buffer();
+        let top_line = (0..20)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(top_line.ends_with("┤x│"), "{top_line}");
+    }
+
+    #[test]
+    fn dialog_host_join_patch_does_not_join_scrollbar_to_bottom_border() {
+        let mut host = Dialog::<()>::new().host(BottomRightVerticalBody);
+        let mut layout = LayoutCtx::new();
+        host.layout(Rect::new(0, 0, 20, 6), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| host.render(frame, frame.area()))
+            .expect("dialog host should render");
+
+        let buffer = terminal.backend().buffer();
+        let bottom_line = (0..20)
+            .map(|x| buffer.cell((x, 5)).unwrap().symbol())
+            .collect::<String>();
+        assert!(!bottom_line.contains('┴'), "{bottom_line}");
     }
 
     #[test]

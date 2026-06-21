@@ -39,7 +39,7 @@ pub use panel::{Panel, PanelHost, PanelTitlePosition};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};
-pub use tabs::{ModalCloseReason, Tab, Tabs};
+pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
 pub use text_input::{InputOutcome, TextInput, TextInputKeyBindings};
 pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};
 pub use toggle::{Toggle, ToggleOutcome};

@@ -24,6 +24,7 @@ pub struct TreeApp<N, M = ()> {
     root: N,
     animation_settings: AnimationSettings,
     runtime_keybindings: RuntimeKeyBindings,
+    runtime_keybindings_overridden: bool,
     on_message: Option<Box<MessageHandler<N, M>>>,
 }
 
@@ -51,6 +52,7 @@ impl<N, M> TreeApp<N, M> {
             root,
             animation_settings: animation_settings(),
             runtime_keybindings: keybindings().runtime().clone(),
+            runtime_keybindings_overridden: false,
             on_message: None,
         }
     }
@@ -62,6 +64,7 @@ impl<N, M> TreeApp<N, M> {
 
     pub fn runtime_keybindings(mut self, keybindings: RuntimeKeyBindings) -> Self {
         self.runtime_keybindings = keybindings;
+        self.runtime_keybindings_overridden = true;
         self
     }
 
@@ -404,7 +407,14 @@ where
     ) {
         let event = event;
         if let TuiEvent::Key(key) = &event {
-            if is_global_quit_key(*key, &self.runtime_keybindings) {
+            let live_keybindings;
+            let runtime_keybindings = if self.runtime_keybindings_overridden {
+                &self.runtime_keybindings
+            } else {
+                live_keybindings = keybindings().runtime().clone();
+                &live_keybindings
+            };
+            if is_global_quit_key(*key, runtime_keybindings) {
                 flags.quit = true;
                 return;
             }

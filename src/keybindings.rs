@@ -1,4 +1,4 @@
-use std::{env, fmt, fs, io, path::PathBuf};
+use std::{fmt, fs, io, path::PathBuf};
 
 use crate::event::{Key, KeyEvent, KeyModifiers};
 
@@ -730,6 +730,10 @@ impl TabsKeyBindings {
         matches_any(&self.close, key.into())
     }
 
+    pub fn close_label(&self) -> Option<String> {
+        self.close.first().map(|key| key.label())
+    }
+
     pub fn previous_label(&self) -> String {
         self.previous.label()
     }
@@ -1235,16 +1239,7 @@ fn modified_key(value: &str, modifiers: KeyModifiers) -> Option<KeySpec> {
 }
 
 fn keybindings_path() -> Option<PathBuf> {
-    config_dir().map(|path| path.join("keybindings.toml"))
-}
-
-pub(crate) fn config_dir() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("TUICORE_CONFIG_DIR") {
-        return Some(PathBuf::from(path));
-    }
-
-    let home = env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".tuicore"))
+    crate::config::config_dir().map(|path| path.join("keybindings.toml"))
 }
 
 #[cfg(test)]

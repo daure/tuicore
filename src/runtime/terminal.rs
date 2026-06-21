@@ -1,7 +1,7 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -17,6 +17,7 @@ pub struct TerminalGuard {
     raw_enabled: bool,
     alternate_screen: bool,
     mouse_capture: bool,
+    bracketed_paste: bool,
 }
 
 impl TerminalGuard {
@@ -25,20 +26,30 @@ impl TerminalGuard {
         let raw_enabled = true;
         let mut stdout = io::stdout();
         if let Err(error) = execute!(stdout, EnterAlternateScreen) {
-            cleanup_setup(raw_enabled, false, false);
+            cleanup_setup(raw_enabled, false, false, false);
             return Err(error);
         }
         let alternate_screen = true;
         if let Err(error) = execute!(stdout, EnableMouseCapture) {
-            cleanup_setup(raw_enabled, alternate_screen, false);
+            cleanup_setup(raw_enabled, alternate_screen, false, false);
             return Err(error);
         }
         let mouse_capture = true;
+        if let Err(error) = execute!(stdout, EnableBracketedPaste) {
+            cleanup_setup(raw_enabled, alternate_screen, mouse_capture, false);
+            return Err(error);
+        }
+        let bracketed_paste = true;
         let backend = CrosstermBackend::new(stdout);
         let terminal = match Terminal::new(backend) {
             Ok(terminal) => terminal,
             Err(error) => {
-                cleanup_setup(raw_enabled, alternate_screen, mouse_capture);
+                cleanup_setup(
+                    raw_enabled,
+                    alternate_screen,
+                    mouse_capture,
+                    bracketed_paste,
+                );
                 return Err(error);
             }
         };
@@ -49,6 +60,7 @@ impl TerminalGuard {
             raw_enabled,
             alternate_screen,
             mouse_capture,
+            bracketed_paste,
         })
     }
 
@@ -78,6 +90,12 @@ impl TerminalGuard {
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
+        if self.bracketed_paste {
+            match execute!(self.terminal.backend_mut(), DisableBracketedPaste) {
+                Ok(()) => self.bracketed_paste = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
         if self.raw_enabled {
             match disable_raw_mode() {
                 Ok(()) => self.raw_enabled = false,
@@ -95,7 +113,8 @@ impl TerminalGuard {
         self.restored = first_error.is_none()
             && !self.raw_enabled
             && !self.alternate_screen
-            && !self.mouse_capture;
+            && !self.mouse_capture
+            && !self.bracketed_paste;
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -107,6 +126,12 @@ impl TerminalGuard {
         if self.mouse_capture {
             match execute!(self.terminal.backend_mut(), DisableMouseCapture) {
                 Ok(()) => self.mouse_capture = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if self.bracketed_paste {
+            match execute!(self.terminal.backend_mut(), DisableBracketedPaste) {
+                Ok(()) => self.bracketed_paste = false,
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
@@ -150,6 +175,12 @@ impl TerminalGuard {
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
+        if !self.bracketed_paste {
+            match execute!(self.terminal.backend_mut(), EnableBracketedPaste) {
+                Ok(()) => self.bracketed_paste = true,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
         capture_first(&mut first_error, self.terminal.hide_cursor());
 
         match first_error {
@@ -159,8 +190,17 @@ impl TerminalGuard {
     }
 }
 
-fn cleanup_setup(raw_enabled: bool, alternate_screen: bool, mouse_capture: bool) {
+fn cleanup_setup(
+    raw_enabled: bool,
+    alternate_screen: bool,
+    mouse_capture: bool,
+    bracketed_paste: bool,
+) {
     let mut first_error = None;
+    if bracketed_paste {
+        let mut stdout = io::stdout();
+        capture_first(&mut first_error, execute!(stdout, DisableBracketedPaste));
+    }
     if mouse_capture {
         let mut stdout = io::stdout();
         capture_first(&mut first_error, execute!(stdout, DisableMouseCapture));

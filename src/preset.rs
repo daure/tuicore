@@ -1,7 +1,7 @@
 use std::{fmt, fs, num::NonZeroU32, path::PathBuf, str::FromStr, time::Duration};
 
 use crate::animation::{AnimationSettings, Easing};
-use crate::keybindings::config_dir;
+use crate::config::config_dir;
 use crate::scroll::{ScrollPreset, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

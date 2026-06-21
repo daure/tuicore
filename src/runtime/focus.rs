@@ -46,7 +46,11 @@ impl FocusManager {
             return None;
         }
 
-        self.set_current(validate_replacement_target(self.current.as_ref(), targets))
+        self.set_current(
+            validate_replacement_target(self.current.as_ref(), targets),
+            targets,
+            true,
+        )
     }
 
     pub fn repair(
@@ -71,7 +75,11 @@ impl FocusManager {
             return None;
         }
 
-        self.set_current(repair_target(repair, self.current.as_ref(), targets))
+        self.set_current(
+            repair_target(repair, self.current.as_ref(), targets),
+            targets,
+            true,
+        )
     }
 
     pub fn apply_request(
@@ -80,31 +88,44 @@ impl FocusManager {
         targets: &[FocusTarget],
     ) -> Option<FocusTransition> {
         match request {
-            FocusRequest::Next => self.set_current(self.next_target(targets)),
-            FocusRequest::Previous => self.set_current(self.previous_target(targets)),
-            FocusRequest::Unfocus => self.set_current_if_found(self.parent_target(targets)),
+            FocusRequest::Next => self.set_current(self.next_target(targets), targets, true),
+            FocusRequest::Previous => {
+                self.set_current(self.previous_target(targets), targets, true)
+            }
+            FocusRequest::Unfocus => {
+                self.set_current_if_found(self.parent_target(targets), targets, false)
+            }
             FocusRequest::FirstChild => self.set_current_if_found(
                 self.current
                     .as_ref()
                     .and_then(|current| first_leaf_descendant(current, targets)),
+                targets,
+                true,
             ),
             FocusRequest::FirstChildOf { path, id } => self.set_current_if_found(
                 unique_enabled_target(targets, |target| &target.path == path && &target.id == id)
                     .and_then(|target| first_leaf_descendant(&target, targets).or(Some(target))),
+                targets,
+                true,
             ),
-            FocusRequest::Last => self.set_current_if_found(self.last_enabled_target(targets)),
-            FocusRequest::Target(id) => {
-                self.set_current_if_found(unique_enabled_target(targets, |target| &target.id == id))
+            FocusRequest::Last => {
+                self.set_current_if_found(self.last_enabled_target(targets), targets, true)
             }
-            FocusRequest::Path(path) => self
-                .set_current_if_found(unique_enabled_target(targets, |target| {
-                    &target.path == path
-                })),
-            FocusRequest::TargetAt { path, id } => {
-                self.set_current_if_found(unique_enabled_target(targets, |target| {
-                    &target.path == path && &target.id == id
-                }))
-            }
+            FocusRequest::Target(id) => self.set_current_if_found(
+                unique_enabled_target(targets, |target| &target.id == id),
+                targets,
+                true,
+            ),
+            FocusRequest::Path(path) => self.set_current_if_found(
+                unique_enabled_target(targets, |target| &target.path == path),
+                targets,
+                true,
+            ),
+            FocusRequest::TargetAt { path, id } => self.set_current_if_found(
+                unique_enabled_target(targets, |target| &target.path == path && &target.id == id),
+                targets,
+                true,
+            ),
         }
     }
 
@@ -200,7 +221,19 @@ impl FocusManager {
         }
     }
 
-    fn set_current(&mut self, next: Option<FocusTarget>) -> Option<FocusTransition> {
+    fn set_current(
+        &mut self,
+        next: Option<FocusTarget>,
+        targets: &[FocusTarget],
+        descend: bool,
+    ) -> Option<FocusTransition> {
+        let next = next.map(|target| {
+            if descend {
+                resolve_focus_target(target, targets)
+            } else {
+                target
+            }
+        });
         if self
             .current
             .as_ref()
@@ -226,9 +259,14 @@ impl FocusManager {
         })
     }
 
-    fn set_current_if_found(&mut self, next: Option<FocusTarget>) -> Option<FocusTransition> {
+    fn set_current_if_found(
+        &mut self,
+        next: Option<FocusTarget>,
+        targets: &[FocusTarget],
+        descend: bool,
+    ) -> Option<FocusTransition> {
         match next {
-            Some(next) => self.set_current(Some(next)),
+            Some(next) => self.set_current(Some(next), targets, descend),
             None => None,
         }
     }
@@ -281,6 +319,10 @@ fn repair_target(
     match *repair {
         FocusRepair::RemovedChild { index: _ } => nearest_enabled_target(current, targets),
     }
+}
+
+fn resolve_focus_target(target: FocusTarget, targets: &[FocusTarget]) -> FocusTarget {
+    first_leaf_descendant(&target, targets).unwrap_or(target)
 }
 
 fn validate_replacement_target(
@@ -683,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn next_from_container_focuses_first_child() {
+    fn target_request_to_container_focuses_first_child_then_next_advances() {
         let targets = [
             target_at_path(
                 "first",
@@ -704,9 +746,11 @@ mod tests {
             },
             &targets,
         );
+        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+
         manager.next(&targets);
 
-        assert_eq!(manager.current().unwrap().id.as_str(), "first");
+        assert_eq!(manager.current().unwrap().id.as_str(), "second");
     }
 
     #[test]
@@ -766,6 +810,33 @@ mod tests {
         );
 
         assert_eq!(manager.current().unwrap().id.as_str(), "first");
+    }
+
+    #[test]
+    fn focusing_container_resolves_to_first_leaf_descendant() {
+        let dialog_path = TreePath::from_keys([ChildKey::new("dialog")]);
+        let tabs_path = TreePath::from_keys([ChildKey::new("dialog"), ChildKey::new("tabs")]);
+        let input_path = TreePath::from_keys([
+            ChildKey::new("dialog"),
+            ChildKey::new("tabs"),
+            ChildKey::new("input"),
+        ]);
+        let targets = [
+            target_at_path("dialog", dialog_path.clone()),
+            target_at_path("tabs", tabs_path),
+            target_at_path("input", input_path),
+        ];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: dialog_path,
+                id: FocusId::new("dialog"),
+            },
+            &targets,
+        );
+
+        assert_eq!(manager.current().unwrap().id.as_str(), "input");
     }
 
     #[test]

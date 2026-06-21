@@ -17,7 +17,8 @@ use crate::{
 const PANEL_FOCUS: &str = "panel";
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, HotkeyMatch,
-    HotkeySequenceMatcher, LayoutCtx, LayoutResult, LifecycleCtx, TuiNode,
+    HotkeySequenceMatcher, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx,
+    TuiNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -656,6 +657,15 @@ impl<C, M> TuiNode<M> for PanelHost<C>
 where
     C: TuiNode<M>,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let child = self.child.measure(proposal);
+        LayoutSizeHint::content(
+            child.preferred.width.saturating_add(2),
+            child.preferred.height.saturating_add(2),
+        )
+        .normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.panel.area = area;
         let inner = Panel::inner_area(area);

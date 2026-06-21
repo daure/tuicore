@@ -10,10 +10,11 @@ use crate::event::{Key, KeyEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, Children, ColorTween,
     EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, HotkeyEvent,
-    HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutResult, LifecycleCtx,
-    TabsVariant, TickResult, TuiEvent, TuiNode, Tween, border_chars, border_set,
-    hotkey_badge_spans, hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans,
-    hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width, preset, theme,
+    HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutProposal, LayoutResult,
+    LayoutSizeHint, LifecycleCtx, TabsVariant, TickResult, TreePath, TuiEvent, TuiNode, Tween,
+    border_chars, border_set, hotkey_badge_spans, hotkey_badge_width, hotkey_edge_spans,
+    hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width,
+    preset, theme,
 };
 
 const TABS_FOCUS: &str = "tabs";
@@ -28,6 +29,12 @@ pub struct Tab<M = ()> {
 pub enum ModalCloseReason {
     CloseKey,
     Escape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabsSelectionMemory {
+    Remember,
+    ResetOnOpen,
 }
 
 pub struct Tabs<M = ()> {
@@ -48,10 +55,12 @@ pub struct Tabs<M = ()> {
     tab_color: ColorTween,
     selected_color: ColorTween,
     body_area: Rect,
+    focus_path: TreePath,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
     modal: bool,
+    selection_memory: TabsSelectionMemory,
     on_close: Option<Box<dyn Fn(ModalCloseReason) -> M>>,
 }
 
@@ -121,17 +130,35 @@ where
             tab_color: ColorTween::idle(theme.border_fg()),
             selected_color: ColorTween::idle(theme.muted_fg()),
             body_area: Rect::default(),
+            focus_path: TreePath::default(),
             hotkey: None,
             hotkey_matcher,
             pending_hotkey_prefix: None,
             modal: false,
+            selection_memory: TabsSelectionMemory::Remember,
             on_close: None,
         }
     }
 
     pub fn modal(mut self) -> Self {
         self.modal = true;
+        self.selection_memory = TabsSelectionMemory::ResetOnOpen;
         self
+    }
+
+    pub fn selection_memory(mut self, memory: TabsSelectionMemory) -> Self {
+        self.selection_memory = memory;
+        self
+    }
+
+    pub fn set_selection_memory(&mut self, memory: TabsSelectionMemory) {
+        self.selection_memory = memory;
+    }
+
+    pub fn prepare_modal_open(&mut self, settings: AnimationSettings) {
+        if self.modal && self.selection_memory == TabsSelectionMemory::ResetOnOpen {
+            self.select_index_with_settings(0, settings);
+        }
     }
 
     pub fn on_close(mut self, handler: impl Fn(ModalCloseReason) -> M + 'static) -> Self {
@@ -1125,14 +1152,17 @@ where
         if self.on_close.is_none() {
             return;
         }
-        let width = line_width(&Line::from("┤x│")).min(u16::MAX as usize) as u16;
+        let Some(label) = keybindings().tabs().close_label() else {
+            return;
+        };
+        let width = line_width(&Line::from(format!("┤{label}│"))).min(u16::MAX as usize) as u16;
         let y = self.modal_close_label_y(area);
         if area.width <= width + 2 || y >= area.bottom() {
             return;
         }
         let style = self.selected_tab_style().add_modifier(Modifier::BOLD);
         let line = Line::from(hotkey_edge_spans(
-            "x",
+            &label,
             None,
             border,
             self.border_style(),
@@ -1161,7 +1191,10 @@ where
         ctx.request_redraw();
         ctx.request_layout();
         if self.selected_index() != previous {
-            ctx.focus(FocusRequest::FirstChild);
+            ctx.focus(FocusRequest::FirstChildOf {
+                path: self.focus_path.clone(),
+                id: FocusId::new(TABS_FOCUS),
+            });
         }
     }
 
@@ -1197,7 +1230,44 @@ impl<M> TuiNode<M> for Tabs<M>
 where
     M: 'static,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let title_width = self
+            .titles
+            .iter()
+            .enumerate()
+            .map(|(index, _)| self.rendered_tab_label_width(index).saturating_add(2))
+            .sum::<usize>()
+            .min(u16::MAX as usize) as u16;
+        let body = self
+            .selected_key()
+            .and_then(|key| self.bodies.measure_child(key, proposal))
+            .unwrap_or_else(LayoutSizeHint::unmeasured);
+        let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
+        let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
+        let header_height: u16 = if self.titles.is_empty() {
+            0
+        } else {
+            match variant {
+                TabsVariant::Minimal => 1,
+                TabsVariant::Underline if bordered => 1,
+                TabsVariant::Underline => 2,
+                TabsVariant::Boxed => 3,
+            }
+        };
+        let border_pad = (bordered as u16).saturating_mul(2);
+        LayoutSizeHint::content(
+            title_width
+                .max(body.preferred.width)
+                .saturating_add(border_pad),
+            header_height
+                .saturating_add(body.preferred.height)
+                .saturating_add(border_pad),
+        )
+        .normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.focus_path = ctx.current_path();
         self.body_area = self.calculate_body_area(area);
         if let Some(key) = self.selected_key().cloned() {
             self.bodies.layout_child(&key, self.body_area, ctx);
@@ -1534,7 +1604,13 @@ mod tests {
         assert_eq!(tabs.selected_index(), 1);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(ctx.layout_requested());
-        assert_eq!(ctx.focus_request(), Some(&FocusRequest::FirstChild));
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::FirstChildOf {
+                path: TreePath::default(),
+                id: FocusId::new(TABS_FOCUS),
+            })
+        );
     }
 
     #[test]
@@ -1549,6 +1625,29 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(tabs.selected_index(), 1);
         assert_eq!(ctx.focus_request(), None);
+    }
+
+    #[test]
+    fn modal_tabs_reset_selection_on_open_by_default() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .modal()
+            .selected(1);
+
+        tabs.prepare_modal_open(AnimationSettings::default());
+
+        assert_eq!(tabs.selected_index(), 0);
+    }
+
+    #[test]
+    fn modal_tabs_can_remember_selection_on_open() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .modal()
+            .selection_memory(TabsSelectionMemory::Remember)
+            .selected(1);
+
+        tabs.prepare_modal_open(AnimationSettings::default());
+
+        assert_eq!(tabs.selected_index(), 1);
     }
 
     #[test]

@@ -14,102 +14,18 @@ tuicore = { path = "../tuicore" } # replace with your local path
 Minimal app:
 
 ```rust
-use std::{error::Error, time::Duration};
+use std::error::Error;
 
-use ratatui::{Frame, layout::Rect};
-use tuicore::{
-    AnimationSettings, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget,
-    Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, Panel,
-    PanelHost, TextInput, TickResult, TuiEvent, TuiNode,
-};
+use tuicore::{Panel, TextInput};
 
 fn main() -> Result<(), Box<dyn Error>> {
     tuicore::init();
-    tuicore::run(App::new())?;
+    tuicore::run(
+        Panel::new()
+            .top_left("Filter")
+            .host(TextInput::new().placeholder("Search…")),
+    )?;
     Ok(())
-}
-
-struct App {
-    body: PanelHost<TextInput>,
-}
-
-impl App {
-    fn new() -> Self {
-        Self {
-            body: Panel::new()
-                .top_left("Filter")
-                .host(TextInput::new().placeholder("Search…")),
-        }
-    }
-
-    fn quit_key(event: &TuiEvent) -> bool {
-        let TuiEvent::Key(KeyEvent { code, modifiers }) = event else {
-            return false;
-        };
-
-        *code == Key::Esc
-            || (matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'c'))
-                && modifiers.contains(KeyModifiers::CONTROL))
-    }
-}
-
-impl TuiNode for App {
-    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        self.body.layout(area, ctx)
-    }
-
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.body.render(frame, area);
-    }
-
-    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
-        if Self::quit_key(event) {
-            ctx.request_quit();
-            ctx.stop_propagation();
-            EventOutcome::Handled
-        } else {
-            self.body.event(event, ctx)
-        }
-    }
-
-    fn dispatch_event(
-        &mut self,
-        route: &EventRoute,
-        event: &TuiEvent,
-        ctx: &mut EventCtx<()>,
-    ) -> EventOutcome {
-        if Self::quit_key(event) {
-            ctx.request_quit();
-            ctx.stop_propagation();
-            EventOutcome::Handled
-        } else {
-            self.body.dispatch_event(route, event, ctx)
-        }
-    }
-
-    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<()>) {
-        self.body.dispatch_focus(target, focused, ctx);
-    }
-
-    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.body.tick(dt, settings)
-    }
-
-    fn init(&mut self, ctx: &mut LifecycleCtx<()>) {
-        self.body.init(ctx);
-    }
-
-    fn mount(&mut self, ctx: &mut LifecycleCtx<()>) {
-        self.body.mount(ctx);
-    }
-
-    fn unmount(&mut self, ctx: &mut LifecycleCtx<()>) {
-        self.body.unmount(ctx);
-    }
-
-    fn destroy(&mut self, ctx: &mut LifecycleCtx<()>) {
-        self.body.destroy(ctx);
-    }
 }
 ```
 

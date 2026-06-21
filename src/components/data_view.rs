@@ -16,8 +16,9 @@ mod tree_rows;
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     Animated, AnimationSettings, EventCtx, EventOutcome, FocusCtx, FocusId, KeyBindings, LayoutCtx,
-    LayoutResult, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome,
-    ScrollState, ScrollbarConfig, TickResult, TuiNode, animation_settings, keybindings, preset,
+    LayoutProposal, LayoutResult, LayoutSizeHint, ScrollAxes, ScrollBehavior, ScrollDelta,
+    ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig, TickResult, TuiNode,
+    animation_settings, keybindings, preset,
 };
 
 pub use model::{
@@ -934,6 +935,17 @@ impl<T, Id, M> TuiNode<M> for DataView<T, Id>
 where
     Id: Clone + Eq + Hash,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let width = self.columns.len().max(1).min(u16::MAX as usize) as u16;
+        let header = self.headers as u16;
+        let rows = self
+            .visible_row_indices
+            .as_ref()
+            .map_or(self.rows.len(), Vec::len)
+            .min(u16::MAX as usize) as u16;
+        LayoutSizeHint::content(width, header.saturating_add(rows).max(1)).normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
         if let Some(hotkey) = &self.hotkey {

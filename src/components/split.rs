@@ -5,7 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use crate::{
     AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget,
-    LayoutCtx, LayoutResult, LifecycleCtx, TickResult, TuiEvent, TuiNode,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, TickResult, TuiEvent,
+    TuiNode,
 };
 use crate::{Separator, separator};
 
@@ -109,6 +110,32 @@ where
     L: TuiNode<M>,
     R: TuiNode<M>,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let first = self.first.measure(proposal);
+        let second = self.second.measure(proposal);
+        let separator = self.separator.is_some() as u16;
+        let reserved = self.gap.saturating_add(separator);
+        let size = match self.direction {
+            Direction::Horizontal => (
+                first
+                    .preferred
+                    .width
+                    .saturating_add(second.preferred.width)
+                    .saturating_add(reserved),
+                first.preferred.height.max(second.preferred.height),
+            ),
+            Direction::Vertical => (
+                first.preferred.width.max(second.preferred.width),
+                first
+                    .preferred
+                    .height
+                    .saturating_add(second.preferred.height)
+                    .saturating_add(reserved),
+            ),
+        };
+        LayoutSizeHint::content(size.0, size.1).normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let separator_cell = (self.separator.is_some() && self.main_len(area) > 0) as u16;
         let gap = self

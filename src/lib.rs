@@ -2,6 +2,7 @@ pub mod animation;
 pub mod border;
 pub mod children;
 pub mod components;
+mod config;
 pub mod event;
 pub mod focus;
 pub mod hotkey;
@@ -31,8 +32,9 @@ pub use components::{
     Grid, GridItem, GridTrack, InputOutcome, List, ListOutcome, MainAlign, ModalCloseReason,
     Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition, SelectionGlyphs,
     SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack,
-    StackAlign, StackItem, StackSize, Tab, Tabs, TextInput, TextInputKeyBindings, TextareaInput,
-    TextareaInputKeyBindings, Toggle, ToggleOutcome, TreeAdapter, TreeGlyphs,
+    StackAlign, StackItem, StackSize, Tab, Tabs, TabsSelectionMemory, TextInput,
+    TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings, Toggle, ToggleOutcome,
+    TreeAdapter, TreeGlyphs,
 };
 pub use event::{
     ExternalEditorRequest, ExternalEditorResponse, HotkeyEvent, Key, KeyEvent, KeyModifiers,

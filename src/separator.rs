@@ -184,28 +184,36 @@ pub(crate) fn patch_border_joins(
     let bottom_y = outer.bottom().saturating_sub(1);
     let right_x = outer.right().saturating_sub(1);
 
-    for x in inner.x..inner.right() {
-        if cell_symbol_is(frame, x, inner.y, chars.vertical) {
+    for x in inner.x.saturating_add(1)..inner.right().saturating_sub(1) {
+        if cell_symbol_is(frame, x, inner.y, chars.vertical)
+            && cell_symbol_is(frame, x, outer.y, chars.horizontal)
+        {
             frame
                 .buffer_mut()
                 .set_string(x, outer.y, chars.top_join, style);
         }
         let y = inner.bottom().saturating_sub(1);
-        if cell_symbol_is(frame, x, y, chars.vertical) {
+        if cell_symbol_is(frame, x, y, chars.vertical)
+            && cell_symbol_is(frame, x, bottom_y, chars.horizontal)
+        {
             frame
                 .buffer_mut()
                 .set_string(x, bottom_y, chars.bottom_join, style);
         }
     }
 
-    for y in inner.y..inner.bottom() {
-        if cell_symbol_is(frame, inner.x, y, chars.horizontal) {
+    for y in inner.y.saturating_add(1)..inner.bottom().saturating_sub(1) {
+        if cell_symbol_is(frame, inner.x, y, chars.horizontal)
+            && cell_symbol_is(frame, outer.x, y, chars.vertical)
+        {
             frame
                 .buffer_mut()
                 .set_string(outer.x, y, chars.left_join, style);
         }
         let x = inner.right().saturating_sub(1);
-        if cell_symbol_is(frame, x, y, chars.horizontal) {
+        if cell_symbol_is(frame, x, y, chars.horizontal)
+            && cell_symbol_is(frame, right_x, y, chars.vertical)
+        {
             frame
                 .buffer_mut()
                 .set_string(right_x, y, chars.right_join, style);

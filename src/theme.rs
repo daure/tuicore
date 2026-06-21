@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, fs, path::PathBuf, str::FromStr};
 
 use ratatui::style::Color;
 
-use crate::keybindings::config_dir;
+use crate::config::config_dir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThemeName {

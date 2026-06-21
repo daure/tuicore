@@ -7,20 +7,24 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, BorderKind, Button, CellContext, ChildKey, Column,
-    DataView, DataViewTypedEvent, Dialog, DialogCloseReason, DialogHost, DialogLayer, Dropdown,
-    DropdownCommitMode, DropdownSearchMode, DropdownVariant, EventCtx, EventOutcome, EventRoute,
-    Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource,
-    Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize,
-    LayoutSizeHint, Overlay, OverlayAnchor, OverlaySize, Panel, PanelTitlePosition,
+    DataView, DataViewTypedEvent, Dialog, DialogBackdrop, DialogCloseReason, DialogHost,
+    DialogLayer, Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownPopupDirection,
+    DropdownSearchMode, DropdownVariant, EventCtx, EventOutcome, EventRoute, Flex, FlexItem,
+    FocusCtx, FocusId, FocusTarget, Gap, Grid, GridItem, GridTrack, HintSource, Key, KeyEvent,
+    KeyModifiers, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
+    ModalCloseReason, Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition,
     SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, Separator,
     SeparatorColorRole, Spinner, Split, Stack, StackAlign, StackItem, Tab, Tabs, TabsVariant,
-    TextInput, TextareaInput, TickResult, Toggle, TreeAdapter, TreeGlyphs, TuiEvent, TuiNode,
+    TextInput, TextareaInput, Theme, ThemeName, TickResult, Toggle, TreeAdapter, TreeGlyphs,
+    TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
 enum Msg {
     DialogOpened(DialogExample),
     DialogClosed(DialogCloseReason),
+    ModalTabsOpened(TabsVariant),
+    ModalTabsClosed(ModalCloseReason),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +34,7 @@ enum DialogExample {
     Medium,
     Small,
     Tiny,
+    Top,
 }
 
 impl DialogExample {
@@ -40,6 +45,7 @@ impl DialogExample {
             Self::Medium => 60,
             Self::Small => 40,
             Self::Tiny => 20,
+            Self::Top => 50,
         }
     }
 
@@ -50,6 +56,7 @@ impl DialogExample {
             Self::Medium => "60% input dialog",
             Self::Small => "40% toggle dialog",
             Self::Tiny => "20% data dialog",
+            Self::Top => "50% input dialog",
         }
     }
 
@@ -57,9 +64,10 @@ impl DialogExample {
         match self {
             Self::Full => "Open 100% • text",
             Self::Large => "Open 80% • tabs",
-            Self::Medium => "Open 60% • text input",
+            Self::Medium => "Open 60% • input",
             Self::Small => "Open 40% • toggle",
-            Self::Tiny => "Open 20% • data list",
+            Self::Tiny => "Open 20% • data",
+            Self::Top => "Open 50% • input",
         }
     }
 
@@ -70,40 +78,57 @@ impl DialogExample {
             Self::Medium => "3",
             Self::Small => "4",
             Self::Tiny => "5",
+            Self::Top => "6",
         }
     }
 }
 
 fn main() -> tuicore::Result<()> {
     tuicore::init();
-    let root = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
+    let dialog_layer = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
+    let root = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
     tuicore::TreeApp::new(root)
         .on_message(|root, msg, ctx| match msg {
             Msg::DialogOpened(example) => {
-                root.layer_mut().child_mut().set_example(example);
-                root.layer_mut().dialog_mut().set_top_left(example.title());
-                root.layer_mut().dialog_mut().set_bottom_left("Esc blurs");
-                root.layer_mut()
+                let dialog_layer = root.base_mut();
+                dialog_layer.layer_mut().child_mut().set_example(example);
+                dialog_layer
+                    .layer_mut()
+                    .dialog_mut()
+                    .set_top_left(example.title());
+                dialog_layer
+                    .layer_mut()
+                    .dialog_mut()
+                    .set_bottom_left("Esc blurs");
+                dialog_layer
+                    .layer_mut()
                     .dialog_mut()
                     .set_bottom_right(format!("{}% viewport", example.percent()));
                 if example == DialogExample::Full {
-                    root.layer_mut().dialog_mut().set_content([
+                    dialog_layer.layer_mut().dialog_mut().set_content([
                         "100% dialog: full-screen modal content.",
                         "This uses the Dialog chrome only, with text content inside.",
                         "Press x or Esc to close and restore focus.",
                     ]);
                 } else {
-                    root.layer_mut().dialog_mut().clear_content();
+                    dialog_layer.layer_mut().dialog_mut().clear_content();
                 }
-                root.set_layer_percent(example.percent());
-                root.set_active(true);
-                ctx.request_layout();
-                ctx.request_redraw();
+                dialog_layer.set_layer_percent(example.percent());
+                dialog_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                dialog_layer.set_active_with_dialog_focus(true, ctx);
             }
             Msg::DialogClosed(_reason) => {
-                root.set_active(false);
-                ctx.request_layout();
-                ctx.request_redraw();
+                root.base_mut().set_active_with_context(false, ctx);
+            }
+            Msg::ModalTabsOpened(variant) => {
+                root.layer_mut().set_variant(variant);
+                root.layer_mut().prepare_modal_open(ctx.animation());
+                root.set_layer_percent(72);
+                root.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                root.set_active_with_context(true, ctx);
+            }
+            Msg::ModalTabsClosed(_reason) => {
+                root.set_active_with_context(false, ctx);
             }
         })
         .run()
@@ -115,6 +140,7 @@ struct Gallery {
     areas: GalleryAreas,
     list_panel: Panel,
     preview_panel: Panel,
+    theme_dropdown: Dropdown<ThemeChoice, ThemeName>,
     previews: PreviewState,
 }
 
@@ -124,6 +150,8 @@ struct GalleryAreas {
     list_body: Rect,
     preview_panel: Rect,
     preview_body: Rect,
+    footer: Rect,
+    theme_dropdown: Rect,
 }
 
 struct GalleryDialogContent {
@@ -179,6 +207,9 @@ impl TuiNode<Msg> for GalleryDialogContent {
             DialogExample::Tiny => {
                 <DataView<DemoRow, usize> as TuiNode<Msg>>::layout(&mut self.data, area, ctx);
             }
+            DialogExample::Top => {
+                self.input.layout(area, ctx);
+            }
         }
         LayoutResult::new(area)
     }
@@ -190,6 +221,7 @@ impl TuiNode<Msg> for GalleryDialogContent {
             DialogExample::Medium => self.input.render(frame, area),
             DialogExample::Small => self.toggle.render(frame, area),
             DialogExample::Tiny => self.data.render(frame, area),
+            DialogExample::Top => self.input.render(frame, area),
         }
     }
 
@@ -205,6 +237,7 @@ impl TuiNode<Msg> for GalleryDialogContent {
             DialogExample::Medium => self.input.dispatch_event(route, event, ctx),
             DialogExample::Small => self.toggle.dispatch_event(route, event, ctx),
             DialogExample::Tiny => self.data.dispatch_event(route, event, ctx),
+            DialogExample::Top => self.input.dispatch_event(route, event, ctx),
         }
     }
 
@@ -222,6 +255,7 @@ impl TuiNode<Msg> for GalleryDialogContent {
             DialogExample::Medium => self.input.dispatch_focus(target, focused, ctx),
             DialogExample::Small => self.toggle.dispatch_focus(target, focused, ctx),
             DialogExample::Tiny => self.data.dispatch_focus(target, focused, ctx),
+            DialogExample::Top => self.input.dispatch_focus(target, focused, ctx),
         }
     }
 }
@@ -270,7 +304,6 @@ impl TuiNode<Msg> for DialogControlsTab {
         self.toggle.render(frame, self.areas[0]);
         self.dropdown.render(frame, self.areas[1]);
         self.input.render(frame, self.areas[2]);
-        self.dropdown.render_popup_overlay(frame, area);
     }
 
     fn dispatch_event(
@@ -434,6 +467,7 @@ impl Gallery {
                 .hotkey("c")
                 .focused(true),
             preview_panel: Panel::new().top_left(ComponentKind::Tabs.preview().title()),
+            theme_dropdown: theme_dropdown(),
             previews: PreviewState::new(),
         }
     }
@@ -466,16 +500,26 @@ impl Gallery {
 
 impl TuiNode<Msg> for Gallery {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let [main, footer] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Fill(1), Constraint::Length(1)])
+            .areas(area);
         let [list_panel, preview_panel] = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .areas(area);
+            .areas(main);
+        let [theme_dropdown, _] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(36), Constraint::Fill(1)])
+            .areas(footer);
 
         self.areas = GalleryAreas {
             list_panel,
             list_body: Panel::inner_area(list_panel),
             preview_panel,
             preview_body: Panel::inner_area(preview_panel),
+            footer,
+            theme_dropdown,
         };
         ctx.push_slot(gallery_list_child_key(), self.areas.list_body, |ctx| {
             <DataView<ComponentKind, ComponentKind> as TuiNode<Msg>>::layout(
@@ -489,10 +533,14 @@ impl TuiNode<Msg> for Gallery {
             self.areas.preview_body,
             |ctx| {
                 self.previews
-                    .layout(self.selected.preview(), self.areas.preview_body, ctx);
+                    .layout(self.selected.preview(), self.areas.preview_body, area, ctx);
                 ctx.register_focusable(FocusId::new("preview"), self.areas.preview_body, true);
             },
         );
+        ctx.push_slot(gallery_theme_child_key(), theme_dropdown, |ctx| {
+            self.theme_dropdown
+                .layout_overlay::<Msg>(theme_dropdown, area, ctx);
+        });
         LayoutResult::new(area)
     }
 
@@ -503,6 +551,10 @@ impl TuiNode<Msg> for Gallery {
         self.preview_panel.render(frame, self.areas.preview_panel);
         self.previews
             .render(self.selected.preview(), frame, self.areas.preview_body);
+
+        self.theme_dropdown.render(frame, self.areas.theme_dropdown);
+        self.previews
+            .render_overlay(self.selected.preview(), frame, _area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -518,6 +570,7 @@ impl TuiNode<Msg> for Gallery {
         Animated::tick(&mut self.list_panel, dt, settings)
             .merge(Animated::tick(&mut self.preview_panel, dt, settings))
             .merge(Animated::tick(&mut self.component_list, dt, settings))
+            .merge(Animated::tick(&mut self.theme_dropdown, dt, settings))
             .merge(self.previews.tick(dt, settings))
     }
 
@@ -565,6 +618,22 @@ impl TuiNode<Msg> for Gallery {
             return child.bubble(ctx, |ctx| self.event(event, ctx));
         }
 
+        if let Some(route) = route
+            .path
+            .without_first_if(&gallery_theme_child_key())
+            .map(EventRoute::new)
+        {
+            let before = self.theme_dropdown.selected_id();
+            let child = self.theme_dropdown.dispatch_event(&route, event, ctx);
+            if self.theme_dropdown.selected_id() != before {
+                if let Some(name) = self.theme_dropdown.selected_id() {
+                    tuicore::set_theme(Theme::named(name));
+                    ctx.request_redraw();
+                }
+            }
+            return child.bubble(ctx, |ctx| self.event(event, ctx));
+        }
+
         EventOutcome::Ignored
     }
 
@@ -573,6 +642,13 @@ impl TuiNode<Msg> for Gallery {
             self.component_list
                 .dispatch_focus(&child_target, focused, ctx);
             self.list_panel.set_focused(focused, ctx.animation());
+            ctx.request_redraw();
+            return;
+        }
+
+        if let Some(child_target) = target.for_child(&gallery_theme_child_key()) {
+            self.theme_dropdown
+                .dispatch_focus(&child_target, focused, ctx);
             ctx.request_redraw();
             return;
         }
@@ -601,11 +677,16 @@ struct PreviewState {
     dialog_60: Button<Msg>,
     dialog_40: Button<Msg>,
     dialog_20: Button<Msg>,
+    dialog_top: Button<Msg>,
     spinner: Spinner,
     panel_demo: Panel,
+    panel_join_demo: PanelHost<Split<DemoBox, DemoBox>>,
     tabs_minimal: Tabs<Msg>,
     tabs_underline: Tabs<Msg>,
     tabs_boxed: Tabs<Msg>,
+    tabs_modal_minimal_button: Button<Msg>,
+    tabs_modal_underline_button: Button<Msg>,
+    tabs_modal_boxed_button: Button<Msg>,
     data_list: DataView<DemoRow, usize>,
     data_table: DataView<DemoRow, usize>,
     data_list_tree: DataView<DemoRow, usize>,
@@ -651,17 +732,22 @@ impl PreviewState {
             dialog_60: dialog_button(DialogExample::Medium),
             dialog_40: dialog_button(DialogExample::Small),
             dialog_20: dialog_button(DialogExample::Tiny),
+            dialog_top: dialog_button(DialogExample::Top),
             spinner: Spinner::new(),
             panel_demo: panel_demo(),
-            tabs_minimal: Tabs::default().variant(TabsVariant::Minimal).hotkey("m"),
-            tabs_underline: Tabs::default().variant(TabsVariant::Underline).hotkey("l"),
-            tabs_boxed: Tabs::new(vec![
-                Tab::text("Overview", "Simple tabs component for tuicore.").hotkey("o"),
-                Tab::text("Usage", "Use Tab::new(title, node), then Tabs::new(tabs).").hotkey("u"),
-                Tab::text("State", "The selected tab is a plain index.").hotkey("s"),
-            ])
-            .variant(TabsVariant::Boxed)
-            .hotkey("b"),
+            panel_join_demo: panel_join_demo(),
+            tabs_minimal: tabs_demo(TabsVariant::Minimal).hotkey("m"),
+            tabs_underline: tabs_demo(TabsVariant::Underline).hotkey("ma"),
+            tabs_boxed: tabs_demo(TabsVariant::Boxed).hotkey("mam"),
+            tabs_modal_minimal_button: Button::new("Open Style 1 tabs-as-dialog")
+                .hotkey("td")
+                .on_press(|| Msg::ModalTabsOpened(TabsVariant::Minimal)),
+            tabs_modal_underline_button: Button::new("Open Style 2 tabs-as-dialog")
+                .hotkey("tu")
+                .on_press(|| Msg::ModalTabsOpened(TabsVariant::Underline)),
+            tabs_modal_boxed_button: Button::new("Open Style 3 tabs-as-dialog")
+                .hotkey("tb")
+                .on_press(|| Msg::ModalTabsOpened(TabsVariant::Boxed)),
             data_list: DataViewMode::List.data_view(),
             data_table: DataViewMode::Table.data_view(),
             data_list_tree: DataViewMode::ListTree.data_view(),
@@ -689,7 +775,13 @@ impl PreviewState {
         }
     }
 
-    fn layout(&mut self, preview: PreviewKind, area: Rect, ctx: &mut LayoutCtx) {
+    fn layout(
+        &mut self,
+        preview: PreviewKind,
+        area: Rect,
+        overlay_bounds: Rect,
+        ctx: &mut LayoutCtx,
+    ) {
         match preview {
             PreviewKind::Tabs => self.layout_tabs(area, ctx),
             PreviewKind::Panel => self.layout_panel_preview(area, ctx),
@@ -723,7 +815,7 @@ impl PreviewState {
                     ctx,
                 );
             }
-            PreviewKind::Dropdown => self.layout_dropdowns(area, ctx),
+            PreviewKind::Dropdown => self.layout_dropdowns(area, overlay_bounds, ctx),
             PreviewKind::LayoutFlex => {
                 self.layout_flex.layout(layout_demo_body(area), ctx);
             }
@@ -767,6 +859,15 @@ impl PreviewState {
             PreviewKind::LayoutStack => self.render_layout_stack(frame, area),
             PreviewKind::LayoutOverlay => self.render_layout_overlay(frame, area),
             PreviewKind::LayoutGrid => self.render_layout_grid(frame, area),
+        }
+    }
+
+    fn render_overlay(&self, preview: PreviewKind, frame: &mut Frame, overlay_bounds: Rect) {
+        if preview == PreviewKind::Dropdown {
+            for index in 0..6 {
+                self.dropdown(index)
+                    .render_popup_overlay(frame, overlay_bounds);
+            }
         }
     }
 
@@ -829,6 +930,11 @@ impl PreviewState {
             return self.textarea_input.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::Tabs {
+            if let Some((index, route)) = modal_tabs_open_child_route(route) {
+                return self
+                    .modal_tabs_button_mut(index)
+                    .dispatch_event(&route, event, ctx);
+            }
             let Some((index, route)) = tab_demo_child_route(route) else {
                 return EventOutcome::Ignored;
             };
@@ -898,14 +1004,23 @@ impl PreviewState {
                     ctx,
                 );
             }
-            PreviewKind::Tabs => dispatch_focus_indexed(
-                target,
-                tab_demo_index,
-                |state, index| state.tab_demo_mut(index),
-                self,
-                focused,
-                ctx,
-            ),
+            PreviewKind::Tabs => {
+                if let Some((index, child_target)) =
+                    indexed_child_target(target, modal_tabs_open_index)
+                {
+                    self.modal_tabs_button_mut(index)
+                        .dispatch_focus(&child_target, focused, ctx);
+                } else {
+                    dispatch_focus_indexed(
+                        target,
+                        tab_demo_index,
+                        |state, index| state.tab_demo_mut(index),
+                        self,
+                        focused,
+                        ctx,
+                    );
+                }
+            }
             PreviewKind::Toggle => self.toggle.dispatch_focus(target, focused, ctx),
             PreviewKind::Dialog => {
                 dispatch_focus_indexed(
@@ -960,6 +1075,7 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.dialog_60, dt, settings))
             .merge(Animated::tick(&mut self.dialog_40, dt, settings))
             .merge(Animated::tick(&mut self.dialog_20, dt, settings))
+            .merge(Animated::tick(&mut self.dialog_top, dt, settings))
             .merge(<Tabs<Msg> as TuiNode<Msg>>::tick(
                 &mut self.tabs_minimal,
                 dt,
@@ -972,6 +1088,21 @@ impl PreviewState {
             ))
             .merge(<Tabs<Msg> as TuiNode<Msg>>::tick(
                 &mut self.tabs_boxed,
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_minimal_button,
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_underline_button,
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_boxed_button,
                 dt,
                 settings,
             ))
@@ -988,6 +1119,7 @@ impl PreviewState {
                 settings,
             ))
             .merge(Animated::tick(&mut self.panel_demo, dt, settings))
+            .merge(self.panel_join_demo.tick(dt, settings))
             .merge(Animated::tick(&mut self.panel_top_left, dt, settings))
             .merge(Animated::tick(&mut self.panel_top_right, dt, settings))
             .merge(Animated::tick(&mut self.panel_bottom_left, dt, settings))
@@ -1052,6 +1184,14 @@ impl PreviewState {
             1 => &mut self.tabs_underline,
             2 => &mut self.tabs_boxed,
             _ => &mut self.tabs_minimal,
+        }
+    }
+
+    fn modal_tabs_button_mut(&mut self, index: usize) -> &mut Button<Msg> {
+        match index {
+            1 => &mut self.tabs_modal_underline_button,
+            2 => &mut self.tabs_modal_boxed_button,
+            _ => &mut self.tabs_modal_minimal_button,
         }
     }
 
@@ -1169,9 +1309,9 @@ impl PreviewState {
             frame,
             areas[3],
             3,
-            "Filled 4 • Fuzzy single",
+            "Filled 4 • Inline label",
             &format!(
-                "selected: {:?}\nquery: {:?}\nSearch field is focused when opened.",
+                "selected: {:?}\nquery: {:?}\nInline label keeps selected value bold.",
                 self.dropdown_filled_fuzzy_single.selected_id(),
                 self.dropdown_filled_fuzzy_single.search_query()
             ),
@@ -1191,9 +1331,9 @@ impl PreviewState {
             frame,
             areas[5],
             5,
-            "Filled 6 • No search immediate",
+            "Filled 6 • No selection text",
             &format!(
-                "selected: {:?}\nquery: {:?}\nCtrl+J/Ctrl+K changes committed value while open.",
+                "selected: {:?}\nquery: {:?}\nShows --None-- before a value is chosen.",
                 self.dropdown_filled_no_search_immediate.selected_id(),
                 self.dropdown_filled_no_search_immediate.search_query()
             ),
@@ -1201,9 +1341,6 @@ impl PreviewState {
 
         for (index, area) in areas.iter().copied().enumerate() {
             self.dropdown(index).render(frame, dropdown_area(area));
-        }
-        for index in 0..6 {
-            self.dropdown(index).render_popup_overlay(frame, body);
         }
     }
 
@@ -1221,7 +1358,7 @@ impl PreviewState {
     fn render_dialog(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
             Paragraph::new(
-                "Open app-level dialogs at different sizes. They cover the whole gallery, block sidenav hotkeys, and leave the backdrop visible unless 100%. Press x or Esc to close.",
+                "Open app-level dialogs with backdrop dim tween. Press x or Esc to close.",
             ),
             Rect::new(area.x, area.y, area.width, 2.min(area.height)),
         );
@@ -1237,6 +1374,7 @@ impl PreviewState {
             2 => &self.dialog_60,
             3 => &self.dialog_40,
             4 => &self.dialog_20,
+            5 => &self.dialog_top,
             _ => &self.dialog_100,
         }
     }
@@ -1247,6 +1385,7 @@ impl PreviewState {
             2 => &mut self.dialog_60,
             3 => &mut self.dialog_40,
             4 => &mut self.dialog_20,
+            5 => &mut self.dialog_top,
             _ => &mut self.dialog_100,
         }
     }
@@ -1276,34 +1415,37 @@ impl PreviewState {
         frame.render_widget(Paragraph::new(details.to_string()), details_area);
     }
 
-    fn layout_dropdowns(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+    fn layout_dropdowns(&mut self, area: Rect, overlay_bounds: Rect, ctx: &mut LayoutCtx) {
         let [_, body] = dropdown_preview_layout(area);
         let grid_areas = dropdown_grid_areas(body);
         let areas = grid_areas.map(dropdown_area);
 
         ctx.push_slot(dropdown_child_key(0), areas[0], |ctx| {
             self.dropdown_fuzzy_single
-                .layout_overlay::<Msg>(areas[0], body, ctx);
+                .layout_overlay::<Msg>(areas[0], overlay_bounds, ctx);
         });
         ctx.push_slot(dropdown_child_key(1), areas[1], |ctx| {
             self.dropdown_multi_contains
-                .layout_overlay::<Msg>(areas[1], body, ctx);
+                .layout_overlay::<Msg>(areas[1], overlay_bounds, ctx);
         });
         ctx.push_slot(dropdown_child_key(2), areas[2], |ctx| {
             self.dropdown_no_search_immediate
-                .layout_overlay::<Msg>(areas[2], body, ctx);
+                .layout_overlay::<Msg>(areas[2], overlay_bounds, ctx);
         });
         ctx.push_slot(dropdown_child_key(3), areas[3], |ctx| {
             self.dropdown_filled_fuzzy_single
-                .layout_overlay::<Msg>(areas[3], body, ctx);
+                .layout_overlay::<Msg>(areas[3], overlay_bounds, ctx);
         });
         ctx.push_slot(dropdown_child_key(4), areas[4], |ctx| {
-            self.dropdown_filled_multi_contains
-                .layout_overlay::<Msg>(areas[4], body, ctx);
+            self.dropdown_filled_multi_contains.layout_overlay::<Msg>(
+                areas[4],
+                overlay_bounds,
+                ctx,
+            );
         });
         ctx.push_slot(dropdown_child_key(5), areas[5], |ctx| {
             self.dropdown_filled_no_search_immediate
-                .layout_overlay::<Msg>(areas[5], body, ctx);
+                .layout_overlay::<Msg>(areas[5], overlay_bounds, ctx);
         });
     }
 
@@ -1347,11 +1489,18 @@ impl PreviewState {
 
     fn layout_panel_preview(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [_, controls, panel_area] = panel_preview_layout(area);
+        let [panel_area, join_area] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .areas(panel_area);
         let areas = panel_title_control_areas(controls).map(panel_title_dropdown_area);
 
         self.sync_panel_demo_from_dropdowns();
         ctx.push_slot(panel_demo_child_key(), panel_area, |ctx| {
             <Panel as TuiNode<Msg>>::layout(&mut self.panel_demo, panel_area, ctx);
+        });
+        ctx.push_slot(panel_join_demo_child_key(), join_area, |ctx| {
+            self.panel_join_demo.layout(join_area, ctx);
         });
 
         ctx.push_slot(panel_title_child_key(0), areas[0], |ctx| {
@@ -1476,6 +1625,10 @@ impl PreviewState {
 
     fn render_panel_preview(&self, frame: &mut Frame, area: Rect) {
         let [help, controls, panel_area] = panel_preview_layout(area);
+        let [panel_area, join_area] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .areas(panel_area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("Enter/Space opens controls • "),
@@ -1485,6 +1638,7 @@ impl PreviewState {
         );
 
         self.panel_demo.render(frame, panel_area);
+        self.panel_join_demo.render(frame, join_area);
 
         let areas = panel_title_control_areas(controls);
         self.render_panel_title_control(frame, areas[0], 0, "Top left");
@@ -1517,7 +1671,19 @@ impl PreviewState {
     }
 
     fn layout_tabs(&mut self, area: Rect, ctx: &mut LayoutCtx) {
-        let [minimal, underline, boxed] = tabs_areas(area);
+        let [buttons_area, demos_area] = modal_tabs_preview_layout(area);
+        let button_areas = modal_tabs_button_areas(buttons_area);
+        ctx.push_slot(modal_tabs_open_child_key(0), button_areas[0], |ctx| {
+            self.tabs_modal_minimal_button.layout(button_areas[0], ctx);
+        });
+        ctx.push_slot(modal_tabs_open_child_key(1), button_areas[1], |ctx| {
+            self.tabs_modal_underline_button
+                .layout(button_areas[1], ctx);
+        });
+        ctx.push_slot(modal_tabs_open_child_key(2), button_areas[2], |ctx| {
+            self.tabs_modal_boxed_button.layout(button_areas[2], ctx);
+        });
+        let [minimal, underline, boxed] = tabs_areas(demos_area);
         let [_, minimal_tabs] = labeled_area(minimal);
         let [_, underline_tabs] = labeled_area(underline);
         let [_, boxed_tabs] = labeled_area(boxed);
@@ -1533,7 +1699,14 @@ impl PreviewState {
     }
 
     fn render_tabs(&self, frame: &mut Frame, area: Rect) {
-        let [minimal, underline, boxed] = tabs_areas(area);
+        let [buttons_area, demos_area] = modal_tabs_preview_layout(area);
+        let button_areas = modal_tabs_button_areas(buttons_area);
+        self.tabs_modal_minimal_button
+            .render(frame, button_areas[0]);
+        self.tabs_modal_underline_button
+            .render(frame, button_areas[1]);
+        self.tabs_modal_boxed_button.render(frame, button_areas[2]);
+        let [minimal, underline, boxed] = tabs_areas(demos_area);
         let [minimal_label, minimal_tabs] = labeled_area(minimal);
         let [underline_label, underline_tabs] = labeled_area(underline);
         let [boxed_label, boxed_tabs] = labeled_area(boxed);
@@ -1764,6 +1937,18 @@ fn gallery_preview_child_key() -> ChildKey {
     ChildKey::new("preview")
 }
 
+fn gallery_theme_child_key() -> ChildKey {
+    ChildKey::new("theme")
+}
+
+fn panel_join_demo_child_key() -> ChildKey {
+    ChildKey::new("panel-join-demo")
+}
+
+fn modal_tabs_open_child_key(index: usize) -> ChildKey {
+    ChildKey::new(format!("modal-tabs-open-{index}"))
+}
+
 fn text_input_child_key() -> ChildKey {
     ChildKey::new("text-input")
 }
@@ -1848,18 +2033,19 @@ fn dialog_body_area(area: Rect) -> Rect {
     )
 }
 
-fn dialog_button_areas(area: Rect) -> [Rect; 5] {
+fn dialog_button_areas(area: Rect) -> [Rect; 6] {
     let [_, body, _] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(9.min(area.height)),
+            Constraint::Length(11.min(area.height)),
             Constraint::Fill(1),
         ])
         .areas(area);
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -2137,19 +2323,16 @@ impl DataViewMode {
                 data_keys.toggle_expansion_label()
             ),
             Self::SingleSelect => format!(
-                "{} toggles row • {} selects + activates • single selected ID",
-                data_keys.toggle_selection_label(),
+                "{} selects + activates • single selected ID",
                 data_keys.activate_label()
             ),
             Self::MultiSelect => format!(
-                "{} or {} toggles rows • selected IDs stay in source order",
-                data_keys.activate_label(),
-                data_keys.toggle_selection_label()
+                "{} toggles rows • selected IDs stay in source order",
+                data_keys.activate_label()
             ),
             Self::ChecklistTree => format!(
-                "{} or {} cascades descendants • Nerd Font mixed icon",
-                data_keys.activate_label(),
-                data_keys.toggle_selection_label()
+                "{} cascades descendants • Nerd Font mixed icon",
+                data_keys.activate_label()
             ),
             Self::ActivateOnNavigate => {
                 format!(
@@ -2222,6 +2405,31 @@ struct DropdownDemoItem {
     label: &'static str,
 }
 
+#[derive(Clone)]
+struct ThemeChoice {
+    name: ThemeName,
+}
+
+fn theme_dropdown() -> Dropdown<ThemeChoice, ThemeName> {
+    let current = tuicore::theme().name();
+    Dropdown::single(
+        ThemeName::ALL.map(|name| ThemeChoice { name }),
+        |row| row.name,
+        |row| row.name.label().to_string(),
+    )
+    .selected_one(current)
+    .variant(DropdownVariant::Filled)
+    .alt_style(true)
+    .label("Theme")
+    .hotkey("th")
+    .tab_stop(false)
+    .label_position(DropdownLabelPosition::Inline)
+    .popup_direction(DropdownPopupDirection::Up)
+    .search_mode(DropdownSearchMode::Contains)
+    .commit_mode(DropdownCommitMode::Immediate)
+    .max_popup_height(12)
+}
+
 fn dropdown_items() -> Vec<DropdownDemoItem> {
     vec![
         DropdownDemoItem {
@@ -2281,6 +2489,7 @@ fn dropdown_filled_fuzzy_single() -> Dropdown<DropdownDemoItem, &'static str> {
         .label("Lane")
         .hotkey("4")
         .alt_style(true)
+        .label_position(DropdownLabelPosition::Inline)
 }
 
 fn dropdown_filled_multi_contains() -> Dropdown<DropdownDemoItem, &'static str> {
@@ -2292,7 +2501,11 @@ fn dropdown_filled_multi_contains() -> Dropdown<DropdownDemoItem, &'static str> 
 }
 
 fn dropdown_filled_no_search_immediate() -> Dropdown<DropdownDemoItem, &'static str> {
-    dropdown_no_search_immediate()
+    Dropdown::single(dropdown_items(), |row| row.id, |row| row.label.to_string())
+        .placeholder("Pick immediate lane...")
+        .search_mode(DropdownSearchMode::None)
+        .commit_mode(DropdownCommitMode::Immediate)
+        .no_selection_text("--None--")
         .variant(DropdownVariant::Filled)
         .label("Immediate")
         .hotkey("6")
@@ -2333,6 +2546,33 @@ fn panel_demo() -> Panel {
     ])
 }
 
+fn panel_join_demo() -> PanelHost<Split<DemoBox, DemoBox>> {
+    Panel::new()
+        .top_left("Joined separators")
+        .border(BorderKind::Plain)
+        .host(
+            Split::horizontal(
+                DemoBox::new("Left pane", "separator joins top/bottom border", 12, 3),
+                DemoBox::new("Right pane", "normal Panel + Split composition", 12, 3),
+            )
+            .separator(Separator::new().role(SeparatorColorRole::Subtle)),
+        )
+}
+
+fn tabs_demo(variant: TabsVariant) -> Tabs<Msg> {
+    let hotkeys = match variant {
+        TabsVariant::Minimal => ["o", "u", "s"],
+        TabsVariant::Underline => ["v", "sa", "ta"],
+        TabsVariant::Boxed => ["w", "e", "tat"],
+    };
+    Tabs::new(vec![
+        Tab::text("Overview", "Simple tabs component for tuicore.").hotkey(hotkeys[0]),
+        Tab::text("Usage", "Use Tab::new(title, node), then Tabs::new(tabs).").hotkey(hotkeys[1]),
+        Tab::text("State", "The selected tab is a plain index.").hotkey(hotkeys[2]),
+    ])
+    .variant(variant)
+}
+
 fn dialog_button(example: DialogExample) -> Button<Msg> {
     Button::new(example.button_label())
         .hotkey(example.hotkey())
@@ -2363,6 +2603,28 @@ fn gallery_dialog() -> DialogHost<GalleryDialogContent, Msg> {
         .on_close(Msg::DialogClosed);
     dialog.clear_title(tuicore::DialogTitlePosition::TopRight);
     dialog.host(GalleryDialogContent::new())
+}
+
+fn modal_tabs_dialog() -> Tabs<Msg> {
+    Tabs::new(vec![
+        Tab::text(
+            "Overview",
+            "This is the actual tabs-as-dialog demo. There is no Dialog wrapper, no extra title, and no nested border.",
+        )
+        .hotkey("o"),
+        Tab::text(
+            "Behavior",
+            "The outer DialogLayer centers this Tabs component, dims the gallery underneath, traps focus, and animates it in.",
+        )
+        .hotkey("b"),
+        Tab::text(
+            "Close",
+            "Press x or Esc. The close affordance lives on the tab strip's top border line.",
+        )
+        .hotkey("c"),
+    ])
+    .modal()
+    .on_close(Msg::ModalTabsClosed)
 }
 
 fn panel_title_dropdown(position: PanelTitlePosition) -> Dropdown<PanelTitleChoice, &'static str> {
@@ -2603,7 +2865,7 @@ fn panel_title_index(key: &ChildKey) -> Option<usize> {
         .strip_prefix("panel-title-")?
         .parse()
         .ok()
-        .filter(|index| *index < 4)
+        .filter(|index| *index < PANEL_TITLE_CONTROL_COUNT)
 }
 
 fn panel_title_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
@@ -2669,6 +2931,39 @@ fn dropdown_area(area: Rect) -> Rect {
     dropdown_column_layout(area)[1]
 }
 
+fn modal_tabs_preview_layout(area: Rect) -> [Rect; 2] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Fill(1)])
+        .areas(area)
+}
+
+fn modal_tabs_button_areas(area: Rect) -> [Rect; 3] {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+        ])
+        .spacing(1)
+        .areas(area)
+}
+
+fn modal_tabs_open_index(key: &ChildKey) -> Option<usize> {
+    key.as_str()
+        .strip_prefix("modal-tabs-open-")?
+        .parse()
+        .ok()
+        .filter(|index| *index < 3)
+}
+
+fn modal_tabs_open_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
+    let first = route.path.first()?;
+    let index = modal_tabs_open_index(first)?;
+    Some((index, EventRoute::new(route.path.without_first())))
+}
+
 fn tab_demo_child_key(index: usize) -> ChildKey {
     ChildKey::new(format!("tab-demo-{index}"))
 }
@@ -2678,7 +2973,7 @@ fn tab_demo_index(key: &ChildKey) -> Option<usize> {
         .strip_prefix("tab-demo-")?
         .parse()
         .ok()
-        .filter(|index| *index < 3)
+        .filter(|index| *index < 4)
 }
 
 fn tab_demo_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
@@ -2770,6 +3065,16 @@ mod tests {
         state.layout_panel_preview(Rect::new(0, 0, 80, 20), &mut ctx);
 
         assert!(state.panel_demo.is_focused());
+    }
+
+    #[test]
+    fn bottom_right_panel_title_route_is_recognized() {
+        let route = EventRoute::new(tuicore::TreePath::from_keys([panel_title_child_key(3)]));
+
+        let (index, child_route) = panel_title_child_route(&route).expect("route should resolve");
+
+        assert_eq!(index, 3);
+        assert!(child_route.path.is_empty());
     }
 
     #[test]

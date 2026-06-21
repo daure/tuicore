@@ -1,5 +1,12 @@
 # Pull-based layout improvement plan
 
+## Current status
+
+- Shipped: `TuiNode::measure`, `LayoutSizeHint`, `FlexItem::fit_content()`, Grid, Overlay, and Stack.
+- Partial: intrinsic measurement coverage across all components.
+- Still useful: guidance on replacing parent-owned magic sizes with child-owned hints.
+- Treat older phase lists below as roadmap notes, not exact shipped-state inventory.
+
 ## Purpose
 
 Make tuicore layout smarter without making it dogmatic.

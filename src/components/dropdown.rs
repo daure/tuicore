@@ -569,8 +569,12 @@ where
             return;
         }
 
-        let field_area = self.field_area(area);
-        self.render_field(frame, field_area);
+        if self.open && !self.overlay_bounds.is_empty() {
+            self.render_popup_overlay(frame, self.overlay_bounds);
+        } else {
+            let field_area = self.field_area(area);
+            self.render_field(frame, field_area);
+        }
     }
 
     pub fn render_popup_overlay(&self, frame: &mut Frame, bounds: Rect) {
@@ -632,6 +636,9 @@ where
         } else {
             ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
             ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
+            if self.search_enabled() {
+                ctx.set_focus_suppresses_global_hotkeys(FocusId::new(FIELD_FOCUS), true);
+            }
         }
         let mut child_ctx = LayoutCtx::new();
         <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, rows_area, &mut child_ctx);
@@ -1850,7 +1857,6 @@ mod tests {
                         .bg(Color::Rgb(10, 20, 30)),
                 );
                 dropdown.render(frame, Rect::new(0, 0, 12, 1));
-                dropdown.render_popup_overlay(frame, AREA);
             })
             .expect("dropdown should render");
 
@@ -2555,10 +2561,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
 
         terminal
-            .draw(|frame| {
-                dropdown.render(frame, Rect::new(0, 0, 12, 3));
-                dropdown.render_popup_overlay(frame, frame.area());
-            })
+            .draw(|frame| dropdown.render(frame, Rect::new(0, 0, 12, 3)))
             .expect("dropdown should render");
 
         let buffer = terminal.backend().buffer();
@@ -2592,6 +2595,22 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id.as_str(), "input");
         assert!(targets[0].path.is_empty());
+    }
+
+    #[test]
+    fn open_search_dropdown_suppresses_global_hotkeys_on_field_focus() {
+        let mut dropdown = single_dropdown().auto_focus_search(false);
+        dropdown.open();
+        let mut ctx = LayoutCtx::new();
+
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut ctx);
+
+        let target = ctx
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == FIELD_FOCUS)
+            .expect("field focus target");
+        assert!(target.suppress_global_hotkeys);
     }
 
     #[test]

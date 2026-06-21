@@ -9,7 +9,10 @@ use ratatui::widgets::Paragraph;
 use crate::animation::{Animated, AnimationSettings, TickResult};
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
-use crate::{EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutResult, TuiNode};
+use crate::{
+    EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
+    LayoutSizeHint, TuiNode, line_width,
+};
 
 use super::text_input::{
     CursorFade, InputOutcome, cell_width, display_char, placeholder_line, text_char,
@@ -212,6 +215,16 @@ impl<M> TextareaInput<M> {
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> InputOutcome {
         let outcome = self.on_key_inner(key.into());
+        if outcome.needs_redraw() {
+            self.cursor_fade.reset();
+        }
+        outcome
+    }
+
+    pub fn on_paste(&mut self, value: impl AsRef<str>) -> InputOutcome {
+        let outcome = self.insert_text(value.as_ref());
+        self.clamp_lines();
+        self.cursor = self.cursor.min(self.len_chars());
         if outcome.needs_redraw() {
             self.cursor_fade.reset();
         }
@@ -670,6 +683,22 @@ impl<M> TextareaInput<M> {
 }
 
 impl<M> TuiNode<M> for TextareaInput<M> {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let text = if self.value.is_empty() {
+            self.placeholder.as_str()
+        } else {
+            self.value.as_str()
+        };
+        let width = text
+            .lines()
+            .map(|line| line_width(&Line::from(line)))
+            .max()
+            .unwrap_or(1)
+            .min(u16::MAX as usize) as u16;
+        let height = text.lines().count().max(1).min(u16::MAX as usize) as u16;
+        LayoutSizeHint::content(width.max(1), height).normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
         ctx.set_focus_suppresses_global_hotkeys(FocusId::new(TEXTAREA_FOCUS), true);
@@ -688,6 +717,17 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if let TuiEvent::Paste(value) = event {
+            let outcome = self.on_paste(value);
+            if outcome.needs_redraw() {
+                ctx.request_redraw();
+            }
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            return EventOutcome::Ignored;
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
@@ -1031,6 +1071,19 @@ mod tests {
         assert_eq!(input.cursor, "edited\nlines".chars().count());
         assert!(ctx.redraw_requested());
         assert!(ctx.clear_requested());
+    }
+
+    #[test]
+    fn paste_inserts_multiline_text() {
+        let mut input = TextareaInput::<()>::new().value("hello");
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(&TuiEvent::Paste(" world\nagain".into()), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.current_value(), "hello world\nagain");
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
     }
 
     #[test]
