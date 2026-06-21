@@ -4,8 +4,10 @@ mod gallery_demo;
 
 use gallery_demo::data::{DataViewMode, DemoRow, data_event_status, data_view_layout};
 use gallery_demo::dialogs::{
-    DialogExample, dialog_body_area, dialog_button, dialog_button_areas, dialog_demo_child_key,
-    dialog_demo_child_route, dialog_demo_index, gallery_dialog,
+    DialogExample, DockOverlayExample, GalleryDialogContent, GalleryDockOverlayContent,
+    dialog_body_area, dialog_button, dialog_button_areas, dialog_demo_child_key,
+    dialog_demo_child_route, dialog_demo_index, dock_overlay_button, gallery_dialog,
+    gallery_dock_overlay,
 };
 use gallery_demo::dropdowns::{
     DropdownDemoItem, ThemeChoice, dropdown_area, dropdown_child_key, dropdown_child_route,
@@ -36,9 +38,10 @@ use gallery_demo::panels::{
     panel_title_control_areas, panel_title_dropdown, panel_title_dropdown_area, panel_title_index,
 };
 use gallery_demo::tabs::{
-    labeled_area, modal_tabs_button_areas, modal_tabs_dialog, modal_tabs_open_child_key,
-    modal_tabs_open_child_route, modal_tabs_open_index, modal_tabs_preview_layout,
-    tab_demo_child_key, tab_demo_child_route, tab_demo_index, tabs_areas, tabs_demo,
+    ModalTabsExample, labeled_area, modal_tabs_button_areas, modal_tabs_dialog,
+    modal_tabs_open_child_key, modal_tabs_open_child_route, modal_tabs_open_index,
+    modal_tabs_preview_layout, tab_demo_child_key, tab_demo_child_route, tab_demo_index,
+    tabs_areas, tabs_demo,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -47,31 +50,50 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, ChildKey, DataView, DataViewTypedEvent,
-    DialogBackdrop, DialogCloseReason, DialogLayer, Dropdown, EventCtx, EventOutcome, EventRoute,
-    Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, Key, KeyEvent, KeyModifiers, LayoutCtx,
-    LayoutResult, ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition,
-    Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger,
-    Spinner, Split, Stack, Tabs, TabsVariant, TextInput, TextareaInput, Theme, ThemeName,
-    TickResult, ToastRack, Toggle, TreeAdapter, TuiEvent, TuiNode,
+    DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, Dropdown,
+    EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, Key,
+    KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, ModalCloseReason, Overlay, Panel, PanelHost,
+    PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode,
+    SelectionTrigger, Spinner, Split, Stack, Tabs, TabsVariant, TextInput, TextareaInput, Theme,
+    ThemeName, TickResult, ToastRack, Toggle, TreeAdapter, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
 enum Msg {
     DialogOpened(DialogExample),
     DialogClosed(DialogCloseReason),
-    ModalTabsOpened(TabsVariant),
+    DockOverlayOpened(DockOverlayExample),
+    DockOverlayClosed(DialogCloseReason),
+    ModalTabsOpened(ModalTabsExample),
     ModalTabsClosed(ModalCloseReason),
     NotificationTriggered(usize),
+}
+
+type DialogDemoLayer = DialogLayer<Gallery, DialogHost<GalleryDialogContent, Msg>>;
+type ModalTabsLayer = DialogLayer<DialogDemoLayer, Tabs<Msg>>;
+type RootLayer = DialogLayer<ModalTabsLayer, DialogHost<GalleryDockOverlayContent, Msg>>;
+
+fn dialog_demo_layer(root: &mut RootLayer) -> &mut DialogDemoLayer {
+    root.base_mut().base_mut()
+}
+
+fn modal_tabs_layer(root: &mut RootLayer) -> &mut ModalTabsLayer {
+    root.base_mut()
+}
+
+fn gallery(root: &mut RootLayer) -> &mut Gallery {
+    root.base_mut().base_mut().base_mut()
 }
 
 fn main() -> tuicore::Result<()> {
     tuicore::init();
     let dialog_layer = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
-    let root = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
+    let tabs_layer = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
+    let root = DialogLayer::new(tabs_layer, gallery_dock_overlay()).active(false);
     tuicore::TreeApp::new(root)
         .on_message(|root, msg, ctx| match msg {
             Msg::DialogOpened(example) => {
-                let dialog_layer = root.base_mut();
+                let dialog_layer = dialog_demo_layer(root);
                 dialog_layer.layer_mut().child_mut().set_example(example);
                 dialog_layer
                     .layer_mut()
@@ -80,7 +102,7 @@ fn main() -> tuicore::Result<()> {
                 dialog_layer
                     .layer_mut()
                     .dialog_mut()
-                    .set_bottom_left("Esc blurs");
+                    .set_bottom_left("Esc closes");
                 dialog_layer
                     .layer_mut()
                     .dialog_mut()
@@ -99,21 +121,102 @@ fn main() -> tuicore::Result<()> {
                 dialog_layer.set_active_with_dialog_focus(true, ctx);
             }
             Msg::DialogClosed(_reason) => {
-                root.base_mut().set_active_with_context(false, ctx);
+                dialog_demo_layer(root).set_active_with_context(false, ctx);
             }
-            Msg::ModalTabsOpened(variant) => {
-                root.layer_mut().set_variant(variant);
-                root.layer_mut().prepare_modal_open(ctx.animation());
-                root.set_layer_percent(72);
+            Msg::DockOverlayOpened(example) => {
+                root.layer_mut().child_mut().set_example(example);
+                root.layer_mut().dialog_mut().set_top_left(example.title());
+                root.layer_mut()
+                    .dialog_mut()
+                    .set_bottom_right(match example {
+                        DockOverlayExample::BottomSnackbar => "80% width",
+                        DockOverlayExample::BottomTabs => "tabbed bottom",
+                        _ => "100% cross-axis",
+                    });
+                match example {
+                    DockOverlayExample::Top => {
+                        root.set_placement(DialogLayerPlacement::Top);
+                        root.set_layer_percent(30);
+                        root.set_layer_cross_percent(100);
+                    }
+                    DockOverlayExample::Bottom => {
+                        root.set_placement(DialogLayerPlacement::Bottom);
+                        root.set_layer_percent(30);
+                        root.set_layer_cross_percent(100);
+                    }
+                    DockOverlayExample::Left => {
+                        root.set_placement(DialogLayerPlacement::Left);
+                        root.set_layer_percent(32);
+                        root.set_layer_cross_percent(100);
+                    }
+                    DockOverlayExample::Right => {
+                        root.set_placement(DialogLayerPlacement::Right);
+                        root.set_layer_percent(32);
+                        root.set_layer_cross_percent(100);
+                    }
+                    DockOverlayExample::BottomSnackbar => {
+                        root.set_placement(DialogLayerPlacement::Bottom);
+                        root.set_layer_percent(16);
+                        root.set_layer_cross_percent(80);
+                    }
+                    DockOverlayExample::BottomTabs => {
+                        root.set_placement(DialogLayerPlacement::Bottom);
+                        root.set_layer_percent(36);
+                        root.set_layer_cross_percent(100);
+                    }
+                }
                 root.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                root.set_active_with_context(true, ctx);
+                root.set_active_with_dialog_focus(true, ctx);
             }
-            Msg::ModalTabsClosed(_reason) => {
+            Msg::DockOverlayClosed(_reason) => {
                 root.set_active_with_context(false, ctx);
             }
+            Msg::ModalTabsOpened(variant) => {
+                let tabs_layer = modal_tabs_layer(root);
+                tabs_layer.layer_mut().set_variant(variant.variant());
+                tabs_layer.layer_mut().prepare_modal_open(ctx.animation());
+                match variant {
+                    ModalTabsExample::CenterMinimal
+                    | ModalTabsExample::CenterUnderline
+                    | ModalTabsExample::CenterBoxed => {
+                        tabs_layer.set_placement(DialogLayerPlacement::Center);
+                        tabs_layer.set_layer_percent(72);
+                        tabs_layer.set_layer_cross_percent(100);
+                    }
+                    ModalTabsExample::Top => {
+                        tabs_layer.set_placement(DialogLayerPlacement::Top);
+                        tabs_layer.set_layer_percent(30);
+                        tabs_layer.set_layer_cross_percent(100);
+                    }
+                    ModalTabsExample::Bottom => {
+                        tabs_layer.set_placement(DialogLayerPlacement::Bottom);
+                        tabs_layer.set_layer_percent(30);
+                        tabs_layer.set_layer_cross_percent(100);
+                    }
+                    ModalTabsExample::Left => {
+                        tabs_layer.set_placement(DialogLayerPlacement::Left);
+                        tabs_layer.set_layer_percent(32);
+                        tabs_layer.set_layer_cross_percent(100);
+                    }
+                    ModalTabsExample::Right => {
+                        tabs_layer.set_placement(DialogLayerPlacement::Right);
+                        tabs_layer.set_layer_percent(32);
+                        tabs_layer.set_layer_cross_percent(100);
+                    }
+                    ModalTabsExample::BottomSnackbar => {
+                        tabs_layer.set_placement(DialogLayerPlacement::Bottom);
+                        tabs_layer.set_layer_percent(16);
+                        tabs_layer.set_layer_cross_percent(80);
+                    }
+                }
+                tabs_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                tabs_layer.set_active_with_context(true, ctx);
+            }
+            Msg::ModalTabsClosed(_reason) => {
+                modal_tabs_layer(root).set_active_with_context(false, ctx);
+            }
             Msg::NotificationTriggered(index) => {
-                root.base_mut()
-                    .base_mut()
+                gallery(root)
                     .previews
                     .notification_triggers
                     .push(notification_for_index(index).ttl(Duration::from_secs(4)));
@@ -396,6 +499,12 @@ struct PreviewState {
     dialog_40: Button<Msg>,
     dialog_20: Button<Msg>,
     dialog_top: Button<Msg>,
+    dock_top: Button<Msg>,
+    dock_bottom: Button<Msg>,
+    dock_left: Button<Msg>,
+    dock_right: Button<Msg>,
+    dock_snackbar: Button<Msg>,
+    dock_bottom_tabs: Button<Msg>,
     spinner: Spinner,
     notification_triggers: ToastRack,
     notification_buttons: [Button<Msg>; 4],
@@ -405,9 +514,7 @@ struct PreviewState {
     tabs_minimal: Tabs<Msg>,
     tabs_underline: Tabs<Msg>,
     tabs_boxed: Tabs<Msg>,
-    tabs_modal_minimal_button: Button<Msg>,
-    tabs_modal_underline_button: Button<Msg>,
-    tabs_modal_boxed_button: Button<Msg>,
+    tabs_modal_buttons: [Button<Msg>; 8],
     data_list: DataView<DemoRow, usize>,
     data_table: DataView<DemoRow, usize>,
     data_list_tree: DataView<DemoRow, usize>,
@@ -481,6 +588,12 @@ impl PreviewState {
             dialog_40: dialog_button(DialogExample::Small),
             dialog_20: dialog_button(DialogExample::Tiny),
             dialog_top: dialog_button(DialogExample::Top),
+            dock_top: dock_overlay_button(DockOverlayExample::Top),
+            dock_bottom: dock_overlay_button(DockOverlayExample::Bottom),
+            dock_left: dock_overlay_button(DockOverlayExample::Left),
+            dock_right: dock_overlay_button(DockOverlayExample::Right),
+            dock_snackbar: dock_overlay_button(DockOverlayExample::BottomSnackbar),
+            dock_bottom_tabs: dock_overlay_button(DockOverlayExample::BottomTabs),
             spinner: Spinner::new(),
             notification_triggers: ToastRack::new(),
             notification_buttons: notification_buttons(),
@@ -490,15 +603,16 @@ impl PreviewState {
             tabs_minimal: tabs_demo(TabsVariant::Minimal).hotkey("m"),
             tabs_underline: tabs_demo(TabsVariant::Underline).hotkey("ma"),
             tabs_boxed: tabs_demo(TabsVariant::Boxed).hotkey("mam"),
-            tabs_modal_minimal_button: Button::new("Open Style 1 tabs-as-dialog")
-                .hotkey("td")
-                .on_press(|| Msg::ModalTabsOpened(TabsVariant::Minimal)),
-            tabs_modal_underline_button: Button::new("Open Style 2 tabs-as-dialog")
-                .hotkey("tu")
-                .on_press(|| Msg::ModalTabsOpened(TabsVariant::Underline)),
-            tabs_modal_boxed_button: Button::new("Open Style 3 tabs-as-dialog")
-                .hotkey("tb")
-                .on_press(|| Msg::ModalTabsOpened(TabsVariant::Boxed)),
+            tabs_modal_buttons: [
+                modal_tabs_button(ModalTabsExample::CenterMinimal),
+                modal_tabs_button(ModalTabsExample::CenterUnderline),
+                modal_tabs_button(ModalTabsExample::CenterBoxed),
+                modal_tabs_button(ModalTabsExample::Top),
+                modal_tabs_button(ModalTabsExample::Bottom),
+                modal_tabs_button(ModalTabsExample::Left),
+                modal_tabs_button(ModalTabsExample::Right),
+                modal_tabs_button(ModalTabsExample::BottomSnackbar),
+            ],
             data_list: DataViewMode::List.data_view(),
             data_table: DataViewMode::Table.data_view(),
             data_list_tree: DataViewMode::ListTree.data_view(),
@@ -1011,6 +1125,12 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.dialog_40, dt, settings))
             .merge(Animated::tick(&mut self.dialog_20, dt, settings))
             .merge(Animated::tick(&mut self.dialog_top, dt, settings))
+            .merge(Animated::tick(&mut self.dock_top, dt, settings))
+            .merge(Animated::tick(&mut self.dock_bottom, dt, settings))
+            .merge(Animated::tick(&mut self.dock_left, dt, settings))
+            .merge(Animated::tick(&mut self.dock_right, dt, settings))
+            .merge(Animated::tick(&mut self.dock_snackbar, dt, settings))
+            .merge(Animated::tick(&mut self.dock_bottom_tabs, dt, settings))
             .merge(<Tabs<Msg> as TuiNode<Msg>>::tick(
                 &mut self.tabs_minimal,
                 dt,
@@ -1027,17 +1147,42 @@ impl PreviewState {
                 settings,
             ))
             .merge(Animated::tick(
-                &mut self.tabs_modal_minimal_button,
+                &mut self.tabs_modal_buttons[0],
                 dt,
                 settings,
             ))
             .merge(Animated::tick(
-                &mut self.tabs_modal_underline_button,
+                &mut self.tabs_modal_buttons[1],
                 dt,
                 settings,
             ))
             .merge(Animated::tick(
-                &mut self.tabs_modal_boxed_button,
+                &mut self.tabs_modal_buttons[2],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_buttons[3],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_buttons[4],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_buttons[5],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_buttons[6],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_buttons[7],
                 dt,
                 settings,
             ))
@@ -1127,11 +1272,7 @@ impl PreviewState {
     }
 
     fn modal_tabs_button_mut(&mut self, index: usize) -> &mut Button<Msg> {
-        match index {
-            1 => &mut self.tabs_modal_underline_button,
-            2 => &mut self.tabs_modal_boxed_button,
-            _ => &mut self.tabs_modal_minimal_button,
-        }
+        &mut self.tabs_modal_buttons[index.min(7)]
     }
 
     fn dropdown_mut(&mut self, index: usize) -> &mut Dropdown<DropdownDemoItem, &'static str> {
@@ -1297,7 +1438,7 @@ impl PreviewState {
     fn render_dialog(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
             Paragraph::new(
-                "Open app-level dialogs with backdrop dim tween. Press x or Esc to close.",
+                "Open app-level dialogs or docked overlays with backdrop dim tween. Press x or Esc to close.",
             ),
             Rect::new(area.x, area.y, area.width, 2.min(area.height)),
         );
@@ -1314,6 +1455,12 @@ impl PreviewState {
             3 => &self.dialog_40,
             4 => &self.dialog_20,
             5 => &self.dialog_top,
+            6 => &self.dock_top,
+            7 => &self.dock_bottom,
+            8 => &self.dock_left,
+            9 => &self.dock_right,
+            10 => &self.dock_snackbar,
+            11 => &self.dock_bottom_tabs,
             _ => &self.dialog_100,
         }
     }
@@ -1325,6 +1472,12 @@ impl PreviewState {
             3 => &mut self.dialog_40,
             4 => &mut self.dialog_20,
             5 => &mut self.dialog_top,
+            6 => &mut self.dock_top,
+            7 => &mut self.dock_bottom,
+            8 => &mut self.dock_left,
+            9 => &mut self.dock_right,
+            10 => &mut self.dock_snackbar,
+            11 => &mut self.dock_bottom_tabs,
             _ => &mut self.dialog_100,
         }
     }
@@ -1724,16 +1877,11 @@ impl PreviewState {
     fn layout_tabs(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [buttons_area, demos_area] = modal_tabs_preview_layout(area);
         let button_areas = modal_tabs_button_areas(buttons_area);
-        ctx.push_slot(modal_tabs_open_child_key(0), button_areas[0], |ctx| {
-            self.tabs_modal_minimal_button.layout(button_areas[0], ctx);
-        });
-        ctx.push_slot(modal_tabs_open_child_key(1), button_areas[1], |ctx| {
-            self.tabs_modal_underline_button
-                .layout(button_areas[1], ctx);
-        });
-        ctx.push_slot(modal_tabs_open_child_key(2), button_areas[2], |ctx| {
-            self.tabs_modal_boxed_button.layout(button_areas[2], ctx);
-        });
+        for (index, button_area) in button_areas.into_iter().enumerate() {
+            ctx.push_slot(modal_tabs_open_child_key(index), button_area, |ctx| {
+                self.tabs_modal_buttons[index].layout(button_area, ctx);
+            });
+        }
         let [minimal, underline, boxed] = tabs_areas(demos_area);
         let [_, minimal_tabs] = labeled_area(minimal);
         let [_, underline_tabs] = labeled_area(underline);
@@ -1752,11 +1900,9 @@ impl PreviewState {
     fn render_tabs(&self, frame: &mut Frame, area: Rect) {
         let [buttons_area, demos_area] = modal_tabs_preview_layout(area);
         let button_areas = modal_tabs_button_areas(buttons_area);
-        self.tabs_modal_minimal_button
-            .render(frame, button_areas[0]);
-        self.tabs_modal_underline_button
-            .render(frame, button_areas[1]);
-        self.tabs_modal_boxed_button.render(frame, button_areas[2]);
+        for (index, button_area) in button_areas.into_iter().enumerate() {
+            self.tabs_modal_buttons[index].render(frame, button_area);
+        }
         let [minimal, underline, boxed] = tabs_areas(demos_area);
         let [minimal_label, minimal_tabs] = labeled_area(minimal);
         let [underline_label, underline_tabs] = labeled_area(underline);
@@ -1866,6 +2012,12 @@ fn toggle_switch_child_key() -> ChildKey {
 
 fn toggle_checkbox_child_key() -> ChildKey {
     ChildKey::new("toggle-checkbox")
+}
+
+fn modal_tabs_button(example: ModalTabsExample) -> Button<Msg> {
+    Button::new(example.button_label())
+        .hotkey(example.hotkey())
+        .on_press(move || Msg::ModalTabsOpened(example))
 }
 
 fn dispatch_focus_child<N>(

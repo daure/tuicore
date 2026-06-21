@@ -531,7 +531,7 @@ where
             let field_area = self.effective_field_area(bounds);
             let backdrop = self.backdrop_tween.value();
             if backdrop > 0.0 {
-                super::dialog::dim_backdrop_buffer_except(
+                super::dialog_layer::dim_backdrop_buffer_except(
                     frame,
                     bounds,
                     backdrop,

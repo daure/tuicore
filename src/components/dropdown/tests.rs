@@ -287,8 +287,9 @@ fn escape_rolls_back_single_draft() {
 
 #[test]
 fn configured_unfocus_key_cancels_open_dropdown() {
-    let _guard =
-        KeyBindingsGuard::replace(KeyBindings::new().with_focus_unfocus([KeySpec::plain('q')]));
+    let _guard = KeyBindingsGuard::replace(
+        KeyBindings::new().with_focus_unfocus([KeySpec::key(Key::Esc), KeySpec::plain('q')]),
+    );
     let mut dropdown = single_dropdown().selected_one("Alpha");
 
     dropdown.open();

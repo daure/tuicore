@@ -1,6 +1,7 @@
 mod button;
 mod data_view;
 mod dialog;
+mod dialog_layer;
 mod dropdown;
 mod flex;
 mod grid;
@@ -25,10 +26,8 @@ pub use data_view::{
     DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
-pub use dialog::{
-    Dialog, DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings, DialogLayer,
-    DialogTitlePosition,
-};
+pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition};
+pub use dialog_layer::{DialogBackdrop, DialogLayer, DialogLayerPlacement};
 pub use dropdown::{
     Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,
     DropdownPopupDirection, DropdownSearchMode, DropdownVariant,

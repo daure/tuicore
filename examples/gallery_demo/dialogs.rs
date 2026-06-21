@@ -23,6 +23,51 @@ pub(crate) enum DialogExample {
     Top,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DockOverlayExample {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    BottomSnackbar,
+    BottomTabs,
+}
+
+impl DockOverlayExample {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Top => "Top dock overlay",
+            Self::Bottom => "Bottom dock overlay",
+            Self::Left => "Left dock overlay",
+            Self::Right => "Right dock overlay",
+            Self::BottomSnackbar => "Bottom snackbar overlay",
+            Self::BottomTabs => "Tabbed bottom bar",
+        }
+    }
+
+    fn button_label(self) -> &'static str {
+        match self {
+            Self::Top => "Open top dock",
+            Self::Bottom => "Open bottom dock",
+            Self::Left => "Open left dock",
+            Self::Right => "Open right dock",
+            Self::BottomSnackbar => "Open 80% snackbar",
+            Self::BottomTabs => "Open docked tab bar",
+        }
+    }
+
+    fn hotkey(self) -> &'static str {
+        match self {
+            Self::Top => "ot",
+            Self::Bottom => "ob",
+            Self::Left => "ol",
+            Self::Right => "or",
+            Self::BottomSnackbar => "os",
+            Self::BottomTabs => "od",
+        }
+    }
+}
+
 impl DialogExample {
     pub(crate) fn percent(self) -> u16 {
         match self {
@@ -77,6 +122,11 @@ pub(crate) struct GalleryDialogContent {
     data: DataView<DemoRow, usize>,
 }
 
+pub(crate) struct GalleryDockOverlayContent {
+    example: DockOverlayExample,
+    tabs: Tabs<Msg>,
+}
+
 struct DialogControlsTab {
     toggle: Toggle<Msg>,
     dropdown: Dropdown<DropdownDemoItem, &'static str>,
@@ -102,6 +152,31 @@ impl GalleryDialogContent {
     }
 
     pub(crate) fn set_example(&mut self, example: DialogExample) {
+        self.example = example;
+    }
+}
+
+impl GalleryDockOverlayContent {
+    fn new() -> Self {
+        Self {
+            example: DockOverlayExample::BottomTabs,
+            tabs: Tabs::new(vec![
+                Tab::text(
+                    "Status",
+                    "Bottom tab bar: status content. Press x or Esc to close the overlay.",
+                )
+                .hotkey("1"),
+                Tab::text(
+                    "Logs",
+                    "Recent activity lives here while app content underneath is dimmed.",
+                )
+                .hotkey("2"),
+                Tab::text("Actions", "Quick actions can sit in a docked tab overlay.").hotkey("3"),
+            ]),
+        }
+    }
+
+    pub(crate) fn set_example(&mut self, example: DockOverlayExample) {
         self.example = example;
     }
 }
@@ -171,6 +246,52 @@ impl TuiNode<Msg> for GalleryDialogContent {
             DialogExample::Small => self.toggle.dispatch_focus(target, focused, ctx),
             DialogExample::Tiny => self.data.dispatch_focus(target, focused, ctx),
             DialogExample::Top => self.input.dispatch_focus(target, focused, ctx),
+        }
+    }
+}
+
+impl TuiNode<Msg> for GalleryDockOverlayContent {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        if self.example == DockOverlayExample::BottomTabs {
+            self.tabs.layout(area, ctx);
+        }
+        LayoutResult::new(area)
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        if self.example == DockOverlayExample::BottomTabs {
+            self.tabs.render(frame, area);
+        } else {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{}\n\nDocked overlay content. Underlying gallery is faded and blocked. Press x or Esc to close.",
+                    self.example.title()
+                )),
+                area,
+            );
+        }
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> EventOutcome {
+        if self.example == DockOverlayExample::BottomTabs {
+            self.tabs.dispatch_event(route, event, ctx)
+        } else {
+            EventOutcome::Ignored
+        }
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        <Tabs<Msg> as TuiNode<Msg>>::tick(&mut self.tabs, dt, settings)
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<Msg>) {
+        if self.example == DockOverlayExample::BottomTabs {
+            self.tabs.dispatch_focus(target, focused, ctx);
         }
     }
 }
@@ -360,6 +481,12 @@ pub(crate) fn dialog_button(example: DialogExample) -> Button<Msg> {
         .on_press(move || Msg::DialogOpened(example))
 }
 
+pub(crate) fn dock_overlay_button(example: DockOverlayExample) -> Button<Msg> {
+    Button::new(example.button_label())
+        .hotkey(example.hotkey())
+        .on_press(move || Msg::DockOverlayOpened(example))
+}
+
 fn dialog_tabs() -> Tabs<Msg> {
     Tabs::new(vec![
         Tab::new("Controls", DialogControlsTab::new()).hotkey("1"),
@@ -379,11 +506,20 @@ fn dialog_tabs() -> Tabs<Msg> {
 pub(crate) fn gallery_dialog() -> DialogHost<GalleryDialogContent, Msg> {
     let mut dialog = Dialog::new()
         .top_left(DialogExample::Large.title())
-        .bottom_left("Esc blurs")
+        .bottom_left("Esc closes")
         .bottom_right("80% viewport")
         .on_close(Msg::DialogClosed);
     dialog.clear_title(tuicore::DialogTitlePosition::TopRight);
     dialog.host(GalleryDialogContent::new())
+}
+
+pub(crate) fn gallery_dock_overlay() -> DialogHost<GalleryDockOverlayContent, Msg> {
+    Dialog::new()
+        .top_left(DockOverlayExample::BottomTabs.title())
+        .bottom_left("Esc closes")
+        .bottom_right("docked")
+        .on_close(Msg::DockOverlayClosed)
+        .host(GalleryDockOverlayContent::new())
 }
 
 fn dialog_tab_child_key(key: &'static str) -> ChildKey {
@@ -413,18 +549,24 @@ pub(crate) fn dialog_body_area(area: Rect) -> Rect {
     )
 }
 
-pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 6] {
+pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 12] {
     let [_, body, _] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(11.min(area.height)),
+            Constraint::Length(23.min(area.height)),
             Constraint::Fill(1),
         ])
         .areas(area);
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),

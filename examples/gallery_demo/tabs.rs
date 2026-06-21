@@ -3,6 +3,59 @@ use tuicore::{ChildKey, EventRoute, Tab, Tabs, TabsVariant};
 
 use crate::Msg;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModalTabsExample {
+    CenterMinimal,
+    CenterUnderline,
+    CenterBoxed,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    BottomSnackbar,
+}
+
+impl ModalTabsExample {
+    pub(crate) fn variant(self) -> TabsVariant {
+        match self {
+            Self::CenterMinimal => TabsVariant::Minimal,
+            Self::CenterUnderline => TabsVariant::Underline,
+            Self::CenterBoxed
+            | Self::Top
+            | Self::Bottom
+            | Self::Left
+            | Self::Right
+            | Self::BottomSnackbar => TabsVariant::Boxed,
+        }
+    }
+
+    pub(crate) fn button_label(self) -> &'static str {
+        match self {
+            Self::CenterMinimal => "Open Style 1 tabs-as-dialog",
+            Self::CenterUnderline => "Open Style 2 tabs-as-dialog",
+            Self::CenterBoxed => "Open center boxed tabs-as-dialog",
+            Self::Top => "Open top tabs dialog",
+            Self::Bottom => "Open bottom tabs dialog",
+            Self::Left => "Open left tabs dialog",
+            Self::Right => "Open right tabs dialog",
+            Self::BottomSnackbar => "Open 80% tabs snackbar",
+        }
+    }
+
+    pub(crate) fn hotkey(self) -> &'static str {
+        match self {
+            Self::CenterMinimal => "td",
+            Self::CenterUnderline => "tu",
+            Self::CenterBoxed => "tc",
+            Self::Top => "tt",
+            Self::Bottom => "tb",
+            Self::Left => "tl",
+            Self::Right => "tr",
+            Self::BottomSnackbar => "ts",
+        }
+    }
+}
+
 pub(crate) fn tabs_demo(variant: TabsVariant) -> Tabs<Msg> {
     let hotkeys = match variant {
         TabsVariant::Minimal => ["o", "u", "s"],
@@ -26,7 +79,7 @@ pub(crate) fn modal_tabs_dialog() -> Tabs<Msg> {
         .hotkey("o"),
         Tab::text(
             "Behavior",
-            "The outer DialogLayer centers this Tabs component, dims the gallery underneath, traps focus, and animates it in.",
+            "The outer DialogLayer places this Tabs component, dims the gallery underneath, traps focus, and animates it in.",
         )
         .hotkey("b"),
         Tab::text(
@@ -42,17 +95,22 @@ pub(crate) fn modal_tabs_dialog() -> Tabs<Msg> {
 pub(crate) fn modal_tabs_preview_layout(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Fill(1)])
+        .constraints([Constraint::Length(15.min(area.height)), Constraint::Fill(1)])
         .areas(area)
 }
 
-pub(crate) fn modal_tabs_button_areas(area: Rect) -> [Rect; 3] {
+pub(crate) fn modal_tabs_button_areas(area: Rect) -> [Rect; 8] {
     Layout::default()
-        .direction(Direction::Horizontal)
+        .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
         ])
         .spacing(1)
         .areas(area)
@@ -67,7 +125,7 @@ pub(crate) fn modal_tabs_open_index(key: &ChildKey) -> Option<usize> {
         .strip_prefix("modal-tabs-open-")?
         .parse()
         .ok()
-        .filter(|index| *index < 3)
+        .filter(|index| *index < 8)
 }
 
 pub(crate) fn modal_tabs_open_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
