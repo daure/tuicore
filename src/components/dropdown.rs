@@ -13,12 +13,12 @@ use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::{Key, KeyEvent};
 use crate::search::{SearchMode, search_ranked};
 use crate::{
-    Animated, AnimationSettings, BorderKind, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusRequest, FocusTarget, HintSource, HotkeyEvent, HotkeyLabelMode, HotkeyMatch,
-    HotkeySequenceMatcher, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize,
-    LayoutSizeHint, TickResult, TreePath, TuiEvent, TuiNode, border_chars, border_set,
-    hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans, hotkey_sequence_to_event,
-    hotkey_underline_style, keybindings, line_width, preset, theme,
+    Animated, AnimationSettings, AnimationSpec, BorderKind, EventCtx, EventOutcome, EventRoute,
+    FocusCtx, FocusId, FocusRequest, FocusTarget, HintSource, HotkeyEvent, HotkeyLabelMode,
+    HotkeyMatch, HotkeySequenceMatcher, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
+    LayoutSize, LayoutSizeHint, TickResult, TreePath, TuiEvent, TuiNode, Tween, border_chars,
+    border_set, hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans,
+    hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width, preset, theme,
 };
 
 use super::text_input::{CursorFade, placeholder_line};
@@ -163,6 +163,7 @@ pub struct Dropdown<T, Id> {
     no_selection_text: Option<String>,
     no_selection_highlighted: bool,
     field_cursor_fade: CursorFade,
+    backdrop_tween: Tween,
     pending_hotkey_prefix: Option<String>,
     action_keys: DropdownActionKeys,
 }
@@ -249,6 +250,7 @@ where
             no_selection_text: None,
             no_selection_highlighted: false,
             field_cursor_fade: CursorFade::default(),
+            backdrop_tween: Tween::idle(0.0),
             pending_hotkey_prefix: None,
             action_keys: DropdownActionKeys::default(),
         }
@@ -418,12 +420,21 @@ where
         self.focus_region.is_some()
     }
 
+    fn field_is_focused(&self) -> bool {
+        self.focus_region == Some(DropdownFocusRegion::Field)
+    }
+
+    fn chrome_is_active(&self) -> bool {
+        self.open || self.field_is_focused()
+    }
+
     pub fn open(&mut self) -> DropdownOutcome {
         if self.open {
             return DropdownOutcome::HANDLED;
         }
 
         self.open = true;
+        self.backdrop_tween.snap_to(DROPDOWN_BACKDROP_AMOUNT);
         self.opened_committed = self.committed.clone();
         self.draft = self.committed.clone();
         self.highlight_committed();
@@ -442,12 +453,32 @@ where
         }
     }
 
+    fn start_backdrop_tween(&mut self, active: bool, settings: AnimationSettings) {
+        let target = if active {
+            DROPDOWN_BACKDROP_AMOUNT
+        } else {
+            0.0
+        };
+        let resolved = settings.resolve(AnimationSpec::default());
+        if !resolved.enabled {
+            self.backdrop_tween.snap_to(target);
+            return;
+        }
+        self.backdrop_tween.start(
+            self.backdrop_tween.value(),
+            target,
+            resolved.duration,
+            resolved.easing,
+        );
+    }
+
     pub fn close(&mut self) -> DropdownOutcome {
         if !self.open {
             return DropdownOutcome::HANDLED;
         }
         let had_focus = self.is_focused();
         self.open = false;
+        self.backdrop_tween.snap_to(0.0);
         self.no_selection_highlighted = false;
         self.opened_committed.clear();
         self.clear_search_query();
@@ -585,12 +616,15 @@ where
         let popup_area = self.popup_overlay_area(bounds);
         if !popup_area.is_empty() {
             let field_area = self.effective_field_area(bounds);
-            super::dialog::dim_backdrop_buffer_except(
-                frame,
-                bounds,
-                DROPDOWN_BACKDROP_AMOUNT,
-                &[field_area, popup_area],
-            );
+            let backdrop = self.backdrop_tween.value();
+            if backdrop > 0.0 {
+                super::dialog::dim_backdrop_buffer_except(
+                    frame,
+                    bounds,
+                    backdrop,
+                    &[field_area, popup_area],
+                );
+            }
             self.render_field(frame, field_area);
             self.render_popup(frame, popup_area);
         }
@@ -1148,7 +1182,7 @@ where
             if !text.is_empty() && !label_area.is_empty() {
                 let theme = theme();
                 let style = Style::default()
-                    .fg(if self.is_focused() {
+                    .fg(if self.chrome_is_active() {
                         theme.accent_fg()
                     } else {
                         theme.muted_fg()
@@ -1195,7 +1229,7 @@ where
         let block = Block::default()
             .borders(Borders::ALL)
             .border_set(border_set(border))
-            .border_style(Style::default().fg(if self.is_focused() {
+            .border_style(Style::default().fg(if self.chrome_is_active() {
                 theme.accent_fg()
             } else {
                 theme.border_fg()
@@ -1452,7 +1486,7 @@ where
         };
         let theme = theme();
         let style = Style::default()
-            .fg(if self.is_focused() {
+            .fg(if self.chrome_is_active() {
                 theme.accent_fg()
             } else {
                 theme.muted_fg()
@@ -1478,12 +1512,12 @@ where
         }
 
         let theme = theme();
-        let border_style = Style::default().fg(if self.is_focused() {
+        let border_style = Style::default().fg(if self.chrome_is_active() {
             theme.accent_fg()
         } else {
             theme.border_fg()
         });
-        let title_style = Style::default().fg(if self.is_focused() {
+        let title_style = Style::default().fg(if self.chrome_is_active() {
             theme.accent_fg()
         } else {
             theme.muted_fg()
@@ -1576,6 +1610,8 @@ where
                     {
                         let outcome = self.open();
                         if outcome.opened {
+                            self.backdrop_tween.snap_to(0.0);
+                            self.start_backdrop_tween(true, ctx.animation());
                             ctx.request_layout();
                             self.request_open_focus(ctx);
                         }
@@ -1594,6 +1630,7 @@ where
         let focus_keys = bindings.focus();
         if self.open && focus_keys.next_matches(*key) {
             self.cancel();
+            self.start_backdrop_tween(false, ctx.animation());
             ctx.focus_next();
             ctx.request_layout();
             ctx.request_redraw();
@@ -1602,6 +1639,7 @@ where
         }
         if self.open && focus_keys.previous_matches(*key) {
             self.cancel();
+            self.start_backdrop_tween(false, ctx.animation());
             ctx.focus_previous();
             ctx.request_layout();
             ctx.request_redraw();
@@ -1610,6 +1648,10 @@ where
         }
         let outcome = self.on_key(*key, self.overlay_bounds);
         if outcome.opened || outcome.closed {
+            if outcome.opened {
+                self.backdrop_tween.snap_to(0.0);
+            }
+            self.start_backdrop_tween(outcome.opened, ctx.animation());
             ctx.request_layout();
         }
         if outcome.handled || outcome.changed {
@@ -1648,6 +1690,7 @@ where
             ctx.request_redraw();
         } else if !focused && self.open && self.target_matches_focus_region(target) {
             self.cancel();
+            self.start_backdrop_tween(false, ctx.animation());
             self.clear_focus();
             ctx.request_redraw();
         } else if !focused && self.target_matches_focus_region(target) {
@@ -1680,6 +1723,7 @@ where
                 dt,
                 settings,
             ))
+            .merge(self.backdrop_tween.tick(dt, settings))
             .merge(hotkey_tick)
     }
 }
@@ -1876,6 +1920,29 @@ mod tests {
                 .modifier
                 .contains(Modifier::DIM)
         );
+    }
+
+    #[test]
+    fn opening_from_event_tweens_backdrop_dim() {
+        let mut dropdown = single_dropdown();
+        dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 1), AREA, &mut LayoutCtx::new());
+        let mut ctx = EventCtx::<()>::new(AnimationSettings::default());
+
+        let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+        assert!(outcome.handled());
+        assert!(dropdown.is_open());
+        assert_eq!(dropdown.backdrop_tween.value(), 0.0);
+        assert!(dropdown.backdrop_tween.is_active());
+
+        Animated::tick(
+            &mut dropdown,
+            Duration::from_millis(125),
+            AnimationSettings::default(),
+        );
+
+        assert!(dropdown.backdrop_tween.value() > 0.0);
+        assert!(dropdown.backdrop_tween.value() < DROPDOWN_BACKDROP_AMOUNT);
     }
 
     #[test]
@@ -2565,6 +2632,31 @@ mod tests {
             .expect("dropdown should render");
 
         let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 2)).unwrap().fg, theme().accent_fg());
+    }
+
+    #[test]
+    fn open_dropdown_keeps_trigger_chrome_accented_under_popup() {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        let mut layout = LayoutCtx::new();
+        dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 3), Rect::new(0, 0, 12, 8), &mut layout);
+        let search = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == SEARCH_FOCUS)
+            .expect("search focus target should exist")
+            .clone();
+        let mut focus = FocusCtx::<()>::new(AnimationSettings::default());
+        dropdown.dispatch_focus(&search, true, &mut focus);
+        let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dropdown.render(frame, Rect::new(0, 0, 12, 3)))
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
         assert_eq!(buffer.cell((0, 2)).unwrap().fg, theme().accent_fg());
     }
 
