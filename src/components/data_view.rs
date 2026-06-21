@@ -414,6 +414,12 @@ where
         }
     }
 
+    pub(crate) fn snap_highlight_centered(&mut self, area: Rect) -> ScrollOutcome {
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        self.center_highlight(area, settings)
+    }
+
     pub fn on_key(&mut self, key: impl Into<KeyEvent>, viewport: Rect) -> DataViewOutcome {
         self.on_key_with_settings(key, viewport, animation_settings())
     }

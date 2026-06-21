@@ -5,6 +5,7 @@ mod dropdown;
 mod flex;
 mod grid;
 mod list;
+mod notifications;
 mod overlay;
 mod panel;
 mod spinner;
@@ -14,6 +15,7 @@ mod tabs;
 mod text_input;
 mod textarea_input;
 mod toggle;
+mod typography;
 
 pub use crate::separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
 pub use crate::spacing::{Gap, Padding};
@@ -34,12 +36,16 @@ pub use dropdown::{
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use grid::{Grid, GridItem, GridTrack};
 pub use list::{List, ListOutcome};
+pub use notifications::{
+    Notification, NotificationCenter, NotificationId, NotificationKind, ToastIcons, ToastRack,
+};
 pub use overlay::{Overlay, OverlayAnchor, OverlaySize};
 pub use panel::{Panel, PanelHost, PanelTitlePosition};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};
 pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
-pub use text_input::{InputOutcome, TextInput, TextInputKeyBindings};
+pub use text_input::{InputOutcome, PasswordInput, TextInput, TextInputKeyBindings};
 pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};
-pub use toggle::{Toggle, ToggleOutcome};
+pub use toggle::{Toggle, ToggleOutcome, ToggleStyle};
+pub use typography::{Header, Paragraph, ParagraphOverflow};

@@ -14,10 +14,18 @@ use gallery_demo::dropdowns::{
     dropdown_index, dropdown_multi_contains, dropdown_no_search_immediate, dropdown_preview_layout,
     theme_dropdown,
 };
-use gallery_demo::inputs::{button_layout, input_layout, textarea_layout, toggle_layout};
+use gallery_demo::inputs::{
+    button_layout, password_input_showcase_layout, text_input_showcase_layout,
+    textarea_showcase_layout, toggle_layout, typography_showcase_layout,
+};
 use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_overlay_demo,
     layout_split_demo, layout_stack_demo, render_layout_intro,
+};
+use gallery_demo::notifications::{
+    notification_button_areas, notification_button_child_key, notification_button_child_route,
+    notification_button_index, notification_buttons, notification_for_index,
+    notification_trigger_layout,
 };
 use gallery_demo::panels::{
     PANEL_TITLE_CONTROL_COUNT, PanelTitleChoice, apply_panel_choice, panel_demo,
@@ -40,10 +48,11 @@ use ratatui::widgets::Paragraph;
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, ChildKey, DataView, DataViewTypedEvent,
     DialogBackdrop, DialogCloseReason, DialogLayer, Dropdown, EventCtx, EventOutcome, EventRoute,
-    Flex, FocusCtx, FocusId, FocusTarget, Grid, Key, KeyEvent, KeyModifiers, LayoutCtx,
-    LayoutResult, ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, SelectionMode,
-    SelectionTrigger, Spinner, Split, Stack, Tabs, TabsVariant, TextInput, TextareaInput, Theme,
-    ThemeName, TickResult, Toggle, TreeAdapter, TuiEvent, TuiNode,
+    Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, Key, KeyEvent, KeyModifiers, LayoutCtx,
+    LayoutResult, ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition,
+    Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger,
+    Spinner, Split, Stack, Tabs, TabsVariant, TextInput, TextareaInput, Theme, ThemeName,
+    TickResult, ToastRack, Toggle, TreeAdapter, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -52,6 +61,7 @@ enum Msg {
     DialogClosed(DialogCloseReason),
     ModalTabsOpened(TabsVariant),
     ModalTabsClosed(ModalCloseReason),
+    NotificationTriggered(usize),
 }
 
 fn main() -> tuicore::Result<()> {
@@ -101,6 +111,14 @@ fn main() -> tuicore::Result<()> {
             Msg::ModalTabsClosed(_reason) => {
                 root.set_active_with_context(false, ctx);
             }
+            Msg::NotificationTriggered(index) => {
+                root.base_mut()
+                    .base_mut()
+                    .previews
+                    .notification_triggers
+                    .push(notification_for_index(index).ttl(Duration::from_secs(4)));
+                ctx.request_redraw();
+            }
         })
         .run()
 }
@@ -142,6 +160,8 @@ impl Gallery {
         .selected([ComponentKind::Tabs])
         .expanded([
             ComponentKind::Panel,
+            ComponentKind::Notifications,
+            ComponentKind::Typography,
             ComponentKind::Inputs,
             ComponentKind::Layouts,
             ComponentKind::DataView,
@@ -245,6 +265,7 @@ impl TuiNode<Msg> for Gallery {
         self.theme_dropdown.render(frame, self.areas.theme_dropdown);
         self.previews
             .render_overlay(self.selected.preview(), frame, _area);
+        self.theme_dropdown.render_popup_overlay(frame, _area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -358,10 +379,17 @@ impl TuiNode<Msg> for Gallery {
 
 struct PreviewState {
     text_input: TextInput<Msg>,
+    text_input_panel: PanelHost<TextInput<Msg>>,
+    password_input: PasswordInput<Msg>,
+    header_plain: Header,
+    header_icon: Header,
+    paragraph: TuiParagraph,
     textarea_input: TextareaInput<Msg>,
+    textarea_panel: PanelHost<TextareaInput<Msg>>,
     button: Button<Msg>,
     button_presses: u32,
     toggle: Toggle<Msg>,
+    checkbox_toggle: Toggle<Msg>,
     dialog_100: Button<Msg>,
     dialog_80: Button<Msg>,
     dialog_60: Button<Msg>,
@@ -369,6 +397,8 @@ struct PreviewState {
     dialog_20: Button<Msg>,
     dialog_top: Button<Msg>,
     spinner: Spinner,
+    notification_triggers: ToastRack,
+    notification_buttons: [Button<Msg>; 4],
     panel_demo: Panel,
     panel_join_demo: PanelHost<Flex<Msg>>,
     panel_tabs_join_demo: PanelHost<Tabs<Msg>>,
@@ -409,15 +439,42 @@ impl PreviewState {
         Self {
             text_input: TextInput::new()
                 .placeholder("Type one line...")
-                .value("tuicore")
+                .hotkey("i")
                 .max_len(80),
+            text_input_panel: Panel::new()
+                .top_left("Description")
+                .hotkey("p")
+                .host(TextInput::new().placeholder("Nested input")),
+            password_input: PasswordInput::new()
+                .placeholder("Enter password...")
+                .hotkey("pw")
+                .value("hunter2")
+                .max_len(80),
+            header_plain: Header::new("Release Notes"),
+            header_icon: Header::new("Settings").icon(""),
+            paragraph: TuiParagraph::new(
+                "Paragraphs render wrapped body copy for explanatory text, help panels, and quiet content blocks. This one is intentionally longer than its preview box so the ellipsis overflow behavior is visible without needing a separate gallery entry.",
+            )
+            .overflow(ParagraphOverflow::Ellipsis)
+            .max_lines(1),
             textarea_input: TextareaInput::new()
                 .placeholder("Write multiple lines...")
                 .value("First line\nSecond line")
+                .hotkey("t")
                 .max_lines(8),
+            textarea_panel: Panel::new()
+                .top_left("Description")
+                .hotkey("p")
+                .host(
+                    TextareaInput::new()
+                        .placeholder("Nested textarea")
+                        .value("Draft note")
+                        .max_lines(4),
+                ),
             button: Button::new("button").hotkey("b"),
             button_presses: 0,
             toggle: Toggle::new("Telemetry").hotkey("x"),
+            checkbox_toggle: Toggle::new("Item").checkbox().checked(true).hotkey("i"),
             dialog_100: dialog_button(DialogExample::Full),
             dialog_80: dialog_button(DialogExample::Large),
             dialog_60: dialog_button(DialogExample::Medium),
@@ -425,6 +482,8 @@ impl PreviewState {
             dialog_20: dialog_button(DialogExample::Tiny),
             dialog_top: dialog_button(DialogExample::Top),
             spinner: Spinner::new(),
+            notification_triggers: ToastRack::new(),
+            notification_buttons: notification_buttons(),
             panel_demo: panel_demo(),
             panel_join_demo: panel_join_demo(),
             panel_tabs_join_demo: panel_tabs_join_demo(),
@@ -480,18 +539,43 @@ impl PreviewState {
             PreviewKind::PanelJoinedSeparators => self.layout_panel_join_preview(area, ctx),
             PreviewKind::PanelTabSeparators => self.layout_panel_tabs_join_preview(area, ctx),
             PreviewKind::Dialog => self.layout_dialog(area, ctx),
+            PreviewKind::NotificationTriggers => self.layout_notification_triggers(area, ctx),
             PreviewKind::Button => self.layout_button(area, ctx),
             PreviewKind::Toggle => self.layout_toggle(area, ctx),
             PreviewKind::TextInput => {
-                let [_, input] = input_layout(area);
+                let [_, input, panel] = text_input_showcase_layout(area);
                 ctx.push_slot(text_input_child_key(), input, |ctx| {
                     self.text_input.layout(input, ctx);
                 });
+                ctx.push_slot(text_input_panel_child_key(), panel, |ctx| {
+                    self.text_input_panel.layout(panel, ctx);
+                });
+            }
+            PreviewKind::PasswordInput => {
+                let [_, input, _] = password_input_showcase_layout(area);
+                ctx.push_slot(password_input_child_key(), input, |ctx| {
+                    self.password_input.layout(input, ctx);
+                });
+            }
+            PreviewKind::Typography => {
+                let [_, plain, icon, _, paragraph] = typography_showcase_layout(area);
+                ctx.push_slot(header_plain_child_key(), plain, |ctx| {
+                    <Header as TuiNode<Msg>>::layout(&mut self.header_plain, plain, ctx);
+                });
+                ctx.push_slot(header_icon_child_key(), icon, |ctx| {
+                    <Header as TuiNode<Msg>>::layout(&mut self.header_icon, icon, ctx);
+                });
+                ctx.push_slot(paragraph_child_key(), paragraph, |ctx| {
+                    <TuiParagraph as TuiNode<Msg>>::layout(&mut self.paragraph, paragraph, ctx);
+                });
             }
             PreviewKind::TextareaInput => {
-                let [_, input] = input_layout(area);
+                let [_, input, panel] = textarea_showcase_layout(area);
                 ctx.push_slot(textarea_input_child_key(), input, |ctx| {
                     self.textarea_input.layout(input, ctx);
+                });
+                ctx.push_slot(textarea_panel_child_key(), panel, |ctx| {
+                    self.textarea_panel.layout(panel, ctx);
                 });
             }
             PreviewKind::DataList
@@ -537,7 +621,10 @@ impl PreviewState {
             PreviewKind::PanelTabSeparators => self.render_panel_tabs_join_preview(frame, area),
             PreviewKind::Dialog => self.render_dialog(frame, area),
             PreviewKind::Spinner => self.render_spinner(frame, area),
+            PreviewKind::NotificationTriggers => self.render_notification_triggers(frame, area),
             PreviewKind::TextInput => self.render_text_input(frame, area),
+            PreviewKind::PasswordInput => self.render_password_input(frame, area),
+            PreviewKind::Typography => self.render_typography(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
             PreviewKind::Button => self.render_button(frame, area),
             PreviewKind::Toggle => self.render_toggle(frame, area),
@@ -564,6 +651,9 @@ impl PreviewState {
                 self.dropdown(index)
                     .render_popup_overlay(frame, overlay_bounds);
             }
+        }
+        if preview == PreviewKind::NotificationTriggers {
+            self.notification_triggers.render(frame, overlay_bounds);
         }
     }
 
@@ -606,24 +696,48 @@ impl PreviewState {
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
         if preview == PreviewKind::TextInput {
-            let Some(route) = route
+            if let Some(route) = route
                 .path
                 .without_first_if(&text_input_child_key())
                 .map(EventRoute::new)
-            else {
-                return EventOutcome::Ignored;
-            };
-            return self.text_input.dispatch_event(&route, event, ctx);
-        }
-        if preview == PreviewKind::TextareaInput {
+            {
+                return self.text_input.dispatch_event(&route, event, ctx);
+            }
             let Some(route) = route
                 .path
-                .without_first_if(&textarea_input_child_key())
+                .without_first_if(&text_input_panel_child_key())
                 .map(EventRoute::new)
             else {
                 return EventOutcome::Ignored;
             };
-            return self.textarea_input.dispatch_event(&route, event, ctx);
+            return self.text_input_panel.dispatch_event(&route, event, ctx);
+        }
+        if preview == PreviewKind::PasswordInput {
+            let Some(route) = route
+                .path
+                .without_first_if(&password_input_child_key())
+                .map(EventRoute::new)
+            else {
+                return EventOutcome::Ignored;
+            };
+            return self.password_input.dispatch_event(&route, event, ctx);
+        }
+        if preview == PreviewKind::TextareaInput {
+            if let Some(route) = route
+                .path
+                .without_first_if(&textarea_input_child_key())
+                .map(EventRoute::new)
+            {
+                return self.textarea_input.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&textarea_panel_child_key())
+                .map(EventRoute::new)
+            else {
+                return EventOutcome::Ignored;
+            };
+            return self.textarea_panel.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::Tabs {
             if let Some((index, route)) = modal_tabs_open_child_route(route) {
@@ -637,7 +751,24 @@ impl PreviewState {
             return self.tab_demo_mut(index).dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::Toggle {
-            return self.toggle.dispatch_event(route, event, ctx);
+            if let Some(route) = route
+                .path
+                .without_first_if(&toggle_switch_child_key())
+                .map(EventRoute::new)
+            {
+                return self.toggle.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&toggle_checkbox_child_key())
+                .map(EventRoute::new)
+            else {
+                return EventOutcome::Ignored;
+            };
+            return self.checkbox_toggle.dispatch_event(&route, event, ctx);
+        }
+        if preview == PreviewKind::NotificationTriggers {
+            return self.notification_trigger_dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::Button {
             return self.button_dispatch_event(route, event, ctx);
@@ -695,19 +826,46 @@ impl PreviewState {
     ) {
         match preview {
             PreviewKind::TextInput => {
-                dispatch_focus_child(
+                if dispatch_focus_child(
                     &mut self.text_input,
                     target,
                     text_input_child_key(),
                     focused,
                     ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.text_input_panel,
+                    target,
+                    text_input_panel_child_key(),
+                    focused,
+                    ctx,
+                );
+            }
+            PreviewKind::PasswordInput => {
+                dispatch_focus_child(
+                    &mut self.password_input,
+                    target,
+                    password_input_child_key(),
+                    focused,
+                    ctx,
                 );
             }
             PreviewKind::TextareaInput => {
-                dispatch_focus_child(
+                if dispatch_focus_child(
                     &mut self.textarea_input,
                     target,
                     textarea_input_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.textarea_panel,
+                    target,
+                    textarea_panel_child_key(),
                     focused,
                     ctx,
                 );
@@ -729,7 +887,32 @@ impl PreviewState {
                     );
                 }
             }
-            PreviewKind::Toggle => self.toggle.dispatch_focus(target, focused, ctx),
+            PreviewKind::Toggle => {
+                if dispatch_focus_child(
+                    &mut self.toggle,
+                    target,
+                    toggle_switch_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.checkbox_toggle,
+                    target,
+                    toggle_checkbox_child_key(),
+                    focused,
+                    ctx,
+                );
+            }
+            PreviewKind::NotificationTriggers => dispatch_focus_indexed(
+                target,
+                notification_button_index,
+                |state, index| &mut state.notification_buttons[index],
+                self,
+                focused,
+                ctx,
+            ),
             PreviewKind::Dialog => {
                 dispatch_focus_indexed(
                     target,
@@ -794,8 +977,34 @@ impl PreviewState {
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         Animated::tick(&mut self.spinner, dt, settings)
+            .merge(Animated::tick(
+                &mut self.notification_triggers,
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(&mut self.button, dt, settings))
+            .merge(Animated::tick(
+                &mut self.notification_buttons[0],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.notification_buttons[1],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.notification_buttons[2],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.notification_buttons[3],
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
+            .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
             .merge(Animated::tick(&mut self.dialog_100, dt, settings))
             .merge(Animated::tick(&mut self.dialog_80, dt, settings))
             .merge(Animated::tick(&mut self.dialog_60, dt, settings))
@@ -882,7 +1091,10 @@ impl PreviewState {
                 settings,
             ))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
+            .merge(self.text_input_panel.tick(dt, settings))
+            .merge(Animated::tick(&mut self.password_input, dt, settings))
             .merge(Animated::tick(&mut self.textarea_input, dt, settings))
+            .merge(self.textarea_panel.tick(dt, settings))
     }
 
     fn panel_title_dropdown_mut(
@@ -1256,10 +1468,11 @@ impl PreviewState {
     }
 
     fn render_text_input(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, input] = input_layout(area);
+        let [instructions, input, panel] = text_input_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter submits. Tab returns to list. Ctrl+Q quits from gallery root.\n\
+                "Type text. Enter submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
+                 Plain input has hotkey |i|. Nested panel has hotkey |p|.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -1272,13 +1485,58 @@ impl PreviewState {
             instructions,
         );
         self.text_input.render(frame, input);
+        self.text_input_panel.render(frame, panel);
+    }
+
+    fn render_password_input(&self, frame: &mut Frame, area: Rect) {
+        let [instructions, input, preview] = password_input_showcase_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "Type a secret. Enter submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
+                 Text is masked; current editing shortcuts match TextInput.\n\
+                 Shortcuts:\n\
+                 • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
+                 • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
+                 • Ctrl+Delete / Alt+D                    : Delete word forward\n\
+                 • Ctrl+A / Ctrl+E                        : Move cursor to start / end of line\n\
+                 • Ctrl+U / Ctrl+K                        : Delete to start / end of line\n\
+                 • Ctrl+C                                 : Clear input",
+            ),
+            instructions,
+        );
+        self.password_input.render(frame, input);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Current value: {}",
+                self.password_input.current_value()
+            )),
+            preview,
+        );
+    }
+
+    fn render_typography(&self, frame: &mut Frame, area: Rect) {
+        let [instructions, plain, icon, paragraph_label, paragraph] =
+            typography_showcase_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "Typography renders semantic text primitives.\n\
+                 Headers support plain labels and Nerd Font icons.\n\
+                 Paragraphs can wrap, clip, or ellipsize overflowing copy.",
+            ),
+            instructions,
+        );
+        self.header_plain.render(frame, plain);
+        self.header_icon.render(frame, icon);
+        frame.render_widget(Paragraph::new("Paragraph with ellipsis:"), paragraph_label);
+        self.paragraph.render(frame, paragraph);
     }
 
     fn render_textarea_input(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, input] = textarea_layout(area);
+        let [instructions, input, panel] = textarea_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab returns to list. Ctrl+Q quits from gallery root.\n\
+                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
+                 Plain textarea has hotkey |t|. Nested panel has hotkey |p|.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+P / Ctrl+N                        : Move cursor up / down a line\n\
@@ -1292,6 +1550,7 @@ impl PreviewState {
             instructions,
         );
         self.textarea_input.render(frame, input);
+        self.textarea_panel.render(frame, panel);
     }
 
     fn layout_button(&mut self, area: Rect, ctx: &mut LayoutCtx) {
@@ -1330,19 +1589,25 @@ impl PreviewState {
     }
 
     fn layout_toggle(&mut self, area: Rect, ctx: &mut LayoutCtx) {
-        let [_, toggle_area] = toggle_layout(area);
-        self.toggle.layout(toggle_area, ctx);
+        let [_, switch_area, checkbox_area] = toggle_layout(area);
+        ctx.push_slot(toggle_switch_child_key(), switch_area, |ctx| {
+            self.toggle.layout(switch_area, ctx);
+        });
+        ctx.push_slot(toggle_checkbox_child_key(), checkbox_area, |ctx| {
+            self.checkbox_toggle.layout(checkbox_area, ctx);
+        });
     }
 
     fn render_toggle(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, toggle_area] = toggle_layout(area);
+        let [instructions, switch_area, checkbox_area] = toggle_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Enter/Space toggles. Press x from anywhere in this preview to focus and toggle.",
+                "Enter/Space toggles. Press x for switch style or i for checkbox style.",
             ),
             instructions,
         );
-        self.toggle.render(frame, toggle_area);
+        self.toggle.render(frame, switch_area);
+        self.checkbox_toggle.render(frame, checkbox_area);
     }
 
     fn render_spinner(&self, frame: &mut Frame, area: Rect) {
@@ -1355,6 +1620,45 @@ impl PreviewState {
             help,
         );
         self.spinner.render(frame, spinner);
+    }
+
+    fn layout_notification_triggers(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let [_, buttons, _] = notification_trigger_layout(area);
+        let button_areas = notification_button_areas(buttons);
+        for (index, button_area) in button_areas.into_iter().enumerate() {
+            ctx.push_slot(notification_button_child_key(index), button_area, |ctx| {
+                self.notification_buttons[index].layout(button_area, ctx);
+            });
+        }
+    }
+
+    fn render_notification_triggers(&self, frame: &mut Frame, area: Rect) {
+        let [help, buttons, footer] = notification_trigger_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "Press a button to push a toast. Notifications render over the full app area, not inside this preview panel.",
+            ),
+            help,
+        );
+        for (index, button_area) in notification_button_areas(buttons).into_iter().enumerate() {
+            self.notification_buttons[index].render(frame, button_area);
+        }
+        frame.render_widget(
+            Paragraph::new("Hotkeys: ni info • ns success • nw warning • ne error"),
+            footer,
+        );
+    }
+
+    fn notification_trigger_dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> EventOutcome {
+        let Some((index, route)) = notification_button_child_route(route) else {
+            return EventOutcome::Ignored;
+        };
+        self.notification_buttons[index].dispatch_event(&route, event, ctx)
     }
 
     fn render_panel_preview(&self, frame: &mut Frame, area: Rect) {
@@ -1528,8 +1832,40 @@ fn text_input_child_key() -> ChildKey {
     ChildKey::new("text-input")
 }
 
+fn text_input_panel_child_key() -> ChildKey {
+    ChildKey::new("text-input-panel")
+}
+
+fn password_input_child_key() -> ChildKey {
+    ChildKey::new("password-input")
+}
+
+fn header_plain_child_key() -> ChildKey {
+    ChildKey::new("header-plain")
+}
+
+fn header_icon_child_key() -> ChildKey {
+    ChildKey::new("header-icon")
+}
+
+fn paragraph_child_key() -> ChildKey {
+    ChildKey::new("paragraph")
+}
+
 fn textarea_input_child_key() -> ChildKey {
     ChildKey::new("textarea-input")
+}
+
+fn textarea_panel_child_key() -> ChildKey {
+    ChildKey::new("textarea-panel")
+}
+
+fn toggle_switch_child_key() -> ChildKey {
+    ChildKey::new("toggle-switch")
+}
+
+fn toggle_checkbox_child_key() -> ChildKey {
+    ChildKey::new("toggle-checkbox")
 }
 
 fn dispatch_focus_child<N>(
@@ -1582,6 +1918,9 @@ enum ComponentKind {
     PanelTabSeparators,
     Dialog,
     Spinner,
+    Notifications,
+    NotificationTriggers,
+    Typography,
     Layouts,
     LayoutFlex,
     LayoutSplit,
@@ -1591,6 +1930,7 @@ enum ComponentKind {
     Inputs,
     Button,
     TextInput,
+    PasswordInput,
     TextareaInput,
     Toggle,
     Dropdown,
@@ -1606,13 +1946,16 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 27] = [
+    const ALL: [Self; 31] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
         Self::PanelTabSeparators,
         Self::Dialog,
         Self::Spinner,
+        Self::Notifications,
+        Self::NotificationTriggers,
+        Self::Typography,
         Self::Layouts,
         Self::LayoutFlex,
         Self::LayoutSplit,
@@ -1622,6 +1965,7 @@ impl ComponentKind {
         Self::Inputs,
         Self::Button,
         Self::TextInput,
+        Self::PasswordInput,
         Self::TextareaInput,
         Self::Toggle,
         Self::Dropdown,
@@ -1644,6 +1988,9 @@ impl ComponentKind {
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
             Self::Spinner => "Spinner",
+            Self::Notifications => "Notifications",
+            Self::NotificationTriggers => "Triggers",
+            Self::Typography => "Typography",
             Self::Layouts => "Layouts",
             Self::LayoutFlex => "Flex",
             Self::LayoutSplit => "Split",
@@ -1653,6 +2000,7 @@ impl ComponentKind {
             Self::Inputs => "Inputs",
             Self::Button => "Button",
             Self::TextInput => "Text",
+            Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
@@ -1680,6 +2028,7 @@ impl ComponentKind {
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
             Self::Button
             | Self::TextInput
+            | Self::PasswordInput
             | Self::TextareaInput
             | Self::Toggle
             | Self::Dropdown => Some(Self::Inputs),
@@ -1689,6 +2038,7 @@ impl ComponentKind {
             | Self::LayoutOverlay
             | Self::LayoutGrid => Some(Self::Layouts),
             Self::PanelJoinedSeparators | Self::PanelTabSeparators => Some(Self::Panel),
+            Self::NotificationTriggers => Some(Self::Notifications),
             _ => None,
         }
     }
@@ -1701,6 +2051,9 @@ impl ComponentKind {
             Self::PanelTabSeparators => PreviewKind::PanelTabSeparators,
             Self::Dialog => PreviewKind::Dialog,
             Self::Spinner => PreviewKind::Spinner,
+            Self::Notifications => PreviewKind::NotificationTriggers,
+            Self::NotificationTriggers => PreviewKind::NotificationTriggers,
+            Self::Typography => PreviewKind::Typography,
             Self::Layouts | Self::LayoutFlex => PreviewKind::LayoutFlex,
             Self::LayoutSplit => PreviewKind::LayoutSplit,
             Self::LayoutStack => PreviewKind::LayoutStack,
@@ -1708,6 +2061,7 @@ impl ComponentKind {
             Self::LayoutGrid => PreviewKind::LayoutGrid,
             Self::Inputs | Self::Button => PreviewKind::Button,
             Self::TextInput => PreviewKind::TextInput,
+            Self::PasswordInput => PreviewKind::PasswordInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
             Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
@@ -1731,12 +2085,15 @@ enum PreviewKind {
     PanelTabSeparators,
     Dialog,
     Spinner,
+    NotificationTriggers,
+    Typography,
     LayoutFlex,
     LayoutSplit,
     LayoutStack,
     LayoutOverlay,
     LayoutGrid,
     TextInput,
+    PasswordInput,
     TextareaInput,
     Button,
     Toggle,
@@ -1760,12 +2117,15 @@ impl PreviewKind {
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
             Self::Spinner => "Spinner",
+            Self::NotificationTriggers => "Notification Triggers",
+            Self::Typography => "Typography",
             Self::LayoutFlex => "Flex Layout",
             Self::LayoutSplit => "Split Layout",
             Self::LayoutStack => "Stack Layout",
             Self::LayoutOverlay => "Overlay Layout",
             Self::LayoutGrid => "Grid Layout",
             Self::TextInput => "Text",
+            Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::Button => "Button",
             Self::Toggle => "Toggle",

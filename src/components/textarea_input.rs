@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::animation::{Animated, AnimationSettings, TickResult};
-use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{HotkeyEvent, Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::theme;
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
@@ -15,8 +15,8 @@ use crate::{
 };
 
 use super::text_input::{
-    CursorFade, InputOutcome, cell_width, display_char, placeholder_line, text_char,
-    visible_start_for_cursor,
+    CursorFade, InputOutcome, append_unfocused_hotkey, cell_width, display_char, placeholder_label,
+    placeholder_line, text_char, visible_start_for_cursor,
 };
 
 const TEXTAREA_FOCUS: &str = "textarea";
@@ -25,6 +25,7 @@ const TAB_INSERT: &str = "    ";
 pub struct TextareaInput<M = ()> {
     value: String,
     placeholder: String,
+    hotkey: Option<String>,
     cursor: usize,
     focused: bool,
     max_lines: Option<usize>,
@@ -33,6 +34,7 @@ pub struct TextareaInput<M = ()> {
     external_editor_key: Option<KeyEvent>,
     keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
+    pending_hotkey_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +142,7 @@ impl<M> TextareaInput<M> {
         Self {
             value: String::new(),
             placeholder: String::new(),
+            hotkey: None,
             cursor: 0,
             focused: false,
             max_lines: None,
@@ -148,6 +151,7 @@ impl<M> TextareaInput<M> {
             external_editor_key: Some(ctrl_key('o')),
             keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
+            pending_hotkey_prefix: None,
         }
     }
 
@@ -161,6 +165,34 @@ impl<M> TextareaInput<M> {
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.hotkey = Some(hotkey.into());
+        self
+    }
+
+    pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.hotkey = Some(hotkey.into());
+    }
+
+    pub fn clear_hotkey(&mut self) {
+        self.hotkey = None;
+        self.pending_hotkey_prefix = None;
+    }
+
+    fn handle_visual_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) {
+        match hotkey {
+            HotkeyEvent::Pending(prefix) => {
+                self.pending_hotkey_prefix = Some(prefix.clone());
+                ctx.request_redraw();
+            }
+            HotkeyEvent::Canceled | HotkeyEvent::Commit(_) => {
+                if self.pending_hotkey_prefix.take().is_some() {
+                    ctx.request_redraw();
+                }
+            }
+        }
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -317,13 +349,16 @@ impl<M> TextareaInput<M> {
             theme.subtle_fg()
         });
         let placeholder_style = Style::default().fg(theme.muted_fg());
+        let hotkey_style = Style::default().fg(theme.muted_fg());
         let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
             let mut lines = vec![placeholder_line(
                 &self.placeholder,
+                self.hotkey.as_deref(),
                 width,
                 self.focused,
+                self.pending_hotkey_prefix.as_deref(),
                 self.cursor_fade.style(placeholder_style),
                 placeholder_style,
             )];
@@ -357,6 +392,8 @@ impl<M> TextareaInput<M> {
                     horizontal,
                     width,
                     value_style,
+                    (!self.focused && line_index == ranges.len().saturating_sub(1))
+                        .then_some(hotkey_style),
                     cursor_style,
                 )
             })
@@ -370,6 +407,7 @@ impl<M> TextareaInput<M> {
         horizontal: usize,
         width: usize,
         value_style: Style,
+        hotkey_style: Option<Style>,
         cursor_style: Style,
     ) -> Line<'static> {
         let chars = self.value.chars().collect::<Vec<_>>();
@@ -405,6 +443,17 @@ impl<M> TextareaInput<M> {
                 drawn += cell_width(&text);
                 spans.push(Span::styled(text, value_style));
             }
+        }
+        if let Some(hotkey_style) = hotkey_style {
+            append_unfocused_hotkey(
+                &mut spans,
+                &mut drawn,
+                width,
+                self.hotkey.as_deref(),
+                self.focused,
+                self.pending_hotkey_prefix.as_deref(),
+                hotkey_style,
+            );
         }
 
         Line::from(spans)
@@ -685,9 +734,9 @@ impl<M> TextareaInput<M> {
 impl<M> TuiNode<M> for TextareaInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let text = if self.value.is_empty() {
-            self.placeholder.as_str()
+            placeholder_label(&self.placeholder, self.hotkey.as_deref())
         } else {
-            self.value.as_str()
+            self.value.clone()
         };
         let width = text
             .lines()
@@ -695,12 +744,21 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             .max()
             .unwrap_or(1)
             .min(u16::MAX as usize) as u16;
-        let height = text.lines().count().max(1).min(u16::MAX as usize) as u16;
+        let height = text.split('\n').count().min(u16::MAX as usize) as u16;
         LayoutSizeHint::content(width.max(1), height).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
+        if let Some(hotkey) = self.hotkey.clone() {
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new(TEXTAREA_FOCUS),
+                area,
+                true,
+                vec![hotkey],
+            );
+        } else {
+            ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
+        }
         ctx.set_focus_suppresses_global_hotkeys(FocusId::new(TEXTAREA_FOCUS), true);
         LayoutResult::new(area)
     }
@@ -710,6 +768,10 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Hotkey(hotkey) = event {
+            self.handle_visual_hotkey(hotkey, ctx);
+            return EventOutcome::Ignored;
+        }
         if let TuiEvent::ExternalEditor(response) = event {
             self.apply_external_editor_response(response);
             self.cursor_fade.reset();
@@ -811,300 +873,5 @@ fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Propagation;
-
-    #[test]
-    fn handled_key_stops_propagation() {
-        let mut input = TextareaInput::<()>::new();
-        let mut ctx = EventCtx::<()>::default();
-
-        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-    }
-
-    #[test]
-    fn control_enter_submit_emits_message_and_stops_propagation() {
-        let mut input = TextareaInput::new()
-            .value("first\nsecond")
-            .on_submit(|value| format!("submit:{value}"));
-        let mut ctx = EventCtx::default();
-        let key = KeyEvent {
-            code: Key::Enter,
-            modifiers: KeyModifiers::CONTROL,
-        };
-
-        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(ctx.messages(), &["submit:first\nsecond".to_string()]);
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-        assert!(ctx.redraw_requested());
-    }
-
-    #[test]
-    fn control_d_submit_emits_message_and_stops_propagation() {
-        let mut input = TextareaInput::new()
-            .value("draft")
-            .on_submit(|value| format!("submit:{value}"));
-        let mut ctx = EventCtx::default();
-        let key = KeyEvent {
-            code: Key::Char('d'),
-            modifiers: KeyModifiers::CONTROL,
-        };
-
-        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(ctx.messages(), &["submit:draft".to_string()]);
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-        assert!(ctx.redraw_requested());
-    }
-
-    #[test]
-    fn control_c_clears_value_and_stops_propagation() {
-        let mut input = TextareaInput::<()>::new().value("first\nsecond");
-        let mut ctx = EventCtx::<()>::default();
-        let key = KeyEvent {
-            code: Key::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-        };
-
-        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "");
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-        assert!(ctx.redraw_requested());
-    }
-
-    #[test]
-    fn tab_inserts_tab_character_and_stops_propagation() {
-        let mut input = TextareaInput::<()>::new().value("left");
-        let mut ctx = EventCtx::<()>::default();
-
-        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "left    ");
-        assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-        assert!(ctx.redraw_requested());
-    }
-
-    #[test]
-    fn control_i_inserts_tab_character_and_stops_propagation() {
-        let mut input = TextareaInput::<()>::new().value("left");
-        let mut ctx = EventCtx::<()>::default();
-        let key = KeyEvent {
-            code: Key::Char('i'),
-            modifiers: KeyModifiers::CONTROL,
-        };
-
-        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "left    ");
-        assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-        assert!(ctx.redraw_requested());
-    }
-
-    #[test]
-    fn visible_lines_clip_wide_unicode_by_terminal_width() {
-        let input = TextareaInput::<()>::new().value("ab界d");
-
-        let lines = input.visible_lines(4, 1);
-
-        assert_eq!(line_text(&lines[0]), "ab界");
-        assert_eq!(cell_width(&line_text(&lines[0])), 4);
-    }
-
-    #[test]
-    fn custom_submit_key_replaces_default_control_enter() {
-        let keys = TextareaInputKeyBindings {
-            submit: vec![KeySpec::plain('s')],
-            ..TextareaInputKeyBindings::default()
-        };
-        let mut input = TextareaInput::<()>::new().keybindings(keys);
-        let control_enter = KeyEvent {
-            code: Key::Enter,
-            modifiers: KeyModifiers::CONTROL,
-        };
-
-        assert_eq!(input.on_key(control_enter), InputOutcome::IDLE);
-        assert!(input.on_key(KeyEvent::from(Key::Char('s'))).submitted);
-    }
-
-    #[test]
-    fn focused_placeholder_draws_cursor_over_first_character() {
-        let input = TextareaInput::<()>::new()
-            .placeholder("Write multiple lines...")
-            .focused(true);
-
-        let lines = input.visible_lines(8, 1);
-
-        assert_eq!(lines[0].spans[0].content.as_ref(), "W");
-        assert_eq!(line_text(&lines[0]), "Write mu");
-    }
-
-    #[test]
-    fn escape_bubbles_to_parent_policy() {
-        let mut input = TextareaInput::<()>::new();
-        let mut ctx = EventCtx::<()>::default();
-
-        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx);
-        let mut parent_observed = false;
-        let bubbled = outcome.bubble(&mut ctx, |_ctx| {
-            parent_observed = true;
-            EventOutcome::Handled
-        });
-
-        assert_eq!(outcome, EventOutcome::Ignored);
-        assert_eq!(bubbled, EventOutcome::Handled);
-        assert!(parent_observed);
-        assert_eq!(ctx.propagation(), Propagation::Continue);
-        assert!(ctx.redraw_requested());
-    }
-
-    #[test]
-    fn word_navigation_and_deletion() {
-        let mut input = TextareaInput::<()>::new().value("hello world example");
-        // Start cursor is at the end (19)
-        assert_eq!(input.cursor, 19);
-
-        // Ctrl+Left jumps to the start of "example" (12)
-        input.on_key(KeyEvent {
-            code: Key::Left,
-            modifiers: KeyModifiers::CONTROL,
-        });
-        assert_eq!(input.cursor, 12);
-
-        // Ctrl+Left jumps to the start of "world" (6)
-        input.on_key(KeyEvent {
-            code: Key::Left,
-            modifiers: KeyModifiers::CONTROL,
-        });
-        assert_eq!(input.cursor, 6);
-
-        // Ctrl+Right jumps to the start of "example" (12)
-        input.on_key(KeyEvent {
-            code: Key::Right,
-            modifiers: KeyModifiers::CONTROL,
-        });
-        assert_eq!(input.cursor, 12);
-
-        // Ctrl+Right jumps to the end of input (19)
-        input.on_key(KeyEvent {
-            code: Key::Right,
-            modifiers: KeyModifiers::CONTROL,
-        });
-        assert_eq!(input.cursor, 19);
-
-        // Move cursor back to "world" (6)
-        input.cursor = 6;
-
-        // Ctrl+Backspace deletes "hello " (before cursor)
-        input.on_key(KeyEvent {
-            code: Key::Backspace,
-            modifiers: KeyModifiers::CONTROL,
-        });
-        assert_eq!(input.current_value(), "world example");
-        assert_eq!(input.cursor, 0);
-
-        // Reset text and delete next word (Ctrl+Delete)
-        input.set_value("hello world example");
-        input.cursor = 6; // start of "world"
-        input.on_key(KeyEvent {
-            code: Key::Delete,
-            modifiers: KeyModifiers::CONTROL,
-        });
-        // Deletes "world " (from cursor to start of next word)
-        assert_eq!(input.current_value(), "hello example");
-        assert_eq!(input.cursor, 6);
-    }
-
-    #[test]
-    fn ctrl_o_requests_external_editor() {
-        let mut input = TextareaInput::<()>::new().value("initial");
-        let mut ctx = EventCtx::default();
-        let key = KeyEvent {
-            code: Key::Char('o'),
-            modifiers: KeyModifiers::CONTROL,
-        };
-
-        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "initial");
-        assert_eq!(
-            ctx.external_editor_request(),
-            Some(&crate::ExternalEditorRequest {
-                value: "initial".to_string(),
-                line: 1,
-                col: 8,
-            })
-        );
-        assert!(ctx.redraw_requested());
-        assert!(!ctx.clear_requested());
-    }
-
-    #[test]
-    fn external_editor_response_clamps_column_to_selected_line() {
-        let mut input = TextareaInput::<()>::new().value("initial");
-        let mut ctx = EventCtx::default();
-
-        let outcome = input.event(
-            &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
-                value: "edited\nlines\n".to_string(),
-                line: 2,
-                col: 99,
-            }),
-            &mut ctx,
-        );
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "edited\nlines\n");
-        assert_eq!(input.cursor, "edited\nlines".chars().count());
-        assert!(ctx.redraw_requested());
-        assert!(ctx.clear_requested());
-    }
-
-    #[test]
-    fn paste_inserts_multiline_text() {
-        let mut input = TextareaInput::<()>::new().value("hello");
-        let mut ctx = EventCtx::default();
-
-        let outcome = input.event(&TuiEvent::Paste(" world\nagain".into()), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Handled);
-        assert_eq!(input.current_value(), "hello world\nagain");
-        assert!(ctx.redraw_requested());
-        assert_eq!(ctx.propagation(), Propagation::Stopped);
-    }
-
-    #[test]
-    fn on_blur_emits_message_when_focus_lost() {
-        let mut input = TextareaInput::new()
-            .value("hello")
-            .on_blur(|value| format!("blur:{value}"));
-        let mut ctx = FocusCtx::new(AnimationSettings::default());
-
-        input.focus(None, false, &mut ctx);
-
-        assert_eq!(
-            ctx.drain_messages().collect::<Vec<_>>(),
-            vec!["blur:hello".to_string()]
-        );
-    }
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    }
-}
+#[path = "textarea_input_tests.rs"]
+mod tests;

@@ -60,6 +60,5 @@ Useful public exports:
 Run examples:
 
 ```sh
-cargo run --example quickstart
-cargo run --example gallery_new_runtime
+cargo run --example gallery
 ```

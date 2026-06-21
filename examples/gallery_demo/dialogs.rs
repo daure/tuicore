@@ -217,9 +217,7 @@ impl TuiNode<Msg> for DialogControlsTab {
             Rect::new(area.x, area.y, area.width, 1),
         );
         self.toggle.render(frame, self.areas[0]);
-        if !self.dropdown.is_open() {
-            self.dropdown.render(frame, self.areas[1]);
-        }
+        self.dropdown.render(frame, self.areas[1]);
         self.input.render(frame, self.areas[2]);
         if self.dropdown.is_open() {
             self.dropdown.render_popup_overlay(frame, frame.area());

@@ -2,11 +2,10 @@ use std::time::{Duration, Instant};
 
 use crate::AnimationSettings;
 
-const DISABLED_ANIMATION_TIMEOUT: Duration = Duration::from_millis(i32::MAX as u64);
+const IDLE_TIMEOUT: Duration = Duration::from_millis(i32::MAX as u64);
 
 #[derive(Debug, Clone)]
 pub struct Scheduler {
-    enabled: bool,
     active: bool,
     frame_duration: Duration,
     last_tick: Instant,
@@ -15,7 +14,6 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(settings: AnimationSettings) -> Self {
         Self {
-            enabled: settings.enabled,
             active: false,
             frame_duration: settings.frame_duration(),
             last_tick: Instant::now(),
@@ -23,15 +21,15 @@ impl Scheduler {
     }
 
     pub fn timeout(&self) -> Duration {
-        if !self.enabled || !self.active {
-            return DISABLED_ANIMATION_TIMEOUT;
+        if !self.active {
+            return IDLE_TIMEOUT;
         }
 
         self.frame_duration.saturating_sub(self.last_tick.elapsed())
     }
 
     pub fn tick_due(&self) -> bool {
-        if !self.enabled || !self.active {
+        if !self.active {
             return false;
         }
 
@@ -39,14 +37,14 @@ impl Scheduler {
     }
 
     pub fn wake(&mut self) {
-        if self.enabled && !self.active {
+        if !self.active {
             self.active = true;
             self.last_tick = Instant::now();
         }
     }
 
     pub fn set_active(&mut self, active: bool) {
-        self.active = self.enabled && active;
+        self.active = active;
         if self.active {
             self.last_tick = Instant::now();
         }
@@ -92,20 +90,21 @@ mod tests {
         let scheduler = Scheduler::new(AnimationSettings::default());
 
         assert!(!scheduler.tick_due());
-        assert_eq!(scheduler.timeout(), DISABLED_ANIMATION_TIMEOUT);
+        assert_eq!(scheduler.timeout(), IDLE_TIMEOUT);
     }
 
     #[test]
-    fn disabled_animation_never_produces_ticks() {
+    fn disabled_animation_still_produces_active_ticks() {
         let mut scheduler = Scheduler {
-            enabled: false,
             active: true,
             frame_duration: Duration::from_millis(16),
             last_tick: Instant::now() - Duration::from_secs(1),
         };
 
-        assert!(!scheduler.tick_due());
-        assert_eq!(scheduler.tick(Duration::from_millis(100)), None);
-        assert_eq!(scheduler.timeout(), DISABLED_ANIMATION_TIMEOUT);
+        assert!(scheduler.tick_due());
+        assert_eq!(
+            scheduler.tick(Duration::from_millis(100)),
+            Some(Duration::from_millis(100))
+        );
     }
 }

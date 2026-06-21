@@ -16,6 +16,13 @@ use crate::{
 
 const TOGGLE_FOCUS: &str = "toggle";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToggleStyle {
+    #[default]
+    Switch,
+    Checkbox,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToggleOutcome {
     pub handled: bool,
@@ -44,6 +51,7 @@ impl ToggleOutcome {
 pub struct Toggle<M = ()> {
     label: String,
     value: bool,
+    style: ToggleStyle,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     focused: bool,
@@ -60,6 +68,7 @@ impl<M> Toggle<M> {
         Self {
             label: label.into(),
             value: false,
+            style: ToggleStyle::default(),
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             focused: false,
@@ -99,6 +108,20 @@ impl<M> Toggle<M> {
 
     pub fn set_label(&mut self, label: impl Into<String>) {
         self.label = label.into();
+    }
+
+    pub fn style(mut self, style: ToggleStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    pub fn set_style(&mut self, style: ToggleStyle) {
+        self.style = style;
+    }
+
+    pub fn checkbox(mut self) -> Self {
+        self.style = ToggleStyle::Checkbox;
+        self
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -179,7 +202,12 @@ impl<M> Toggle<M> {
     }
 
     fn line(&self) -> Line<'static> {
-        let switch = if self.value { "──●" } else { "○──" };
+        let switch = match (self.style, self.value) {
+            (ToggleStyle::Switch, true) => "──●",
+            (ToggleStyle::Switch, false) => "○──",
+            (ToggleStyle::Checkbox, true) => "[x]",
+            (ToggleStyle::Checkbox, false) => "[ ]",
+        };
         let switch_style = Style::default()
             .fg(self.visible_switch_color())
             .add_modifier(if self.focused {
@@ -547,6 +575,38 @@ mod tests {
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
         assert!(row.contains("○── Telemetry |x|"));
+    }
+
+    #[test]
+    fn renders_checkbox_style_when_unchecked() {
+        let toggle = Toggle::<()>::new("Telemetry").style(ToggleStyle::Checkbox);
+        let mut terminal = Terminal::new(TestBackend::new(16, 1)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| toggle.render(frame, frame.area()))
+            .expect("toggle should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = (0..16)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row.contains("[ ] Telemetry"));
+    }
+
+    #[test]
+    fn renders_checkbox_style_when_checked() {
+        let toggle = Toggle::<()>::new("Telemetry").checkbox().checked(true);
+        let mut terminal = Terminal::new(TestBackend::new(16, 1)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| toggle.render(frame, frame.area()))
+            .expect("toggle should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = (0..16)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(row.contains("[x] Telemetry"));
     }
 
     #[test]
