@@ -397,7 +397,7 @@ where
 
     fn dispatch_runtime_event(
         &mut self,
-        terminal: Option<&mut TerminalGuard>,
+        mut terminal: Option<&mut TerminalGuard>,
         flags: &mut RuntimeFlags,
         focus_manager: &mut FocusManager,
         layout_engine: &LayoutEngine,
@@ -417,6 +417,32 @@ where
             if is_global_quit_key(*key, runtime_keybindings) {
                 flags.quit = true;
                 return;
+            }
+            if focus_manager
+                .current()
+                .is_some_and(|target| target.focused_events_before_global_hotkeys)
+            {
+                let route = EventRoute::new(focus_manager.current_path());
+                let effects = dispatcher.dispatch_event(
+                    &mut self.root,
+                    &route,
+                    &event,
+                    self.animation_settings,
+                );
+                let external_editor = effects.external_editor.clone();
+                let focus_request = focus_request_from_event(&event, &effects);
+                let handled = effects.outcome.handled();
+                flags.merge(self.handle_effects(effects));
+                if flags.focus_request.is_none() {
+                    flags.focus_request = focus_request;
+                }
+                if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_editor)
+                {
+                    self.handle_external_editor(flags, dispatcher, terminal, route, request);
+                }
+                if handled {
+                    return;
+                }
             }
             let suppress_global_hotkeys = focus_manager
                 .current()
@@ -515,7 +541,7 @@ where
         if flags.focus_request.is_none() {
             flags.focus_request = focus_request;
         }
-        if let (Some(terminal), Some(request)) = (terminal, external_editor) {
+        if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_editor) {
             self.handle_external_editor(flags, dispatcher, terminal, route, request);
         }
     }
@@ -1028,6 +1054,12 @@ mod tests {
         hotkey_events: usize,
     }
 
+    #[derive(Default)]
+    struct FocusedFirstHotkeyNode {
+        focused_key_events: usize,
+        hotkey_events: usize,
+    }
+
     impl TuiNode<()> for QuitNode {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
@@ -1386,6 +1418,36 @@ mod tests {
                 _ => {}
             }
             EventOutcome::Ignored
+        }
+    }
+
+    impl TuiNode<()> for FocusedFirstHotkeyNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable(FocusId::new("picker"), area, true);
+            ctx.set_focus_receives_events_before_global_hotkeys(FocusId::new("picker"), true);
+            ctx.register_focusable_with_hotkey_sequences(
+                FocusId::new("action"),
+                area,
+                true,
+                vec!["t".to_string(), "x".to_string()],
+            );
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+
+        fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
+            match event {
+                TuiEvent::Key(key) if key.code == Key::Char('t') => {
+                    self.focused_key_events += 1;
+                    EventOutcome::Handled
+                }
+                TuiEvent::Hotkey(HotkeyEvent::Commit(_)) => {
+                    self.hotkey_events += 1;
+                    EventOutcome::Ignored
+                }
+                _ => EventOutcome::Ignored,
+            }
         }
     }
 
@@ -1779,6 +1841,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["s".to_string()],
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let other = FocusTarget {
             id: FocusId::new("tabs"),
@@ -1790,6 +1853,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["sa".to_string()],
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let targets = hotkey_sequence_targets(&[current.clone(), other]);
 
@@ -1811,6 +1875,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["t".to_string()],
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let longer = FocusTarget {
             id: FocusId::new("tabs"),
@@ -1822,6 +1887,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["ta".to_string()],
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let targets = hotkey_sequence_targets(&[exact, longer.clone()]);
 
@@ -1843,6 +1909,20 @@ mod tests {
 
         assert_eq!(app.root.key_events, 2);
         assert_eq!(app.root.hotkey_events, 0);
+    }
+
+    #[test]
+    fn focused_first_target_consumes_handled_keys_before_global_hotkeys() {
+        let app = TreeApp::new(FocusedFirstHotkeyNode::default());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('t'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.focused_key_events, 1);
+        assert_eq!(app.root.hotkey_events, 1);
     }
 
     #[test]

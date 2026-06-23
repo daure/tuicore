@@ -81,6 +81,7 @@ pub struct TextInput<M = ()> {
     hotkey: Option<String>,
     cursor: usize,
     focused: bool,
+    insert_mode: bool,
     max_len: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
@@ -119,7 +120,10 @@ impl Default for TextInputKeyBindings {
     fn default() -> Self {
         Self {
             submit: vec![KeySpec::key(Key::Enter)],
-            cancel: vec![KeySpec::key(Key::Esc)],
+            cancel: vec![
+                KeySpec::key(Key::Esc),
+                KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
+            ],
             clear: vec![KeySpec::key_with_modifiers(
                 Key::Char('c'),
                 KeyModifiers::CONTROL,
@@ -188,6 +192,7 @@ impl<M> TextInput<M> {
             hotkey: None,
             cursor: 0,
             focused: false,
+            insert_mode: false,
             max_len: None,
             on_submit: None,
             on_blur: None,
@@ -238,6 +243,19 @@ impl<M> TextInput<M> {
         }
     }
 
+    fn handle_focus_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> bool {
+        let HotkeyEvent::Commit(_) = hotkey else {
+            return false;
+        };
+
+        self.insert_mode = true;
+        self.cursor_fade.reset();
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.stop_propagation();
+        true
+    }
+
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
@@ -245,6 +263,14 @@ impl<M> TextInput<M> {
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        if !focused {
+            self.insert_mode = false;
+        }
+    }
+
+    pub(crate) fn set_insert_mode(&mut self, insert_mode: bool) {
+        self.insert_mode = insert_mode;
+        self.cursor_fade.reset();
     }
 
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
@@ -353,7 +379,6 @@ impl<M> TextInput<M> {
         if matches_any(&self.keys.cancel, key) {
             return InputOutcome::CANCELED;
         }
-
         match key.code {
             Key::Char(value) if text_char(key) => self.insert_char(value),
             _ => InputOutcome::IDLE,
@@ -368,6 +393,11 @@ impl<M> TextInput<M> {
         if area.is_empty() {
             return;
         }
+        let style = if self.focused && !self.insert_mode {
+            selected_input_style(style)
+        } else {
+            style
+        };
 
         frame.render_widget(
             Paragraph::new(self.line(area.width as usize)).style(style),
@@ -381,13 +411,27 @@ impl<M> TextInput<M> {
         }
 
         let theme = theme();
+        let selected = self.focused && !self.insert_mode;
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
             theme.subtle_fg()
         });
-        let placeholder_style = Style::default().fg(theme.muted_fg());
-        let hotkey_style = Style::default().fg(theme.muted_fg());
+        let value_style = if selected {
+            selected_input_style(value_style)
+        } else {
+            value_style
+        };
+        let placeholder_style = if selected {
+            selected_input_style(Style::default().fg(theme.muted_fg()))
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
+        let hotkey_style = if selected {
+            selected_input_style(Style::default())
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
         let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
@@ -395,7 +439,7 @@ impl<M> TextInput<M> {
                 &self.placeholder,
                 self.hotkey.as_deref(),
                 width,
-                self.focused,
+                self.focused && self.insert_mode,
                 self.pending_hotkey_prefix.as_deref(),
                 self.cursor_fade.style(placeholder_style),
                 placeholder_style,
@@ -404,7 +448,7 @@ impl<M> TextInput<M> {
 
         let chars = self.value.chars().collect::<Vec<_>>();
         let len = chars.len();
-        let start = if self.focused {
+        let start = if self.focused && self.insert_mode {
             visible_start_for_cursor(&chars, self.cursor, width)
         } else {
             0
@@ -417,7 +461,7 @@ impl<M> TextInput<M> {
                 break;
             }
             let remaining = width.saturating_sub(drawn);
-            if self.focused && position == self.cursor {
+            if self.focused && self.insert_mode && position == self.cursor {
                 let mut text = display_char(chars.get(position).copied().unwrap_or(' '), remaining);
                 if text.is_empty() && remaining > 0 {
                     text.push(' ');
@@ -437,7 +481,7 @@ impl<M> TextInput<M> {
             &mut drawn,
             width,
             self.hotkey.as_deref(),
-            self.focused,
+            self.focused && self.insert_mode,
             self.pending_hotkey_prefix.as_deref(),
             hotkey_style,
         );
@@ -764,6 +808,11 @@ impl<M> PasswordInput<M> {
         if area.is_empty() {
             return;
         }
+        let style = if self.input.focused && !self.input.insert_mode {
+            selected_input_style(style)
+        } else {
+            style
+        };
 
         frame.render_widget(
             Paragraph::new(self.line(area.width as usize)).style(style),
@@ -777,13 +826,27 @@ impl<M> PasswordInput<M> {
         }
 
         let theme = theme();
+        let selected = self.input.focused && !self.input.insert_mode;
         let value_style = Style::default().fg(if self.input.focused {
             theme.text_fg()
         } else {
             theme.subtle_fg()
         });
-        let placeholder_style = Style::default().fg(theme.muted_fg());
-        let hotkey_style = Style::default().fg(theme.muted_fg());
+        let value_style = if selected {
+            selected_input_style(value_style)
+        } else {
+            value_style
+        };
+        let placeholder_style = if selected {
+            selected_input_style(Style::default().fg(theme.muted_fg()))
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
+        let hotkey_style = if selected {
+            selected_input_style(Style::default())
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
         let cursor_style = self.input.cursor_fade.style(value_style);
 
         if self.input.value.is_empty() {
@@ -791,7 +854,7 @@ impl<M> PasswordInput<M> {
                 &self.input.placeholder,
                 self.input.hotkey.as_deref(),
                 width,
-                self.input.focused,
+                self.input.focused && self.input.insert_mode,
                 self.input.pending_hotkey_prefix.as_deref(),
                 self.input.cursor_fade.style(placeholder_style),
                 placeholder_style,
@@ -802,7 +865,7 @@ impl<M> PasswordInput<M> {
             .take(self.input.len_chars())
             .collect::<Vec<_>>();
         let len = chars.len();
-        let start = if self.input.focused {
+        let start = if self.input.focused && self.input.insert_mode {
             visible_start_for_cursor(&chars, self.input.cursor, width)
         } else {
             0
@@ -815,7 +878,7 @@ impl<M> PasswordInput<M> {
                 break;
             }
             let remaining = width.saturating_sub(drawn);
-            if self.input.focused && position == self.input.cursor {
+            if self.input.focused && self.input.insert_mode && position == self.input.cursor {
                 let mut text = display_char(chars.get(position).copied().unwrap_or(' '), remaining);
                 if text.is_empty() && remaining > 0 {
                     text.push(' ');
@@ -835,7 +898,7 @@ impl<M> PasswordInput<M> {
             &mut drawn,
             width,
             self.input.hotkey.as_deref(),
-            self.input.focused,
+            self.input.focused && self.input.insert_mode,
             self.input.pending_hotkey_prefix.as_deref(),
             hotkey_style,
         );
@@ -849,7 +912,11 @@ impl<M> TuiNode<M> for TextInput<M> {
         let text = if self.value.is_empty() {
             placeholder_label(&self.placeholder, self.hotkey.as_deref())
         } else {
-            self.value.clone()
+            label_with_visible_hotkey(
+                &self.value,
+                self.hotkey.as_deref(),
+                !(self.focused && self.insert_mode),
+            )
         };
         let width = line_width(&Line::from(text.as_str())).min(u16::MAX as usize) as u16;
         LayoutSizeHint::content(width.max(1), 1).normalized(proposal)
@@ -866,7 +933,7 @@ impl<M> TuiNode<M> for TextInput<M> {
         } else {
             ctx.register_focusable(FocusId::new(INPUT_FOCUS), area, true);
         }
-        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(INPUT_FOCUS), true);
+        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(INPUT_FOCUS), self.insert_mode);
         LayoutResult::new(area)
     }
 
@@ -877,6 +944,9 @@ impl<M> TuiNode<M> for TextInput<M> {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if let TuiEvent::Hotkey(hotkey) = event {
             self.handle_visual_hotkey(hotkey, ctx);
+            if self.handle_focus_hotkey(hotkey, ctx) {
+                return EventOutcome::Handled;
+            }
             return EventOutcome::Ignored;
         }
         if let TuiEvent::ExternalEditor(response) = event {
@@ -888,6 +958,10 @@ impl<M> TuiNode<M> for TextInput<M> {
             return EventOutcome::Handled;
         }
         if let TuiEvent::Paste(value) = event {
+            if !self.insert_mode {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             let outcome = self.on_paste(value);
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -903,6 +977,34 @@ impl<M> TuiNode<M> for TextInput<M> {
         };
         if self.external_editor_key_matches(*key) {
             ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if !self.insert_mode {
+            if focus_navigation_key(*key) {
+                return EventOutcome::Ignored;
+            }
+            if matches_any(&self.keys.submit, *key) {
+                self.insert_mode = true;
+                self.cursor_fade.reset();
+                ctx.request_layout();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            if matches_any(&self.keys.cancel, *key) {
+                self.cursor_fade.reset();
+                ctx.request_redraw();
+                return EventOutcome::Ignored;
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if matches_any(&self.keys.cancel, *key) {
+            self.insert_mode = false;
+            self.cursor_fade.reset();
+            ctx.request_layout();
+            ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
@@ -927,7 +1029,7 @@ impl<M> TuiNode<M> for TextInput<M> {
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
-        self.focused = focused;
+        self.set_focused(focused);
         if focused {
             self.cursor_fade.reset();
         } else if let Some(on_blur) = &self.on_blur {
@@ -946,9 +1048,14 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         let text = if self.input.value.is_empty() {
             placeholder_label(&self.input.placeholder, self.input.hotkey.as_deref())
         } else {
-            std::iter::repeat(self.mask_char)
+            let value = std::iter::repeat(self.mask_char)
                 .take(self.input.len_chars())
-                .collect::<String>()
+                .collect::<String>();
+            label_with_visible_hotkey(
+                &value,
+                self.input.hotkey.as_deref(),
+                !(self.input.focused && self.input.insert_mode),
+            )
         };
         let width = line_width(&Line::from(text.as_str())).min(u16::MAX as usize) as u16;
         LayoutSizeHint::content(width.max(1), 1).normalized(proposal)
@@ -965,7 +1072,10 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         } else {
             ctx.register_focusable(FocusId::new(PASSWORD_INPUT_FOCUS), area, true);
         }
-        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(PASSWORD_INPUT_FOCUS), true);
+        ctx.set_focus_suppresses_global_hotkeys(
+            FocusId::new(PASSWORD_INPUT_FOCUS),
+            self.input.insert_mode,
+        );
         LayoutResult::new(area)
     }
 
@@ -976,9 +1086,16 @@ impl<M> TuiNode<M> for PasswordInput<M> {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if let TuiEvent::Hotkey(hotkey) = event {
             self.input.handle_visual_hotkey(hotkey, ctx);
+            if self.input.handle_focus_hotkey(hotkey, ctx) {
+                return EventOutcome::Handled;
+            }
             return EventOutcome::Ignored;
         }
         if let TuiEvent::Paste(value) = event {
+            if !self.input.insert_mode {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             let outcome = self.on_paste(value);
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -992,6 +1109,34 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if !self.input.insert_mode {
+            if focus_navigation_key(*key) {
+                return EventOutcome::Ignored;
+            }
+            if matches_any(&self.input.keys.submit, *key) {
+                self.input.insert_mode = true;
+                self.input.cursor_fade.reset();
+                ctx.request_layout();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            if matches_any(&self.input.keys.cancel, *key) {
+                self.input.cursor_fade.reset();
+                ctx.request_redraw();
+                return EventOutcome::Ignored;
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if matches_any(&self.input.keys.cancel, *key) {
+            self.input.insert_mode = false;
+            self.input.cursor_fade.reset();
+            ctx.request_layout();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.on_key(*key);
         if outcome.submitted
             && let Some(on_submit) = &self.input.on_submit
@@ -1013,7 +1158,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
-        self.input.focused = focused;
+        self.input.set_focused(focused);
         if focused {
             self.input.cursor_fade.reset();
         } else if let Some(on_blur) = &self.input.on_blur {
@@ -1031,13 +1176,14 @@ impl<M> Animated for PasswordInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.input
             .cursor_fade
-            .tick(self.input.focused, dt, settings)
+            .tick(self.input.focused && self.input.insert_mode, dt, settings)
     }
 }
 
 impl<M> Animated for TextInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.cursor_fade.tick(self.focused, dt, settings)
+        self.cursor_fade
+            .tick(self.focused && self.insert_mode, dt, settings)
     }
 }
 
@@ -1078,9 +1224,43 @@ pub(crate) fn placeholder_line(
     Line::from(spans)
 }
 
+pub(crate) fn selected_input_style(style: Style) -> Style {
+    let theme = theme();
+    style
+        .fg(theme.highlight_fg())
+        .bg(theme.highlight_bg())
+        .add_modifier(Modifier::BOLD)
+}
+
+pub(crate) fn focus_navigation_key(key: KeyEvent) -> bool {
+    matches!(key.code, Key::Tab | Key::BackTab)
+}
+
 pub(crate) fn placeholder_label(placeholder: &str, hotkey: Option<&str>) -> String {
     hotkey_label_spans(
         placeholder,
+        hotkey,
+        HotkeyLabelMode::Inline,
+        None,
+        Style::default(),
+        Style::default(),
+    )
+    .into_iter()
+    .map(|span| span.content.into_owned())
+    .collect()
+}
+
+pub(crate) fn label_with_visible_hotkey(
+    label: &str,
+    hotkey: Option<&str>,
+    visible: bool,
+) -> String {
+    if !visible {
+        return label.to_owned();
+    }
+
+    hotkey_label_spans(
+        label,
         hotkey,
         HotkeyLabelMode::Inline,
         None,

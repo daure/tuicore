@@ -15,8 +15,9 @@ use crate::{
 };
 
 use super::text_input::{
-    CursorFade, InputOutcome, append_unfocused_hotkey, cell_width, display_char, placeholder_label,
-    placeholder_line, text_char, visible_start_for_cursor,
+    CursorFade, InputOutcome, append_unfocused_hotkey, cell_width, display_char,
+    focus_navigation_key, label_with_visible_hotkey, placeholder_label, placeholder_line,
+    selected_input_style, text_char, visible_start_for_cursor,
 };
 
 const TEXTAREA_FOCUS: &str = "textarea";
@@ -28,6 +29,7 @@ pub struct TextareaInput<M = ()> {
     hotkey: Option<String>,
     cursor: usize,
     focused: bool,
+    insert_mode: bool,
     max_lines: Option<usize>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
@@ -67,7 +69,10 @@ impl Default for TextareaInputKeyBindings {
                 KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::CONTROL),
                 KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
             ],
-            cancel: vec![KeySpec::key(Key::Esc)],
+            cancel: vec![
+                KeySpec::key(Key::Esc),
+                KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
+            ],
             clear: vec![KeySpec::key_with_modifiers(
                 Key::Char('c'),
                 KeyModifiers::CONTROL,
@@ -145,6 +150,7 @@ impl<M> TextareaInput<M> {
             hotkey: None,
             cursor: 0,
             focused: false,
+            insert_mode: false,
             max_lines: None,
             on_submit: None,
             on_blur: None,
@@ -195,6 +201,19 @@ impl<M> TextareaInput<M> {
         }
     }
 
+    fn handle_focus_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> bool {
+        let HotkeyEvent::Commit(_) = hotkey else {
+            return false;
+        };
+
+        self.insert_mode = true;
+        self.cursor_fade.reset();
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.stop_propagation();
+        true
+    }
+
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
@@ -202,6 +221,9 @@ impl<M> TextareaInput<M> {
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        if !focused {
+            self.insert_mode = false;
+        }
     }
 
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
@@ -333,8 +355,13 @@ impl<M> TextareaInput<M> {
             return;
         }
 
+        let style = if self.focused && !self.insert_mode {
+            selected_input_style(Style::default())
+        } else {
+            Style::default()
+        };
         let lines = self.visible_lines(area.width as usize, area.height as usize);
-        frame.render_widget(Paragraph::new(lines), area);
+        frame.render_widget(Paragraph::new(lines).style(style), area);
     }
 
     fn visible_lines(&self, width: usize, height: usize) -> Vec<Line<'static>> {
@@ -343,13 +370,27 @@ impl<M> TextareaInput<M> {
         }
 
         let theme = theme();
+        let selected = self.focused && !self.insert_mode;
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
             theme.subtle_fg()
         });
-        let placeholder_style = Style::default().fg(theme.muted_fg());
-        let hotkey_style = Style::default().fg(theme.muted_fg());
+        let value_style = if selected {
+            selected_input_style(value_style)
+        } else {
+            value_style
+        };
+        let placeholder_style = if selected {
+            selected_input_style(Style::default().fg(theme.muted_fg()))
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
+        let hotkey_style = if selected {
+            selected_input_style(Style::default())
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
         let cursor_style = self.cursor_fade.style(value_style);
 
         if self.value.is_empty() {
@@ -357,7 +398,7 @@ impl<M> TextareaInput<M> {
                 &self.placeholder,
                 self.hotkey.as_deref(),
                 width,
-                self.focused,
+                self.focused && self.insert_mode,
                 self.pending_hotkey_prefix.as_deref(),
                 self.cursor_fade.style(placeholder_style),
                 placeholder_style,
@@ -381,7 +422,7 @@ impl<M> TextareaInput<M> {
                     .skip(range.start)
                     .take(range.len())
                     .collect::<Vec<_>>();
-                let horizontal = if self.focused && line_index == cursor_line {
+                let horizontal = if self.focused && self.insert_mode && line_index == cursor_line {
                     visible_start_for_cursor(&line_chars, cursor_col, width)
                 } else {
                     0
@@ -392,8 +433,9 @@ impl<M> TextareaInput<M> {
                     horizontal,
                     width,
                     value_style,
-                    (!self.focused && line_index == ranges.len().saturating_sub(1))
-                        .then_some(hotkey_style),
+                    (!(self.focused && self.insert_mode)
+                        && line_index == ranges.len().saturating_sub(1))
+                    .then_some(hotkey_style),
                     cursor_style,
                 )
             })
@@ -420,7 +462,7 @@ impl<M> TextareaInput<M> {
             }
             let remaining = width.saturating_sub(drawn);
             let position = range.start + col;
-            if self.focused && cursor_line && position == self.cursor {
+            if self.focused && self.insert_mode && cursor_line && position == self.cursor {
                 let value = if position < range.end {
                     chars.get(position).copied().unwrap_or(' ')
                 } else {
@@ -450,7 +492,7 @@ impl<M> TextareaInput<M> {
                 &mut drawn,
                 width,
                 self.hotkey.as_deref(),
-                self.focused,
+                self.focused && self.insert_mode,
                 self.pending_hotkey_prefix.as_deref(),
                 hotkey_style,
             );
@@ -733,18 +775,27 @@ impl<M> TextareaInput<M> {
 
 impl<M> TuiNode<M> for TextareaInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        let text = if self.value.is_empty() {
-            placeholder_label(&self.placeholder, self.hotkey.as_deref())
+        let lines = if self.value.is_empty() {
+            vec![placeholder_label(&self.placeholder, self.hotkey.as_deref())]
         } else {
-            self.value.clone()
+            let show_hotkey = !(self.focused && self.insert_mode);
+            let mut lines = self
+                .value
+                .split('\n')
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if let Some(line) = lines.last_mut() {
+                *line = label_with_visible_hotkey(line, self.hotkey.as_deref(), show_hotkey);
+            }
+            lines
         };
-        let width = text
-            .lines()
-            .map(|line| line_width(&Line::from(line)))
+        let width = lines
+            .iter()
+            .map(|line| line_width(&Line::from(line.as_str())))
             .max()
             .unwrap_or(1)
             .min(u16::MAX as usize) as u16;
-        let height = text.split('\n').count().min(u16::MAX as usize) as u16;
+        let height = lines.len().min(u16::MAX as usize) as u16;
         LayoutSizeHint::content(width.max(1), height).normalized(proposal)
     }
 
@@ -759,7 +810,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         } else {
             ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
         }
-        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(TEXTAREA_FOCUS), true);
+        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(TEXTAREA_FOCUS), self.insert_mode);
         LayoutResult::new(area)
     }
 
@@ -770,6 +821,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if let TuiEvent::Hotkey(hotkey) = event {
             self.handle_visual_hotkey(hotkey, ctx);
+            if self.handle_focus_hotkey(hotkey, ctx) {
+                return EventOutcome::Handled;
+            }
             return EventOutcome::Ignored;
         }
         if let TuiEvent::ExternalEditor(response) = event {
@@ -781,6 +835,10 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         if let TuiEvent::Paste(value) = event {
+            if !self.insert_mode {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             let outcome = self.on_paste(value);
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -797,6 +855,34 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         if self.external_editor_key_matches(*key) {
             let (line, col) = self.external_editor_request_position();
             ctx.request_external_editor(self.value.clone(), line, col);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if !self.insert_mode {
+            if focus_navigation_key(*key) {
+                return EventOutcome::Ignored;
+            }
+            if matches_any(&self.keys.insert_newline, *key) {
+                self.insert_mode = true;
+                self.cursor_fade.reset();
+                ctx.request_layout();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            if matches_any(&self.keys.cancel, *key) {
+                self.cursor_fade.reset();
+                ctx.request_redraw();
+                return EventOutcome::Ignored;
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if matches_any(&self.keys.cancel, *key) {
+            self.insert_mode = false;
+            self.cursor_fade.reset();
+            ctx.request_layout();
+            ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
@@ -821,7 +907,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
-        self.focused = focused;
+        self.set_focused(focused);
         if focused {
             self.cursor_fade.reset();
         } else if let Some(on_blur) = &self.on_blur {
@@ -837,7 +923,8 @@ impl<M> TuiNode<M> for TextareaInput<M> {
 
 impl<M> Animated for TextareaInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.cursor_fade.tick(self.focused, dt, settings)
+        self.cursor_fade
+            .tick(self.focused && self.insert_mode, dt, settings)
     }
 }
 

@@ -1,5 +1,7 @@
 mod button;
+mod chip;
 mod data_view;
+mod date_time;
 mod dialog;
 mod dialog_layer;
 mod dropdown;
@@ -21,10 +23,15 @@ mod typography;
 pub use crate::separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
 pub use crate::spacing::{Gap, Padding};
 pub use button::{Button, ButtonOutcome};
+pub use chip::{Chip, ChipColorRole};
 pub use data_view::{
     ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
     DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
+};
+pub use date_time::{
+    DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerLayout, PickerOutcome, TimeField,
+    TimePicker, TimePrecision,
 };
 pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition};
 pub use dialog_layer::{DialogBackdrop, DialogLayer, DialogLayerPlacement};

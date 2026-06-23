@@ -300,6 +300,14 @@ where
         }
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        if self.active {
+            self.layer.render_overlay(frame, area);
+        } else {
+            self.base.render_overlay(frame, area);
+        }
+    }
+
     fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if self.active {
             ctx.stop_propagation();
@@ -415,7 +423,16 @@ pub(crate) fn dim_backdrop_buffer_except(
             } else {
                 dimmed_bg
             };
-            let fg = blend_cell_color(cell.fg, fallback_fg, target, amount);
+            let fg = if cell.bg == Color::Reset && is_powerline_fill(cell.symbol()) {
+                blend_cell_color(
+                    cell.fg,
+                    fallback_fg,
+                    fallback_bg,
+                    amount * BACKDROP_BACKGROUND_DIM_FACTOR,
+                )
+            } else {
+                blend_cell_color(cell.fg, fallback_fg, target, amount)
+            };
             cell.set_fg(fg);
             if cell.bg != Color::Reset {
                 cell.set_bg(dimmed_bg);
@@ -423,6 +440,10 @@ pub(crate) fn dim_backdrop_buffer_except(
             cell.modifier.insert(Modifier::DIM);
         }
     }
+}
+
+fn is_powerline_fill(symbol: &str) -> bool {
+    matches!(symbol, "" | "")
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -531,6 +552,8 @@ mod tests {
 
     struct ColorBody;
 
+    struct PowerlineBody;
+
     impl TuiNode<()> for StaticBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
@@ -552,6 +575,25 @@ mod tests {
                 Style::default()
                     .fg(Color::Rgb(200, 200, 200))
                     .bg(Color::Rgb(10, 20, 30)),
+            );
+        }
+    }
+
+    impl TuiNode<()> for PowerlineBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+            let fill = Color::Rgb(10, 120, 200);
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y, "", Style::default().fg(fill));
+            frame.buffer_mut().set_string(
+                area.x + 1,
+                area.y,
+                "A",
+                Style::default().fg(Color::Rgb(255, 255, 255)).bg(fill),
             );
         }
     }
@@ -578,6 +620,25 @@ mod tests {
         );
         assert_eq!(cell.bg, expected_bg);
         assert_eq!(cell.fg, expected_bg);
+    }
+
+    #[test]
+    fn backdrop_dim_keeps_powerline_fill_aligned_with_adjacent_background() {
+        let base = PowerlineBody;
+        let layer = StaticBody;
+        let mut dialog_layer =
+            DialogLayer::new(base, layer).backdrop(DialogBackdrop::dim().amount(1.0));
+        let mut layout = LayoutCtx::new();
+        dialog_layer.layout(Rect::new(0, 0, 10, 4), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog_layer.render(frame, frame.area()))
+            .expect("dialog layer should render");
+
+        let cap = terminal.backend().buffer().cell((0, 0)).unwrap();
+        let content = terminal.backend().buffer().cell((1, 0)).unwrap();
+        assert_eq!(cap.fg, content.bg);
     }
 
     #[test]
@@ -631,6 +692,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let other_focus_target = FocusTarget {
             id: FocusId::new("other"),
@@ -642,6 +704,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
 
         dialog_layer.set_active_with_dialog_focus(true, &mut ctx);
@@ -681,6 +744,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let other_focus_target = FocusTarget {
             id: FocusId::new("other"),
@@ -692,6 +756,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
 
         dialog_layer.set_active_with_context(true, &mut ctx);
@@ -716,6 +781,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
 
         dialog_layer.set_active_with_context(true, &mut ctx);

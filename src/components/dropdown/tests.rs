@@ -407,6 +407,42 @@ fn contains_search_requires_contiguous_match() {
 }
 
 #[test]
+fn open_popup_highlights_matching_search_characters() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    dropdown.on_key(char_key('a'), AREA);
+    dropdown.on_key(char_key('l'), AREA);
+    let mut terminal = Terminal::new(TestBackend::new(16, 6)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render_popup(frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .cell((1, 2))
+            .unwrap()
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert!(
+        buffer
+            .cell((2, 2))
+            .unwrap()
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert!(
+        !buffer
+            .cell((3, 2))
+            .unwrap()
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+}
+
+#[test]
 fn disabled_search_ignores_typing() {
     let mut dropdown = single_dropdown().search_mode(DropdownSearchMode::None);
 
@@ -669,10 +705,10 @@ fn flex_horizontal_fit_content_allocates_width_based_on_text() {
 
     flex.layout(Rect::new(0, 0, 40, 3), &mut ctx);
 
-    // "Beta" is 4 cells, plus 2 border cells = 6 width.
+    // "Beta" is 4 cells, plus 2 border cells, arrow spacing, and right padding = 9 width.
     assert_eq!(
         flex.child_rect(&ChildKey::from("dropdown")).unwrap().width,
-        6
+        9
     );
 }
 
@@ -689,8 +725,37 @@ fn flex_fit_content_uses_display_width_for_dropdown_text() {
 
     assert_eq!(
         flex.child_rect(&ChildKey::from("dropdown")).unwrap().width,
-        4
+        7
     );
+}
+
+#[test]
+fn bordered_variant_renders_trigger_with_nerd_font_chevron() {
+    let dropdown = single_dropdown().selected_one("Beta");
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render(frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((1, 1)).unwrap().symbol(), "B");
+    assert_eq!(buffer.cell((9, 1)).unwrap().symbol(), "");
+    assert_eq!(buffer.cell((10, 1)).unwrap().symbol(), " ");
+}
+
+#[test]
+fn open_bordered_variant_renders_up_chevron() {
+    let mut dropdown = single_dropdown().selected_one("Beta");
+    dropdown.open();
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render(frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((9, 1)).unwrap().symbol(), "");
 }
 
 #[test]
@@ -719,6 +784,22 @@ fn filled_variant_renders_filled_trigger_with_nerd_font_chevron() {
     assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().highlight_bg());
     assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "B");
     assert_eq!(buffer.cell((10, 0)).unwrap().symbol(), "");
+}
+
+#[test]
+fn open_filled_variant_renders_up_chevron() {
+    let mut dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .selected_one("Beta");
+    dropdown.open();
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render(frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((10, 0)).unwrap().symbol(), "");
 }
 
 #[test]

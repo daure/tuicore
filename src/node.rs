@@ -14,6 +14,8 @@ pub trait TuiNode<M = ()> {
 
     fn render(&self, frame: &mut Frame, area: Rect);
 
+    fn render_overlay(&self, _frame: &mut Frame, _area: Rect) {}
+
     fn event(&mut self, _event: &TuiEvent, _ctx: &mut EventCtx<M>) -> EventOutcome {
         EventOutcome::Ignored
     }
@@ -66,6 +68,10 @@ where
 
     fn render(&self, frame: &mut Frame, area: Rect) {
         self.as_ref().render(frame, area);
+    }
+
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.as_ref().render_overlay(frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -246,6 +252,7 @@ pub struct FocusTarget {
     pub hotkeys: Vec<KeyEvent>,
     pub hotkey_sequences: Vec<String>,
     pub suppress_global_hotkeys: bool,
+    pub focused_events_before_global_hotkeys: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -549,6 +556,7 @@ impl LayoutCtx {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         });
     }
 
@@ -572,6 +580,7 @@ impl LayoutCtx {
             hotkeys: Vec::new(),
             hotkey_sequences: hotkey_sequence_from_event(hotkey).into_iter().collect(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         });
     }
 
@@ -598,6 +607,7 @@ impl LayoutCtx {
                 .collect(),
             hotkeys,
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         });
     }
 
@@ -626,6 +636,7 @@ impl LayoutCtx {
             hotkeys,
             hotkey_sequences,
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         });
     }
 
@@ -640,6 +651,24 @@ impl LayoutCtx {
             return false;
         };
         target.suppress_global_hotkeys = suppress;
+        true
+    }
+
+    pub fn set_focus_receives_events_before_global_hotkeys(
+        &mut self,
+        id: FocusId,
+        receives_first: bool,
+    ) -> bool {
+        let path = self.current_path();
+        let Some(target) = self
+            .focus_paths
+            .iter_mut()
+            .rev()
+            .find(|target| target.id == id && target.path == path)
+        else {
+            return false;
+        };
+        target.focused_events_before_global_hotkeys = receives_first;
         true
     }
 
@@ -965,6 +994,7 @@ impl FocusTarget {
             hotkeys: self.hotkeys.clone(),
             hotkey_sequences: self.hotkey_sequences.clone(),
             suppress_global_hotkeys: self.suppress_global_hotkeys,
+            focused_events_before_global_hotkeys: self.focused_events_before_global_hotkeys,
         })
     }
 }
@@ -1192,6 +1222,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let mut decorator = OnBlur::new(Probe, || "blurred");
         let mut dispatcher = crate::TreeDispatcher::new();

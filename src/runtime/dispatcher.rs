@@ -280,6 +280,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let transition = FocusTransition {
             previous: None,
@@ -311,6 +312,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             }),
         };
         let mut settings = AnimationSettings::default();

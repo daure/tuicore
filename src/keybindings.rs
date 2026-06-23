@@ -14,6 +14,7 @@ pub struct KeyBindings {
     toggle: ToggleKeyBindings,
     data_view: DataViewKeyBindings,
     dropdown: DropdownKeyBindings,
+    date_time_picker: DateTimePickerKeyBindings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,16 @@ pub struct DropdownKeyBindings {
     page_next: Vec<KeySpec>,
     page_previous: Vec<KeySpec>,
     select: Vec<KeySpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DateTimePickerKeyBindings {
+    today: Vec<KeySpec>,
+    month_view: Vec<KeySpec>,
+    year_view: Vec<KeySpec>,
+    external_editor: Vec<KeySpec>,
+    top_prefix: Vec<KeySpec>,
+    bottom: Vec<KeySpec>,
 }
 
 impl Default for NavKeyBindings {
@@ -193,6 +204,22 @@ impl Default for DropdownKeyBindings {
     }
 }
 
+impl Default for DateTimePickerKeyBindings {
+    fn default() -> Self {
+        Self {
+            today: vec![KeySpec::plain('t')],
+            month_view: vec![KeySpec::plain('m')],
+            year_view: vec![KeySpec::plain('y')],
+            external_editor: vec![KeySpec::key_with_modifiers(
+                Key::Char('o'),
+                KeyModifiers::CONTROL,
+            )],
+            top_prefix: vec![KeySpec::plain('g')],
+            bottom: vec![KeySpec::shifted('g')],
+        }
+    }
+}
+
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
@@ -204,6 +231,7 @@ impl Default for KeyBindings {
             toggle: ToggleKeyBindings::default(),
             data_view: DataViewKeyBindings::default(),
             dropdown: DropdownKeyBindings::default(),
+            date_time_picker: DateTimePickerKeyBindings::default(),
         }
     }
 }
@@ -345,6 +373,42 @@ impl KeyBindings {
             &mut bindings.dropdown.page_previous,
         )?;
         set_keys(&value, "dropdown", "select", &mut bindings.dropdown.select)?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "today",
+            &mut bindings.date_time_picker.today,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "month_view",
+            &mut bindings.date_time_picker.month_view,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "year_view",
+            &mut bindings.date_time_picker.year_view,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "external_editor",
+            &mut bindings.date_time_picker.external_editor,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "top_prefix",
+            &mut bindings.date_time_picker.top_prefix,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "bottom",
+            &mut bindings.date_time_picker.bottom,
+        )?;
 
         Ok(bindings)
     }
@@ -375,6 +439,10 @@ impl KeyBindings {
 
     pub fn toggle(&self) -> &ToggleKeyBindings {
         &self.toggle
+    }
+
+    pub fn date_time_picker(&self) -> &DateTimePickerKeyBindings {
+        &self.date_time_picker
     }
 
     pub fn set_tabs_previous(&mut self, key: KeySpec) {
@@ -650,6 +718,75 @@ impl KeyBindings {
 
     pub fn with_dropdown_select(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_dropdown_select(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_today(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.today = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_today(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_date_time_picker_today(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_month_view(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.month_view = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_month_view(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_month_view(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_year_view(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.year_view = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_year_view(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_year_view(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_external_editor(
+        &mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) {
+        self.date_time_picker.external_editor = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_external_editor(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_external_editor(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_top_prefix(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.top_prefix = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_top_prefix(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_top_prefix(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_bottom(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.bottom = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_bottom(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_date_time_picker_bottom(keys);
         self
     }
 
@@ -963,6 +1100,56 @@ impl ToggleKeyBindings {
 
     pub fn toggle_label(&self) -> String {
         labels(&self.toggle)
+    }
+}
+
+impl DateTimePickerKeyBindings {
+    pub fn today_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.today, key.into())
+    }
+
+    pub fn today_label(&self) -> String {
+        labels(&self.today)
+    }
+
+    pub fn month_view_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.month_view, key.into())
+    }
+
+    pub fn month_view_label(&self) -> String {
+        labels(&self.month_view)
+    }
+
+    pub fn year_view_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.year_view, key.into())
+    }
+
+    pub fn year_view_label(&self) -> String {
+        labels(&self.year_view)
+    }
+
+    pub fn external_editor_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.external_editor, key.into())
+    }
+
+    pub fn external_editor_label(&self) -> String {
+        labels(&self.external_editor)
+    }
+
+    pub fn top_prefix_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.top_prefix, key.into())
+    }
+
+    pub fn top_prefix_label(&self) -> String {
+        labels(&self.top_prefix)
+    }
+
+    pub fn bottom_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.bottom, key.into())
+    }
+
+    pub fn bottom_label(&self) -> String {
+        labels(&self.bottom)
     }
 }
 
@@ -1280,6 +1467,14 @@ mod tests {
             page_next = "ctrl+d"
             page_previous = "ctrl+u"
             select = "ctrl+space"
+
+            [date_time_picker]
+            today = "t"
+            month_view = "m"
+            year_view = "y"
+            external_editor = "ctrl+o"
+            top_prefix = "home"
+            bottom = "end"
             "#,
         );
 
@@ -1383,6 +1578,14 @@ mod tests {
             code: Key::Char(' '),
             modifiers: KeyModifiers::CONTROL,
         }));
+        assert!(bindings.date_time_picker().top_prefix_matches(KeyEvent {
+            code: Key::Home,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.date_time_picker().bottom_matches(KeyEvent {
+            code: Key::End,
+            modifiers: KeyModifiers::NONE,
+        }));
     }
 
     #[test]
@@ -1412,7 +1615,9 @@ mod tests {
             .with_dropdown_previous([KeySpec::plain('k')])
             .with_dropdown_page_next([KeySpec::plain('d')])
             .with_dropdown_page_previous([KeySpec::plain('u')])
-            .with_dropdown_select([KeySpec::plain(' ')]);
+            .with_dropdown_select([KeySpec::plain(' ')])
+            .with_date_time_picker_top_prefix([KeySpec::plain('t')])
+            .with_date_time_picker_bottom([KeySpec::plain('b')]);
 
         assert!(bindings.tabs().previous_matches(KeyEvent {
             code: Key::Char('h'),
@@ -1514,6 +1719,14 @@ mod tests {
             code: Key::Char(' '),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.date_time_picker().top_prefix_matches(KeyEvent {
+            code: Key::Char('t'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.date_time_picker().bottom_matches(KeyEvent {
+            code: Key::Char('b'),
+            modifiers: KeyModifiers::NONE,
+        }));
     }
 
     #[test]
@@ -1546,6 +1759,20 @@ mod tests {
         }));
         assert!(bindings.dropdown().select_matches(KeyEvent {
             code: Key::Char(' '),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+    }
+
+    #[test]
+    fn default_date_picker_today_matches_plain_t_only() {
+        let bindings = KeyBindings::default();
+
+        assert!(bindings.date_time_picker().today_matches(KeyEvent {
+            code: Key::Char('t'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!bindings.date_time_picker().today_matches(KeyEvent {
+            code: Key::Char('t'),
             modifiers: KeyModifiers::CONTROL,
         }));
     }

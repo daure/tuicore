@@ -543,6 +543,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         }
     }
 
@@ -557,6 +558,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         }
     }
 
@@ -575,6 +577,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         }
     }
 
@@ -907,6 +910,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         }];
         let new_targets = [
             FocusTarget {
@@ -924,6 +928,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -940,6 +945,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("tabs"),
@@ -951,6 +957,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("dialog"),
@@ -962,6 +969,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
         ];
         let mut manager = FocusManager::new();
@@ -1003,6 +1011,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         }];
         let new_targets = [
             FocusTarget {
@@ -1015,6 +1024,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("field"),
@@ -1026,6 +1036,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("after"),
@@ -1037,6 +1048,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
         ];
         let mut manager = FocusManager::new();
@@ -1059,6 +1071,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         }];
         let new_targets = [
             FocusTarget {
@@ -1071,6 +1084,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("field"),
@@ -1082,6 +1096,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("after"),
@@ -1093,6 +1108,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
         ];
         let mut manager = FocusManager::new();
@@ -1163,6 +1179,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -1174,6 +1191,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
         ];
         let mut manager = FocusManager::new();
@@ -1218,6 +1236,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -1229,6 +1248,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
         ];
         let mut manager = FocusManager::new();
@@ -1262,6 +1282,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
             FocusTarget {
                 id: FocusId::new("input"),
@@ -1273,6 +1294,7 @@ mod tests {
                 hotkeys: Vec::new(),
                 hotkey_sequences: Vec::new(),
                 suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
             },
         ];
         let mut manager = FocusManager::new();

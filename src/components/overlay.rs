@@ -118,6 +118,11 @@ where
         self.layer.render(frame, self.layer_rect);
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.base.render_overlay(frame, area);
+        self.layer.render_overlay(frame, area);
+    }
+
     fn dispatch_event(
         &mut self,
         route: &EventRoute,

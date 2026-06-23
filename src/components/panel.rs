@@ -708,6 +708,10 @@ where
         );
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.child.render_overlay(frame, area);
+    }
+
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         self.panel.event(event, ctx)
     }
@@ -966,7 +970,7 @@ mod tests {
         TuiNode, animation_settings,
     };
 
-    use super::super::TextInput;
+    use super::super::{PasswordInput, TextInput, TextareaInput};
     use super::*;
 
     #[test]
@@ -1183,14 +1187,21 @@ mod tests {
         assert!(focus.redraw_requested());
         assert!(host.panel.border_color.is_active());
 
+        let mut enter_insert = EventCtx::new(AnimationSettings::default());
+        let enter_outcome = host.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut enter_insert,
+        );
         let mut key = EventCtx::new(AnimationSettings::default());
-        let outcome = host.dispatch_event(
+        let key_outcome = host.dispatch_event(
             &route,
             &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
             &mut key,
         );
 
-        assert!(outcome.handled());
+        assert!(enter_outcome.handled());
+        assert!(key_outcome.handled());
         assert_eq!(key.propagation(), crate::Propagation::Stopped);
         assert!(key.redraw_requested());
         assert_eq!(host.child().current_value(), "x");
@@ -1423,5 +1434,76 @@ mod tests {
         assert_eq!(host.panel().pending_hotkey_prefix, None);
         assert_eq!(commit.propagation(), crate::Propagation::Stopped);
         assert!(commit.redraw_requested());
+    }
+
+    #[test]
+    fn panel_hotkey_commit_activates_nested_text_input() {
+        let mut host = Panel::new().hotkey("p").host(TextInput::<()>::new());
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 20, 3), &mut layout);
+        let route = EventRoute::new(layout.focus_targets()[0].path.clone());
+        let mut commit = EventCtx::<()>::default();
+        let commit_outcome = host.dispatch_event(
+            &route,
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("p".into())),
+            &mut commit,
+        );
+        let mut key = EventCtx::<()>::default();
+        let key_outcome = host.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut key,
+        );
+
+        assert_eq!(commit_outcome, EventOutcome::Handled);
+        assert_eq!(key_outcome, EventOutcome::Handled);
+        assert_eq!(host.child().current_value(), "x");
+        assert!(commit.layout_requested());
+        assert_eq!(commit.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
+    fn panel_hotkey_commit_activates_nested_textarea_input() {
+        let mut host = Panel::new().hotkey("p").host(TextareaInput::<()>::new());
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 20, 3), &mut layout);
+        let route = EventRoute::new(layout.focus_targets()[0].path.clone());
+        host.dispatch_event(
+            &route,
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("p".into())),
+            &mut EventCtx::<()>::default(),
+        );
+        let key_outcome = host.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut EventCtx::<()>::default(),
+        );
+
+        assert_eq!(key_outcome, EventOutcome::Handled);
+        assert_eq!(host.child().current_value(), "x");
+    }
+
+    #[test]
+    fn panel_hotkey_commit_activates_nested_password_input() {
+        let mut host = Panel::new().hotkey("p").host(PasswordInput::<()>::new());
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 20, 3), &mut layout);
+        let route = EventRoute::new(layout.focus_targets()[0].path.clone());
+        host.dispatch_event(
+            &route,
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("p".into())),
+            &mut EventCtx::<()>::default(),
+        );
+        let key_outcome = host.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut EventCtx::<()>::default(),
+        );
+
+        assert_eq!(key_outcome, EventOutcome::Handled);
+        assert_eq!(host.child().current_value(), "x");
     }
 }

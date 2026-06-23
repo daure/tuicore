@@ -105,6 +105,10 @@ where
         self.child.render(frame, area);
     }
 
+    pub fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.child.render_overlay(frame, area);
+    }
+
     pub fn dispatch_event(
         &mut self,
         route: &EventRoute,
@@ -900,6 +904,7 @@ mod tests {
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
             suppress_global_hotkeys: false,
+            focused_events_before_global_hotkeys: false,
         };
         let mut ctx = FocusCtx::default();
 

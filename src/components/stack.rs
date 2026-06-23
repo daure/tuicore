@@ -252,6 +252,14 @@ impl<M> TuiNode<M> for Stack<M> {
         }
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        for (key, _) in &self.rects {
+            if let Some(child) = self.children.get(key) {
+                child.render_overlay(frame, area);
+            }
+        }
+    }
+
     fn dispatch_event(
         &mut self,
         route: &EventRoute,

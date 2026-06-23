@@ -12,7 +12,7 @@ use crate::{
     EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, KeySpec, LayoutCtx,
     LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
     ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode,
-    border_set, hotkey_edge_spans, keybindings, line_width, paragraph_scroll, preset, theme,
+    border_set, keybindings, line_width, paragraph_scroll, preset, theme,
 };
 
 pub(crate) const DIALOG_FOCUS: &str = "dialog";
@@ -65,6 +65,7 @@ pub struct Dialog<M = ()> {
     bottom_left: Option<DialogTitle>,
     bottom_right: Option<DialogTitle>,
     border: Option<BorderKind>,
+    edge_borders: Option<Borders>,
     content: Vec<String>,
     scroll: Option<ScrollState>,
     on_close: Option<Box<dyn Fn(DialogCloseReason) -> M>>,
@@ -96,6 +97,7 @@ impl<M> Dialog<M> {
             bottom_left: None,
             bottom_right: None,
             border: None,
+            edge_borders: None,
             content: Vec::new(),
             scroll: None,
             on_close: None,
@@ -159,6 +161,19 @@ impl<M> Dialog<M> {
     pub fn border(mut self, border: BorderKind) -> Self {
         self.border = Some(border);
         self
+    }
+
+    pub fn edge_borders(mut self, borders: Borders) -> Self {
+        self.edge_borders = Some(borders);
+        self
+    }
+
+    pub fn set_edge_borders(&mut self, borders: Borders) {
+        self.edge_borders = Some(borders);
+    }
+
+    pub fn clear_edge_borders(&mut self) {
+        self.edge_borders = None;
     }
 
     pub fn content(mut self, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -316,11 +331,37 @@ impl<M> Dialog<M> {
     }
 
     pub fn inner_area(area: Rect) -> Rect {
+        Self::inner_area_for(area, Borders::ALL)
+    }
+
+    fn resolved_edge_borders(&self) -> Borders {
+        self.edge_borders.unwrap_or(Borders::ALL)
+    }
+
+    fn inner_area_for(area: Rect, borders: Borders) -> Rect {
+        let left_edge_dock = !borders.contains(Borders::TOP)
+            && !borders.contains(Borders::BOTTOM)
+            && borders.contains(Borders::LEFT);
+        let right_edge_dock = !borders.contains(Borders::TOP)
+            && !borders.contains(Borders::BOTTOM)
+            && borders.contains(Borders::RIGHT);
+        let left = if left_edge_dock {
+            2
+        } else {
+            borders.contains(Borders::LEFT) as u16
+        };
+        let right = if right_edge_dock {
+            2
+        } else {
+            borders.contains(Borders::RIGHT) as u16
+        };
+        let top = borders.contains(Borders::TOP) as u16;
+        let bottom = borders.contains(Borders::BOTTOM) as u16;
         Rect::new(
-            area.x.saturating_add(1),
-            area.y.saturating_add(1),
-            area.width.saturating_sub(2),
-            area.height.saturating_sub(2),
+            area.x.saturating_add(left),
+            area.y.saturating_add(top),
+            area.width.saturating_sub(left.saturating_add(right)),
+            area.height.saturating_sub(top.saturating_add(bottom)),
         )
     }
 
@@ -331,12 +372,13 @@ impl<M> Dialog<M> {
 
         frame.render_widget(Clear, area);
         let border = self.border.unwrap_or_else(|| preset().border());
+        let edge_borders = self.resolved_edge_borders();
         let border_style = Style::default().fg(self.visible_border_color());
         let block = Block::default()
-            .borders(Borders::ALL)
+            .borders(edge_borders)
             .border_set(border_set(border))
             .border_style(border_style);
-        let inner = block.inner(area);
+        let inner = Self::inner_area_for(area, edge_borders);
         frame.render_widget(block, area);
 
         self.render_titles(frame, area, border);
@@ -382,11 +424,49 @@ impl<M> Dialog<M> {
     }
 
     fn render_titles(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        self.render_top_left_title(frame, area);
-        self.render_top_right_title(frame, area);
-        self.render_bottom_title(frame, area, DialogTitlePosition::BottomLeft);
-        self.render_bottom_title(frame, area, DialogTitlePosition::BottomRight);
-        self.render_close_label(frame, area, border);
+        let edge_borders = self.resolved_edge_borders();
+        let close_on_bottom =
+            !edge_borders.contains(Borders::TOP) && edge_borders.contains(Borders::BOTTOM);
+        let close_on_left = !edge_borders.contains(Borders::TOP)
+            && !edge_borders.contains(Borders::BOTTOM)
+            && edge_borders.contains(Borders::LEFT);
+        let close_on_right = !edge_borders.contains(Borders::TOP)
+            && !edge_borders.contains(Borders::BOTTOM)
+            && edge_borders.contains(Borders::RIGHT);
+        let horizontal_open_end = edge_borders == Borders::TOP || edge_borders == Borders::BOTTOM;
+        if edge_borders.contains(Borders::TOP) {
+            self.render_top_left_title(frame, area);
+            self.render_top_right_title(frame, area);
+            self.render_close_label(frame, area, area.y, border, horizontal_open_end);
+        }
+        if edge_borders.contains(Borders::BOTTOM) {
+            self.render_bottom_title(frame, area, DialogTitlePosition::BottomLeft, 0);
+            self.render_bottom_title(
+                frame,
+                area,
+                DialogTitlePosition::BottomRight,
+                if close_on_bottom {
+                    self.close_label_width() + 1
+                } else {
+                    0
+                },
+            );
+            if close_on_bottom {
+                self.render_close_label(
+                    frame,
+                    area,
+                    area.y + area.height.saturating_sub(1),
+                    border,
+                    horizontal_open_end,
+                );
+            }
+        }
+        if close_on_left {
+            self.render_left_close_label(frame, area, border);
+        }
+        if close_on_right {
+            self.render_right_close_label(frame, area, border);
+        }
     }
 
     fn render_top_left_title(&self, frame: &mut Frame, area: Rect) {
@@ -419,7 +499,13 @@ impl<M> Dialog<M> {
             .unwrap_or_default()
     }
 
-    fn render_bottom_title(&self, frame: &mut Frame, area: Rect, position: DialogTitlePosition) {
+    fn render_bottom_title(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        position: DialogTitlePosition,
+        reserved_right: u16,
+    ) {
         let Some(title) = self.title_slot(position) else {
             return;
         };
@@ -434,7 +520,7 @@ impl<M> Dialog<M> {
             title,
             alignment,
             area.y + area.height.saturating_sub(1),
-            0,
+            reserved_right,
         );
     }
 
@@ -474,7 +560,14 @@ impl<M> Dialog<M> {
         );
     }
 
-    fn render_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+    fn render_close_label(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        y: u16,
+        border: BorderKind,
+        open_end: bool,
+    ) {
         let Some(label) = self.keys.close_label() else {
             return;
         };
@@ -486,16 +579,81 @@ impl<M> Dialog<M> {
         let title_style = Style::default()
             .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
-        let line = Line::from(hotkey_edge_spans(
-            &label,
-            None,
-            border,
-            border_style,
-            title_style,
-            title_style,
-        ));
+        let chars = crate::border_chars(border);
+        let line = Line::from(vec![
+            Span::styled(chars.right_join, border_style),
+            Span::styled(label, title_style),
+            Span::styled(
+                if open_end {
+                    chars.left_join
+                } else {
+                    chars.vertical
+                },
+                border_style,
+            ),
+        ]);
         let x = area.x + area.width.saturating_sub(width);
-        frame.render_widget(Paragraph::new(line), Rect::new(x, area.y, width, 1));
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+    }
+
+    fn render_left_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+        let Some(label) = self.keys.close_label() else {
+            return;
+        };
+        let label_width = line_width(&Line::from(label.as_str())).min(u16::MAX as usize) as u16;
+        if area.height < 3 || area.width < label_width {
+            return;
+        }
+
+        let chars = crate::border_chars(border);
+        let border_style = Style::default().fg(self.visible_border_color());
+        let title_style = Style::default()
+            .fg(self.visible_title_color())
+            .add_modifier(Modifier::BOLD);
+        let x = area.x;
+        let y = area.bottom().saturating_sub(3);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(chars.bottom_join, border_style))),
+            Rect::new(x, y, 1, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(label, title_style))),
+            Rect::new(x, y.saturating_add(1), label_width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(chars.top_join, border_style))),
+            Rect::new(x, y.saturating_add(2), 1, 1),
+        );
+    }
+
+    fn render_right_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
+        let Some(label) = self.keys.close_label() else {
+            return;
+        };
+        let label_width = line_width(&Line::from(label.as_str())).min(u16::MAX as usize) as u16;
+        if area.height < 3 || area.width < label_width {
+            return;
+        }
+
+        let chars = crate::border_chars(border);
+        let border_style = Style::default().fg(self.visible_border_color());
+        let title_style = Style::default()
+            .fg(self.visible_title_color())
+            .add_modifier(Modifier::BOLD);
+        let x = area.right().saturating_sub(1);
+        let y = area.bottom().saturating_sub(3);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(chars.bottom_join, border_style))),
+            Rect::new(x, y, 1, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(label, title_style))),
+            Rect::new(x, y.saturating_add(1), label_width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(chars.top_join, border_style))),
+            Rect::new(x, y.saturating_add(2), 1, 1),
+        );
     }
 
     fn visible_border_color(&self) -> ratatui::style::Color {
@@ -650,7 +808,7 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.dialog.area = area;
-        let inner = Dialog::<M>::inner_area(area);
+        let inner = Dialog::<M>::inner_area_for(area, self.dialog.resolved_edge_borders());
         self.child_area = inner;
         let fallback_inserted = ctx
             .with_focus_fallback_status(FocusId::new(DIALOG_FOCUS), area, |ctx| {
@@ -677,6 +835,10 @@ where
         );
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.child.render_overlay(frame, area);
+    }
+
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         self.dialog.event(event, ctx)
     }
@@ -698,6 +860,9 @@ where
             .map(|route| self.child.dispatch_event(&route, event, ctx))
             .unwrap_or(EventOutcome::Ignored);
         if is_focus_unfocus_event(event) && ctx.propagation() == crate::Propagation::Stopped {
+            return child;
+        }
+        if is_focus_unfocus_event(event) && route.path.keys().len() > 1 {
             return child;
         }
         child.bubble(ctx, |ctx| self.event(event, ctx))
@@ -743,7 +908,7 @@ fn focus_color_animation() -> AnimationSpec {
 }
 
 fn close_label_width(label: &str) -> u16 {
-    line_width(&Line::from(format!("┤{label}│"))).min(u16::MAX as usize) as u16
+    line_width(&Line::from(format!("┤{label}├"))).min(u16::MAX as usize) as u16
 }
 
 fn is_focus_unfocus_event(event: &TuiEvent) -> bool {
@@ -802,6 +967,8 @@ mod tests {
 
     struct BottomRightVerticalBody;
 
+    struct NestedFocusableBody;
+
     impl TuiNode<()> for StaticBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
@@ -837,6 +1004,52 @@ mod tests {
                 "│",
                 Style::default(),
             );
+        }
+    }
+
+    impl NestedFocusableBody {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    impl TuiNode<DialogCloseReason> for NestedFocusableBody {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable(FocusId::new("nested"), area, true);
+            ctx.push_slot(ChildKey::new("input"), area, |ctx| {
+                ctx.register_focusable(FocusId::new("input"), area, true);
+            });
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+
+        fn dispatch_event(
+            &mut self,
+            _route: &EventRoute,
+            _event: &TuiEvent,
+            _ctx: &mut EventCtx<DialogCloseReason>,
+        ) -> EventOutcome {
+            EventOutcome::Ignored
+        }
+
+        fn focus(
+            &mut self,
+            _target: Option<&FocusId>,
+            _focused: bool,
+            _ctx: &mut FocusCtx<DialogCloseReason>,
+        ) {
+        }
+
+        fn dispatch_focus(
+            &mut self,
+            target: &FocusTarget,
+            focused: bool,
+            ctx: &mut FocusCtx<DialogCloseReason>,
+        ) {
+            if target.path.is_empty() {
+                self.focus(Some(&target.id), focused, ctx);
+            }
         }
     }
 
@@ -896,6 +1109,102 @@ mod tests {
         ]
         .join("\n");
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn dialog_can_hide_docked_touching_edges() {
+        let dialog = Dialog::<()>::new()
+            .edge_borders(Borders::BOTTOM)
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..20)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert!(row(0).starts_with("Body"), "{}", row(0));
+        assert!(!row(0).contains('─'), "{}", row(0));
+        assert!(!row(0).starts_with('│'), "{}", row(0));
+        assert!(!row(0).ends_with('│'), "{}", row(0));
+        assert!(row(3).contains('─'), "{}", row(3));
+    }
+
+    #[test]
+    fn dialog_left_edge_dock_renders_vertical_close_label() {
+        let dialog = Dialog::<()>::new()
+            .edge_borders(Borders::LEFT)
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(8, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let column = (0..6)
+            .map(|y| buffer.cell((0, y)).unwrap().symbol())
+            .collect::<String>();
+        let close_row = (0..8)
+            .map(|x| buffer.cell((x, 4)).unwrap().symbol())
+            .collect::<String>();
+        let content_row = (0..8)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(column, "│││┴x┬");
+        assert!(close_row.starts_with("x"), "{close_row}");
+        assert!(content_row.starts_with("│ Body"), "{content_row}");
+    }
+
+    #[test]
+    fn dialog_right_edge_dock_renders_vertical_close_label() {
+        let dialog = Dialog::<()>::new()
+            .edge_borders(Borders::RIGHT)
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(8, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let column = (0..6)
+            .map(|y| buffer.cell((7, y)).unwrap().symbol())
+            .collect::<String>();
+        let content_row = (0..8)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(column, "│││┴x┬");
+        assert!(content_row.starts_with("Body"), "{content_row}");
+        assert!(content_row.ends_with(" │"), "{content_row}");
+    }
+
+    #[test]
+    fn partial_width_dialog_snackbar_uses_closed_close_label_end() {
+        let dialog = Dialog::<()>::new()
+            .edge_borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .top_left("Snackbar")
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(32, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let top = (0..32)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+
+        assert!(top.ends_with("┤x│"), "{top}");
     }
 
     #[test]
@@ -979,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn focused_text_input_receives_x_before_dialog_close_policy() {
+    fn focused_text_input_receives_x_after_enter_before_dialog_close_policy() {
         let mut host = Dialog::new()
             .on_close(|reason| reason)
             .host(TextInput::<DialogCloseReason>::new());
@@ -989,8 +1298,10 @@ mod tests {
         let route = EventRoute::new(layout.focus_targets()[0].path.clone());
         let mut ctx = EventCtx::new(animation_settings());
 
+        let enter = host.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
         let outcome = host.dispatch_event(&route, &TuiEvent::Key(Key::Char('x').into()), &mut ctx);
 
+        assert_eq!(enter, EventOutcome::Handled);
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(host.child().current_value(), "x");
         assert!(ctx.messages().is_empty());
@@ -1013,6 +1324,32 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.messages(), &[DialogCloseReason::Escape]);
         assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
+    fn escape_from_nested_child_blurs_instead_of_closing_dialog() {
+        let mut host = Dialog::new()
+            .on_close(|reason| reason)
+            .host(NestedFocusableBody::new());
+        let mut layout = LayoutCtx::new();
+        let area = Rect::new(0, 0, 24, 5);
+        host.layout(area, &mut layout);
+        let route_path = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == "input")
+            .expect("nested input should be focusable")
+            .path
+            .clone();
+        assert_eq!(route_path.keys().len(), 2);
+        let route = EventRoute::new(route_path);
+        let mut ctx = EventCtx::new(animation_settings());
+
+        let outcome = host.dispatch_event(&route, &TuiEvent::Key(Key::Esc.into()), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert!(ctx.messages().is_empty());
+        assert_eq!(ctx.propagation(), crate::Propagation::Continue);
     }
 
     #[test]

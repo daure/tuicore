@@ -24,7 +24,10 @@ impl Renderer {
         std::io::Error: From<B::Error>,
     {
         terminal
-            .draw(|frame| root.render(frame, area))
+            .draw(|frame| {
+                root.render(frame, area);
+                root.render_overlay(frame, area);
+            })
             .map_err(Into::into)?;
         Ok(())
     }

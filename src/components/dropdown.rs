@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 use std::rc::Rc;
 use std::time::Duration;
@@ -10,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::{Key, KeyEvent};
-use crate::search::{SearchMode, search_ranked};
+use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, EventCtx, EventOutcome, EventRoute,
     FocusCtx, FocusId, FocusRequest, FocusTarget, HintSource, HotkeyEvent, HotkeyLabelMode,
@@ -39,10 +40,70 @@ const DROPDOWN_BACKDROP_AMOUNT: f64 = 0.55;
 const FIELD_FOCUS: &str = "field";
 const SEARCH_FOCUS: &str = "input";
 const POPUP_BORDER_HEIGHT: u16 = 2;
+const DROPDOWN_ARROW_DOWN: &str = "";
+const DROPDOWN_ARROW_UP: &str = "";
+
+fn highlighted_label_line(
+    label: String,
+    query: &str,
+    search_mode: DropdownSearchMode,
+) -> Line<'static> {
+    if query.is_empty() || search_mode == DropdownSearchMode::None {
+        return Line::from(label);
+    }
+
+    let Some(mode) = search_mode_for_highlight(search_mode) else {
+        return Line::from(label);
+    };
+    let Some(matched) = search_match(query, &label, mode) else {
+        return Line::from(label);
+    };
+    highlighted_spans(label, &matched.spans)
+}
+
+fn search_mode_for_highlight(search_mode: DropdownSearchMode) -> Option<SearchMode> {
+    match search_mode {
+        DropdownSearchMode::None => None,
+        DropdownSearchMode::Contains => Some(SearchMode::Contains),
+        DropdownSearchMode::Fuzzy => Some(SearchMode::Fuzzy),
+    }
+}
+
+fn highlighted_spans(label: String, spans: &[MatchSpan]) -> Line<'static> {
+    if spans.is_empty() {
+        return Line::from(label);
+    }
+
+    let mut rendered = Vec::new();
+    let mut cursor = 0;
+    for span in spans {
+        if span.start > cursor {
+            rendered.push(Span::raw(label[cursor..span.start].to_string()));
+        }
+        rendered.push(Span::styled(
+            label[span.start..span.end].to_string(),
+            search_match_style(),
+        ));
+        cursor = span.end;
+    }
+    if cursor < label.len() {
+        rendered.push(Span::raw(label[cursor..].to_string()));
+    }
+
+    Line::from(rendered)
+}
+
+fn search_match_style() -> Style {
+    Style::default()
+        .fg(theme().accent_fg())
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}
 
 pub struct Dropdown<T, Id> {
     data_view: DataView<T, Id>,
     search_input: TextInput,
+    search_render_query: Rc<RefCell<String>>,
+    search_render_mode: Rc<Cell<DropdownSearchMode>>,
     ids: Vec<Id>,
     labels: Vec<String>,
     committed: Vec<Id>,
@@ -113,17 +174,27 @@ where
         let labels = rows.iter().map(|row| label(row)).collect::<Vec<_>>();
         let data_view_row_id = Rc::clone(&row_id);
         let data_view_label = Rc::clone(&label);
+        let search_render_query = Rc::new(RefCell::new(String::new()));
+        let search_render_mode = Rc::new(Cell::new(DropdownSearchMode::Fuzzy));
+        let data_view_search_query = Rc::clone(&search_render_query);
+        let data_view_search_mode = Rc::clone(&search_render_mode);
         let selection_mode = if multi {
             SelectionMode::Multi
         } else {
             SelectionMode::Single
         };
         let data_view = DataView::new(rows, move |row| data_view_row_id(row))
-            .column(Column::text(
+            .column(Column::rich(
                 "label",
                 "",
                 Constraint::Percentage(100),
-                move |row| data_view_label(row),
+                move |row, _| {
+                    highlighted_label_line(
+                        data_view_label(row),
+                        &data_view_search_query.borrow(),
+                        data_view_search_mode.get(),
+                    )
+                },
             ))
             .selection_mode(selection_mode)
             .focused(false);
@@ -131,6 +202,8 @@ where
         Self {
             data_view,
             search_input: TextInput::new().placeholder("Search..."),
+            search_render_query,
+            search_render_mode,
             filtered: ids.clone(),
             ids,
             labels,
@@ -170,6 +243,7 @@ where
 
     pub fn search_mode(mut self, mode: DropdownSearchMode) -> Self {
         self.search_mode = mode;
+        self.search_render_mode.set(mode);
         self.refresh_filter();
         self
     }
@@ -707,6 +781,8 @@ where
     fn refresh_filter(&mut self) {
         let query = self.search_input.current_value();
         let query_empty = query.is_empty();
+        self.search_render_query.replace(query.to_string());
+        self.search_render_mode.set(self.search_mode);
         let filtered = match self.search_mode {
             DropdownSearchMode::None if query_empty => self.ids.clone(),
             DropdownSearchMode::None => self.ids.clone(),
@@ -780,8 +856,9 @@ where
     }
 
     fn sync_child_focus(&mut self) {
-        self.search_input
-            .set_focused(self.open && self.focus_region == Some(DropdownFocusRegion::Search));
+        let search_focused = self.open && self.focus_region == Some(DropdownFocusRegion::Search);
+        self.search_input.set_focused(search_focused);
+        self.search_input.set_insert_mode(search_focused);
         self.data_view.set_focused(
             self.open && self.focus_region.is_some() && !self.no_selection_highlighted,
         );
@@ -1014,7 +1091,7 @@ where
     fn measured_field_width(&self) -> u16 {
         let summary_width = line_width(&Line::from(self.selected_summary()));
         let mut width = match self.variant {
-            DropdownVariant::Bordered => summary_width.saturating_add(2),
+            DropdownVariant::Bordered => summary_width.saturating_add(5),
             DropdownVariant::Filled
                 if self.alt_style && self.label_position == DropdownLabelPosition::Inline =>
             {
@@ -1157,12 +1234,18 @@ where
             }));
         let inner = block.inner(area);
         frame.render_widget(block, area);
+        let text_area = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width.saturating_sub(3),
+            inner.height,
+        );
         let text = if self.committed.is_empty() {
             let placeholder_style = Style::default().fg(theme.muted_fg());
             placeholder_line(
                 &self.empty_summary(),
                 None,
-                inner.width as usize,
+                text_area.width as usize,
                 self.focus_region == Some(DropdownFocusRegion::Field),
                 None,
                 self.field_cursor_fade.style(placeholder_style),
@@ -1174,7 +1257,20 @@ where
                 Style::default().fg(theme.text_fg()),
             ))
         };
-        frame.render_widget(Paragraph::new(text), inner);
+        frame.render_widget(Paragraph::new(text), text_area);
+        if inner.width > 0 {
+            let arrow_area = Rect::new(inner.x + inner.width.saturating_sub(2), inner.y, 1, 1);
+            frame.render_widget(
+                Paragraph::new(self.dropdown_arrow())
+                    .style(Style::default().fg(if self.chrome_is_active() {
+                        theme.accent_fg()
+                    } else {
+                        theme.muted_fg()
+                    }))
+                    .alignment(Alignment::Right),
+                arrow_area,
+            );
+        }
 
         if !self.alt_style {
             if let Some(ref label) = self.label {
@@ -1242,11 +1338,19 @@ where
 
         let arrow_area = Rect::new(arrow_x, area.y, 1, 1);
         frame.render_widget(
-            Paragraph::new("")
+            Paragraph::new(self.dropdown_arrow())
                 .style(base_style)
                 .alignment(Alignment::Right),
             arrow_area,
         );
+    }
+
+    fn dropdown_arrow(&self) -> &'static str {
+        if self.open {
+            DROPDOWN_ARROW_UP
+        } else {
+            DROPDOWN_ARROW_DOWN
+        }
     }
 
     fn render_popup(&self, frame: &mut Frame, area: Rect) {
@@ -1510,6 +1614,10 @@ where
 
     fn render(&self, frame: &mut Frame, area: Rect) {
         Self::render(self, frame, area);
+    }
+
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.render_popup_overlay(frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Borders, Paragraph};
 use tuicore::{
     Animated, AnimationSettings, Button, ChildKey, DataView, Dialog, DialogHost, Dropdown,
     EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget, LayoutCtx, LayoutResult, Tab, Tabs,
@@ -179,6 +179,10 @@ impl GalleryDockOverlayContent {
     pub(crate) fn set_example(&mut self, example: DockOverlayExample) {
         self.example = example;
     }
+
+    pub(crate) fn set_tabs_edge_borders(&mut self, borders: Borders) {
+        self.tabs.set_edge_borders(borders);
+    }
 }
 
 impl TuiNode<Msg> for GalleryDialogContent {
@@ -272,6 +276,12 @@ impl TuiNode<Msg> for GalleryDockOverlayContent {
         }
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        if self.example == DockOverlayExample::BottomTabs {
+            self.tabs.render_overlay(frame, area);
+        }
+    }
+
     fn dispatch_event(
         &mut self,
         route: &EventRoute,
@@ -340,9 +350,10 @@ impl TuiNode<Msg> for DialogControlsTab {
         self.toggle.render(frame, self.areas[0]);
         self.dropdown.render(frame, self.areas[1]);
         self.input.render(frame, self.areas[2]);
-        if self.dropdown.is_open() {
-            self.dropdown.render_popup_overlay(frame, frame.area());
-        }
+    }
+
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        TuiNode::<Msg>::render_overlay(&self.dropdown, frame, area);
     }
 
     fn dispatch_event(
@@ -549,7 +560,7 @@ pub(crate) fn dialog_body_area(area: Rect) -> Rect {
     )
 }
 
-pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 12] {
+pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 11] {
     let [_, body, _] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -561,7 +572,6 @@ pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 12] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),

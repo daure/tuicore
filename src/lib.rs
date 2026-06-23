@@ -24,19 +24,21 @@ pub use animation::{
 pub use border::{BorderChars, border_chars, border_set};
 pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
-    ActivationMode, Button, ButtonOutcome, CellContext, CheckState, Column, CrossAlign, CrossSize,
-    DataView, DataViewEvent, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTypedEvent,
-    Dialog, DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings, DialogLayer,
-    DialogLayerPlacement, DialogTitlePosition, Dropdown, DropdownActionKeys, DropdownCommitMode,
-    DropdownLabelPosition, DropdownOutcome, DropdownPopupDirection, DropdownSearchMode,
-    DropdownVariant, Flex, FlexItem, Grid, GridItem, GridTrack, Header, InputOutcome, List,
-    ListOutcome, MainAlign, ModalCloseReason, Notification, NotificationCenter, NotificationId,
-    NotificationKind, Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition,
-    Paragraph, ParagraphOverflow, PasswordInput, SelectionGlyphs, SelectionMode,
-    SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack, StackAlign,
-    StackItem, StackSize, Tab, Tabs, TabsSelectionMemory, TextInput, TextInputKeyBindings,
-    TextareaInput, TextareaInputKeyBindings, ToastIcons, ToastRack, Toggle, ToggleOutcome,
-    ToggleStyle, TreeAdapter, TreeGlyphs,
+    ActivationMode, Button, ButtonOutcome, CellContext, CheckState, Chip, ChipColorRole, Column,
+    CrossAlign, CrossSize, DataView, DataViewEvent, DataViewOutcome, DataViewPagination,
+    DataViewSort, DataViewTypedEvent, DatePicker, DatePickerDropdown, DateTimePicker,
+    DateTimePickerLayout, Dialog, DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings,
+    DialogLayer, DialogLayerPlacement, DialogTitlePosition, Dropdown, DropdownActionKeys,
+    DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownPopupDirection,
+    DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid, GridItem, GridTrack, Header,
+    InputOutcome, List, ListOutcome, MainAlign, ModalCloseReason, Notification, NotificationCenter,
+    NotificationId, NotificationKind, Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost,
+    PanelTitlePosition, Paragraph, ParagraphOverflow, PasswordInput, PickerOutcome,
+    SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner,
+    Split, Stack, StackAlign, StackItem, StackSize, Tab, Tabs, TabsSelectionMemory, TextInput,
+    TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings, TimeField, TimePicker,
+    TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome, ToggleStyle, TreeAdapter,
+    TreeGlyphs,
 };
 pub use event::{
     ExternalEditorRequest, ExternalEditorResponse, HotkeyEvent, Key, KeyEvent, KeyModifiers,
@@ -50,8 +52,9 @@ pub use hotkey::{
     hotkey_edge_spans, hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style,
 };
 pub use keybindings::{
-    ButtonKeyBindings, DataViewKeyBindings, DropdownKeyBindings, FocusKeyBindings, KeyBindings,
-    KeyBindingsError, KeySpec, RuntimeKeyBindings, TabsKeyBindings, ToggleKeyBindings,
+    ButtonKeyBindings, DataViewKeyBindings, DateTimePickerKeyBindings, DropdownKeyBindings,
+    FocusKeyBindings, KeyBindings, KeyBindingsError, KeySpec, RuntimeKeyBindings, TabsKeyBindings,
+    ToggleKeyBindings,
 };
 pub use node::{
     AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,

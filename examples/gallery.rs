@@ -17,8 +17,9 @@ use gallery_demo::dropdowns::{
     theme_dropdown,
 };
 use gallery_demo::inputs::{
-    button_layout, password_input_showcase_layout, text_input_showcase_layout,
-    textarea_showcase_layout, toggle_layout, typography_showcase_layout,
+    button_layout, chip_layout, date_time_showcase_layout, password_input_showcase_layout,
+    text_input_showcase_layout, textarea_showcase_layout, toggle_layout,
+    typography_showcase_layout,
 };
 use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_overlay_demo,
@@ -47,15 +48,18 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Borders, Paragraph};
+use time::{Date, Month, PrimitiveDateTime, Time};
 use tuicore::{
-    ActivationMode, Animated, AnimationSettings, Button, ChildKey, DataView, DataViewTypedEvent,
-    DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, Dropdown,
-    EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, Key,
-    KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, ModalCloseReason, Overlay, Panel, PanelHost,
-    PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode,
-    SelectionTrigger, Spinner, Split, Stack, Tabs, TabsVariant, TextInput, TextareaInput, Theme,
-    ThemeName, TickResult, ToastRack, Toggle, TreeAdapter, TuiEvent, TuiNode,
+    ActivationMode, Animated, AnimationSettings, Button, ChildKey, Chip, ChipColorRole, DataView,
+    DataViewTypedEvent, DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerLayout,
+    DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
+    DialogTitlePosition, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId,
+    FocusTarget, Grid, Header, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult,
+    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
+    ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger, Spinner, Split, Stack, Tabs,
+    TabsVariant, TextInput, TextareaInput, Theme, ThemeName, TickResult, TimePicker, TimePrecision,
+    ToastRack, Toggle, TreeAdapter, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -83,6 +87,20 @@ fn modal_tabs_layer(root: &mut RootLayer) -> &mut ModalTabsLayer {
 
 fn gallery(root: &mut RootLayer) -> &mut Gallery {
     root.base_mut().base_mut().base_mut()
+}
+
+fn dock_edge_borders(placement: DialogLayerPlacement, cross_percent: u16) -> Borders {
+    match placement {
+        DialogLayerPlacement::Center => Borders::ALL,
+        DialogLayerPlacement::Top if cross_percent == 100 => Borders::BOTTOM,
+        DialogLayerPlacement::Top => Borders::LEFT | Borders::RIGHT | Borders::BOTTOM,
+        DialogLayerPlacement::Bottom if cross_percent == 100 => Borders::TOP,
+        DialogLayerPlacement::Bottom => Borders::TOP | Borders::LEFT | Borders::RIGHT,
+        DialogLayerPlacement::Left if cross_percent == 100 => Borders::RIGHT,
+        DialogLayerPlacement::Left => Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+        DialogLayerPlacement::Right if cross_percent == 100 => Borders::LEFT,
+        DialogLayerPlacement::Right => Borders::TOP | Borders::LEFT | Borders::BOTTOM,
+    }
 }
 
 fn main() -> tuicore::Result<()> {
@@ -128,43 +146,23 @@ fn main() -> tuicore::Result<()> {
                 root.layer_mut().dialog_mut().set_top_left(example.title());
                 root.layer_mut()
                     .dialog_mut()
-                    .set_bottom_right(match example {
-                        DockOverlayExample::BottomSnackbar => "80% width",
-                        DockOverlayExample::BottomTabs => "tabbed bottom",
-                        _ => "100% cross-axis",
-                    });
-                match example {
-                    DockOverlayExample::Top => {
-                        root.set_placement(DialogLayerPlacement::Top);
-                        root.set_layer_percent(30);
-                        root.set_layer_cross_percent(100);
-                    }
-                    DockOverlayExample::Bottom => {
-                        root.set_placement(DialogLayerPlacement::Bottom);
-                        root.set_layer_percent(30);
-                        root.set_layer_cross_percent(100);
-                    }
-                    DockOverlayExample::Left => {
-                        root.set_placement(DialogLayerPlacement::Left);
-                        root.set_layer_percent(32);
-                        root.set_layer_cross_percent(100);
-                    }
-                    DockOverlayExample::Right => {
-                        root.set_placement(DialogLayerPlacement::Right);
-                        root.set_layer_percent(32);
-                        root.set_layer_cross_percent(100);
-                    }
-                    DockOverlayExample::BottomSnackbar => {
-                        root.set_placement(DialogLayerPlacement::Bottom);
-                        root.set_layer_percent(16);
-                        root.set_layer_cross_percent(80);
-                    }
-                    DockOverlayExample::BottomTabs => {
-                        root.set_placement(DialogLayerPlacement::Bottom);
-                        root.set_layer_percent(36);
-                        root.set_layer_cross_percent(100);
-                    }
-                }
+                    .clear_title(DialogTitlePosition::BottomRight);
+                let (placement, percent, cross_percent) = match example {
+                    DockOverlayExample::Top => (DialogLayerPlacement::Top, 30, 100),
+                    DockOverlayExample::Bottom => (DialogLayerPlacement::Bottom, 30, 100),
+                    DockOverlayExample::Left => (DialogLayerPlacement::Left, 32, 100),
+                    DockOverlayExample::Right => (DialogLayerPlacement::Right, 32, 100),
+                    DockOverlayExample::BottomSnackbar => (DialogLayerPlacement::Bottom, 16, 80),
+                    DockOverlayExample::BottomTabs => (DialogLayerPlacement::Bottom, 36, 100),
+                };
+                root.set_placement(placement);
+                root.set_layer_percent(percent);
+                root.set_layer_cross_percent(cross_percent);
+                let edge_borders = dock_edge_borders(placement, cross_percent);
+                root.layer_mut().dialog_mut().set_edge_borders(edge_borders);
+                root.layer_mut()
+                    .child_mut()
+                    .set_tabs_edge_borders(edge_borders);
                 root.set_backdrop(DialogBackdrop::dim().amount(0.55));
                 root.set_active_with_dialog_focus(true, ctx);
             }
@@ -174,46 +172,31 @@ fn main() -> tuicore::Result<()> {
             Msg::ModalTabsOpened(variant) => {
                 let tabs_layer = modal_tabs_layer(root);
                 tabs_layer.layer_mut().set_variant(variant.variant());
+                tabs_layer.layer_mut().clear_edge_borders();
                 tabs_layer.layer_mut().prepare_modal_open(ctx.animation());
-                match variant {
+                let (placement, percent, cross_percent) = match variant {
                     ModalTabsExample::CenterMinimal
                     | ModalTabsExample::CenterUnderline
-                    | ModalTabsExample::CenterBoxed => {
-                        tabs_layer.set_placement(DialogLayerPlacement::Center);
-                        tabs_layer.set_layer_percent(72);
-                        tabs_layer.set_layer_cross_percent(100);
-                    }
-                    ModalTabsExample::Top => {
-                        tabs_layer.set_placement(DialogLayerPlacement::Top);
-                        tabs_layer.set_layer_percent(30);
-                        tabs_layer.set_layer_cross_percent(100);
-                    }
-                    ModalTabsExample::Bottom => {
-                        tabs_layer.set_placement(DialogLayerPlacement::Bottom);
-                        tabs_layer.set_layer_percent(30);
-                        tabs_layer.set_layer_cross_percent(100);
-                    }
-                    ModalTabsExample::Left => {
-                        tabs_layer.set_placement(DialogLayerPlacement::Left);
-                        tabs_layer.set_layer_percent(32);
-                        tabs_layer.set_layer_cross_percent(100);
-                    }
-                    ModalTabsExample::Right => {
-                        tabs_layer.set_placement(DialogLayerPlacement::Right);
-                        tabs_layer.set_layer_percent(32);
-                        tabs_layer.set_layer_cross_percent(100);
-                    }
-                    ModalTabsExample::BottomSnackbar => {
-                        tabs_layer.set_placement(DialogLayerPlacement::Bottom);
-                        tabs_layer.set_layer_percent(16);
-                        tabs_layer.set_layer_cross_percent(80);
-                    }
-                }
+                    | ModalTabsExample::CenterBoxed => (DialogLayerPlacement::Center, 72, 100),
+                    ModalTabsExample::Top => (DialogLayerPlacement::Top, 30, 100),
+                    ModalTabsExample::Bottom => (DialogLayerPlacement::Bottom, 30, 100),
+                    ModalTabsExample::Left => (DialogLayerPlacement::Left, 32, 100),
+                    ModalTabsExample::Right => (DialogLayerPlacement::Right, 32, 100),
+                    ModalTabsExample::BottomSnackbar => (DialogLayerPlacement::Bottom, 16, 80),
+                };
+                tabs_layer.set_placement(placement);
+                tabs_layer.set_layer_percent(percent);
+                tabs_layer.set_layer_cross_percent(cross_percent);
+                tabs_layer
+                    .layer_mut()
+                    .set_edge_borders(dock_edge_borders(placement, cross_percent));
                 tabs_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
                 tabs_layer.set_active_with_context(true, ctx);
             }
             Msg::ModalTabsClosed(_reason) => {
-                modal_tabs_layer(root).set_active_with_context(false, ctx);
+                let tabs_layer = modal_tabs_layer(root);
+                tabs_layer.layer_mut().prepare_modal_close();
+                tabs_layer.set_active_with_context(false, ctx);
             }
             Msg::NotificationTriggered(index) => {
                 gallery(root)
@@ -366,9 +349,12 @@ impl TuiNode<Msg> for Gallery {
             .render(self.selected.preview(), frame, self.areas.preview_body);
 
         self.theme_dropdown.render(frame, self.areas.theme_dropdown);
+    }
+
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
         self.previews
-            .render_overlay(self.selected.preview(), frame, _area);
-        self.theme_dropdown.render_popup_overlay(frame, _area);
+            .render_overlay(self.selected.preview(), frame, area);
+        TuiNode::<Msg>::render_overlay(&self.theme_dropdown, frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -489,8 +475,14 @@ struct PreviewState {
     paragraph: TuiParagraph,
     textarea_input: TextareaInput<Msg>,
     textarea_panel: PanelHost<TextareaInput<Msg>>,
+    date_picker: DatePicker<Msg>,
+    time_picker: TimePicker<Msg>,
+    date_time_picker: DateTimePicker<Msg>,
+    date_dropdown: DatePickerDropdown<Msg>,
+    date_time_status: String,
     button: Button<Msg>,
     button_presses: u32,
+    chips: [Chip; 7],
     toggle: Toggle<Msg>,
     checkbox_toggle: Toggle<Msg>,
     dialog_100: Button<Msg>,
@@ -504,7 +496,6 @@ struct PreviewState {
     dock_left: Button<Msg>,
     dock_right: Button<Msg>,
     dock_snackbar: Button<Msg>,
-    dock_bottom_tabs: Button<Msg>,
     spinner: Spinner,
     notification_triggers: ToastRack,
     notification_buttons: [Button<Msg>; 4],
@@ -578,8 +569,40 @@ impl PreviewState {
                         .value("Draft note")
                         .max_lines(4),
                 ),
+            date_picker: DatePicker::new()
+                .today(demo_date())
+                .value(Some(demo_date()))
+                .hotkey("dp"),
+            time_picker: TimePicker::new()
+                .value(demo_time())
+                .minute_step(15)
+                .precision(TimePrecision::HourMinute)
+                .hotkey("tp"),
+            date_time_picker: DateTimePicker::new()
+                .value(Some(demo_datetime()))
+                .layout(DateTimePickerLayout::Vertical),
+            date_dropdown: DatePickerDropdown::new()
+                .today(demo_date())
+                .value(Some(demo_date()))
+                .hotkey("dd"),
+            date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
             button: Button::new("button").hotkey("b"),
             button_presses: 0,
+            chips: [
+                Chip::new("Chip value"),
+                Chip::new("Prepend").prepend_icon(""),
+                Chip::new("Append").append_icon(""),
+                Chip::new("Both icons").prepend_icon("󰄬").append_icon(""),
+                Chip::new("Success")
+                    .prepend_icon("")
+                    .color_role(ChipColorRole::Success),
+                Chip::new("Warning")
+                    .prepend_icon("")
+                    .color_role(ChipColorRole::Warning),
+                Chip::new("Error")
+                    .prepend_icon("")
+                    .color_role(ChipColorRole::Error),
+            ],
             toggle: Toggle::new("Telemetry").hotkey("x"),
             checkbox_toggle: Toggle::new("Item").checkbox().checked(true).hotkey("i"),
             dialog_100: dialog_button(DialogExample::Full),
@@ -593,7 +616,6 @@ impl PreviewState {
             dock_left: dock_overlay_button(DockOverlayExample::Left),
             dock_right: dock_overlay_button(DockOverlayExample::Right),
             dock_snackbar: dock_overlay_button(DockOverlayExample::BottomSnackbar),
-            dock_bottom_tabs: dock_overlay_button(DockOverlayExample::BottomTabs),
             spinner: Spinner::new(),
             notification_triggers: ToastRack::new(),
             notification_buttons: notification_buttons(),
@@ -692,6 +714,7 @@ impl PreviewState {
                     self.textarea_panel.layout(panel, ctx);
                 });
             }
+            PreviewKind::DateTimePicker => self.layout_date_time(area, ctx),
             PreviewKind::DataList
             | PreviewKind::DataTable
             | PreviewKind::DataListTree
@@ -740,7 +763,9 @@ impl PreviewState {
             PreviewKind::PasswordInput => self.render_password_input(frame, area),
             PreviewKind::Typography => self.render_typography(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
+            PreviewKind::DateTimePicker => self.render_date_time(frame, area),
             PreviewKind::Button => self.render_button(frame, area),
+            PreviewKind::Chip => self.render_chips(frame, area),
             PreviewKind::Toggle => self.render_toggle(frame, area),
             PreviewKind::DataList
             | PreviewKind::DataTable
@@ -762,12 +787,23 @@ impl PreviewState {
     fn render_overlay(&self, preview: PreviewKind, frame: &mut Frame, overlay_bounds: Rect) {
         if preview == PreviewKind::Dropdown {
             for index in 0..6 {
-                self.dropdown(index)
-                    .render_popup_overlay(frame, overlay_bounds);
+                TuiNode::<Msg>::render_overlay(self.dropdown(index), frame, overlay_bounds);
             }
         }
         if preview == PreviewKind::NotificationTriggers {
             self.notification_triggers.render(frame, overlay_bounds);
+        }
+        if preview == PreviewKind::DateTimePicker {
+            TuiNode::<Msg>::render_overlay(&self.date_dropdown, frame, overlay_bounds);
+        }
+        if preview == PreviewKind::Panel {
+            for index in 0..PANEL_TITLE_CONTROL_COUNT {
+                TuiNode::<Msg>::render_overlay(
+                    self.panel_title_dropdown(index),
+                    frame,
+                    overlay_bounds,
+                );
+            }
         }
     }
 
@@ -852,6 +888,9 @@ impl PreviewState {
                 return EventOutcome::Ignored;
             };
             return self.textarea_panel.dispatch_event(&route, event, ctx);
+        }
+        if preview == PreviewKind::DateTimePicker {
+            return self.date_time_dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::Tabs {
             if let Some((index, route)) = modal_tabs_open_child_route(route) {
@@ -980,6 +1019,42 @@ impl PreviewState {
                     &mut self.textarea_panel,
                     target,
                     textarea_panel_child_key(),
+                    focused,
+                    ctx,
+                );
+            }
+            PreviewKind::DateTimePicker => {
+                if dispatch_focus_child(
+                    &mut self.date_picker,
+                    target,
+                    date_picker_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                if dispatch_focus_child(
+                    &mut self.time_picker,
+                    target,
+                    time_picker_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                if dispatch_focus_child(
+                    &mut self.date_time_picker,
+                    target,
+                    date_time_picker_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.date_dropdown,
+                    target,
+                    date_dropdown_child_key(),
                     focused,
                     ctx,
                 );
@@ -1119,6 +1194,11 @@ impl PreviewState {
             ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
+            .merge(<DatePickerDropdown<Msg> as TuiNode<Msg>>::tick(
+                &mut self.date_dropdown,
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(&mut self.dialog_100, dt, settings))
             .merge(Animated::tick(&mut self.dialog_80, dt, settings))
             .merge(Animated::tick(&mut self.dialog_60, dt, settings))
@@ -1130,7 +1210,6 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.dock_left, dt, settings))
             .merge(Animated::tick(&mut self.dock_right, dt, settings))
             .merge(Animated::tick(&mut self.dock_snackbar, dt, settings))
-            .merge(Animated::tick(&mut self.dock_bottom_tabs, dt, settings))
             .merge(<Tabs<Msg> as TuiNode<Msg>>::tick(
                 &mut self.tabs_minimal,
                 dt,
@@ -1460,7 +1539,6 @@ impl PreviewState {
             8 => &self.dock_left,
             9 => &self.dock_right,
             10 => &self.dock_snackbar,
-            11 => &self.dock_bottom_tabs,
             _ => &self.dialog_100,
         }
     }
@@ -1477,7 +1555,6 @@ impl PreviewState {
             8 => &mut self.dock_left,
             9 => &mut self.dock_right,
             10 => &mut self.dock_snackbar,
-            11 => &mut self.dock_bottom_tabs,
             _ => &mut self.dialog_100,
         }
     }
@@ -1706,6 +1783,103 @@ impl PreviewState {
         self.textarea_panel.render(frame, panel);
     }
 
+    fn layout_date_time(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let [_, date_area, _, combo_area, dropdown_area, _] = date_time_showcase_layout(area);
+        let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
+        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(12), 1);
+        ctx.push_slot(date_picker_child_key(), date_picker_area, |ctx| {
+            self.date_picker.layout(date_picker_area, ctx);
+        });
+        ctx.push_slot(time_picker_child_key(), time_picker_area, |ctx| {
+            self.time_picker.layout(time_picker_area, ctx);
+        });
+        ctx.push_slot(date_time_picker_child_key(), combo_area, |ctx| {
+            <DateTimePicker<Msg> as TuiNode<Msg>>::layout(
+                &mut self.date_time_picker,
+                combo_area,
+                ctx,
+            );
+        });
+        ctx.push_slot(date_dropdown_child_key(), dropdown_area, |ctx| {
+            self.date_dropdown.layout(dropdown_area, ctx);
+        });
+    }
+
+    fn render_date_time(&self, frame: &mut Frame, area: Rect) {
+        let [
+            instructions,
+            date_area,
+            status_area,
+            combo_area,
+            dropdown_area,
+            help_area,
+        ] = date_time_showcase_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "DatePicker, TimePicker, composed DateTimePicker, and dropdown DatePicker.\n\
+                 Hotkeys: |dp| date, |tp| time, |dd| dropdown. Date: arrows/vim move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
+                 Time: left/right field, up/down increment, Enter select, Esc cancel. Tab changes gallery focus; inside DateTimePicker Tab switches date/time.",
+            ),
+            instructions,
+        );
+        let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
+        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(12), 1);
+        self.date_picker.render(frame, date_picker_area);
+        self.time_picker.render(frame, time_picker_area);
+        frame.render_widget(Paragraph::new(self.date_time_status.clone()), status_area);
+        self.date_time_picker.render(frame, combo_area);
+        self.date_dropdown.render(frame, dropdown_area);
+        frame.render_widget(
+            Paragraph::new(
+                "Dropdown date field uses calendar icon and hotkey |dd|. Enter/Space opens; picker shortcuts work while open.",
+            ),
+            help_area,
+        );
+    }
+
+    fn date_time_dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> EventOutcome {
+        let outcome = if let Some(route) = route
+            .path
+            .without_first_if(&date_picker_child_key())
+            .map(EventRoute::new)
+        {
+            self.date_picker.dispatch_event(&route, event, ctx)
+        } else if let Some(route) = route
+            .path
+            .without_first_if(&time_picker_child_key())
+            .map(EventRoute::new)
+        {
+            self.time_picker.dispatch_event(&route, event, ctx)
+        } else if let Some(route) = route
+            .path
+            .without_first_if(&date_time_picker_child_key())
+            .map(EventRoute::new)
+        {
+            self.date_time_picker.dispatch_event(&route, event, ctx)
+        } else if let Some(route) = route
+            .path
+            .without_first_if(&date_dropdown_child_key())
+            .map(EventRoute::new)
+        {
+            self.date_dropdown.dispatch_event(&route, event, ctx)
+        } else {
+            return EventOutcome::Ignored;
+        };
+        self.date_time_status = format!(
+            "date: {} • time: {} • datetime: {} • dropdown: {}",
+            format_date_option(self.date_picker.current_value()),
+            format_time(self.time_picker.current_value()),
+            format_datetime_option(self.date_time_picker.current_value()),
+            format_date_option(self.date_dropdown.current_value())
+        );
+        outcome
+    }
+
     fn layout_button(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [_, button_area, _] = button_layout(area);
         self.button.layout(button_area, ctx);
@@ -1725,6 +1899,44 @@ impl PreviewState {
             Paragraph::new(format!("Pressed {} times", self.button_presses)),
             status,
         );
+    }
+
+    fn render_chips(&self, frame: &mut Frame, area: Rect) {
+        let [instructions, chips_area, _] = chip_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "Chip uses Nerd Font rounded powerline caps: Chip value. Icons keep one space between icon and label.",
+            ),
+            instructions,
+        );
+
+        let [first_row, second_row] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .areas(chips_area);
+        let first_row_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(14),
+                Constraint::Length(13),
+                Constraint::Length(13),
+                Constraint::Length(18),
+            ])
+            .areas::<4>(first_row);
+        let second_row_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(14),
+                Constraint::Length(14),
+                Constraint::Length(12),
+            ])
+            .areas::<3>(second_row);
+        for (chip, area) in self.chips[..4].iter().zip(first_row_areas) {
+            chip.render(frame, area);
+        }
+        for (chip, area) in self.chips[4..].iter().zip(second_row_areas) {
+            chip.render(frame, area);
+        }
     }
 
     fn button_dispatch_event(
@@ -1831,11 +2043,6 @@ impl PreviewState {
         self.render_panel_title_control(frame, areas[1], 1, "Top right");
         self.render_panel_title_control(frame, areas[2], 2, "Bottom left");
         self.render_panel_title_control(frame, areas[3], 3, "Bottom right");
-
-        for index in 0..PANEL_TITLE_CONTROL_COUNT {
-            self.panel_title_dropdown(index)
-                .render_popup_overlay(frame, area);
-        }
     }
 
     fn render_panel_join_preview(&self, frame: &mut Frame, area: Rect) {
@@ -2006,6 +2213,50 @@ fn textarea_panel_child_key() -> ChildKey {
     ChildKey::new("textarea-panel")
 }
 
+fn date_picker_child_key() -> ChildKey {
+    ChildKey::new("date-picker")
+}
+
+fn time_picker_child_key() -> ChildKey {
+    ChildKey::new("time-picker")
+}
+
+fn date_time_picker_child_key() -> ChildKey {
+    ChildKey::new("date-time-picker")
+}
+
+fn date_dropdown_child_key() -> ChildKey {
+    ChildKey::new("date-dropdown")
+}
+
+fn demo_date() -> Date {
+    Date::from_calendar_date(2026, Month::June, 22).expect("valid demo date")
+}
+
+fn demo_time() -> Time {
+    Time::from_hms(9, 30, 0).expect("valid demo time")
+}
+
+fn demo_datetime() -> PrimitiveDateTime {
+    demo_date().with_time(demo_time())
+}
+
+fn format_date_option(value: Option<Date>) -> String {
+    value
+        .map(|date| date.to_string())
+        .unwrap_or_else(|| String::from("none"))
+}
+
+fn format_time(value: Time) -> String {
+    format!("{:02}:{:02}", value.hour(), value.minute())
+}
+
+fn format_datetime_option(value: Option<PrimitiveDateTime>) -> String {
+    value
+        .map(|value| format!("{} {}", value.date(), format_time(value.time())))
+        .unwrap_or_else(|| String::from("none"))
+}
+
 fn toggle_switch_child_key() -> ChildKey {
     ChildKey::new("toggle-switch")
 }
@@ -2081,9 +2332,11 @@ enum ComponentKind {
     LayoutGrid,
     Inputs,
     Button,
+    Chip,
     TextInput,
     PasswordInput,
     TextareaInput,
+    DateTimePicker,
     Toggle,
     Dropdown,
     DataView,
@@ -2098,7 +2351,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 31] = [
+    const ALL: [Self; 33] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -2116,9 +2369,11 @@ impl ComponentKind {
         Self::LayoutGrid,
         Self::Inputs,
         Self::Button,
+        Self::Chip,
         Self::TextInput,
         Self::PasswordInput,
         Self::TextareaInput,
+        Self::DateTimePicker,
         Self::Toggle,
         Self::Dropdown,
         Self::DataView,
@@ -2151,9 +2406,11 @@ impl ComponentKind {
             Self::LayoutGrid => "Grid",
             Self::Inputs => "Inputs",
             Self::Button => "Button",
+            Self::Chip => "Chip",
             Self::TextInput => "Text",
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
+            Self::DateTimePicker => "Date & Time",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
             Self::DataView => "DataView",
@@ -2179,9 +2436,11 @@ impl ComponentKind {
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
             Self::Button
+            | Self::Chip
             | Self::TextInput
             | Self::PasswordInput
             | Self::TextareaInput
+            | Self::DateTimePicker
             | Self::Toggle
             | Self::Dropdown => Some(Self::Inputs),
             Self::LayoutFlex
@@ -2212,9 +2471,11 @@ impl ComponentKind {
             Self::LayoutOverlay => PreviewKind::LayoutOverlay,
             Self::LayoutGrid => PreviewKind::LayoutGrid,
             Self::Inputs | Self::Button => PreviewKind::Button,
+            Self::Chip => PreviewKind::Chip,
             Self::TextInput => PreviewKind::TextInput,
             Self::PasswordInput => PreviewKind::PasswordInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
+            Self::DateTimePicker => PreviewKind::DateTimePicker,
             Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
             Self::DataView | Self::DataViewList => PreviewKind::DataList,
@@ -2247,7 +2508,9 @@ enum PreviewKind {
     TextInput,
     PasswordInput,
     TextareaInput,
+    DateTimePicker,
     Button,
+    Chip,
     Toggle,
     Dropdown,
     DataList,
@@ -2279,7 +2542,9 @@ impl PreviewKind {
             Self::TextInput => "Text",
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
+            Self::DateTimePicker => "Date & Time",
             Self::Button => "Button",
+            Self::Chip => "Chip",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
             Self::DataList => "List",

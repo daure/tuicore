@@ -35,6 +35,7 @@ pub enum ModalCloseReason {
 pub enum TabsSelectionMemory {
     Remember,
     ResetOnOpen,
+    ResetOnClose,
 }
 
 pub struct Tabs<M = ()> {
@@ -47,6 +48,7 @@ pub struct Tabs<M = ()> {
     allow_looping: bool,
     variant: Option<TabsVariant>,
     border: Option<BorderKind>,
+    edge_borders: Option<Borders>,
     bordered: Option<bool>,
     animation: Option<AnimationSpec>,
     focused: bool,
@@ -122,6 +124,7 @@ where
             allow_looping: true,
             variant: None,
             border: None,
+            edge_borders: None,
             bordered: None,
             animation: None,
             focused: false,
@@ -142,7 +145,7 @@ where
 
     pub fn modal(mut self) -> Self {
         self.modal = true;
-        self.selection_memory = TabsSelectionMemory::ResetOnOpen;
+        self.selection_memory = TabsSelectionMemory::ResetOnClose;
         self
     }
 
@@ -158,6 +161,12 @@ where
     pub fn prepare_modal_open(&mut self, settings: AnimationSettings) {
         if self.modal && self.selection_memory == TabsSelectionMemory::ResetOnOpen {
             self.select_index_with_settings(0, settings);
+        }
+    }
+
+    pub fn prepare_modal_close(&mut self) {
+        if self.modal && self.selection_memory == TabsSelectionMemory::ResetOnClose {
+            self.reset_selection();
         }
     }
 
@@ -190,6 +199,19 @@ where
     pub fn border(mut self, border: BorderKind) -> Self {
         self.border = Some(border);
         self
+    }
+
+    pub fn edge_borders(mut self, borders: Borders) -> Self {
+        self.edge_borders = Some(borders);
+        self
+    }
+
+    pub fn set_edge_borders(&mut self, borders: Borders) {
+        self.edge_borders = Some(borders);
+    }
+
+    pub fn clear_edge_borders(&mut self) {
+        self.edge_borders = None;
     }
 
     pub fn bordered(mut self, bordered: bool) -> Self {
@@ -250,6 +272,12 @@ where
             self.transition
                 .start(1.0, 1.0, Duration::ZERO, animation.easing);
         }
+    }
+
+    fn reset_selection(&mut self) {
+        self.selected = self.clamp_selected(0);
+        self.previous_selected = self.selected;
+        self.transition.snap_to(1.0);
     }
 
     pub fn next(&mut self) {
@@ -364,26 +392,64 @@ where
             return Block::default().borders(Borders::ALL).inner(area);
         }
 
+        let edge_borders = self.resolved_edge_borders(bordered);
         let header_height = match variant {
             TabsVariant::Minimal => 1,
             TabsVariant::Underline if bordered => 1,
             TabsVariant::Underline => 2,
-            TabsVariant::Boxed => 3,
+            TabsVariant::Boxed => Self::boxed_header_height(bordered, edge_borders),
         };
         let [_, body] = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(header_height), Constraint::Fill(1)])
             .areas(area);
 
-        if bordered {
-            let borders = if variant == TabsVariant::Boxed {
-                Borders::LEFT | Borders::RIGHT | Borders::BOTTOM
-            } else {
-                Borders::ALL
-            };
-            Block::default().borders(borders).inner(body)
+        let panel_borders = self.panel_borders(variant, edge_borders);
+        if !panel_borders.is_empty() {
+            Self::panel_inner_area(body, panel_borders)
         } else {
             body
+        }
+    }
+
+    fn panel_inner_area(area: Rect, borders: Borders) -> Rect {
+        let left_edge_dock = !borders.contains(Borders::TOP)
+            && !borders.contains(Borders::BOTTOM)
+            && borders.contains(Borders::LEFT);
+        let right_edge_dock = !borders.contains(Borders::TOP)
+            && !borders.contains(Borders::BOTTOM)
+            && borders.contains(Borders::RIGHT);
+        let left = if left_edge_dock {
+            2
+        } else {
+            borders.contains(Borders::LEFT) as u16
+        };
+        let right = if right_edge_dock {
+            2
+        } else {
+            borders.contains(Borders::RIGHT) as u16
+        };
+        let top = borders.contains(Borders::TOP) as u16;
+        let bottom = borders.contains(Borders::BOTTOM) as u16;
+        Rect::new(
+            area.x.saturating_add(left),
+            area.y.saturating_add(top),
+            area.width.saturating_sub(left.saturating_add(right)),
+            area.height.saturating_sub(top.saturating_add(bottom)),
+        )
+    }
+
+    fn resolved_edge_borders(&self, bordered: bool) -> Borders {
+        if !bordered {
+            return Borders::NONE;
+        }
+        self.edge_borders.unwrap_or(Borders::ALL)
+    }
+
+    fn panel_borders(&self, variant: TabsVariant, edge_borders: Borders) -> Borders {
+        match variant {
+            TabsVariant::Boxed => edge_borders & (Borders::LEFT | Borders::RIGHT | Borders::BOTTOM),
+            TabsVariant::Minimal | TabsVariant::Underline => edge_borders,
         }
     }
 
@@ -403,10 +469,11 @@ where
             return;
         }
 
+        let edge_borders = self.resolved_edge_borders(bordered);
         let header_height = match variant {
             TabsVariant::Underline if bordered => 1,
             TabsVariant::Underline => 2,
-            TabsVariant::Boxed => 3,
+            TabsVariant::Boxed => Self::boxed_header_height(bordered, edge_borders),
             TabsVariant::Minimal => unreachable!(),
         };
         let [tabs_area, body_area] = Layout::default()
@@ -414,9 +481,11 @@ where
             .constraints([Constraint::Length(header_height), Constraint::Fill(1)])
             .areas(area);
 
+        let panel_borders = self.panel_borders(variant, edge_borders);
+
         match variant {
             TabsVariant::Boxed => {
-                self.render_boxed_header(frame, tabs_area, selected, border, bordered)
+                self.render_boxed_header(frame, tabs_area, selected, border, bordered, edge_borders)
             }
             TabsVariant::Underline => {
                 self.render_underline_header(frame, tabs_area, selected, bordered)
@@ -424,17 +493,15 @@ where
             TabsVariant::Minimal => unreachable!(),
         }
 
-        if bordered {
+        if !panel_borders.is_empty() {
             let block = Block::default()
-                .borders(if variant == TabsVariant::Boxed {
-                    Borders::LEFT | Borders::RIGHT | Borders::BOTTOM
-                } else {
-                    Borders::ALL
-                })
+                .borders(panel_borders)
                 .border_set(border_set(border))
                 .border_style(self.border_style());
             frame.render_widget(block, body_area);
-            self.render_hotkey(frame, body_area, border);
+            if panel_borders.contains(Borders::BOTTOM) {
+                self.render_hotkey(frame, body_area, border);
+            }
             if variant == TabsVariant::Underline {
                 frame.render_widget(
                     Paragraph::new(self.underline_panel_top_line(
@@ -494,17 +561,27 @@ where
         selected: usize,
         border: BorderKind,
         bordered: bool,
+        edge_borders: Borders,
     ) {
-        let [top, middle, bottom] = self.boxed_title_lines(selected, area.width, border);
-        frame.render_widget(Paragraph::new(top), area);
+        let [top, middle, bottom] =
+            self.boxed_title_lines(selected, area.width, border, bordered, edge_borders);
+        let top_border = bordered && edge_borders.contains(Borders::TOP);
+        if top_border {
+            frame.render_widget(Paragraph::new(top), area);
+        }
+        let middle_y = area.y + top_border as u16;
         frame.render_widget(
             Paragraph::new(middle),
-            Rect::new(area.x, area.y + 1, area.width, 1),
+            Rect::new(area.x, middle_y, area.width, 1),
         );
         frame.render_widget(
             Paragraph::new(if bordered { bottom } else { bottom }),
-            Rect::new(area.x, area.y + 2, area.width, 1),
+            Rect::new(area.x, middle_y + 1, area.width, 1),
         );
+    }
+
+    fn boxed_header_height(bordered: bool, edge_borders: Borders) -> u16 {
+        2 + (bordered && edge_borders.contains(Borders::TOP)) as u16
     }
 
     fn render_underline_header(
@@ -837,59 +914,103 @@ where
         selected: usize,
         width: u16,
         border: BorderKind,
+        bordered: bool,
+        edge_borders: Borders,
     ) -> [Line<'static>; 3] {
         let chars = crate::border_chars(border);
         let border_style = self.border_style();
         let tab_count = self.titles.len();
-        let widths = self
+        let top_border = bordered && edge_borders.contains(Borders::TOP);
+        let left_border = bordered && edge_borders.contains(Borders::LEFT);
+        let right_border = bordered && edge_borders.contains(Borders::RIGHT);
+        let mut widths = self
             .titles
             .iter()
             .enumerate()
             .map(|(index, _)| self.boxed_tab_width(index))
             .collect::<Vec<_>>();
-        let used = 2 + widths.iter().sum::<usize>() + tab_count;
+        if !left_border && let Some(first_width) = widths.first_mut() {
+            *first_width = first_width.saturating_sub(1);
+        }
+        let used = usize::from(left_border)
+            + usize::from(right_border)
+            + widths.iter().sum::<usize>()
+            + tab_count;
         let fill = (width as usize).saturating_sub(used);
         let bottom_fill = fill.saturating_sub(usize::from(
             self.tab_hotkeys.first().and_then(Option::as_ref).is_some(),
         ));
-        let mut top = vec![Span::styled(chars.top_left, border_style)];
-        let mut middle = vec![Span::styled(chars.vertical, border_style)];
-        let mut bottom = vec![Span::styled(chars.left_join, border_style)];
+        let mut top = if top_border && left_border {
+            vec![Span::styled(chars.top_left, border_style)]
+        } else {
+            Vec::new()
+        };
+        let mut middle = if left_border {
+            vec![Span::styled(chars.vertical, border_style)]
+        } else {
+            Vec::new()
+        };
+        let mut bottom = if left_border {
+            vec![Span::styled(chars.left_join, border_style)]
+        } else {
+            Vec::new()
+        };
 
         for (index, _) in self.titles.iter().enumerate() {
             let label = self.titles[index].clone();
             let cell_width = widths[index];
-            top.push(Span::styled(
-                chars.horizontal.repeat(cell_width),
-                border_style,
-            ));
+            if top_border {
+                top.push(Span::styled(
+                    chars.horizontal.repeat(cell_width),
+                    border_style,
+                ));
+            }
             let title_style = if index == selected {
                 self.selected_tab_style()
             } else {
                 self.tab_style()
             };
-            bottom.extend(self.boxed_tab_bottom_spans(index, &label, cell_width, title_style));
-            middle.push(Span::raw(" "));
+            bottom.extend(self.boxed_tab_bottom_spans(
+                index,
+                &label,
+                cell_width,
+                title_style,
+                left_border,
+            ));
+            let left_pad = usize::from(left_border || index > 0);
+            if left_pad > 0 {
+                middle.push(Span::raw(" "));
+            }
             middle.extend(self.tab_title_spans(index, &label, selected, title_style));
-            let right_pad = cell_width.saturating_sub(text_width(&label) + 1);
+            let right_pad = cell_width.saturating_sub(text_width(&label) + left_pad);
             middle.push(Span::raw(" ".repeat(right_pad)));
             if index + 1 == tab_count {
-                top.push(Span::styled(chars.top_join, border_style));
+                if top_border {
+                    top.push(Span::styled(chars.top_join, border_style));
+                }
                 middle.push(Span::styled(chars.vertical, border_style));
                 bottom.push(Span::styled(chars.horizontal, border_style));
                 if fill > 0 {
-                    top.push(Span::styled(chars.horizontal.repeat(fill), border_style));
+                    if top_border {
+                        top.push(Span::styled(chars.horizontal.repeat(fill), border_style));
+                    }
                     bottom.push(Span::styled(
                         chars.horizontal.repeat(bottom_fill),
                         border_style,
                     ));
                 }
                 middle.push(Span::raw(" ".repeat(fill)));
-                top.push(Span::styled(chars.top_right, border_style));
-                middle.push(Span::styled(chars.vertical, border_style));
-                bottom.push(Span::styled(chars.right_join, border_style));
+                if right_border {
+                    if top_border {
+                        top.push(Span::styled(chars.top_right, border_style));
+                    }
+                    middle.push(Span::styled(chars.vertical, border_style));
+                    bottom.push(Span::styled(chars.right_join, border_style));
+                }
             } else {
-                top.push(Span::styled(chars.top_join, border_style));
+                if top_border {
+                    top.push(Span::styled(chars.top_join, border_style));
+                }
                 middle.push(Span::styled(chars.vertical, border_style));
                 bottom.push(Span::styled(chars.horizontal, border_style));
             }
@@ -925,6 +1046,7 @@ where
         title: &str,
         cell_width: usize,
         title_style: Style,
+        left_border: bool,
     ) -> Vec<Span<'static>> {
         let border = self.border.unwrap_or_else(|| preset().border());
         let chars = border_chars(border);
@@ -940,7 +1062,7 @@ where
         let badge_width = hotkey_badge_width(hotkey);
         let base_left_width = title_width.saturating_add(1).min(cell_width);
         let base_right_width = cell_width.saturating_sub(base_left_width + badge_width);
-        let shift = usize::from(index == 0) + usize::from(base_right_width > 0);
+        let shift = usize::from(index == 0 && left_border) + usize::from(base_right_width > 0);
         let left_width = base_left_width.saturating_add(shift).min(cell_width);
         let right_width = base_right_width.saturating_sub(shift);
         let mut spans = vec![Span::styled(
@@ -1155,26 +1277,99 @@ where
         let Some(label) = keybindings().tabs().close_label() else {
             return;
         };
-        let width = line_width(&Line::from(format!("┤{label}│"))).min(u16::MAX as usize) as u16;
+        let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
+        let edge_borders = self.resolved_edge_borders(bordered);
+        if !edge_borders.contains(Borders::TOP)
+            && !edge_borders.contains(Borders::BOTTOM)
+            && edge_borders.contains(Borders::LEFT)
+        {
+            self.render_modal_vertical_close_label(frame, area, area.x, &label, border);
+            return;
+        }
+        if !edge_borders.contains(Borders::TOP)
+            && !edge_borders.contains(Borders::BOTTOM)
+            && edge_borders.contains(Borders::RIGHT)
+        {
+            self.render_modal_vertical_close_label(
+                frame,
+                area,
+                area.right().saturating_sub(1),
+                &label,
+                border,
+            );
+            return;
+        }
+
+        let open_end = edge_borders == Borders::TOP || edge_borders == Borders::BOTTOM;
+        let width = line_width(&Line::from(if open_end {
+            format!("┤{label}├")
+        } else {
+            format!("┤{label}│")
+        }))
+        .min(u16::MAX as usize) as u16;
         let y = self.modal_close_label_y(area);
         if area.width <= width + 2 || y >= area.bottom() {
             return;
         }
         let style = self.selected_tab_style().add_modifier(Modifier::BOLD);
-        let line = Line::from(hotkey_edge_spans(
-            &label,
-            None,
-            border,
-            self.border_style(),
-            style,
-            style,
-        ));
+        let chars = border_chars(border);
+        let line = Line::from(vec![
+            Span::styled(chars.right_join, self.border_style()),
+            Span::styled(label, style),
+            Span::styled(
+                if open_end {
+                    chars.left_join
+                } else {
+                    chars.vertical
+                },
+                self.border_style(),
+            ),
+        ]);
         let x = area.x + area.width.saturating_sub(width);
         frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
     }
 
+    fn render_modal_vertical_close_label(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        x: u16,
+        label: &str,
+        border: BorderKind,
+    ) {
+        let label_width = line_width(&Line::from(label)).min(u16::MAX as usize) as u16;
+        if area.height < 3 || area.width < label_width {
+            return;
+        }
+
+        let chars = border_chars(border);
+        let border_style = self.border_style();
+        let label_style = self.selected_tab_style().add_modifier(Modifier::BOLD);
+        let y = area.bottom().saturating_sub(3);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(chars.bottom_join, border_style))),
+            Rect::new(x, y, 1, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(label.to_owned(), label_style))),
+            Rect::new(x, y.saturating_add(1), label_width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(chars.top_join, border_style))),
+            Rect::new(x, y.saturating_add(2), 1, 1),
+        );
+    }
+
     fn modal_close_label_y(&self, area: Rect) -> u16 {
         let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
+        let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
+        let edge_borders = self.resolved_edge_borders(bordered);
+        if self.modal
+            && !edge_borders.contains(Borders::TOP)
+            && edge_borders.contains(Borders::BOTTOM)
+        {
+            return area.y + area.height.saturating_sub(1);
+        }
         if self.modal && variant == TabsVariant::Underline {
             return area.y.saturating_add(1);
         }
@@ -1203,6 +1398,10 @@ where
         reason: ModalCloseReason,
         ctx: &mut EventCtx<M>,
     ) -> EventOutcome {
+        if self.on_close.is_none() {
+            return EventOutcome::Ignored;
+        };
+        self.prepare_modal_close();
         let Some(handler) = &self.on_close else {
             return EventOutcome::Ignored;
         };
@@ -1303,6 +1502,14 @@ where
                 border,
                 self.border_style(),
             );
+        }
+    }
+
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        if let Some(key) = self.selected_key()
+            && let Some(body) = self.bodies.get(key)
+        {
+            body.render_overlay(frame, area);
         }
     }
 
@@ -1514,6 +1721,14 @@ mod tests {
     use super::*;
     use crate::{Key, KeyEvent, Propagation, TreePath};
 
+    fn char_positions(value: &str, needle: char) -> Vec<usize> {
+        value
+            .chars()
+            .enumerate()
+            .filter_map(|(index, ch)| (ch == needle).then_some(index))
+            .collect()
+    }
+
     struct TickProbe {
         ticks: Rc<RefCell<usize>>,
     }
@@ -1628,9 +1843,44 @@ mod tests {
     }
 
     #[test]
-    fn modal_tabs_reset_selection_on_open_by_default() {
+    fn modal_tabs_reset_selection_on_close_by_default() {
         let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
             .modal()
+            .selected(1);
+
+        tabs.prepare_modal_close();
+
+        assert_eq!(tabs.selected_index(), 0);
+    }
+
+    #[test]
+    fn modal_tabs_do_not_reset_selection_on_open_by_default() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .modal()
+            .selected(1);
+
+        tabs.prepare_modal_open(AnimationSettings::default());
+
+        assert_eq!(tabs.selected_index(), 1);
+    }
+
+    #[test]
+    fn modal_tabs_can_remember_selection_on_close() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .modal()
+            .selection_memory(TabsSelectionMemory::Remember)
+            .selected(1);
+
+        tabs.prepare_modal_close();
+
+        assert_eq!(tabs.selected_index(), 1);
+    }
+
+    #[test]
+    fn modal_tabs_can_reset_selection_on_open() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+            .modal()
+            .selection_memory(TabsSelectionMemory::ResetOnOpen)
             .selected(1);
 
         tabs.prepare_modal_open(AnimationSettings::default());
@@ -1639,15 +1889,18 @@ mod tests {
     }
 
     #[test]
-    fn modal_tabs_can_remember_selection_on_open() {
-        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
+    fn modal_tabs_close_event_resets_selection_before_reopen() {
+        let mut tabs = Tabs::new(vec![Tab::text("One", ""), Tab::text("Two", "")])
             .modal()
-            .selection_memory(TabsSelectionMemory::Remember)
-            .selected(1);
+            .selected(1)
+            .on_close(|reason| reason);
+        let mut ctx = EventCtx::default();
 
-        tabs.prepare_modal_open(AnimationSettings::default());
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
 
-        assert_eq!(tabs.selected_index(), 1);
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(tabs.selected_index(), 0);
+        assert_eq!(ctx.messages(), &[ModalCloseReason::CloseKey]);
     }
 
     #[test]
@@ -2011,6 +2264,121 @@ mod tests {
     }
 
     #[test]
+    fn boxed_tabs_can_hide_edge_borders() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")])
+            .variant(TabsVariant::Boxed)
+            .modal()
+            .edge_borders(Borders::NONE);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 18, 6), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..18)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert!(!row(1).starts_with('│'), "{}", row(1));
+        assert!(!row(1).ends_with('│'), "{}", row(1));
+        assert!(row(2).starts_with("Body"), "{}", row(2));
+        assert!(!row(5).contains('─'), "{}", row(5));
+    }
+
+    #[test]
+    fn boxed_tabs_can_keep_side_borders_without_bottom_border() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")])
+            .variant(TabsVariant::Boxed)
+            .modal()
+            .edge_borders(Borders::TOP | Borders::LEFT | Borders::RIGHT);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 18, 6), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..18)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert!(row(3).starts_with('│'), "{}", row(3));
+        assert!(row(3).ends_with('│'), "{}", row(3));
+        assert!(row(3).contains("Body"), "{}", row(3));
+        assert!(!row(5).contains('─'), "{}", row(5));
+    }
+
+    #[test]
+    fn boxed_tabs_can_hide_top_and_side_borders() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")])
+            .variant(TabsVariant::Boxed)
+            .modal()
+            .edge_borders(Borders::BOTTOM);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 18, 6), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..18)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert!(!row(0).contains('─'), "{}", row(0));
+        assert!(!row(1).starts_with('│'), "{}", row(1));
+        assert!(!row(1).ends_with('│'), "{}", row(1));
+        assert!(row(5).contains('─'), "{}", row(5));
+    }
+
+    #[test]
+    fn boxed_tabs_without_side_borders_align_header_separators() {
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::text("Overview", "Body").hotkey("o"),
+            Tab::text("Behavior", "Body").hotkey("b"),
+            Tab::text("Close", "Body").hotkey("c"),
+        ])
+        .variant(TabsVariant::Boxed)
+        .modal()
+        .edge_borders(Borders::TOP)
+        .on_close(|_| ());
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 64, 6), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(64, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..64)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+        let top = row(0);
+        let middle = row(1);
+
+        let top_joins = char_positions(&top, '┬');
+        let middle_joins = char_positions(&middle, '│');
+
+        assert_eq!(&top_joins[..3], &middle_joins[..3], "{top}\n{middle}");
+    }
+
+    #[test]
     fn bordered_tabs_render_bottom_right_hotkey() {
         let tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")]).hotkey("m");
         let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
@@ -2087,6 +2455,100 @@ mod tests {
 
         assert!(!row(0).contains('x'), "{}", row(0));
         assert!(row(1).ends_with("┤x│"), "{}", row(1));
+    }
+
+    #[test]
+    fn docked_modal_tabs_put_close_label_on_bottom_border_with_open_join() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("Overview", "Body")])
+            .variant(TabsVariant::Underline)
+            .edge_borders(Borders::BOTTOM)
+            .modal()
+            .on_close(|_| ());
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 32, 8), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(32, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let bottom = (0..32)
+            .map(|x| buffer.cell((x, 7)).unwrap().symbol())
+            .collect::<String>();
+
+        assert!(bottom.ends_with("┤x├"), "{bottom}");
+    }
+
+    #[test]
+    fn partial_width_tabs_snackbar_uses_closed_close_label_end() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("Overview", "Body")])
+            .variant(TabsVariant::Boxed)
+            .edge_borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .modal()
+            .on_close(|_| ());
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 32, 8), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(32, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let top = (0..32)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+
+        assert!(top.ends_with("┤x│"), "{top}");
+    }
+
+    #[test]
+    fn docked_modal_tabs_put_vertical_close_label_on_left_edge_bottom() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("Overview", "Body")])
+            .variant(TabsVariant::Underline)
+            .edge_borders(Borders::LEFT)
+            .modal()
+            .on_close(|_| ());
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 8, 8), &mut layout);
+        assert_eq!(tabs.body_area.x, 2);
+        let mut terminal = Terminal::new(TestBackend::new(8, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let column = (0..8)
+            .map(|y| buffer.cell((0, y)).unwrap().symbol())
+            .collect::<String>();
+
+        assert!(column.ends_with("┴x┬"), "{column}");
+    }
+
+    #[test]
+    fn docked_modal_tabs_put_vertical_close_label_on_right_edge_bottom() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("Overview", "Body")])
+            .variant(TabsVariant::Underline)
+            .edge_borders(Borders::RIGHT)
+            .modal()
+            .on_close(|_| ());
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 8, 8), &mut layout);
+        assert_eq!(tabs.body_area.right(), 6);
+        let mut terminal = Terminal::new(TestBackend::new(8, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| tabs.render(frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let column = (0..8)
+            .map(|y| buffer.cell((7, y)).unwrap().symbol())
+            .collect::<String>();
+
+        assert!(column.ends_with("┴x┬"), "{column}");
     }
 
     #[test]

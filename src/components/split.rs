@@ -170,6 +170,11 @@ where
         }
     }
 
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        self.first.render_overlay(frame, area);
+        self.second.render_overlay(frame, area);
+    }
+
     fn dispatch_event(
         &mut self,
         route: &EventRoute,

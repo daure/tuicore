@@ -18,6 +18,7 @@ fn control_enter_submit_emits_message_and_stops_propagation() {
     let mut input = TextareaInput::new()
         .value("first\nsecond")
         .on_submit(|value| format!("submit:{value}"));
+    input.insert_mode = true;
     let mut ctx = EventCtx::default();
     let key = KeyEvent {
         code: Key::Enter,
@@ -37,6 +38,7 @@ fn control_d_submit_emits_message_and_stops_propagation() {
     let mut input = TextareaInput::new()
         .value("draft")
         .on_submit(|value| format!("submit:{value}"));
+    input.insert_mode = true;
     let mut ctx = EventCtx::default();
     let key = KeyEvent {
         code: Key::Char('d'),
@@ -54,6 +56,7 @@ fn control_d_submit_emits_message_and_stops_propagation() {
 #[test]
 fn control_c_clears_value_and_stops_propagation() {
     let mut input = TextareaInput::<()>::new().value("first\nsecond");
+    input.insert_mode = true;
     let mut ctx = EventCtx::<()>::default();
     let key = KeyEvent {
         code: Key::Char('c'),
@@ -71,6 +74,7 @@ fn control_c_clears_value_and_stops_propagation() {
 #[test]
 fn tab_inserts_tab_character_and_stops_propagation() {
     let mut input = TextareaInput::<()>::new().value("left");
+    input.insert_mode = true;
     let mut ctx = EventCtx::<()>::default();
 
     let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
@@ -80,6 +84,18 @@ fn tab_inserts_tab_character_and_stops_propagation() {
     assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn tab_bubbles_for_focus_navigation_before_insert_mode() {
+    let mut input = TextareaInput::<()>::new().value("left").focused(true);
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(input.current_value(), "left");
+    assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
 #[test]
@@ -103,6 +119,7 @@ fn pending_hotkey_underlines_textarea_hotkey() {
 #[test]
 fn control_i_inserts_tab_character_and_stops_propagation() {
     let mut input = TextareaInput::<()>::new().value("left");
+    input.insert_mode = true;
     let mut ctx = EventCtx::<()>::default();
     let key = KeyEvent {
         code: Key::Char('i'),
@@ -146,9 +163,10 @@ fn custom_submit_key_replaces_default_control_enter() {
 
 #[test]
 fn focused_placeholder_draws_cursor_over_first_character() {
-    let input = TextareaInput::<()>::new()
+    let mut input = TextareaInput::<()>::new()
         .placeholder("Write multiple lines...")
         .focused(true);
+    input.insert_mode = true;
 
     let lines = input.visible_lines(8, 1);
 
@@ -178,11 +196,24 @@ fn unfocused_value_hotkey_renders_after_last_line() {
 }
 
 #[test]
-fn focused_value_hotkey_is_hidden() {
+fn focused_value_hotkey_renders_before_insert_mode() {
     let input = TextareaInput::<()>::new()
         .value("First\nSecond")
         .hotkey("t")
         .focused(true);
+
+    let lines = input.visible_lines(20, 2);
+
+    assert_eq!(line_text(&lines[1]), "Second |t|");
+}
+
+#[test]
+fn insert_mode_value_hotkey_is_hidden() {
+    let mut input = TextareaInput::<()>::new()
+        .value("First\nSecond")
+        .hotkey("t")
+        .focused(true);
+    input.insert_mode = true;
 
     let lines = input.visible_lines(20, 2);
 
@@ -197,7 +228,21 @@ fn hotkey_registers_as_focus_shortcut() {
     input.layout(Rect::new(0, 0, 20, 3), &mut ctx);
 
     assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["p"]);
-    assert!(ctx.focus_targets()[0].suppress_global_hotkeys);
+    assert!(!ctx.focus_targets()[0].suppress_global_hotkeys);
+}
+
+#[test]
+fn hotkey_commit_enters_insert_mode() {
+    let mut input = TextareaInput::<()>::new().value("Draft").hotkey("t");
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Hotkey(HotkeyEvent::Commit("t".into())), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(input.insert_mode);
+    assert!(ctx.layout_requested());
+    assert!(ctx.redraw_requested());
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]
@@ -334,6 +379,7 @@ fn external_editor_response_clamps_column_to_selected_line() {
 #[test]
 fn paste_inserts_multiline_text() {
     let mut input = TextareaInput::<()>::new().value("hello");
+    input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
     let outcome = input.event(&TuiEvent::Paste(" world\nagain".into()), &mut ctx);
