@@ -1,4 +1,5 @@
 use super::*;
+use crate::Key;
 
 #[test]
 fn time_picker_arrow_keys_move_minutes_by_one() {
@@ -71,4 +72,25 @@ fn time_picker_registers_and_handles_hotkey() {
     let commit = picker.event(&TuiEvent::Hotkey(HotkeyEvent::Commit("t".into())), &mut ctx);
     assert_eq!(commit, EventOutcome::Handled);
     assert_eq!(picker.pending_hotkey_prefix, None);
+}
+
+#[test]
+fn time_picker_applies_external_editor_time_with_whitespace() {
+    let mut picker = TimePicker::<()>::new();
+    let mut ctx = EventCtx::new(crate::animation_settings());
+
+    let outcome = picker.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: String::from("  14:35\n  "),
+            line: 1,
+            col: 1,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        picker.current_value(),
+        time::Time::from_hms(14, 35, 0).unwrap()
+    );
 }

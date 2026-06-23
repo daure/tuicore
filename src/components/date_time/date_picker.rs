@@ -8,11 +8,12 @@ use ratatui::widgets::calendar::{DateStyler, Monthly};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use time::{Date, Duration, Month};
 
-use crate::event::{ExternalEditorResponse, Key, KeyEvent, TuiEvent};
+use crate::border_set;
+use crate::event::{ExternalEditorResponse, KeyEvent, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_label_spans, hotkey_underline_style,
-    keybindings, theme,
+    keybindings, preset, theme,
 };
 
 use super::{
@@ -133,6 +134,7 @@ impl<M> DatePicker<M> {
         self.focused = focused;
     }
 
+    #[cfg(test)]
     pub(super) fn is_focused(&self) -> bool {
         self.focused
     }
@@ -256,6 +258,7 @@ impl<M> DatePicker<M> {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_set(border_set(preset().border()))
                     .border_style(Style::default().fg(if self.focused {
                         t.highlight_bg()
                     } else {
@@ -346,6 +349,7 @@ impl<M> DatePicker<M> {
         let t = theme();
         Block::default()
             .borders(Borders::ALL)
+            .border_set(border_set(preset().border()))
             .title(title.into())
             .border_style(Style::default().fg(if self.focused {
                 t.highlight_bg()

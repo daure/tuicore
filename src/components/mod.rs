@@ -30,8 +30,8 @@ pub use data_view::{
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
 pub use date_time::{
-    DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerLayout, PickerOutcome, TimeField,
-    TimePicker, TimePrecision,
+    DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
+    PickerOutcome, TimeField, TimePicker, TimePrecision,
 };
 pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition};
 pub use dialog_layer::{DialogBackdrop, DialogLayer, DialogLayerPlacement};

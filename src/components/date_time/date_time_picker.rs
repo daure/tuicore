@@ -2,16 +2,17 @@ use std::time::Duration as StdDuration;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use time::{Date, Month, PrimitiveDateTime, Time};
+use time::PrimitiveDateTime;
 
-use crate::event::{Key, KeyEvent, TuiEvent};
+use crate::event::{KeyEvent, TuiEvent};
 use crate::{
-    EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSizeHint, TickResult, TuiNode, keybindings,
+    EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, LayoutCtx, LayoutProposal,
+    LayoutResult, LayoutSizeHint, TickResult, TreePath, TuiNode, keybindings,
 };
 
 use super::{
-    DATE_TIME_PICKER_FOCUS, DatePicker, PickerOutcome, TimePicker, finish_event, picker_size_hint,
+    DatePicker, PickerOutcome, TimeField, TimePicker, finish_event, format_picker_time,
+    parse_editor_time, picker_size_hint,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub struct DateTimePicker<M = ()> {
     time: TimePicker<M>,
     layout: DateTimePickerLayout,
     active: DateTimePart,
+    focus_path: TreePath,
     on_select: Option<Box<dyn Fn(PrimitiveDateTime) -> M>>,
 }
 
@@ -41,6 +43,7 @@ impl<M> DateTimePicker<M> {
             time: TimePicker::new(),
             layout: DateTimePickerLayout::Horizontal,
             active: DateTimePart::Date,
+            focus_path: TreePath::default(),
             on_select: None,
         }
     }
@@ -148,9 +151,16 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        ctx.register_focusable(FocusId::new(DATE_TIME_PICKER_FOCUS), area, true);
+        self.focus_path = ctx.current_path();
+        let [date_area, time_area] = self.areas(area);
+        ctx.register_focusable(FocusId::new("date-time-picker-date"), date_area, true);
+        ctx.register_focusable(FocusId::new("date-time-picker-time"), time_area, true);
         ctx.set_focus_receives_events_before_global_hotkeys(
-            FocusId::new(DATE_TIME_PICKER_FOCUS),
+            FocusId::new("date-time-picker-date"),
+            true,
+        );
+        ctx.set_focus_receives_events_before_global_hotkeys(
+            FocusId::new("date-time-picker-time"),
             true,
         );
         LayoutResult::new(area)
@@ -162,33 +172,70 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if let TuiEvent::ExternalEditor(response) = event {
-            if self.active != DateTimePart::Date {
-                return EventOutcome::Ignored;
+            match self.active {
+                DateTimePart::Date => {
+                    let outcome = self.date.apply_external_editor_response(response);
+                    if outcome.selected
+                        && let Some(value) = self.current_value()
+                        && let Some(on_select) = &self.on_select
+                    {
+                        ctx.emit(on_select(value));
+                    }
+                    ctx.request_clear();
+                    return finish_event(ctx, outcome);
+                }
+                DateTimePart::Time => {
+                    if let Some(time) = parse_editor_time(&response.value) {
+                        self.time.set_value(time);
+                        if let Some(value) = self.current_value()
+                            && let Some(on_select) = &self.on_select
+                        {
+                            ctx.emit(on_select(value));
+                        }
+                    }
+                    ctx.request_clear();
+                    ctx.request_redraw();
+                    return EventOutcome::Handled;
+                }
             }
-            let outcome = self.date.apply_external_editor_response(response);
-            if outcome.selected
-                && let Some(value) = self.current_value()
-                && let Some(on_select) = &self.on_select
-            {
-                ctx.emit(on_select(value));
-            }
-            ctx.request_clear();
-            return finish_event(ctx, outcome);
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
-        if self.active == DateTimePart::Date
-            && keybindings()
-                .date_time_picker()
-                .external_editor_matches(*key)
+        if keybindings()
+            .date_time_picker()
+            .external_editor_matches(*key)
         {
-            let value = self.date.cursor().to_string();
-            ctx.request_external_editor(value.clone(), 1, value.len() + 1);
+            match self.active {
+                DateTimePart::Date => {
+                    let value = self.date.cursor().to_string();
+                    ctx.request_external_editor(value.clone(), 1, value.len() + 1);
+                }
+                DateTimePart::Time => {
+                    let value = format_picker_time(self.time.draft_value());
+                    let col = match self.time.active_field() {
+                        TimeField::Hour => 1,
+                        TimeField::Minute => 4,
+                        TimeField::Second => 7,
+                    };
+                    ctx.request_external_editor(value.clone(), 1, col);
+                }
+            }
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        let before_active = self.active;
         let outcome = self.on_key(*key);
+        if outcome.handled && self.active != before_active {
+            let id = match self.active {
+                DateTimePart::Date => "date-time-picker-date",
+                DateTimePart::Time => "date-time-picker-time",
+            };
+            ctx.focus(FocusRequest::TargetAt {
+                path: self.focus_path.clone(),
+                id: FocusId::new(id),
+            });
+        }
         if outcome.selected
             && let Some(value) = self.current_value()
             && let Some(on_select) = &self.on_select
@@ -198,9 +245,13 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
         finish_event(ctx, outcome)
     }
 
-    fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+    fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         if focused {
-            self.active = DateTimePart::Date;
+            if target.is_some_and(|id| id.as_str() == "date-time-picker-time") {
+                self.active = DateTimePart::Time;
+            } else {
+                self.active = DateTimePart::Date;
+            }
         }
         self.sync_focus(focused);
         ctx.request_redraw();

@@ -52,7 +52,7 @@ use ratatui::widgets::{Borders, Paragraph};
 use time::{Date, Month, PrimitiveDateTime, Time};
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, ChildKey, Chip, ChipColorRole, DataView,
-    DataViewTypedEvent, DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerLayout,
+    DataViewTypedEvent, DatePicker, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
     DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
     DialogTitlePosition, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId,
     FocusTarget, Grid, Header, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult,
@@ -478,7 +478,7 @@ struct PreviewState {
     date_picker: DatePicker<Msg>,
     time_picker: TimePicker<Msg>,
     date_time_picker: DateTimePicker<Msg>,
-    date_dropdown: DatePickerDropdown<Msg>,
+    date_time_dropdown: DateTimePickerDropdown<Msg>,
     date_time_status: String,
     button: Button<Msg>,
     button_presses: u32,
@@ -581,10 +581,10 @@ impl PreviewState {
             date_time_picker: DateTimePicker::new()
                 .value(Some(demo_datetime()))
                 .layout(DateTimePickerLayout::Vertical),
-            date_dropdown: DatePickerDropdown::new()
+            date_time_dropdown: DateTimePickerDropdown::new()
                 .today(demo_date())
-                .value(Some(demo_date()))
-                .hotkey("dd"),
+                .value(Some(demo_datetime()))
+                .hotkey("dt"),
             date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
             button: Button::new("button").hotkey("b"),
             button_presses: 0,
@@ -794,7 +794,7 @@ impl PreviewState {
             self.notification_triggers.render(frame, overlay_bounds);
         }
         if preview == PreviewKind::DateTimePicker {
-            TuiNode::<Msg>::render_overlay(&self.date_dropdown, frame, overlay_bounds);
+            TuiNode::<Msg>::render_overlay(&self.date_time_dropdown, frame, overlay_bounds);
         }
         if preview == PreviewKind::Panel {
             for index in 0..PANEL_TITLE_CONTROL_COUNT {
@@ -1052,7 +1052,7 @@ impl PreviewState {
                     return;
                 }
                 dispatch_focus_child(
-                    &mut self.date_dropdown,
+                    &mut self.date_time_dropdown,
                     target,
                     date_dropdown_child_key(),
                     focused,
@@ -1194,8 +1194,8 @@ impl PreviewState {
             ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
-            .merge(<DatePickerDropdown<Msg> as TuiNode<Msg>>::tick(
-                &mut self.date_dropdown,
+            .merge(<DateTimePickerDropdown<Msg> as TuiNode<Msg>>::tick(
+                &mut self.date_time_dropdown,
                 dt,
                 settings,
             ))
@@ -1786,7 +1786,7 @@ impl PreviewState {
     fn layout_date_time(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [_, date_area, _, combo_area, dropdown_area, _] = date_time_showcase_layout(area);
         let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
-        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(12), 1);
+        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 1);
         ctx.push_slot(date_picker_child_key(), date_picker_area, |ctx| {
             self.date_picker.layout(date_picker_area, ctx);
         });
@@ -1801,7 +1801,7 @@ impl PreviewState {
             );
         });
         ctx.push_slot(date_dropdown_child_key(), dropdown_area, |ctx| {
-            self.date_dropdown.layout(dropdown_area, ctx);
+            self.date_time_dropdown.layout(dropdown_area, ctx);
         });
     }
 
@@ -1816,22 +1816,22 @@ impl PreviewState {
         ] = date_time_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "DatePicker, TimePicker, composed DateTimePicker, and dropdown DatePicker.\n\
-                 Hotkeys: |dp| date, |tp| time, |dd| dropdown. Date: arrows/vim move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
+                "DatePicker, TimePicker, composed DateTimePicker, and dropdown DateTimePicker.\n\
+                 Hotkeys: |dp| date, |tp| time, |dt| datetime dropdown. Date: arrows/vim move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
                  Time: left/right field, up/down increment, Enter select, Esc cancel. Tab changes gallery focus; inside DateTimePicker Tab switches date/time.",
             ),
             instructions,
         );
         let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
-        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(12), 1);
+        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 1);
         self.date_picker.render(frame, date_picker_area);
         self.time_picker.render(frame, time_picker_area);
         frame.render_widget(Paragraph::new(self.date_time_status.clone()), status_area);
         self.date_time_picker.render(frame, combo_area);
-        self.date_dropdown.render(frame, dropdown_area);
+        self.date_time_dropdown.render(frame, dropdown_area);
         frame.render_widget(
             Paragraph::new(
-                "Dropdown date field uses calendar icon and hotkey |dd|. Enter/Space opens; picker shortcuts work while open.",
+                "Dropdown datetime field starts with date, then centers time in the same popup. Ctrl+O edits the full datetime.",
             ),
             help_area,
         );
@@ -1866,7 +1866,7 @@ impl PreviewState {
             .without_first_if(&date_dropdown_child_key())
             .map(EventRoute::new)
         {
-            self.date_dropdown.dispatch_event(&route, event, ctx)
+            self.date_time_dropdown.dispatch_event(&route, event, ctx)
         } else {
             return EventOutcome::Ignored;
         };
@@ -1875,7 +1875,7 @@ impl PreviewState {
             format_date_option(self.date_picker.current_value()),
             format_time(self.time_picker.current_value()),
             format_datetime_option(self.date_time_picker.current_value()),
-            format_date_option(self.date_dropdown.current_value())
+            format_datetime_option(self.date_time_dropdown.current_value())
         );
         outcome
     }

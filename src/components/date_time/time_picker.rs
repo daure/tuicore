@@ -119,6 +119,7 @@ impl<M> TimePicker<M> {
         self.focused = focused;
     }
 
+    #[cfg(test)]
     pub(super) fn is_focused(&self) -> bool {
         self.focused
     }
@@ -127,6 +128,14 @@ impl<M> TimePicker<M> {
         let key = key.into();
         let bindings = keybindings();
         let date_keys = bindings.date_time_picker();
+        if key.code == Key::Char('n') && key.modifiers.is_empty() {
+            let now = super::today_time();
+            let changed = self.draft != now || self.value != now;
+            self.draft = now;
+            self.value = now;
+            self.typed_digits.clear();
+            return PickerOutcome::handled(changed);
+        }
         if date_keys.top_prefix_matches(key) {
             if self.pending_top_prefix {
                 self.pending_top_prefix = false;
@@ -204,8 +213,10 @@ impl<M> TimePicker<M> {
             .fg(theme().highlight_fg())
             .bg(theme().highlight_bg())
             .add_modifier(Modifier::BOLD);
-        let mut value_spans =
-            vec![self.field_span(format!("{:02}", time.hour()), TimeField::Hour, base, active)];
+        let mut value_spans = vec![
+            Span::styled("󰅐 ", base),
+            self.field_span(format!("{:02}", time.hour()), TimeField::Hour, base, active),
+        ];
         value_spans.push(Span::styled(":", base));
         value_spans.push(self.field_span(
             format!("{:02}", time.minute()),
@@ -248,6 +259,13 @@ impl<M> TimePicker<M> {
             spans.push(Span::styled("|", base));
         }
         Line::from(spans)
+    }
+
+    fn time_line_width(&self) -> u16 {
+        match self.precision {
+            TimePrecision::HourMinute => 8,
+            TimePrecision::HourMinuteSecond => 11,
+        }
     }
 
     fn field_span(
@@ -370,7 +388,7 @@ impl<M> Default for TimePicker<M> {
 
 impl<M: 'static> TuiNode<M> for TimePicker<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        picker_size_hint(12, 1).normalized(proposal)
+        picker_size_hint(self.time_line_width(), 1).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
@@ -420,9 +438,34 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
                 }
             }
         }
+        if let TuiEvent::ExternalEditor(response) = event {
+            if let Some(time) = super::parse_editor_time(&response.value) {
+                self.set_value(time);
+                if let Some(on_select) = &self.on_select {
+                    ctx.emit(on_select(self.value));
+                }
+            }
+            ctx.request_clear();
+            ctx.request_redraw();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if keybindings()
+            .date_time_picker()
+            .external_editor_matches(*key)
+        {
+            let value = super::format_picker_time(self.draft);
+            let col = match self.active_field {
+                TimeField::Hour => 1,
+                TimeField::Minute => 4,
+                TimeField::Second => 7,
+            };
+            ctx.request_external_editor(value.clone(), 1, col);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.on_key(*key);
         if outcome.selected
             && let Some(on_select) = &self.on_select

@@ -1,9 +1,9 @@
 ---
-name: tuicore-layout
-description: Use when working with tuicore.
+name: tuicore-notes
+description: Guide to tuicore layout, primitives, components, and integrations.
 ---
 
-# tuicore Layout Notes
+# tuicore Design Primitives & Architecture
 
 ## Default sizing rule
 
@@ -30,10 +30,82 @@ Use `fill(1)` for main content regions that should consume remaining space.
 
 Dropdown popup rendering uses the overlay render pass. Containers should forward `render_overlay` to children. If a custom container owns child nodes, implement overlay forwarding or dropdowns nested inside it may not appear.
 
-## PoC guidance
+## Core Trait (`TuiNode`)
 
-For quick PoCs:
-1. Use `Flex::column()` for screen shell.
-2. Use `FlexItem::content()` for headers/forms/actions.
-3. Use `FlexItem::fill(1)` for main panes/lists/output.
-4. Avoid guessed `fixed(3)` heights for panels with inputs/dropdowns.
+All UI elements implement `TuiNode<M>` which drives lifecycle and layout:
+- `measure(proposal)` -> `LayoutSizeHint`: sizing hints (min, preferred, stretch).
+- `layout(area, ctx)` -> `LayoutResult`: computes child boundaries. Register focus targets here.
+- `render(frame, area)`: Direct rendering using ratatui.
+- `render_overlay(frame, area)`: Renders dropdowns or modal overlays. Custom containers must forward this.
+- `event(event, ctx)` -> `EventOutcome`: Handles key/mouse/hotkey inputs.
+- `tick(dt, settings)` -> `TickResult`: Advances animations. Updating state happens here, leaving render pure.
+- `focus(target, focused, ctx)`: Reacts to focus changes.
+
+### Event Handling & Propagation
+- **Outcomes**: Return `EventOutcome::Handled` to claim an event, or `EventOutcome::Ignored` to let others handle it.
+- **Redraws**: If state changes, call `ctx.request_redraw()` (and optionally `ctx.request_layout()` if layout size changes).
+- **Communication**: Emit updates up the tree using `ctx.emit(msg)` (where `M` is the message type).
+- **Propagation**: If you handle a key/hotkey and want to block parent containers from receiving it, call `ctx.stop_propagation()`.
+
+## Child Management & Containers
+
+Containers with child elements use the `Children<M>` structure (wrapping list of `ChildSlot`) to properly route layout, events, and focus:
+- **Layout**: In `layout()`, position each child by calling `slot.layout(child_area, ctx)` (this registers hierarchy and hit-testing regions).
+- **Event Routing**: Containers must implement `dispatch_event` and `dispatch_focus` explicitly (the default implementations do not descend). Forward events using `slot.dispatch_event(&route, event, ctx)` and `slot.dispatch_focus(&target, focused, ctx)`.
+- **Ticking & Render**: Loop and forward to `slot.tick(dt, settings)` and `slot.render(frame, area)` / `slot.render_overlay(frame, area)`.
+
+## Semantic Theming & Colors
+
+No raw color literals in components. Retrieve all colors from the active theme:
+- **Usage**: Access via `tuicore::theme()` (e.g., `theme().text_fg()`).
+- **Core Roles**:
+  - Backgrounds: `background_bg` (root/canvas), `surface_bg` (panels/cards), `backdrop_bg` (dialog overlays).
+  - Text: `text_fg` (primary), `muted_fg` (secondary/help), `subtle_fg` (disabled/placeholders).
+  - States: `selected_fg`/`selected_bg` (active elements), `highlight_fg`/`highlight_bg` (focused controls), `success_fg`, `warning_fg`, `error_fg`.
+  - Accents/Chrome: `accent_fg` (links/keys), `border_fg` (borders), `key_fg` (hotkeys).
+
+## Structural Presets
+
+Components query global default configurations from the active preset unless overridden by component-specific builder APIs:
+- **Usage**: Access via `tuicore::preset()` (e.g., `preset().border()`, `preset().scroll()`).
+- **Core Presets**:
+  - `border()`: The default border style (`BorderKind::Rounded`, `Double`, `Thick`, `Plain`).
+  - `tabs()`: Default variant (`Minimal`, `Underline`, `Boxed`) and bordering layout for tab bars.
+  - `scroll()`: Defaults for scrollbar gutters, styling, and visibility policies.
+  - `animation()`: Default easing curve, durations, and target FPS.
+- **Dynamic Swapping**: Apps can dynamically switch presets at runtime by calling `tuicore::set_preset(new_preset)` (e.g., to toggle thick/plain borders or disable animations). Custom components query these settings during layout or rendering to automatically adapt.
+
+## Focus Management
+
+Components participate in focus navigation by registering focus targets and reacting to focus state changes:
+- **Registration**: During `layout(area, ctx)`, components register focusable regions by calling `ctx.register_focusable(FocusId, area, is_active)` or `ctx.register_focusable_with_hotkey_sequences(...)`.
+- **Focus Lifecycle**: The runtime alerts components to focus changes by calling `focus(target_id, focused, ctx)`:
+  - `focused: bool`: indicates if the component gained (`true`) or lost (`false`) focus.
+  - `target_id: Option<&FocusId>`: indicates which sub-element within the component gained focus.
+- **Requesting Focus**: Event handlers can request focus changes on the active `EventCtx` (e.g., `ctx.focus(FocusRequest::Next)`, `ctx.focus_next()`, `ctx.focus_previous()`, or `ctx.unfocus()`).
+- **Focus Routing**: Complex components and containers manage focus internally or route focus using `FocusChain` / `FocusRouter` (helper utilities that advance focus along an array of IDs based on key inputs). Custom containers must forward focus down the tree in `dispatch_focus(target, focused, ctx)` via `slot.dispatch_focus()`.
+
+## Keyboard Shortcuts & Mnemonics
+
+Tuicore matches sequence-based hotkeys and triggers events globally or locally:
+- **Matching**: Components use `HotkeySequenceMatcher::new([keys])` inside key event handlers.
+- **Registration**: Register hotkeys in `layout` using `ctx.register_focusable_with_hotkey_sequences`.
+- **Events**:
+  - `HotkeyEvent::Pending(prefix)`: A partial match sequence is active. Underline/highlight prefix.
+  - `HotkeyEvent::Canceled`: Sequence canceled or timed out.
+  - `HotkeyEvent::Commit(seq)`: Sequence fully typed. Perform action.
+- **Rendering**: Format mnemonic text via `hotkey_label_spans` to underline active letters.
+- **App Configuration**: Built-in library actions map to a static schema in `KeyBindings` (`keybindings.toml`). Consuming apps configure their own custom hotkeys by parsing custom config settings and assigning hotkeys/sequences to components programmatically at runtime.
+
+## Scrolling & Animations
+
+- **Scrolling**: Wrap viewports in `ScrollState` to handle smooth scroll transitions, scrollbar rendering, and mouse wheel propagation.
+- **Animations**: Components implement `Animated` to tick animation frames. Use `Tween` (for numeric transitions) and `ColorTween` (for color interpolations) inside component tick loops to handle easing (e.g., cubic/quad/back) and step integration. Disable animations globally via `animation_settings().enabled`.
+
+## Layout Best Practices
+
+Follow these general structural and sizing rules to build robust screens:
+1. **Screen Shells**: Prefer `Flex::column()` to structure the main page layout.
+2. **Fixed Chrome vs Content**: Use `FlexItem::content()` for headers, status bars, control panels, forms, and toolbars containing intrinsic-height children.
+3. **Flexible Main Panes**: Use `FlexItem::fill(1)` for main panels, lists, grid views, and text logs to consume the remaining active space.
+4. **Avoid Magic Offsets**: Do not hardcode guessed `fixed(n)` heights for panels wrapping dynamic content (like inputs or dropdowns), as this bypasses child measurement and risks crushing element layout. Let the layout engine measure children organically.

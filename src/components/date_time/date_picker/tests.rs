@@ -1,4 +1,5 @@
 use super::*;
+use crate::Key;
 
 #[test]
 fn month_navigation_clamps_invalid_days() {
