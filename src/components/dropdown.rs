@@ -138,6 +138,7 @@ pub struct Dropdown<T, Id> {
     pending_hotkey_prefix: Option<String>,
     scroll_highlight_on_next_layout: bool,
     action_keys: DropdownActionKeys,
+    on_select: Option<Box<dyn Fn(Vec<Id>) + 'static>>,
 }
 
 impl<T, Id> Dropdown<T, Id>
@@ -238,6 +239,7 @@ where
             pending_hotkey_prefix: None,
             scroll_highlight_on_next_layout: false,
             action_keys: DropdownActionKeys::default(),
+            on_select: None,
         }
     }
 
@@ -274,6 +276,11 @@ where
     pub fn clear_no_selection_text(&mut self) {
         self.no_selection_text = None;
         self.no_selection_highlighted = false;
+    }
+
+    pub fn on_select(mut self, handler: impl Fn(Vec<Id>) + 'static) -> Self {
+        self.on_select = Some(Box::new(handler));
+        self
     }
 
     pub fn commit_mode(mut self, mode: DropdownCommitMode) -> Self {
@@ -440,6 +447,20 @@ where
         }
     }
 
+    pub fn open_with_context<M>(&mut self, ctx: &mut EventCtx<M>) -> DropdownOutcome {
+        let outcome = self.open();
+        if outcome.opened {
+            self.backdrop_tween.snap_to(0.0);
+            self.start_backdrop_tween(true, ctx.animation());
+            ctx.request_layout();
+            self.request_open_focus(ctx);
+        }
+        if outcome.handled || outcome.changed {
+            ctx.request_redraw();
+        }
+        outcome
+    }
+
     fn start_backdrop_tween(&mut self, active: bool, settings: AnimationSettings) {
         let target = if active {
             DROPDOWN_BACKDROP_AMOUNT
@@ -512,10 +533,21 @@ where
         }
         let changed = self.committed != self.draft;
         self.committed = self.draft.clone();
+        if changed && let Some(on_select) = &self.on_select {
+            on_select(self.committed.clone());
+        }
         let mut outcome = self.close();
         outcome.committed = true;
         outcome.changed = outcome.changed || changed;
         outcome
+    }
+
+    fn commit_immediate_draft(&mut self) {
+        let changed = self.committed != self.draft;
+        self.committed = self.draft.clone();
+        if changed && let Some(on_select) = &self.on_select {
+            on_select(self.committed.clone());
+        }
     }
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>, area: Rect) -> DropdownOutcome {
@@ -563,7 +595,7 @@ where
                     self.set_single_draft_from_highlight();
                     self.sync_view_selection();
                     if self.commit_mode == DropdownCommitMode::Immediate {
-                        self.committed = self.draft.clone();
+                        self.commit_immediate_draft();
                     }
                 }
             }
@@ -724,7 +756,7 @@ where
             self.set_no_selection_highlighted(true);
             let committed = self.commit_mode == DropdownCommitMode::Immediate;
             if self.commit_mode == DropdownCommitMode::Immediate {
-                self.committed.clear();
+                self.commit_immediate_draft();
             }
             return DropdownOutcome {
                 committed,
@@ -736,7 +768,7 @@ where
             self.set_single_draft_from_highlight();
             self.sync_view_selection();
             if self.commit_mode == DropdownCommitMode::Immediate {
-                self.committed = self.draft.clone();
+                self.commit_immediate_draft();
             }
         }
         DropdownOutcome {
@@ -882,7 +914,7 @@ where
                 self.set_single_draft_from_highlight();
                 self.sync_view_selection();
                 if self.commit_mode == DropdownCommitMode::Immediate {
-                    self.committed = self.draft.clone();
+                    self.commit_immediate_draft();
                 }
             }
             return Some(DropdownOutcome::changed());

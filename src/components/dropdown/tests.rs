@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::hash::Hash;
+use std::rc::Rc;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -466,6 +468,21 @@ fn immediate_commit_updates_selection_while_open() {
     assert!(outcome.committed);
     assert!(dropdown.is_open());
     assert_eq!(dropdown.selected_id(), Some("Beta"));
+}
+
+#[test]
+fn immediate_commit_calls_on_select_when_highlight_changes() {
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&selected);
+    let mut dropdown = single_dropdown()
+        .commit_mode(DropdownCommitMode::Immediate)
+        .selected_one("Alpha")
+        .on_select(move |ids| *captured.borrow_mut() = ids);
+
+    dropdown.open();
+    dropdown.on_key(ctrl('j'), AREA);
+
+    assert_eq!(&*selected.borrow(), &["Beta"]);
 }
 
 #[test]

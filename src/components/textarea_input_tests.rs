@@ -14,7 +14,7 @@ fn handled_key_stops_propagation() {
 }
 
 #[test]
-fn control_enter_submit_emits_message_and_stops_propagation() {
+fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
     let mut input = TextareaInput::new()
         .value("first\nsecond")
         .on_submit(|value| format!("submit:{value}"));
@@ -28,9 +28,26 @@ fn control_enter_submit_emits_message_and_stops_propagation() {
     let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
     assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode);
     assert_eq!(ctx.messages(), &["submit:first\nsecond".to_string()]);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn enter_switches_focused_textarea_into_insert_mode() {
+    let mut input = TextareaInput::<()>::new().value("abc").focused(true);
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(input.insert_mode);
+    assert_eq!(input.current_value(), "abc");
+    assert!(ctx.layout_requested());
+    assert!(ctx.redraw_requested());
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]

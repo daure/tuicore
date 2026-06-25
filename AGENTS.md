@@ -19,5 +19,6 @@
   - Scrolling = reusable `ScrollState`; smooth offset animation only, no stagger/per-row delay.
 - Components live in `src/components/`; treat that directory as the source of truth instead of maintaining a manual component inventory here.
 - Avoid half APIs: public config should be constructible in Rust, not only via TOML.
+- Preferred layout paradigm: Use `Flex` (`Flex::row()` / `Flex::column()`) and `Grid` for UI layout composition. Avoid manual calculations and raw `ratatui::layout::Layout` inside components where possible. By default, children are sized as `FlexItem::fit_content()`, which leverages components' `measure()` hints dynamically.
 - Keep gallery demos honest: use real components/patterns consumers should copy. The gallery serves as the first consumer of the library, so it shouldn't reach into internals or implement custom hacks to make things work. Any such workarounds must be treated as strict exceptions rather than the norm.
 - Maintain `SKILL.md` as the high-level design guide and primitive layout directory (lay of the land) for the codebase. Keep it extremely simple, concise, and focused on how pieces integrate (TuiNode, theming, focus, hotkeys, scrolling) without inner implementation details. Update `SKILL.md` when introducing or removing core primitives to keep it accurate for future development and agent queries.

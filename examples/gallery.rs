@@ -10,11 +10,10 @@ use gallery_demo::dialogs::{
     gallery_dock_overlay,
 };
 use gallery_demo::dropdowns::{
-    DropdownDemoItem, ThemeChoice, dropdown_area, dropdown_child_key, dropdown_child_route,
+    DropdownDemoItem, dropdown_area, dropdown_child_key, dropdown_child_route,
     dropdown_column_layout, dropdown_filled_fuzzy_single, dropdown_filled_multi_contains,
     dropdown_filled_no_search_immediate, dropdown_fuzzy_single, dropdown_grid_areas,
     dropdown_index, dropdown_multi_contains, dropdown_no_search_immediate, dropdown_preview_layout,
-    theme_dropdown,
 };
 use gallery_demo::inputs::{
     button_layout, chip_layout, date_time_showcase_layout, password_input_showcase_layout,
@@ -38,6 +37,7 @@ use gallery_demo::panels::{
     panel_title_child_key, panel_title_child_route, panel_title_column_layout,
     panel_title_control_areas, panel_title_dropdown, panel_title_dropdown_area, panel_title_index,
 };
+use gallery_demo::status_bar::demo_weather_report;
 use gallery_demo::tabs::{
     ModalTabsExample, labeled_area, modal_tabs_button_areas, modal_tabs_dialog,
     modal_tabs_open_child_key, modal_tabs_open_child_route, modal_tabs_open_index,
@@ -48,18 +48,33 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+
+use futures::StreamExt;
 use ratatui::widgets::{Borders, Paragraph};
+use rig::agent::{MultiTurnStreamItem, Text as RigText};
+use rig::client::CompletionClient;
+use rig::completion::ToolDefinition;
+use rig::providers::chatgpt;
+use rig::schemars::JsonSchema;
+use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+use rig::tool::Tool;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
 use time::{Date, Month, PrimitiveDateTime, Time};
+use tuicore::components::{AiDock, LlmEvent, ToolPolicy};
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, ChildKey, Chip, ChipColorRole, DataView,
     DataViewTypedEvent, DatePicker, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
     DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
     DialogTitlePosition, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId,
-    FocusTarget, Grid, Header, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult,
-    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
-    ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger, Spinner, Split, Stack, Tabs,
-    TabsVariant, TextInput, TextareaInput, Theme, ThemeName, TickResult, TimePicker, TimePrecision,
-    ToastRack, Toggle, TreeAdapter, TuiEvent, TuiNode,
+    FocusTarget, Grid, Header, HotkeyLabelMode, Key, KeyEvent, KeyModifiers, LayoutCtx,
+    LayoutResult, Menu, MenuItem, ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition,
+    Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger,
+    Spinner, Split, Stack, StatusBar, StatusBarMenuItem, Tabs, TabsVariant, TextInput,
+    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
+    TuiEvent, TuiNode, WeatherForecastDialog,
 };
 
 #[derive(Debug, PartialEq)]
@@ -71,22 +86,37 @@ enum Msg {
     ModalTabsOpened(ModalTabsExample),
     ModalTabsClosed(ModalCloseReason),
     NotificationTriggered(usize),
+    WeatherForecastOpened,
+    WeatherForecastClosed(DialogCloseReason),
+    OpenAiDock,
+    CloseAiDock,
 }
 
 type DialogDemoLayer = DialogLayer<Gallery, DialogHost<GalleryDialogContent, Msg>>;
 type ModalTabsLayer = DialogLayer<DialogDemoLayer, Tabs<Msg>>;
 type RootLayer = DialogLayer<ModalTabsLayer, DialogHost<GalleryDockOverlayContent, Msg>>;
+type WeatherLayer = DialogLayer<RootLayer, WeatherForecastDialog<Msg>>;
 
-fn dialog_demo_layer(root: &mut RootLayer) -> &mut DialogDemoLayer {
-    root.base_mut().base_mut()
-}
+type AppRoot = DialogLayer<WeatherLayer, tuicore::components::AiDock<Msg>>;
 
-fn modal_tabs_layer(root: &mut RootLayer) -> &mut ModalTabsLayer {
+fn weather_layer(root: &mut AppRoot) -> &mut WeatherLayer {
     root.base_mut()
 }
 
-fn gallery(root: &mut RootLayer) -> &mut Gallery {
-    root.base_mut().base_mut().base_mut()
+fn get_root_layer(root: &mut AppRoot) -> &mut RootLayer {
+    weather_layer(root).base_mut()
+}
+
+fn dialog_demo_layer(root: &mut AppRoot) -> &mut DialogDemoLayer {
+    get_root_layer(root).base_mut().base_mut()
+}
+
+fn modal_tabs_layer(root: &mut AppRoot) -> &mut ModalTabsLayer {
+    get_root_layer(root).base_mut()
+}
+
+fn gallery(root: &mut AppRoot) -> &mut Gallery {
+    get_root_layer(root).base_mut().base_mut().base_mut()
 }
 
 fn dock_edge_borders(placement: DialogLayerPlacement, cross_percent: u16) -> Borders {
@@ -108,7 +138,21 @@ fn main() -> tuicore::Result<()> {
     let dialog_layer = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
     let tabs_layer = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
     let root = DialogLayer::new(tabs_layer, gallery_dock_overlay()).active(false);
-    tuicore::TreeApp::new(root)
+    let weather = DialogLayer::new(
+        root,
+        WeatherForecastDialog::new()
+            .report(demo_weather_report())
+            .on_close(Msg::WeatherForecastClosed),
+    )
+    .active(false)
+    .layer_percent(78)
+    .layer_cross_percent(88)
+    .placement(DialogLayerPlacement::Center)
+    .backdrop(DialogBackdrop::dim().amount(0.45));
+
+    let final_root = DialogLayer::new(weather, ai_dock_dialog()).active(false);
+
+    tuicore::TreeApp::new(final_root)
         .on_message(|root, msg, ctx| match msg {
             Msg::DialogOpened(example) => {
                 let dialog_layer = dialog_demo_layer(root);
@@ -136,15 +180,16 @@ fn main() -> tuicore::Result<()> {
                 }
                 dialog_layer.set_layer_percent(example.percent());
                 dialog_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                dialog_layer.set_active_with_dialog_focus(true, ctx);
+                dialog_layer.set_active_with_context(true, ctx);
             }
             Msg::DialogClosed(_reason) => {
                 dialog_demo_layer(root).set_active_with_context(false, ctx);
             }
             Msg::DockOverlayOpened(example) => {
-                root.layer_mut().child_mut().set_example(example);
-                root.layer_mut().dialog_mut().set_top_left(example.title());
-                root.layer_mut()
+                let r = get_root_layer(root);
+                r.layer_mut().child_mut().set_example(example);
+                r.layer_mut().dialog_mut().set_top_left(example.title());
+                r.layer_mut()
                     .dialog_mut()
                     .clear_title(DialogTitlePosition::BottomRight);
                 let (placement, percent, cross_percent) = match example {
@@ -155,19 +200,19 @@ fn main() -> tuicore::Result<()> {
                     DockOverlayExample::BottomSnackbar => (DialogLayerPlacement::Bottom, 16, 80),
                     DockOverlayExample::BottomTabs => (DialogLayerPlacement::Bottom, 36, 100),
                 };
-                root.set_placement(placement);
-                root.set_layer_percent(percent);
-                root.set_layer_cross_percent(cross_percent);
+                r.set_placement(placement);
+                r.set_layer_percent(percent);
+                r.set_layer_cross_percent(cross_percent);
                 let edge_borders = dock_edge_borders(placement, cross_percent);
-                root.layer_mut().dialog_mut().set_edge_borders(edge_borders);
-                root.layer_mut()
+                r.layer_mut().dialog_mut().set_edge_borders(edge_borders);
+                r.layer_mut()
                     .child_mut()
                     .set_tabs_edge_borders(edge_borders);
-                root.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                root.set_active_with_dialog_focus(true, ctx);
+                r.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                r.set_active_with_context(true, ctx);
             }
             Msg::DockOverlayClosed(_reason) => {
-                root.set_active_with_context(false, ctx);
+                get_root_layer(root).set_active_with_context(false, ctx);
             }
             Msg::ModalTabsOpened(variant) => {
                 let tabs_layer = modal_tabs_layer(root);
@@ -205,6 +250,22 @@ fn main() -> tuicore::Result<()> {
                     .push(notification_for_index(index).ttl(Duration::from_secs(4)));
                 ctx.request_redraw();
             }
+            Msg::WeatherForecastOpened => {
+                weather_layer(root).set_active_with_context(true, ctx);
+            }
+            Msg::WeatherForecastClosed(_reason) => {
+                weather_layer(root).set_active_with_context(false, ctx);
+            }
+            Msg::OpenAiDock => {
+                root.set_placement(DialogLayerPlacement::Bottom);
+                root.set_layer_percent(80);
+                root.set_layer_cross_percent(80);
+                root.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                root.set_active_with_context(true, ctx);
+            }
+            Msg::CloseAiDock => {
+                root.set_active_with_context(false, ctx);
+            }
         })
         .run()
 }
@@ -215,7 +276,7 @@ struct Gallery {
     areas: GalleryAreas,
     list_panel: Panel,
     preview_panel: Panel,
-    theme_dropdown: Dropdown<ThemeChoice, ThemeName>,
+    footer: StatusBar<Msg>,
     previews: PreviewState,
 }
 
@@ -226,7 +287,6 @@ struct GalleryAreas {
     preview_panel: Rect,
     preview_body: Rect,
     footer: Rect,
-    theme_dropdown: Rect,
 }
 
 impl Gallery {
@@ -249,10 +309,17 @@ impl Gallery {
             ComponentKind::Notifications,
             ComponentKind::Typography,
             ComponentKind::Inputs,
+            ComponentKind::StatusBar,
             ComponentKind::Layouts,
             ComponentKind::DataView,
         ])
         .focused(true);
+
+        let footer = StatusBar::new()
+            .menu_items([StatusBarMenuItem::Theme, StatusBarMenuItem::WeatherForecast])
+            .weather_report(demo_weather_report())
+            .on_ai_open(|| Msg::OpenAiDock)
+            .on_weather_open(|| Msg::WeatherForecastOpened);
 
         Self {
             component_list,
@@ -263,7 +330,7 @@ impl Gallery {
                 .hotkey("c")
                 .focused(true),
             preview_panel: Panel::new().top_left(ComponentKind::Tabs.preview().title()),
-            theme_dropdown: theme_dropdown(),
+            footer,
             previews: PreviewState::new(),
         }
     }
@@ -304,10 +371,6 @@ impl TuiNode<Msg> for Gallery {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
             .areas(main);
-        let [theme_dropdown, _] = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(36), Constraint::Fill(1)])
-            .areas(footer);
 
         self.areas = GalleryAreas {
             list_panel,
@@ -315,7 +378,6 @@ impl TuiNode<Msg> for Gallery {
             preview_panel,
             preview_body: Panel::inner_area(preview_panel),
             footer,
-            theme_dropdown,
         };
         ctx.push_slot(gallery_list_child_key(), self.areas.list_body, |ctx| {
             <DataView<ComponentKind, ComponentKind> as TuiNode<Msg>>::layout(
@@ -333,10 +395,10 @@ impl TuiNode<Msg> for Gallery {
                 ctx.register_focusable(FocusId::new("preview"), self.areas.preview_body, true);
             },
         );
-        ctx.push_slot(gallery_theme_child_key(), theme_dropdown, |ctx| {
-            self.theme_dropdown
-                .layout_overlay::<Msg>(theme_dropdown, area, ctx);
+        ctx.push_slot(gallery_footer_child_key(), footer, |ctx| {
+            self.footer.layout_overlay(footer, area, ctx);
         });
+
         LayoutResult::new(area)
     }
 
@@ -348,13 +410,13 @@ impl TuiNode<Msg> for Gallery {
         self.previews
             .render(self.selected.preview(), frame, self.areas.preview_body);
 
-        self.theme_dropdown.render(frame, self.areas.theme_dropdown);
+        self.footer.render(frame, self.areas.footer);
     }
 
     fn render_overlay(&self, frame: &mut Frame, area: Rect) {
         self.previews
             .render_overlay(self.selected.preview(), frame, area);
-        TuiNode::<Msg>::render_overlay(&self.theme_dropdown, frame, area);
+        self.footer.render_overlay(frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -363,15 +425,23 @@ impl TuiNode<Msg> for Gallery {
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+
+        let outcome = self.footer.event(event, ctx);
+        if outcome.handled() {
+            return outcome;
+        }
+
         EventOutcome::Ignored
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        Animated::tick(&mut self.list_panel, dt, settings)
+        let tick_res = Animated::tick(&mut self.list_panel, dt, settings)
             .merge(Animated::tick(&mut self.preview_panel, dt, settings))
             .merge(Animated::tick(&mut self.component_list, dt, settings))
-            .merge(Animated::tick(&mut self.theme_dropdown, dt, settings))
-            .merge(self.previews.tick(dt, settings))
+            .merge(self.footer.tick(dt, settings))
+            .merge(self.previews.tick(dt, settings));
+
+        tick_res
     }
 
     fn dispatch_event(
@@ -420,17 +490,10 @@ impl TuiNode<Msg> for Gallery {
 
         if let Some(route) = route
             .path
-            .without_first_if(&gallery_theme_child_key())
+            .without_first_if(&gallery_footer_child_key())
             .map(EventRoute::new)
         {
-            let before = self.theme_dropdown.selected_id();
-            let child = self.theme_dropdown.dispatch_event(&route, event, ctx);
-            if self.theme_dropdown.selected_id() != before {
-                if let Some(name) = self.theme_dropdown.selected_id() {
-                    tuicore::set_theme(Theme::named(name));
-                    ctx.request_redraw();
-                }
-            }
+            let child = self.footer.dispatch_event(&route, event, ctx);
             return child.bubble(ctx, |ctx| self.event(event, ctx));
         }
 
@@ -446,9 +509,8 @@ impl TuiNode<Msg> for Gallery {
             return;
         }
 
-        if let Some(child_target) = target.for_child(&gallery_theme_child_key()) {
-            self.theme_dropdown
-                .dispatch_focus(&child_target, focused, ctx);
+        if let Some(child_target) = target.for_child(&gallery_footer_child_key()) {
+            self.footer.dispatch_focus(&child_target, focused, ctx);
             ctx.request_redraw();
             return;
         }
@@ -480,6 +542,7 @@ struct PreviewState {
     date_time_picker: DateTimePicker<Msg>,
     date_time_dropdown: DateTimePickerDropdown<Msg>,
     date_time_status: String,
+    status_bar: StatusBar<Msg>,
     button: Button<Msg>,
     button_presses: u32,
     chips: [Chip; 7],
@@ -525,6 +588,9 @@ struct PreviewState {
     dropdown_filled_fuzzy_single: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_multi_contains: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_no_search_immediate: Dropdown<DropdownDemoItem, &'static str>,
+    menu_trigger: Button<Msg>,
+    menu: Menu<&'static str>,
+    menu_status: String,
     layout_flex: Flex<Msg>,
     layout_split: Split<DemoBox, DemoBox>,
     layout_stack: Stack<Msg>,
@@ -586,6 +652,14 @@ impl PreviewState {
                 .value(Some(demo_datetime()))
                 .hotkey("dt"),
             date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
+            status_bar: StatusBar::new()
+                .menu_items([
+                    StatusBarMenuItem::Theme,
+                    StatusBarMenuItem::WeatherForecast,
+                ])
+                .weather_report(demo_weather_report())
+                .on_ai_open(|| Msg::OpenAiDock)
+                .on_weather_open(|| Msg::WeatherForecastOpened),
             button: Button::new("button").hotkey("b"),
             button_presses: 0,
             chips: [
@@ -654,6 +728,11 @@ impl PreviewState {
             dropdown_filled_fuzzy_single: dropdown_filled_fuzzy_single(),
             dropdown_filled_multi_contains: dropdown_filled_multi_contains(),
             dropdown_filled_no_search_immediate: dropdown_filled_no_search_immediate(),
+            menu_trigger: Button::new("Open menu")
+                .hotkey("m")
+                .hotkey_label_mode(HotkeyLabelMode::Inline),
+            menu: demo_menu(),
+            menu_status: String::from("No menu action yet"),
             layout_flex: layout_flex_demo(),
             layout_split: layout_split_demo(),
             layout_stack: layout_stack_demo(),
@@ -715,6 +794,7 @@ impl PreviewState {
                 });
             }
             PreviewKind::DateTimePicker => self.layout_date_time(area, ctx),
+            PreviewKind::StatusBar => self.layout_status_bar(area, overlay_bounds, ctx),
             PreviewKind::DataList
             | PreviewKind::DataTable
             | PreviewKind::DataListTree
@@ -731,6 +811,7 @@ impl PreviewState {
                 );
             }
             PreviewKind::Dropdown => self.layout_dropdowns(area, overlay_bounds, ctx),
+            PreviewKind::Menu => self.layout_menu(area, overlay_bounds, ctx),
             PreviewKind::LayoutFlex => {
                 self.layout_flex.layout(layout_demo_body(area), ctx);
             }
@@ -762,8 +843,10 @@ impl PreviewState {
             PreviewKind::TextInput => self.render_text_input(frame, area),
             PreviewKind::PasswordInput => self.render_password_input(frame, area),
             PreviewKind::Typography => self.render_typography(frame, area),
+            PreviewKind::Colors => self.render_colors(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
             PreviewKind::DateTimePicker => self.render_date_time(frame, area),
+            PreviewKind::StatusBar => self.render_status_bar(frame, area),
             PreviewKind::Button => self.render_button(frame, area),
             PreviewKind::Chip => self.render_chips(frame, area),
             PreviewKind::Toggle => self.render_toggle(frame, area),
@@ -776,6 +859,7 @@ impl PreviewState {
             | PreviewKind::DataChecklistTree
             | PreviewKind::DataActivateOnNavigate => self.render_data_view(preview, frame, area),
             PreviewKind::Dropdown => self.render_dropdown_preview(frame, area),
+            PreviewKind::Menu => self.render_menu(frame, area),
             PreviewKind::LayoutFlex => self.render_layout_flex(frame, area),
             PreviewKind::LayoutSplit => self.render_layout_split(frame, area),
             PreviewKind::LayoutStack => self.render_layout_stack(frame, area),
@@ -789,6 +873,12 @@ impl PreviewState {
             for index in 0..6 {
                 TuiNode::<Msg>::render_overlay(self.dropdown(index), frame, overlay_bounds);
             }
+        }
+        if preview == PreviewKind::Menu {
+            TuiNode::<Msg>::render_overlay(&self.menu, frame, overlay_bounds);
+        }
+        if preview == PreviewKind::StatusBar {
+            self.status_bar.render_overlay(frame, overlay_bounds);
         }
         if preview == PreviewKind::NotificationTriggers {
             self.notification_triggers.render(frame, overlay_bounds);
@@ -892,6 +982,9 @@ impl PreviewState {
         if preview == PreviewKind::DateTimePicker {
             return self.date_time_dispatch_event(route, event, ctx);
         }
+        if preview == PreviewKind::StatusBar {
+            return self.status_bar.dispatch_event(route, event, ctx);
+        }
         if preview == PreviewKind::Tabs {
             if let Some((index, route)) = modal_tabs_open_child_route(route) {
                 return self
@@ -925,6 +1018,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::Button {
             return self.button_dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::Menu {
+            return self.menu_dispatch_event(route, event, ctx);
         }
         if preview.is_data_view() {
             return self.data_view_dispatch_event(preview, route, event, ctx);
@@ -1059,6 +1155,7 @@ impl PreviewState {
                     ctx,
                 );
             }
+            PreviewKind::StatusBar => self.status_bar.dispatch_focus(target, focused, ctx),
             PreviewKind::Tabs => {
                 if let Some((index, child_target)) =
                     indexed_child_target(target, modal_tabs_open_index)
@@ -1113,6 +1210,7 @@ impl PreviewState {
                 );
             }
             PreviewKind::Button => self.button.dispatch_focus(target, focused, ctx),
+            PreviewKind::Menu => self.menu_dispatch_focus(target, focused, ctx),
             preview if preview.is_data_view() => self
                 .active_data_view_mut(preview)
                 .dispatch_focus(target, focused, ctx),
@@ -1196,6 +1294,11 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
             .merge(<DateTimePickerDropdown<Msg> as TuiNode<Msg>>::tick(
                 &mut self.date_time_dropdown,
+                dt,
+                settings,
+            ))
+            .merge(<StatusBar<Msg> as TuiNode<Msg>>::tick(
+                &mut self.status_bar,
                 dt,
                 settings,
             ))
@@ -1314,6 +1417,8 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(Animated::tick(&mut self.menu_trigger, dt, settings))
+            .merge(Animated::tick(&mut self.menu, dt, settings))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
             .merge(self.text_input_panel.tick(dt, settings))
             .merge(Animated::tick(&mut self.password_input, dt, settings))
@@ -1761,6 +1866,61 @@ impl PreviewState {
         self.paragraph.render(frame, paragraph);
     }
 
+    fn render_colors(&self, frame: &mut Frame, area: Rect) {
+        let theme = tuicore::theme();
+        let colors = [
+            ("selected_fg", theme.selected_fg()),
+            ("selected_bg", theme.selected_bg()),
+            ("background_bg", theme.background_bg()),
+            ("surface_bg", theme.surface_bg()),
+            ("backdrop_bg", theme.backdrop_bg()),
+            ("text_fg", theme.text_fg()),
+            ("muted_fg", theme.muted_fg()),
+            ("subtle_fg", theme.subtle_fg()),
+            ("accent_fg", theme.accent_fg()),
+            ("success_fg", theme.success_fg()),
+            ("error_fg", theme.error_fg()),
+            ("border_fg", theme.border_fg()),
+            ("highlight_fg", theme.highlight_fg()),
+            ("highlight_bg", theme.highlight_bg()),
+            ("key_fg", theme.key_fg()),
+            ("warning_fg", theme.warning_fg()),
+            ("weather_sun_fg", theme.weather_sun_fg()),
+            ("weather_cool_fg", theme.weather_cool_fg()),
+            ("weather_warm_fg", theme.weather_warm_fg()),
+            ("weather_hot_fg", theme.weather_hot_fg()),
+            ("weather_rain_fg", theme.weather_rain_fg()),
+        ];
+        let column_width = (area.width / 3).max(1);
+        for (index, (name, color)) in colors.into_iter().enumerate() {
+            let column = index % 3;
+            let row = index / 3;
+            let x = area.x + column as u16 * column_width;
+            let y = area.y + row as u16 * 3;
+            if y >= area.y.saturating_add(area.height) {
+                break;
+            }
+            let swatch = Rect::new(
+                x,
+                y,
+                3.min(column_width),
+                3.min(area.bottom().saturating_sub(y)),
+            );
+            for offset in 0..swatch.height {
+                frame.render_widget(
+                    Paragraph::new("   ").style(Style::default().bg(color)),
+                    Rect::new(swatch.x, swatch.y + offset, swatch.width, 1),
+                );
+            }
+            if column_width > 5 {
+                frame.render_widget(
+                    Paragraph::new(name).style(Style::default().fg(theme.text_fg())),
+                    Rect::new(x + 4, y + 1, column_width.saturating_sub(4), 1),
+                );
+            }
+        }
+    }
+
     fn render_textarea_input(&self, frame: &mut Frame, area: Rect) {
         let [instructions, input, panel] = textarea_showcase_layout(area);
         frame.render_widget(
@@ -1880,6 +2040,24 @@ impl PreviewState {
         outcome
     }
 
+    fn layout_status_bar(&mut self, area: Rect, overlay_bounds: Rect, ctx: &mut LayoutCtx) {
+        let [_, bar, _] = status_bar_preview_layout(area);
+        self.status_bar.layout_overlay(bar, overlay_bounds, ctx);
+    }
+
+    fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
+        let [help, bar, note] = status_bar_preview_layout(area);
+        frame.render_widget(
+            Paragraph::new("Reusable status bar: ` opens the menu, Theme opens a centered dropdown, ' opens AI dock. Weather and time sit on the right."),
+            help,
+        );
+        self.status_bar.render(frame, bar);
+        frame.render_widget(
+            Paragraph::new("Menu contents are configured with StatusBar::menu_items([...])."),
+            note,
+        );
+    }
+
     fn layout_button(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [_, button_area, _] = button_layout(area);
         self.button.layout(button_area, ctx);
@@ -1951,6 +2129,82 @@ impl PreviewState {
             self.button_presses += 1;
         }
         outcome
+    }
+
+    fn layout_menu(&mut self, area: Rect, overlay_bounds: Rect, ctx: &mut LayoutCtx) {
+        let [_, trigger_row, _] = menu_preview_layout(area);
+        let trigger_area = Rect::new(trigger_row.x, trigger_row.y, trigger_row.width.min(15), 1);
+        ctx.push_slot(menu_trigger_child_key(), trigger_area, |ctx| {
+            self.menu_trigger.layout(trigger_area, ctx);
+        });
+        ctx.push_slot(menu_panel_child_key(), trigger_area, |ctx| {
+            self.menu
+                .layout_overlay::<Msg>(trigger_area, overlay_bounds, ctx);
+        });
+    }
+
+    fn render_menu(&self, frame: &mut Frame, area: Rect) {
+        let [help, trigger_row, status] = menu_preview_layout(area);
+        let trigger_area = Rect::new(trigger_row.x, trigger_row.y, trigger_row.width.min(15), 1);
+        frame.render_widget(
+            Paragraph::new(
+                "Menu uses external trigger + overlay panel. Open focuses search; fuzzy search is default. Enter activates, Esc closes, Ctrl+j/k/d/u navigate like Dropdown.",
+            ),
+            help,
+        );
+        self.menu_trigger.render(frame, trigger_area);
+        frame.render_widget(Paragraph::new(self.menu_status.clone()), status);
+    }
+
+    fn menu_dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> EventOutcome {
+        if !self.menu.is_open() && menu_trigger_hotkey(event) {
+            self.menu.open_with_context(ctx);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+
+        if let Some(route) = route
+            .path
+            .without_first_if(&menu_trigger_child_key())
+            .map(EventRoute::new)
+        {
+            let outcome = self.menu_trigger.dispatch_event(&route, event, ctx);
+            if outcome.handled() {
+                self.menu.toggle_with_context(ctx);
+            }
+            return outcome;
+        }
+
+        let Some(route) = route
+            .path
+            .without_first_if(&menu_panel_child_key())
+            .map(EventRoute::new)
+        else {
+            return EventOutcome::Ignored;
+        };
+        let outcome = self.menu.dispatch_event(&route, event, ctx);
+        for id in self.menu.take_activated() {
+            self.menu_status = format!("Activated {id}");
+        }
+        outcome
+    }
+
+    fn menu_dispatch_focus(
+        &mut self,
+        target: &FocusTarget,
+        focused: bool,
+        ctx: &mut FocusCtx<Msg>,
+    ) {
+        if let Some(target) = target.for_child(&menu_trigger_child_key()) {
+            self.menu_trigger.dispatch_focus(&target, focused, ctx);
+        } else if let Some(target) = target.for_child(&menu_panel_child_key()) {
+            self.menu.dispatch_focus(&target, focused, ctx);
+        }
     }
 
     fn layout_toggle(&mut self, area: Rect, ctx: &mut LayoutCtx) {
@@ -2169,6 +2423,44 @@ impl PreviewState {
     }
 }
 
+fn demo_menu() -> Menu<&'static str> {
+    Menu::new([
+        MenuItem::new("new", "New file"),
+        MenuItem::new("open", "Open recent"),
+        MenuItem::new("rename", "Rename symbol"),
+        MenuItem::new("format", "Format document"),
+        MenuItem::new("command", "Run command"),
+        MenuItem::new("settings", "Project settings"),
+    ])
+    .visible_items(10)
+    .trigger_hotkey("m")
+    .return_focus_to(
+        TreePath::from_keys([gallery_preview_child_key(), menu_trigger_child_key()]),
+        FocusId::new("button"),
+    )
+}
+
+fn menu_preview_layout(area: Rect) -> [Rect; 3] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(area)
+}
+
+fn menu_trigger_hotkey(event: &TuiEvent) -> bool {
+    matches!(
+        event,
+        TuiEvent::Key(KeyEvent {
+            code: Key::Char('m'),
+            modifiers: KeyModifiers::NONE,
+        })
+    )
+}
+
 fn gallery_list_child_key() -> ChildKey {
     ChildKey::new("component-list")
 }
@@ -2177,8 +2469,8 @@ fn gallery_preview_child_key() -> ChildKey {
     ChildKey::new("preview")
 }
 
-fn gallery_theme_child_key() -> ChildKey {
-    ChildKey::new("theme")
+fn gallery_footer_child_key() -> ChildKey {
+    ChildKey::new("footer")
 }
 
 fn text_input_child_key() -> ChildKey {
@@ -2227,6 +2519,25 @@ fn date_time_picker_child_key() -> ChildKey {
 
 fn date_dropdown_child_key() -> ChildKey {
     ChildKey::new("date-dropdown")
+}
+
+fn menu_trigger_child_key() -> ChildKey {
+    ChildKey::new("menu-trigger")
+}
+
+fn menu_panel_child_key() -> ChildKey {
+    ChildKey::new("menu-panel")
+}
+
+fn status_bar_preview_layout(area: Rect) -> [Rect; 3] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(area)
 }
 
 fn demo_date() -> Date {
@@ -2324,6 +2635,7 @@ enum ComponentKind {
     Notifications,
     NotificationTriggers,
     Typography,
+    Colors,
     Layouts,
     LayoutFlex,
     LayoutSplit,
@@ -2339,6 +2651,8 @@ enum ComponentKind {
     DateTimePicker,
     Toggle,
     Dropdown,
+    Menu,
+    StatusBar,
     DataView,
     DataViewList,
     DataViewTable,
@@ -2351,7 +2665,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 33] = [
+    const ALL: [Self; 36] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -2361,6 +2675,7 @@ impl ComponentKind {
         Self::Notifications,
         Self::NotificationTriggers,
         Self::Typography,
+        Self::Colors,
         Self::Layouts,
         Self::LayoutFlex,
         Self::LayoutSplit,
@@ -2376,6 +2691,8 @@ impl ComponentKind {
         Self::DateTimePicker,
         Self::Toggle,
         Self::Dropdown,
+        Self::Menu,
+        Self::StatusBar,
         Self::DataView,
         Self::DataViewList,
         Self::DataViewTable,
@@ -2398,6 +2715,7 @@ impl ComponentKind {
             Self::Notifications => "Notifications",
             Self::NotificationTriggers => "Triggers",
             Self::Typography => "Typography",
+            Self::Colors => "Colors",
             Self::Layouts => "Layouts",
             Self::LayoutFlex => "Flex",
             Self::LayoutSplit => "Split",
@@ -2413,6 +2731,8 @@ impl ComponentKind {
             Self::DateTimePicker => "Date & Time",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
+            Self::Menu => "Menu",
+            Self::StatusBar => "Status Bar",
             Self::DataView => "DataView",
             Self::DataViewList => "List",
             Self::DataViewTable => "Table",
@@ -2442,7 +2762,8 @@ impl ComponentKind {
             | Self::TextareaInput
             | Self::DateTimePicker
             | Self::Toggle
-            | Self::Dropdown => Some(Self::Inputs),
+            | Self::Dropdown
+            | Self::Menu => Some(Self::Inputs),
             Self::LayoutFlex
             | Self::LayoutSplit
             | Self::LayoutStack
@@ -2465,6 +2786,7 @@ impl ComponentKind {
             Self::Notifications => PreviewKind::NotificationTriggers,
             Self::NotificationTriggers => PreviewKind::NotificationTriggers,
             Self::Typography => PreviewKind::Typography,
+            Self::Colors => PreviewKind::Colors,
             Self::Layouts | Self::LayoutFlex => PreviewKind::LayoutFlex,
             Self::LayoutSplit => PreviewKind::LayoutSplit,
             Self::LayoutStack => PreviewKind::LayoutStack,
@@ -2478,6 +2800,8 @@ impl ComponentKind {
             Self::DateTimePicker => PreviewKind::DateTimePicker,
             Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
+            Self::Menu => PreviewKind::Menu,
+            Self::StatusBar => PreviewKind::StatusBar,
             Self::DataView | Self::DataViewList => PreviewKind::DataList,
             Self::DataViewTable => PreviewKind::DataTable,
             Self::DataViewListTree => PreviewKind::DataListTree,
@@ -2500,6 +2824,7 @@ enum PreviewKind {
     Spinner,
     NotificationTriggers,
     Typography,
+    Colors,
     LayoutFlex,
     LayoutSplit,
     LayoutStack,
@@ -2509,10 +2834,12 @@ enum PreviewKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    StatusBar,
     Button,
     Chip,
     Toggle,
     Dropdown,
+    Menu,
     DataList,
     DataTable,
     DataListTree,
@@ -2534,6 +2861,7 @@ impl PreviewKind {
             Self::Spinner => "Spinner",
             Self::NotificationTriggers => "Notification Triggers",
             Self::Typography => "Typography",
+            Self::Colors => "Colors",
             Self::LayoutFlex => "Flex Layout",
             Self::LayoutSplit => "Split Layout",
             Self::LayoutStack => "Stack Layout",
@@ -2543,10 +2871,12 @@ impl PreviewKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::StatusBar => "Status Bar",
             Self::Button => "Button",
             Self::Chip => "Chip",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
+            Self::Menu => "Menu",
             Self::DataList => "List",
             Self::DataTable => "Table",
             Self::DataListTree => "List Tree",
@@ -2606,4 +2936,240 @@ mod tests {
         assert_eq!(ComponentKind::Inputs.preview(), PreviewKind::Button);
         assert_eq!(ComponentKind::DataView.preview(), PreviewKind::DataList);
     }
+}
+
+// Rig Calculator Tool and dialog definition
+#[derive(Deserialize, Serialize, JsonSchema)]
+struct CalculatorArgs {
+    op: String,
+    x: f64,
+    y: f64,
+}
+
+struct CalculatorTool {
+    sender: mpsc::Sender<LlmEvent>,
+    request_id: u64,
+}
+
+impl Tool for CalculatorTool {
+    const NAME: &'static str = "calculator";
+    type Error = std::convert::Infallible;
+    type Args = CalculatorArgs;
+    type Output = f64;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Perform basic mathematical calculations: add, sub, mul, div.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "required": ["op", "x", "y"],
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": ["add", "sub", "mul", "div"],
+                        "description": "Operation to perform"
+                    },
+                    "x": { "type": "number", "description": "First number" },
+                    "y": { "type": "number", "description": "Second number" }
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let args_str = serde_json::to_string_pretty(&args).unwrap_or_default();
+
+        let _ = self.sender.send(LlmEvent::approval(
+            self.request_id,
+            Self::NAME,
+            args_str,
+            tx,
+        ));
+
+        let approved = rx.await.unwrap_or(false);
+        if !approved {
+            let _ = self.sender.send(LlmEvent::status(
+                self.request_id,
+                "Tool call 'calculator' was denied by the user.",
+            ));
+            return Ok(0.0);
+        }
+
+        let _ = self.sender.send(LlmEvent::status(
+            self.request_id,
+            "Tool call 'calculator' approved. Executing...",
+        ));
+
+        let result = match args.op.as_str() {
+            "add" => args.x + args.y,
+            "sub" => args.x - args.y,
+            "mul" => args.x * args.y,
+            "div" => {
+                if args.y == 0.0 {
+                    0.0
+                } else {
+                    args.x / args.y
+                }
+            }
+            _ => 0.0,
+        };
+
+        let _ = self.sender.send(LlmEvent::status(
+            self.request_id,
+            format!("Tool call 'calculator' completed. Result: {}", result),
+        ));
+
+        Ok(result)
+    }
+}
+
+fn ai_dock_dialog() -> AiDock<Msg> {
+    let runner = |prompt: String,
+                  history: Vec<rig::message::Message>,
+                  sender: mpsc::Sender<LlmEvent>,
+                  request_id: u64,
+                  _provider: String,
+                  model: String| {
+        thread::spawn(move || {
+            let runtime = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(err) => {
+                    let _ = sender.send(LlmEvent::error(
+                        request_id,
+                        format!("Tokio runtime error: {}", err),
+                    ));
+                    return;
+                }
+            };
+
+            runtime.block_on(async {
+                let model = if model.is_empty() {
+                    std::env::var("LLM_MODEL")
+                        .unwrap_or_else(|_| "openai/gpt-5.3-codex-spark".to_string())
+                } else {
+                    if model.contains('/') {
+                        model
+                    } else {
+                        format!("openai/{}", model)
+                    }
+                };
+
+                let status_sender = sender.clone();
+                let token_dir = chatgpt_token_dir();
+                let client = match chatgpt::Client::builder()
+                    .oauth()
+                    .token_dir(token_dir)
+                    .on_device_code(move |code| {
+                        let _ = status_sender.send(LlmEvent::status(
+                            request_id,
+                            format!(
+                                "OAuth: Open {} and enter code {}",
+                                code.verification_uri, code.user_code
+                            ),
+                        ));
+                    })
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        let _ = sender.send(LlmEvent::error(request_id, format!("Failed to build client: {}", err)));
+                        return;
+                    }
+                };
+
+                let _ = sender.send(LlmEvent::status(request_id, "Authorizing..."));
+                if let Err(err) = client.authorize().await {
+                    let _ = sender.send(LlmEvent::error(request_id, format!("Auth failed: {}", err)));
+                    return;
+                }
+
+                let model_name = model.strip_prefix("openai/").unwrap_or(&model).to_string();
+                let agent = client
+                    .agent(&model_name)
+                    .preamble("You are a helpful arithmetic assistant. Use the calculator tool for math operations. Summarize the tool result to the user.")
+                    .tool(CalculatorTool {
+                        sender: sender.clone(),
+                        request_id,
+                    })
+                    .build();
+
+                let _ = sender.send(LlmEvent::status(request_id, format!("Calling {}...", model_name)));
+                let mut stream = agent
+                    .stream_prompt(prompt)
+                    .with_history(history)
+                    .multi_turn(4)
+                    .await;
+
+                let mut output = String::new();
+                let mut updated_history = Vec::new();
+
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
+                            RigText { text, .. },
+                        ))) => {
+                            output.push_str(&text);
+                            let _ = sender.send(LlmEvent::chunk(request_id, text));
+                        }
+                        Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
+                            if let Some(hist) = final_response.history() {
+                                updated_history = hist.to_vec();
+                            }
+                        }
+                        Err(err) => {
+                            let _ = sender.send(LlmEvent::error(request_id, format!("Stream error: {}", err)));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                let _ = sender.send(LlmEvent::complete(request_id, updated_history, output));
+            });
+        });
+    };
+
+    let calculator_schema = r#"{
+  "type": "object",
+  "required": ["op", "x", "y"],
+  "properties": {
+    "op": {
+      "type": "string",
+      "enum": ["add", "sub", "mul", "div"],
+      "description": "Operation to perform"
+    },
+    "x": { "type": "number", "description": "First number" },
+    "y": { "type": "number", "description": "Second number" }
+  }
+}"#;
+
+    AiDock::new(runner)
+        .on_close(|| Msg::CloseAiDock)
+        .tool(
+            "calculator",
+            "Perform simple mathematical calculations",
+            calculator_schema,
+        )
+        .tool_policy("calculator", ToolPolicy::AskBeforeRun)
+}
+
+fn chatgpt_token_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("TUICORE_CHATGPT_TOKEN_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join("tuicore").join("rig-chatgpt");
+    }
+    if let Ok(dir) = std::env::var("APPDATA") {
+        return PathBuf::from(dir).join("tuicore").join("rig-chatgpt");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join("tuicore")
+            .join("rig-chatgpt");
+    }
+    std::env::temp_dir().join("tuicore").join("rig-chatgpt")
 }

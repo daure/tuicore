@@ -32,6 +32,8 @@ pub struct NavKeyBindings {
     page_down: Vec<KeySpec>,
     home: Vec<KeySpec>,
     end: Vec<KeySpec>,
+    top_prefix: Vec<KeySpec>,
+    bottom: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +109,8 @@ impl Default for NavKeyBindings {
             ],
             home: vec![KeySpec::key(Key::Home)],
             end: vec![KeySpec::key(Key::End)],
+            top_prefix: vec![KeySpec::plain('g')],
+            bottom: vec![KeySpec::shifted('g')],
         }
     }
 }
@@ -291,6 +295,8 @@ impl KeyBindings {
         set_keys(&value, "nav", "page_down", &mut bindings.nav.page_down)?;
         set_keys(&value, "nav", "home", &mut bindings.nav.home)?;
         set_keys(&value, "nav", "end", &mut bindings.nav.end)?;
+        set_keys(&value, "nav", "top_prefix", &mut bindings.nav.top_prefix)?;
+        set_keys(&value, "nav", "bottom", &mut bindings.nav.bottom)?;
         set_keys(&value, "focus", "next", &mut bindings.focus.next)?;
         set_keys(&value, "focus", "previous", &mut bindings.focus.previous)?;
         set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus)?;
@@ -589,6 +595,24 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_nav_top_prefix(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.top_prefix = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_top_prefix(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_top_prefix(keys);
+        self
+    }
+
+    pub fn set_nav_bottom(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.nav.bottom = keys.into_iter().collect();
+    }
+
+    pub fn with_nav_bottom(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_nav_bottom(keys);
+        self
+    }
+
     pub fn set_data_view_activate(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
         self.data_view.activate = keys.into_iter().collect();
     }
@@ -828,6 +852,14 @@ impl KeyBindings {
 
     pub fn end_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.nav.end, key.into())
+    }
+
+    pub fn top_prefix_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.top_prefix, key.into())
+    }
+
+    pub fn bottom_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.nav.bottom, key.into())
     }
 }
 
@@ -1446,6 +1478,8 @@ mod tests {
             page_down = ["ctrl+d", "pagedown"]
             home = "g"
             end = "shift+g"
+            top_prefix = "home"
+            bottom = "end"
 
             [runtime]
             quit = "ctrl+x"
@@ -1513,6 +1547,14 @@ mod tests {
         assert!(bindings.end_matches(KeyEvent {
             code: Key::Char('G'),
             modifiers: KeyModifiers::SHIFT,
+        }));
+        assert!(bindings.top_prefix_matches(KeyEvent {
+            code: Key::Home,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.bottom_matches(KeyEvent {
+            code: Key::End,
+            modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.runtime().quit_matches(KeyEvent {
             code: Key::Char('x'),
@@ -1602,6 +1644,8 @@ mod tests {
             .with_nav_page_down([KeySpec::plain('d')])
             .with_nav_home([KeySpec::plain('g')])
             .with_nav_end([KeySpec::shifted('g')])
+            .with_nav_top_prefix([KeySpec::plain('t')])
+            .with_nav_bottom([KeySpec::plain('b')])
             .with_data_view_activate([KeySpec::plain('a')])
             .with_data_view_toggle_selection([KeySpec::plain('s')])
             .with_data_view_toggle_expansion([KeySpec::plain('e')])
@@ -1661,6 +1705,14 @@ mod tests {
         }));
         assert!(bindings.end_matches(KeyEvent {
             code: Key::Char('G'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.top_prefix_matches(KeyEvent {
+            code: Key::Char('t'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.bottom_matches(KeyEvent {
+            code: Key::Char('b'),
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.data_view().activate_matches(KeyEvent {

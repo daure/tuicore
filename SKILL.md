@@ -25,6 +25,10 @@ Use `fill(1)` for main content regions that should consume remaining space.
 - `Overlay` — base + positioned layer. Use when a component must sit above another.
 - `Panel` — chrome wrapper with title/border/help. Remember inner area is smaller.
 - `Tabs` — tab header + selected body. Body should own its own layout.
+- `Menu` — trigger-driven popup actions. Use for compact command lists.
+- `StatusBar` — app chrome for menu/theme/AI/weather/time indicators.
+- `AiDock` — modal chat/tool assistant surface with configurable tool approval policy.
+- `WeatherIndicator` / `WeatherForecastDialog` / `DateTimeIndicator` — status-bar primitives for weather and time display.
 
 ## Dropdown overlays
 
@@ -63,6 +67,7 @@ No raw color literals in components. Retrieve all colors from the active theme:
   - Text: `text_fg` (primary), `muted_fg` (secondary/help), `subtle_fg` (disabled/placeholders).
   - States: `selected_fg`/`selected_bg` (active elements), `highlight_fg`/`highlight_bg` (focused controls), `success_fg`, `warning_fg`, `error_fg`.
   - Accents/Chrome: `accent_fg` (links/keys), `border_fg` (borders), `key_fg` (hotkeys).
+  - Weather: `weather_sun_fg`, `weather_cool_fg`, `weather_warm_fg`, `weather_hot_fg`, `weather_rain_fg`.
 
 ## Structural Presets
 

@@ -9,8 +9,10 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use crate::animation::{
     Animated, AnimationSettings, AnimationSpec, ResolvedAnimationSpec, ScrollAnimator, TickResult,
 };
-use crate::event::KeyEvent;
-use crate::{theme, ui::keybindings};
+use crate::event::{Key, KeyEvent, KeyModifiers};
+use crate::{KeyBindings, theme, ui::keybindings};
+
+const HORIZONTAL_JUMP: isize = 8;
 
 #[derive(Debug, Clone)]
 pub struct ScrollState {
@@ -19,6 +21,7 @@ pub struct ScrollState {
     axes: ScrollAxes,
     behavior: ScrollBehavior,
     scrollbars: ScrollbarConfig,
+    pending_top_prefix: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +136,7 @@ impl ScrollState {
             axes,
             behavior: ScrollBehavior::default(),
             scrollbars: ScrollbarConfig::default(),
+            pending_top_prefix: false,
         }
     }
 
@@ -270,6 +274,34 @@ impl ScrollState {
     ) -> ScrollOutcome {
         let key = key.into();
         let keybindings = keybindings();
+        if self.axes.vertical() && keybindings.top_prefix_matches(key) {
+            if self.pending_top_prefix {
+                self.pending_top_prefix = false;
+                return self.scroll_to(
+                    ScrollOffset::new(self.x.target, 0),
+                    viewport,
+                    content,
+                    settings,
+                );
+            }
+            self.pending_top_prefix = true;
+            return ScrollOutcome {
+                handled: true,
+                changed: false,
+                active: self.is_active(),
+            };
+        }
+
+        self.pending_top_prefix = false;
+        if self.axes.vertical() && keybindings.bottom_matches(key) {
+            return self.scroll_to(
+                ScrollOffset::new(self.x.target, max_offset(viewport, content).y),
+                viewport,
+                content,
+                settings,
+            );
+        }
+
         if self.axes.vertical() && keybindings.page_up_matches(key) {
             return self.scroll_by(
                 ScrollDelta::new(0, -(self.behavior.page_step(viewport.height) as isize)),
@@ -318,6 +350,17 @@ impl ScrollState {
                 viewport,
                 content,
                 settings,
+            )
+        } else if let Some(delta) =
+            horizontal_jump(&keybindings, key).filter(|_| self.axes.horizontal())
+        {
+            self.scroll_by_with_snap(
+                ScrollDelta::new(delta, 0),
+                viewport,
+                content,
+                settings,
+                true,
+                false,
             )
         } else if self.axes.horizontal() && keybindings.line_left_matches(key) {
             self.scroll_by_with_snap(
@@ -585,6 +628,35 @@ impl Animated for ScrollState {
             .tick(dt, settings, spec)
             .merge(self.y.tick(dt, settings, spec))
     }
+}
+
+fn horizontal_jump(keybindings: &KeyBindings, key: KeyEvent) -> Option<isize> {
+    let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
+        || matches!(key.code, Key::Char(c) if c.is_ascii_uppercase());
+    let plain_shift = shifted
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    if !plain_shift {
+        return None;
+    }
+
+    let base_key = unshift_key(key);
+    if keybindings.line_left_matches(base_key) {
+        Some(-HORIZONTAL_JUMP)
+    } else if keybindings.line_right_matches(base_key) {
+        Some(HORIZONTAL_JUMP)
+    } else {
+        None
+    }
+}
+
+fn unshift_key(mut key: KeyEvent) -> KeyEvent {
+    key.modifiers.remove(KeyModifiers::SHIFT);
+    if let Key::Char(c) = key.code {
+        key.code = Key::Char(c.to_ascii_lowercase());
+    }
+    key
 }
 
 impl Default for AxisScroll {
@@ -890,6 +962,78 @@ mod tests {
         assert_eq!(scroll.offset().x, 1);
         assert_eq!(scroll.target_offset().x, 1);
         assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn shifted_horizontal_vim_keys_jump_eight_columns() {
+        let mut scroll = ScrollState::new(ScrollAxes::Horizontal);
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+
+        let right = scroll.on_key(
+            KeyEvent {
+                code: Key::Char('l'),
+                modifiers: KeyModifiers::SHIFT,
+            },
+            ScrollSize::new(5, 1),
+            ScrollSize::new(20, 1),
+            settings,
+        );
+
+        assert!(right.handled);
+        assert!(right.changed);
+        assert_eq!(scroll.offset().x, 8);
+
+        let left = scroll.on_key(
+            KeyEvent {
+                code: Key::Char('h'),
+                modifiers: KeyModifiers::SHIFT,
+            },
+            ScrollSize::new(5, 1),
+            ScrollSize::new(20, 1),
+            settings,
+        );
+
+        assert!(left.handled);
+        assert!(left.changed);
+        assert_eq!(scroll.offset().x, 0);
+    }
+
+    #[test]
+    fn vim_top_and_bottom_keys_match_home_and_end_scrolling() {
+        let mut scroll = ScrollState::new(ScrollAxes::Vertical);
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+
+        let bottom = scroll.on_key(
+            KeyEvent::from(Key::Char('G')),
+            ScrollSize::new(1, 5),
+            ScrollSize::new(1, 20),
+            settings,
+        );
+
+        assert!(bottom.handled);
+        assert!(bottom.changed);
+        assert_eq!(scroll.offset().y, 15);
+
+        let prefix = scroll.on_key(
+            KeyEvent::from(Key::Char('g')),
+            ScrollSize::new(1, 5),
+            ScrollSize::new(1, 20),
+            settings,
+        );
+        let top = scroll.on_key(
+            KeyEvent::from(Key::Char('g')),
+            ScrollSize::new(1, 5),
+            ScrollSize::new(1, 20),
+            settings,
+        );
+
+        assert!(prefix.handled);
+        assert!(!prefix.changed);
+        assert!(top.handled);
+        assert!(top.changed);
+        assert_eq!(scroll.offset().y, 0);
     }
 
     #[test]

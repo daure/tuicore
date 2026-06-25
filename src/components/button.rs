@@ -42,6 +42,7 @@ pub struct Button<M = ()> {
     hotkey_label_mode: HotkeyLabelMode,
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
+    tab_stop: bool,
     focused: bool,
     on_press: Option<Box<dyn Fn() -> M>>,
     background_color: ColorTween,
@@ -58,6 +59,7 @@ impl<M> Button<M> {
             hotkey_label_mode: HotkeyLabelMode::PreferMnemonic,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             pending_hotkey_prefix: None,
+            tab_stop: true,
             focused: false,
             on_press: None,
             background_color: ColorTween::idle(theme.border_fg()),
@@ -93,6 +95,11 @@ impl<M> Button<M> {
 
     pub fn hotkey_label_mode(mut self, mode: HotkeyLabelMode) -> Self {
         self.hotkey_label_mode = mode;
+        self
+    }
+
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
         self
     }
 
@@ -299,6 +306,7 @@ where
         } else {
             ctx.register_focusable(FocusId::new(BUTTON_FOCUS), area, true);
         }
+        ctx.set_focus_tab_stop(FocusId::new(BUTTON_FOCUS), self.tab_stop);
         LayoutResult::new(area)
     }
 
@@ -431,6 +439,17 @@ mod tests {
 
         assert!(outcome.handled);
         assert!(outcome.pressed);
+    }
+
+    #[test]
+    fn tab_stop_can_be_disabled_while_hotkey_stays_registered() {
+        let mut button = Button::<()>::new("Run").hotkey("b").tab_stop(false);
+        let mut layout = LayoutCtx::new();
+        button.layout(Rect::new(0, 0, 20, 1), &mut layout);
+
+        let target = &layout.focus_targets()[0];
+        assert!(!target.tab_stop);
+        assert_eq!(target.hotkey_sequences, vec!["b"]);
     }
 
     #[test]

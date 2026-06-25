@@ -126,6 +126,10 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
         ctx.focus(self.focus_request_for_active_change(active));
     }
 
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `set_active_with_context` instead to let the focus manager resolve focus natively"
+    )]
     pub fn set_active_with_dialog_focus<M>(&mut self, active: bool, ctx: &mut EventCtx<M>) {
         self.set_active_with_settings(active, ctx.animation());
         ctx.request_layout();
@@ -423,7 +427,7 @@ pub(crate) fn dim_backdrop_buffer_except(
             } else {
                 dimmed_bg
             };
-            let fg = if cell.bg == Color::Reset && is_powerline_fill(cell.symbol()) {
+            let fg = if is_powerline_fill(cell.symbol()) {
                 blend_cell_color(
                     cell.fg,
                     fallback_fg,
@@ -443,7 +447,7 @@ pub(crate) fn dim_backdrop_buffer_except(
 }
 
 fn is_powerline_fill(symbol: &str) -> bool {
-    matches!(symbol, "" | "")
+    matches!(symbol, "" | "" | "" | "")
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -537,6 +541,7 @@ fn scaled_dimension(value: u16, percent: u16) -> u16 {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -586,6 +591,7 @@ mod tests {
 
         fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
             let fill = Color::Rgb(10, 120, 200);
+            let previous_fill = Color::Rgb(240, 200, 40);
             frame
                 .buffer_mut()
                 .set_string(area.x, area.y, "", Style::default().fg(fill));
@@ -593,6 +599,18 @@ mod tests {
                 area.x + 1,
                 area.y,
                 "A",
+                Style::default().fg(Color::Rgb(255, 255, 255)).bg(fill),
+            );
+            frame.buffer_mut().set_string(
+                area.x,
+                area.y + 1,
+                "",
+                Style::default().fg(fill).bg(previous_fill),
+            );
+            frame.buffer_mut().set_string(
+                area.x + 1,
+                area.y + 1,
+                "B",
                 Style::default().fg(Color::Rgb(255, 255, 255)).bg(fill),
             );
         }
@@ -639,6 +657,25 @@ mod tests {
         let cap = terminal.backend().buffer().cell((0, 0)).unwrap();
         let content = terminal.backend().buffer().cell((1, 0)).unwrap();
         assert_eq!(cap.fg, content.bg);
+    }
+
+    #[test]
+    fn backdrop_dim_keeps_powerline_separator_aligned_with_next_background() {
+        let base = PowerlineBody;
+        let layer = StaticBody;
+        let mut dialog_layer =
+            DialogLayer::new(base, layer).backdrop(DialogBackdrop::dim().amount(1.0));
+        let mut layout = LayoutCtx::new();
+        dialog_layer.layout(Rect::new(0, 0, 10, 4), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog_layer.render(frame, frame.area()))
+            .expect("dialog layer should render");
+
+        let separator = terminal.backend().buffer().cell((0, 1)).unwrap();
+        let content = terminal.backend().buffer().cell((1, 1)).unwrap();
+        assert_eq!(separator.fg, content.bg);
     }
 
     #[test]

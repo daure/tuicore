@@ -5,4 +5,5 @@ pub(crate) mod inputs;
 pub(crate) mod layouts;
 pub(crate) mod notifications;
 pub(crate) mod panels;
+pub(crate) mod status_bar;
 pub(crate) mod tabs;

@@ -1,4 +1,5 @@
 /target/
 /workbench/
+/.rig-chatgpt/
 *.log
 *.tmp

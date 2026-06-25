@@ -66,7 +66,7 @@ pub struct Dialog<M = ()> {
     bottom_right: Option<DialogTitle>,
     border: Option<BorderKind>,
     edge_borders: Option<Borders>,
-    content: Vec<String>,
+    content: Vec<Line<'static>>,
     scroll: Option<ScrollState>,
     on_close: Option<Box<dyn Fn(DialogCloseReason) -> M>>,
     focused: bool,
@@ -177,12 +177,22 @@ impl<M> Dialog<M> {
     }
 
     pub fn content(mut self, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.content = lines.into_iter().map(Into::into).collect();
+        self.content = lines
+            .into_iter()
+            .map(|line| Line::from(line.into()))
+            .collect();
         self
     }
 
     pub fn set_content(&mut self, lines: impl IntoIterator<Item = impl Into<String>>) {
-        self.content = lines.into_iter().map(Into::into).collect();
+        self.content = lines
+            .into_iter()
+            .map(|line| Line::from(line.into()))
+            .collect();
+    }
+
+    pub(crate) fn set_content_lines(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
+        self.content = lines.into_iter().collect();
     }
 
     pub fn clear_content(&mut self) {
@@ -260,12 +270,7 @@ impl<M> Dialog<M> {
     }
 
     pub fn content_size(&self) -> ScrollSize {
-        let width = self
-            .content
-            .iter()
-            .map(|line| line_width(&Line::from(line.as_str())))
-            .max()
-            .unwrap_or(0);
+        let width = self.content.iter().map(line_width).max().unwrap_or(0);
         ScrollSize::new(width, self.content.len())
     }
 
@@ -366,6 +371,19 @@ impl<M> Dialog<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        self.render_with_lines(frame, area, self.content.clone());
+    }
+
+    pub(crate) fn render_with_content_lines(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        lines: Vec<Line<'static>>,
+    ) {
+        self.render_with_lines(frame, area, lines);
+    }
+
+    fn render_with_lines(&self, frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
         if area.is_empty() {
             return;
         }
@@ -384,11 +402,6 @@ impl<M> Dialog<M> {
         self.render_titles(frame, area, border);
 
         if !inner.is_empty() {
-            let lines = self
-                .content
-                .iter()
-                .map(|line| Line::from(line.clone()))
-                .collect::<Vec<_>>();
             if let Some(scroll) = &self.scroll {
                 let geometry = scroll.geometry(inner, self.content_size());
                 let offset = scroll.offset();

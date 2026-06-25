@@ -2,23 +2,32 @@ mod button;
 mod chip;
 mod data_view;
 mod date_time;
+mod date_time_indicator;
 mod dialog;
 mod dialog_layer;
 mod dropdown;
 mod flex;
 mod grid;
 mod list;
+mod menu;
 mod notifications;
 mod overlay;
 mod panel;
 mod spinner;
 mod split;
 mod stack;
+mod status_action;
+mod status_bar;
 mod tabs;
 mod text_input;
 mod textarea_input;
 mod toggle;
 mod typography;
+mod weather_forecast_dialog;
+mod weather_indicator;
+
+mod ai_dock;
+pub use ai_dock::{AiDock, AiDockKeyBindings, LlmEvent, LlmEventKind, ToolPolicy};
 
 pub use crate::separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
 pub use crate::spacing::{Gap, Padding};
@@ -42,6 +51,7 @@ pub use dropdown::{
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use grid::{Grid, GridItem, GridTrack};
 pub use list::{List, ListOutcome};
+pub use menu::{Menu, MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode};
 pub use notifications::{
     Notification, NotificationCenter, NotificationId, NotificationKind, ToastIcons, ToastRack,
 };
@@ -50,6 +60,11 @@ pub use panel::{Panel, PanelHost, PanelTitlePosition};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};
+pub use status_bar::{
+    DateTimeIndicator, DateTimeIndicatorFormat, StatusBar, StatusBarKeyBindings, StatusBarMenuItem,
+    WeatherForecastDay, WeatherForecastDialog, WeatherForecastError, WeatherIndicator,
+    WeatherReport, WeatherSummary, weather_condition_icon,
+};
 pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
 pub use text_input::{InputOutcome, PasswordInput, TextInput, TextInputKeyBindings};
 pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};

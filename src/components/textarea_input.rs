@@ -226,6 +226,10 @@ impl<M> TextareaInput<M> {
         }
     }
 
+    pub fn insert_mode(&self) -> bool {
+        self.insert_mode
+    }
+
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
         self.on_submit = Some(Box::new(handler));
         self
@@ -887,10 +891,12 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         let outcome = self.on_key(*key);
-        if outcome.submitted
-            && let Some(on_submit) = &self.on_submit
-        {
-            ctx.emit(on_submit(self.value.clone()));
+        if outcome.submitted {
+            self.insert_mode = false;
+            ctx.request_layout();
+            if let Some(on_submit) = &self.on_submit {
+                ctx.emit(on_submit(self.value.clone()));
+            }
         }
         if outcome.clear {
             ctx.request_clear();

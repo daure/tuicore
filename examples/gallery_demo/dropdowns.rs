@@ -1,38 +1,13 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use tuicore::{
-    ChildKey, Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownPopupDirection,
-    DropdownSearchMode, DropdownVariant, EventRoute, ThemeName,
+    ChildKey, Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownSearchMode,
+    DropdownVariant, EventRoute,
 };
 
 #[derive(Clone)]
 pub(crate) struct DropdownDemoItem {
     pub(crate) id: &'static str,
     pub(crate) label: &'static str,
-}
-
-#[derive(Clone)]
-pub(crate) struct ThemeChoice {
-    pub(crate) name: ThemeName,
-}
-
-pub(crate) fn theme_dropdown() -> Dropdown<ThemeChoice, ThemeName> {
-    let current = tuicore::theme().name();
-    Dropdown::single(
-        ThemeName::ALL.map(|name| ThemeChoice { name }),
-        |row| row.name,
-        |row| row.name.label().to_string(),
-    )
-    .selected_one(current)
-    .variant(DropdownVariant::Filled)
-    .alt_style(true)
-    .label("Theme")
-    .hotkey("th")
-    .tab_stop(false)
-    .label_position(DropdownLabelPosition::Inline)
-    .popup_direction(DropdownPopupDirection::Up)
-    .search_mode(DropdownSearchMode::Contains)
-    .commit_mode(DropdownCommitMode::Immediate)
-    .max_popup_height(12)
 }
 
 fn dropdown_items() -> Vec<DropdownDemoItem> {

@@ -119,7 +119,10 @@ pub struct TextInputKeyBindings {
 impl Default for TextInputKeyBindings {
     fn default() -> Self {
         Self {
-            submit: vec![KeySpec::key(Key::Enter)],
+            submit: vec![KeySpec::key_with_modifiers(
+                Key::Enter,
+                KeyModifiers::CONTROL,
+            )],
             cancel: vec![
                 KeySpec::key(Key::Esc),
                 KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
@@ -266,6 +269,10 @@ impl<M> TextInput<M> {
         if !focused {
             self.insert_mode = false;
         }
+    }
+
+    pub fn insert_mode(&self) -> bool {
+        self.insert_mode
     }
 
     pub(crate) fn set_insert_mode(&mut self, insert_mode: bool) {
@@ -984,7 +991,7 @@ impl<M> TuiNode<M> for TextInput<M> {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if matches_any(&self.keys.submit, *key) {
+            if KeySpec::key(Key::Enter).matches(*key) {
                 self.insert_mode = true;
                 self.cursor_fade.reset();
                 ctx.request_layout();
@@ -1009,10 +1016,12 @@ impl<M> TuiNode<M> for TextInput<M> {
             return EventOutcome::Handled;
         }
         let outcome = self.on_key(*key);
-        if outcome.submitted
-            && let Some(on_submit) = &self.on_submit
-        {
-            ctx.emit(on_submit(self.value.clone()));
+        if outcome.submitted {
+            self.insert_mode = false;
+            ctx.request_layout();
+            if let Some(on_submit) = &self.on_submit {
+                ctx.emit(on_submit(self.value.clone()));
+            }
         }
         if outcome.clear {
             ctx.request_clear();
@@ -1113,7 +1122,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if matches_any(&self.input.keys.submit, *key) {
+            if KeySpec::key(Key::Enter).matches(*key) {
                 self.input.insert_mode = true;
                 self.input.cursor_fade.reset();
                 ctx.request_layout();
@@ -1138,10 +1147,12 @@ impl<M> TuiNode<M> for PasswordInput<M> {
             return EventOutcome::Handled;
         }
         let outcome = self.on_key(*key);
-        if outcome.submitted
-            && let Some(on_submit) = &self.input.on_submit
-        {
-            ctx.emit(on_submit(self.input.value.clone()));
+        if outcome.submitted {
+            self.input.insert_mode = false;
+            ctx.request_layout();
+            if let Some(on_submit) = &self.input.on_submit {
+                ctx.emit(on_submit(self.input.value.clone()));
+            }
         }
         if outcome.clear {
             ctx.request_clear();

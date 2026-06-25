@@ -1,7 +1,10 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
-    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -18,6 +21,7 @@ pub struct TerminalGuard {
     alternate_screen: bool,
     mouse_capture: bool,
     bracketed_paste: bool,
+    keyboard_enhancement: bool,
 }
 
 impl TerminalGuard {
@@ -26,20 +30,31 @@ impl TerminalGuard {
         let raw_enabled = true;
         let mut stdout = io::stdout();
         if let Err(error) = execute!(stdout, EnterAlternateScreen) {
-            cleanup_setup(raw_enabled, false, false, false);
+            cleanup_setup(raw_enabled, false, false, false, false);
             return Err(error);
         }
         let alternate_screen = true;
         if let Err(error) = execute!(stdout, EnableMouseCapture) {
-            cleanup_setup(raw_enabled, alternate_screen, false, false);
+            cleanup_setup(raw_enabled, alternate_screen, false, false, false);
             return Err(error);
         }
         let mouse_capture = true;
         if let Err(error) = execute!(stdout, EnableBracketedPaste) {
-            cleanup_setup(raw_enabled, alternate_screen, mouse_capture, false);
+            cleanup_setup(raw_enabled, alternate_screen, mouse_capture, false, false);
             return Err(error);
         }
         let bracketed_paste = true;
+        if let Err(error) = execute!(stdout, keyboard_enhancement_flags()) {
+            cleanup_setup(
+                raw_enabled,
+                alternate_screen,
+                mouse_capture,
+                bracketed_paste,
+                false,
+            );
+            return Err(error);
+        }
+        let keyboard_enhancement = true;
         let backend = CrosstermBackend::new(stdout);
         let terminal = match Terminal::new(backend) {
             Ok(terminal) => terminal,
@@ -49,6 +64,7 @@ impl TerminalGuard {
                     alternate_screen,
                     mouse_capture,
                     bracketed_paste,
+                    keyboard_enhancement,
                 );
                 return Err(error);
             }
@@ -61,6 +77,7 @@ impl TerminalGuard {
             alternate_screen,
             mouse_capture,
             bracketed_paste,
+            keyboard_enhancement,
         })
     }
 
@@ -96,6 +113,12 @@ impl TerminalGuard {
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
+        if self.keyboard_enhancement {
+            match execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags) {
+                Ok(()) => self.keyboard_enhancement = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
         if self.raw_enabled {
             match disable_raw_mode() {
                 Ok(()) => self.raw_enabled = false,
@@ -114,7 +137,8 @@ impl TerminalGuard {
             && !self.raw_enabled
             && !self.alternate_screen
             && !self.mouse_capture
-            && !self.bracketed_paste;
+            && !self.bracketed_paste
+            && !self.keyboard_enhancement;
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -132,6 +156,12 @@ impl TerminalGuard {
         if self.bracketed_paste {
             match execute!(self.terminal.backend_mut(), DisableBracketedPaste) {
                 Ok(()) => self.bracketed_paste = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if self.keyboard_enhancement {
+            match execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags) {
+                Ok(()) => self.keyboard_enhancement = false,
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
@@ -181,6 +211,12 @@ impl TerminalGuard {
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
+        if !self.keyboard_enhancement {
+            match execute!(self.terminal.backend_mut(), keyboard_enhancement_flags()) {
+                Ok(()) => self.keyboard_enhancement = true,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
         capture_first(&mut first_error, self.terminal.hide_cursor());
 
         match first_error {
@@ -195,8 +231,16 @@ fn cleanup_setup(
     alternate_screen: bool,
     mouse_capture: bool,
     bracketed_paste: bool,
+    keyboard_enhancement: bool,
 ) {
     let mut first_error = None;
+    if keyboard_enhancement {
+        let mut stdout = io::stdout();
+        capture_first(
+            &mut first_error,
+            execute!(stdout, PopKeyboardEnhancementFlags),
+        );
+    }
     if bracketed_paste {
         let mut stdout = io::stdout();
         capture_first(&mut first_error, execute!(stdout, DisableBracketedPaste));
@@ -212,6 +256,15 @@ fn cleanup_setup(
     if raw_enabled {
         capture_first(&mut first_error, disable_raw_mode());
     }
+}
+
+fn keyboard_enhancement_flags() -> PushKeyboardEnhancementFlags {
+    PushKeyboardEnhancementFlags(
+        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+    )
 }
 
 fn capture_first(first_error: &mut Option<io::Error>, result: io::Result<()>) {

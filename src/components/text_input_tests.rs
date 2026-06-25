@@ -43,18 +43,47 @@ fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
 }
 
 #[test]
-fn submit_emits_message_and_stops_propagation() {
+fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
     let mut input = TextInput::new()
         .value("ship")
         .on_submit(|value| format!("submit:{value}"));
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
-    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    let key = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
     assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode);
     assert_eq!(ctx.messages(), &["submit:ship".to_string()]);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert!(ctx.layout_requested());
+    assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn control_enter_password_submit_emits_message_blurs_and_stops_propagation() {
+    let mut input = PasswordInput::new()
+        .value("secret")
+        .on_submit(|value| format!("submit:{value}"));
+    input.input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+    let key = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.input.insert_mode);
+    assert_eq!(ctx.messages(), &["submit:secret".to_string()]);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
 }
 
@@ -121,14 +150,20 @@ fn line_clips_wide_unicode_by_terminal_width() {
 }
 
 #[test]
-fn custom_submit_key_replaces_default_enter() {
+fn custom_submit_key_replaces_default_control_enter() {
     let keys = TextInputKeyBindings {
         submit: vec![KeySpec::plain('s')],
         ..TextInputKeyBindings::default()
     };
     let mut input = TextInput::<()>::new().keybindings(keys);
 
-    assert_eq!(input.on_key(KeyEvent::from(Key::Enter)), InputOutcome::IDLE);
+    assert_eq!(
+        input.on_key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        InputOutcome::IDLE
+    );
     assert!(input.on_key(KeyEvent::from(Key::Char('s'))).submitted);
 }
 

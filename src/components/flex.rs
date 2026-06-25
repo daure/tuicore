@@ -72,6 +72,12 @@ struct FlexChild {
     item: FlexItem,
 }
 
+impl Default for FlexItem {
+    fn default() -> Self {
+        Self::fit_content()
+    }
+}
+
 impl FlexItem {
     pub fn fixed(size: u16) -> Self {
         Self {

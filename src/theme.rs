@@ -243,6 +243,11 @@ pub struct Theme {
     highlight_bg: Color,
     key_fg: Color,
     warning_fg: Color,
+    weather_sun_fg: Color,
+    weather_cool_fg: Color,
+    weather_warm_fg: Color,
+    weather_hot_fg: Color,
+    weather_rain_fg: Color,
     overrides: BTreeMap<String, String>,
 }
 
@@ -255,6 +260,7 @@ impl Default for Theme {
 impl Theme {
     pub fn named(name: ThemeName) -> Self {
         let palette = palette_for(name);
+        let weather = weather_palette_for(&palette);
         Self {
             name,
             selected_fg: palette.green,
@@ -273,6 +279,11 @@ impl Theme {
             highlight_bg: palette.yellow,
             key_fg: palette.blue,
             warning_fg: palette.yellow,
+            weather_sun_fg: weather.sun,
+            weather_cool_fg: weather.cool,
+            weather_warm_fg: weather.warm,
+            weather_hot_fg: weather.hot,
+            weather_rain_fg: weather.rain,
             overrides: BTreeMap::new(),
         }
     }
@@ -366,6 +377,21 @@ impl Theme {
     pub fn warning_fg(&self) -> Color {
         self.warning_fg
     }
+    pub fn weather_sun_fg(&self) -> Color {
+        self.weather_sun_fg
+    }
+    pub fn weather_cool_fg(&self) -> Color {
+        self.weather_cool_fg
+    }
+    pub fn weather_warm_fg(&self) -> Color {
+        self.weather_warm_fg
+    }
+    pub fn weather_hot_fg(&self) -> Color {
+        self.weather_hot_fg
+    }
+    pub fn weather_rain_fg(&self) -> Color {
+        self.weather_rain_fg
+    }
 
     pub fn set_role(&mut self, role: &str, value: &str) -> Result<(), ThemeError> {
         let color = parse_hex_color(value)?;
@@ -386,6 +412,11 @@ impl Theme {
             "highlight_bg" => self.highlight_bg = color,
             "key_fg" => self.key_fg = color,
             "warning_fg" => self.warning_fg = color,
+            "weather_sun_fg" => self.weather_sun_fg = color,
+            "weather_cool_fg" => self.weather_cool_fg = color,
+            "weather_warm_fg" => self.weather_warm_fg = color,
+            "weather_hot_fg" => self.weather_hot_fg = color,
+            "weather_rain_fg" => self.weather_rain_fg = color,
             _ => return Err(ThemeError(format!("Unknown theme role `{role}`"))),
         }
         self.overrides.insert(role.to_string(), value.to_string());
@@ -417,6 +448,140 @@ struct Palette {
     green: Color,
     yellow: Color,
     red: Color,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WeatherPalette {
+    sun: Color,
+    cool: Color,
+    warm: Color,
+    hot: Color,
+    rain: Color,
+}
+
+fn weather_palette_for(palette: &Palette) -> WeatherPalette {
+    WeatherPalette {
+        sun: themed_weather_color(palette.yellow, palette.green, palette),
+        cool: themed_weather_color(palette.cyan, palette.green, palette),
+        warm: themed_weather_color(palette.yellow, palette.red, palette),
+        hot: themed_weather_color(palette.red, palette.yellow, palette),
+        rain: themed_weather_color(palette.blue, palette.cyan, palette),
+    }
+}
+
+fn themed_weather_color(primary: Color, secondary: Color, palette: &Palette) -> Color {
+    let color = mix_color(primary, secondary, 0.18);
+    readable_against(color, palette.base, palette.text)
+}
+
+fn readable_against(color: Color, background: Color, text: Color) -> Color {
+    if contrast_ratio(color, background) >= 3.0 {
+        return color;
+    }
+
+    let mut color = color;
+    for _ in 0..6 {
+        color = mix_color(color, text, 0.18);
+        if contrast_ratio(color, background) >= 3.0 {
+            return color;
+        }
+    }
+    color
+}
+
+fn mix_color(a: Color, b: Color, b_weight: f64) -> Color {
+    let [ar, ag, ab] = color_channels(a);
+    let [br, bg, bb] = color_channels(b);
+    let a_weight = 1.0 - b_weight;
+    Color::Rgb(
+        weighted_channel(ar, br, a_weight, b_weight),
+        weighted_channel(ag, bg, a_weight, b_weight),
+        weighted_channel(ab, bb, a_weight, b_weight),
+    )
+}
+
+fn weighted_channel(a: u8, b: u8, a_weight: f64, b_weight: f64) -> u8 {
+    (f64::from(a) * a_weight + f64::from(b) * b_weight).round() as u8
+}
+
+fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let a = relative_luminance(a);
+    let b = relative_luminance(b);
+    let (lighter, darker) = if a > b { (a, b) } else { (b, a) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn relative_luminance(color: Color) -> f64 {
+    let [red, green, blue] = color_channels(color).map(|channel| {
+        let channel = f64::from(channel) / 255.0;
+        if channel <= 0.03928 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+fn color_channels(color: Color) -> [u8; 3] {
+    match color {
+        Color::Rgb(red, green, blue) => [red, green, blue],
+        Color::Black => [0, 0, 0],
+        Color::Red => [205, 49, 49],
+        Color::Green => [13, 188, 121],
+        Color::Yellow => [229, 229, 16],
+        Color::Blue => [36, 114, 200],
+        Color::Magenta => [188, 63, 188],
+        Color::Cyan => [17, 168, 205],
+        Color::Gray => [229, 229, 229],
+        Color::DarkGray => [102, 102, 102],
+        Color::LightRed => [241, 76, 76],
+        Color::LightGreen => [35, 209, 139],
+        Color::LightYellow => [245, 245, 67],
+        Color::LightBlue => [59, 142, 234],
+        Color::LightMagenta => [214, 112, 214],
+        Color::LightCyan => [41, 184, 219],
+        Color::White => [255, 255, 255],
+        Color::Indexed(index) => indexed_color_channels(index),
+        Color::Reset => [255, 255, 255],
+    }
+}
+
+fn indexed_color_channels(index: u8) -> [u8; 3] {
+    const ANSI: [[u8; 3]; 16] = [
+        [0, 0, 0],
+        [128, 0, 0],
+        [0, 128, 0],
+        [128, 128, 0],
+        [0, 0, 128],
+        [128, 0, 128],
+        [0, 128, 128],
+        [192, 192, 192],
+        [128, 128, 128],
+        [255, 0, 0],
+        [0, 255, 0],
+        [255, 255, 0],
+        [0, 0, 255],
+        [255, 0, 255],
+        [0, 255, 255],
+        [255, 255, 255],
+    ];
+
+    if index < 16 {
+        return ANSI[index as usize];
+    }
+    if index >= 232 {
+        let value = 8 + (index - 232) * 10;
+        return [value, value, value];
+    }
+
+    let index = index - 16;
+    let channel = |value| if value == 0 { 0 } else { 55 + value * 40 };
+    [
+        channel(index / 36),
+        channel((index % 36) / 6),
+        channel(index % 6),
+    ]
 }
 
 fn palette_for(name: ThemeName) -> Palette {
@@ -984,6 +1149,45 @@ mod tests {
     fn default_theme_is_vercel() {
         assert_eq!(ThemeName::default(), ThemeName::Vercel);
         assert_eq!(Theme::default().name(), ThemeName::Vercel);
+    }
+
+    #[test]
+    fn weather_roles_follow_built_in_theme_palette() {
+        let vercel = Theme::named(ThemeName::Vercel);
+        let dracula = Theme::named(ThemeName::Dracula);
+
+        assert_ne!(vercel.weather_sun_fg(), dracula.weather_sun_fg());
+        assert_ne!(vercel.weather_cool_fg(), dracula.weather_cool_fg());
+        assert_ne!(vercel.weather_warm_fg(), dracula.weather_warm_fg());
+        assert_ne!(vercel.weather_hot_fg(), dracula.weather_hot_fg());
+        assert_ne!(vercel.weather_rain_fg(), dracula.weather_rain_fg());
+    }
+
+    #[test]
+    fn weather_role_overrides_still_win() {
+        let mut theme = Theme::named(ThemeName::Dracula);
+
+        theme
+            .set_role("weather_sun_fg", "#112233")
+            .expect("weather role should update");
+
+        assert_eq!(theme.weather_sun_fg(), Color::Rgb(0x11, 0x22, 0x33));
+    }
+
+    #[test]
+    fn weather_roles_keep_readable_contrast() {
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+            for color in [
+                theme.weather_sun_fg(),
+                theme.weather_cool_fg(),
+                theme.weather_warm_fg(),
+                theme.weather_hot_fg(),
+                theme.weather_rain_fg(),
+            ] {
+                assert!(contrast_ratio(color, theme.background_bg()) >= 3.0);
+            }
+        }
     }
 
     #[test]

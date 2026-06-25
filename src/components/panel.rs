@@ -965,9 +965,9 @@ mod tests {
     use ratatui::style::Color;
 
     use crate::{
-        EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusManager, Key, KeyEvent, LayoutCtx,
-        ScrollbarConfig, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility, TreePath, TuiEvent,
-        TuiNode, animation_settings,
+        EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusManager, Key, KeyEvent, KeyModifiers,
+        LayoutCtx, ScrollbarConfig, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility, TreePath,
+        TuiEvent, TuiNode, animation_settings,
     };
 
     use super::super::{PasswordInput, TextInput, TextareaInput};
@@ -1209,7 +1209,10 @@ mod tests {
         let mut submit = EventCtx::new(AnimationSettings::default());
         host.dispatch_event(
             &route,
-            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Enter,
+                modifiers: KeyModifiers::CONTROL,
+            }),
             &mut submit,
         );
 

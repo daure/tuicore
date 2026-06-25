@@ -380,6 +380,34 @@ impl<M> EventCtx<M> {
         self.external_editor.as_ref()
     }
 
+    pub fn forward_non_message_effects_from<N>(&mut self, child: &mut EventCtx<N>) {
+        if child.redraw_requested() {
+            self.request_redraw();
+        }
+        if child.layout_requested() {
+            self.request_layout();
+        }
+        if child.quit_requested() {
+            self.request_quit();
+        }
+        if child.clear_requested() {
+            self.request_clear();
+        }
+        if let Some(request) = child.focus_request().cloned() {
+            self.focus(request);
+        }
+        if let Some(repair) = child.focus_repair() {
+            self.repair_focus(repair);
+        }
+        if child.propagation() == Propagation::Stopped {
+            self.stop_propagation();
+        }
+        if let Some(request) = child.take_external_editor_request() {
+            self.external_editor = Some(request);
+            self.request_redraw();
+        }
+    }
+
     pub fn layout_requested(&self) -> bool {
         self.layout
     }
