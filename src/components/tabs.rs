@@ -17,6 +17,8 @@ use crate::{
     preset, theme,
 };
 
+use super::dialog_layer::DockChrome;
+
 const TABS_FOCUS: &str = "tabs";
 
 pub struct Tab<M = ()> {
@@ -320,6 +322,11 @@ where
 
     fn selected_key(&self) -> Option<&ChildKey> {
         self.body_keys.get(self.selected_index())
+    }
+
+    fn target_is_in_selected_body(&self, target: &FocusTarget) -> bool {
+        self.selected_key()
+            .is_some_and(|key| target.path.first() == Some(key))
     }
 
     fn clamp_selected(&self, selected: usize) -> usize {
@@ -1380,7 +1387,7 @@ where
         area
     }
 
-    fn select_index_from_event(&mut self, selected: usize, ctx: &mut EventCtx<M>) {
+    pub(crate) fn select_index_from_event(&mut self, selected: usize, ctx: &mut EventCtx<M>) {
         let previous = self.selected_index();
         self.select_index_with_settings(selected, ctx.animation());
         ctx.request_redraw();
@@ -1409,6 +1416,15 @@ where
         ctx.stop_propagation();
         ctx.request_redraw();
         EventOutcome::Handled
+    }
+}
+
+impl<M> DockChrome for Tabs<M>
+where
+    M: 'static,
+{
+    fn set_dock_edge_borders(&mut self, borders: Borders) {
+        self.set_edge_borders(borders);
     }
 }
 
@@ -1615,7 +1631,9 @@ where
         if target.path.is_empty() {
             self.focus(Some(&target.id), focused, ctx);
         } else {
-            self.set_focused(focused, ctx.animation());
+            if focused || self.target_is_in_selected_body(target) {
+                self.set_focused(focused, ctx.animation());
+            }
             self.bodies.dispatch_focus_target(target, focused, ctx);
             ctx.request_redraw();
         }
@@ -1783,6 +1801,30 @@ mod tests {
         assert_eq!(tabs.selected_index(), 1);
         assert!(!tabs.transition.is_active());
         assert_eq!(tabs.transition.progress(), 1.0);
+    }
+
+    #[test]
+    fn blurring_previous_body_during_tab_switch_keeps_transition_active() {
+        let ticks = Rc::new(RefCell::new(0));
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::new(
+                "One",
+                TickProbe {
+                    ticks: Rc::clone(&ticks),
+                },
+            ),
+            Tab::text("Two", ""),
+        ]);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 20, 5), &mut layout);
+        let previous_body = layout.focus_targets()[0].clone();
+
+        tabs.select_index_with_settings(1, AnimationSettings::default());
+        let mut focus = FocusCtx::default();
+        tabs.dispatch_focus(&previous_body, false, &mut focus);
+
+        assert_eq!(tabs.selected_index(), 1);
+        assert!(tabs.transition.is_active());
     }
 
     #[test]

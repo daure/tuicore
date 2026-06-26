@@ -1201,6 +1201,8 @@ mod tests {
         );
 
         assert!(enter_outcome.handled());
+        assert!(enter_insert.drain_messages().next().is_none());
+        assert!(enter_insert.redraw_requested());
         assert!(key_outcome.handled());
         assert_eq!(key.propagation(), crate::Propagation::Stopped);
         assert!(key.redraw_requested());
@@ -1209,10 +1211,7 @@ mod tests {
         let mut submit = EventCtx::new(AnimationSettings::default());
         host.dispatch_event(
             &route,
-            &TuiEvent::Key(KeyEvent {
-                code: Key::Enter,
-                modifiers: KeyModifiers::CONTROL,
-            }),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
             &mut submit,
         );
 

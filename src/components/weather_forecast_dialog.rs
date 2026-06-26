@@ -5,9 +5,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
-use time::{Date, Month};
+use time::{Date, Month, OffsetDateTime};
 
-use super::weather_indicator::{WeatherReport, weather_condition_icon};
+use super::weather_indicator::{
+    HourlyWeather, WeatherReport, WeatherSummary, weather_condition_icon,
+};
 use crate::{
     Animated, AnimationSettings, Dialog, DialogCloseReason, EventCtx, EventOutcome, FocusCtx,
     FocusId, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, ScrollAxes, TickResult,
@@ -146,9 +148,10 @@ impl WeatherReport {
         let hourly_precip_probability = optional_f64_array(hourly, "precipitation_probability");
         let hourly_visibility = optional_f64_array(hourly, "visibility");
 
+        let start_index = current_forecast_start_index(&dates);
         let mut rendered_days = Vec::new();
-        for index in 0..dates.len().min(7) {
-            let date = dates[index].as_str();
+        for (index, date) in dates.iter().enumerate().skip(start_index).take(7) {
+            let date = date.as_str();
             let condition = condition_for_wmo(*daily_codes.get(index).unwrap_or(&0));
             let range = format!(
                 "{}/{} °C",
@@ -221,22 +224,50 @@ impl WeatherReport {
         }
 
         let first_condition = daily_codes
-            .first()
+            .get(start_index)
             .map(|code| condition_for_wmo(*code).to_string())
             .unwrap_or_else(|| "Weather".to_string());
         let first_temperature = highs
-            .first()
+            .get(start_index)
             .map(|value| format!("{} °C", rounded(*value)))
             .unwrap_or_else(|| "--".to_string());
         let summary =
-            super::weather_indicator::WeatherSummary::new(first_temperature, first_condition)
-                .location(location.clone());
+            WeatherSummary::new(first_temperature, first_condition).location(location.clone());
+        let hourly_summary =
+            HourlyWeather::new(hourly_times.iter().enumerate().map(|(index, time)| {
+                let temperature = hourly_temps
+                    .get(index)
+                    .map(|value| {
+                        let temperature = rounded(*value);
+                        hourly_feels_like
+                            .as_ref()
+                            .and_then(|values| values.get(index))
+                            .map(|feels_like| {
+                                format!("{}({}) °C", temperature, rounded(*feels_like))
+                            })
+                            .unwrap_or_else(|| format!("{temperature} °C"))
+                    })
+                    .unwrap_or_else(|| "--".to_string());
+                let condition = hourly_codes
+                    .get(index)
+                    .map(|code| condition_for_wmo(*code).to_string())
+                    .unwrap_or_else(|| "Weather".to_string());
+                (time.clone(), temperature, condition)
+            }));
         let raw = format!(
             "Weather report: {location}\n\n{}\nLocation: {location}",
             rendered_days.join("\n")
         );
-        Ok(Self::from_parts(raw, summary))
+        Ok(Self::from_parts(raw, summary).with_hourly(hourly_summary))
     }
+}
+
+fn current_forecast_start_index(dates: &[String]) -> usize {
+    let today = OffsetDateTime::now_local()
+        .unwrap_or_else(|_| OffsetDateTime::now_utc())
+        .date()
+        .to_string();
+    dates.iter().position(|date| date >= &today).unwrap_or(0)
 }
 
 impl WeatherForecastDay {
@@ -983,6 +1014,78 @@ fn styled_line(chars: Vec<char>, styles: Vec<Style>) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_meteo_summary_uses_current_hourly_weather() {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let current_hour = format!("{:02}:00", now.time().hour());
+        let current_time = format!("{}T{current_hour}", now.date());
+        let json = serde_json::json!({
+            "hourly": {
+                "time": [current_time],
+                "temperature_2m": [12.0],
+                "apparent_temperature": [14.0],
+                "weather_code": [61],
+                "wind_speed_10m": [8.0],
+                "precipitation": [0.4]
+            },
+            "daily": {
+                "time": [now.date().to_string()],
+                "weather_code": [0],
+                "temperature_2m_max": [30.0],
+                "temperature_2m_min": [18.0]
+            }
+        });
+
+        let report = WeatherReport::from_open_meteo_json("Here", json.to_string())
+            .expect("valid Open-Meteo report");
+
+        assert_eq!(report.summary().temperature(), "12(14) °C");
+        assert_eq!(report.summary().condition(), "Rain");
+    }
+
+    #[test]
+    fn open_meteo_forecast_starts_at_today_when_response_includes_past_days() {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let yesterday = now
+            .saturating_sub(time::Duration::days(1))
+            .date()
+            .to_string();
+        let today = now.date().to_string();
+        let tomorrow = now
+            .saturating_add(time::Duration::days(1))
+            .date()
+            .to_string();
+        let json = serde_json::json!({
+            "hourly": {
+                "time": [format!("{yesterday}T12:00"), format!("{today}T12:00"), format!("{tomorrow}T12:00")],
+                "temperature_2m": [10.0, 22.0, 24.0],
+                "apparent_temperature": [11.0, 23.0, 25.0],
+                "weather_code": [0, 61, 3],
+                "wind_speed_10m": [7.0, 8.0, 9.0],
+                "precipitation": [0.0, 0.4, 0.0]
+            },
+            "daily": {
+                "time": [yesterday, today, tomorrow],
+                "weather_code": [0, 61, 3],
+                "temperature_2m_max": [30.0, 22.0, 24.0],
+                "temperature_2m_min": [18.0, 14.0, 16.0]
+            }
+        });
+
+        let report = WeatherReport::from_open_meteo_json("Here", json.to_string())
+            .expect("valid Open-Meteo report");
+
+        let today_label = date_label(&now.date().to_string()).expect("today should format");
+        let yesterday_label = date_label(
+            &now.saturating_sub(time::Duration::days(1))
+                .date()
+                .to_string(),
+        )
+        .expect("yesterday should format");
+        assert!(report.raw().contains(&today_label));
+        assert!(!report.raw().contains(&yesterday_label));
+    }
 
     #[test]
     fn prints_one_full_weather_day_for_visual_tuning() {

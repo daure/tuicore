@@ -687,15 +687,20 @@ where
             self.scroll_highlight_on_next_layout = false;
         }
         if self.search_enabled() && self.auto_focus_search {
-            ctx.register_focusable(FocusId::new(SEARCH_FOCUS), search_area, true);
+            ctx.register_text_entry_focusable(FocusId::new(SEARCH_FOCUS), search_area, true, true);
             ctx.set_focus_tab_stop(FocusId::new(SEARCH_FOCUS), self.tab_stop);
-            ctx.set_focus_suppresses_global_hotkeys(FocusId::new(SEARCH_FOCUS), true);
         } else {
-            ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
-            ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
             if self.search_enabled() {
-                ctx.set_focus_suppresses_global_hotkeys(FocusId::new(FIELD_FOCUS), true);
+                ctx.register_text_entry_focusable(
+                    FocusId::new(FIELD_FOCUS),
+                    self.field_area,
+                    true,
+                    true,
+                );
+            } else {
+                ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
             }
+            ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
         }
         let mut child_ctx = LayoutCtx::new();
         <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, rows_area, &mut child_ctx);

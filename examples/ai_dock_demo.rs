@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use tuicore::components::{AiDock, LlmEvent, ToolPolicy};
 use tuicore::{
-    Button, DialogBackdrop, DialogLayer, DialogLayerPlacement, EventCtx, EventOutcome, EventRoute,
-    FocusCtx, FocusId, FocusTarget, KeyEvent, LayoutCtx, LayoutResult, LifecycleCtx, TickResult,
-    TuiEvent, TuiNode, theme,
+    Button, DialogBackdrop, DialogLayer, DockSpec, EventCtx, EventOutcome, EventRoute, FocusCtx,
+    FocusId, FocusTarget, KeyEvent, LayoutCtx, LayoutResult, LifecycleCtx, TickResult, TuiEvent,
+    TuiNode, theme,
 };
 
 #[derive(Debug)]
@@ -119,6 +119,7 @@ impl DemoApp {
 
                     let mut output = String::new();
                     let mut updated_history = Vec::new();
+                    let mut usage = rig::completion::Usage::new();
 
                     while let Some(chunk) = stream.next().await {
                         match chunk {
@@ -129,6 +130,12 @@ impl DemoApp {
                                 let _ = sender.send(LlmEvent::chunk(request_id, text));
                             }
                             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
+                                usage = final_response
+                                    .completion_calls()
+                                    .last()
+                                    .map(|call| call.usage)
+                                    .unwrap_or_else(|| final_response.usage());
+                                usage.total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
                                 if let Some(hist) = final_response.history() {
                                     updated_history = hist.to_vec();
                                 }
@@ -141,7 +148,12 @@ impl DemoApp {
                         }
                     }
 
-                    let _ = sender.send(LlmEvent::complete(request_id, updated_history, output));
+                    let _ = sender.send(LlmEvent::complete_with_usage(
+                        request_id,
+                        updated_history,
+                        output,
+                        usage,
+                    ));
                 });
             });
         };
@@ -171,9 +183,7 @@ impl DemoApp {
             .tool_policy("calculator", ToolPolicy::AskBeforeRun); // Test approval flow!
 
         let dialog_layer = DialogLayer::new(base, ai_dock)
-            .placement(DialogLayerPlacement::Bottom)
-            .layer_percent(80) // 80% height
-            .layer_cross_percent(80) // 80% width
+            .docked(DockSpec::bottom(80).cross_percent(80))
             .backdrop(DialogBackdrop::dim().amount(0.55))
             .active(false);
 

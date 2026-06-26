@@ -68,13 +68,13 @@ use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, ChildKey, Chip, ChipColorRole, DataView,
     DataViewTypedEvent, DatePicker, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
     DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
-    DialogTitlePosition, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId,
-    FocusTarget, Grid, Header, HotkeyLabelMode, Key, KeyEvent, KeyModifiers, LayoutCtx,
-    LayoutResult, Menu, MenuItem, ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition,
-    Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger,
-    Spinner, Split, Stack, StatusBar, StatusBarMenuItem, Tabs, TabsVariant, TextInput,
-    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
-    TuiEvent, TuiNode, WeatherForecastDialog,
+    DialogTitlePosition, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx,
+    FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, Key, KeyEvent, KeyModifiers,
+    LayoutCtx, LayoutResult, Menu, MenuItem, ModalCloseReason, Overlay, Panel, PanelHost,
+    PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode,
+    SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem, Tabs, TabsVariant,
+    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
+    TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherForecastDialog,
 };
 
 #[derive(Debug, PartialEq)]
@@ -117,20 +117,6 @@ fn modal_tabs_layer(root: &mut AppRoot) -> &mut ModalTabsLayer {
 
 fn gallery(root: &mut AppRoot) -> &mut Gallery {
     get_root_layer(root).base_mut().base_mut().base_mut()
-}
-
-fn dock_edge_borders(placement: DialogLayerPlacement, cross_percent: u16) -> Borders {
-    match placement {
-        DialogLayerPlacement::Center => Borders::ALL,
-        DialogLayerPlacement::Top if cross_percent == 100 => Borders::BOTTOM,
-        DialogLayerPlacement::Top => Borders::LEFT | Borders::RIGHT | Borders::BOTTOM,
-        DialogLayerPlacement::Bottom if cross_percent == 100 => Borders::TOP,
-        DialogLayerPlacement::Bottom => Borders::TOP | Borders::LEFT | Borders::RIGHT,
-        DialogLayerPlacement::Left if cross_percent == 100 => Borders::RIGHT,
-        DialogLayerPlacement::Left => Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
-        DialogLayerPlacement::Right if cross_percent == 100 => Borders::LEFT,
-        DialogLayerPlacement::Right => Borders::TOP | Borders::LEFT | Borders::BOTTOM,
-    }
 }
 
 fn main() -> tuicore::Result<()> {
@@ -192,22 +178,18 @@ fn main() -> tuicore::Result<()> {
                 r.layer_mut()
                     .dialog_mut()
                     .clear_title(DialogTitlePosition::BottomRight);
-                let (placement, percent, cross_percent) = match example {
-                    DockOverlayExample::Top => (DialogLayerPlacement::Top, 30, 100),
-                    DockOverlayExample::Bottom => (DialogLayerPlacement::Bottom, 30, 100),
-                    DockOverlayExample::Left => (DialogLayerPlacement::Left, 32, 100),
-                    DockOverlayExample::Right => (DialogLayerPlacement::Right, 32, 100),
-                    DockOverlayExample::BottomSnackbar => (DialogLayerPlacement::Bottom, 16, 80),
-                    DockOverlayExample::BottomTabs => (DialogLayerPlacement::Bottom, 36, 100),
+                let dock = match example {
+                    DockOverlayExample::Top => DockSpec::top(30),
+                    DockOverlayExample::Bottom => DockSpec::bottom(30),
+                    DockOverlayExample::Left => DockSpec::left(32),
+                    DockOverlayExample::Right => DockSpec::right(32),
+                    DockOverlayExample::BottomSnackbar => DockSpec::bottom(16).cross_percent(80),
+                    DockOverlayExample::BottomTabs => DockSpec::bottom(36),
                 };
-                r.set_placement(placement);
-                r.set_layer_percent(percent);
-                r.set_layer_cross_percent(cross_percent);
-                let edge_borders = dock_edge_borders(placement, cross_percent);
-                r.layer_mut().dialog_mut().set_edge_borders(edge_borders);
+                r.set_docked(dock);
                 r.layer_mut()
                     .child_mut()
-                    .set_tabs_edge_borders(edge_borders);
+                    .set_tabs_edge_borders(dock.edge_borders());
                 r.set_backdrop(DialogBackdrop::dim().amount(0.55));
                 r.set_active_with_context(true, ctx);
             }
@@ -219,22 +201,26 @@ fn main() -> tuicore::Result<()> {
                 tabs_layer.layer_mut().set_variant(variant.variant());
                 tabs_layer.layer_mut().clear_edge_borders();
                 tabs_layer.layer_mut().prepare_modal_open(ctx.animation());
-                let (placement, percent, cross_percent) = match variant {
+                let dock = match variant {
                     ModalTabsExample::CenterMinimal
                     | ModalTabsExample::CenterUnderline
-                    | ModalTabsExample::CenterBoxed => (DialogLayerPlacement::Center, 72, 100),
-                    ModalTabsExample::Top => (DialogLayerPlacement::Top, 30, 100),
-                    ModalTabsExample::Bottom => (DialogLayerPlacement::Bottom, 30, 100),
-                    ModalTabsExample::Left => (DialogLayerPlacement::Left, 32, 100),
-                    ModalTabsExample::Right => (DialogLayerPlacement::Right, 32, 100),
-                    ModalTabsExample::BottomSnackbar => (DialogLayerPlacement::Bottom, 16, 80),
+                    | ModalTabsExample::CenterBoxed => None,
+                    ModalTabsExample::Top => Some(DockSpec::top(30)),
+                    ModalTabsExample::Bottom => Some(DockSpec::bottom(30)),
+                    ModalTabsExample::Left => Some(DockSpec::left(32)),
+                    ModalTabsExample::Right => Some(DockSpec::right(32)),
+                    ModalTabsExample::BottomSnackbar => {
+                        Some(DockSpec::bottom(16).cross_percent(80))
+                    }
                 };
-                tabs_layer.set_placement(placement);
-                tabs_layer.set_layer_percent(percent);
-                tabs_layer.set_layer_cross_percent(cross_percent);
-                tabs_layer
-                    .layer_mut()
-                    .set_edge_borders(dock_edge_borders(placement, cross_percent));
+                if let Some(dock) = dock {
+                    tabs_layer.set_docked(dock);
+                } else {
+                    tabs_layer.set_placement(DialogLayerPlacement::Center);
+                    tabs_layer.set_layer_percent(72);
+                    tabs_layer.set_layer_cross_percent(100);
+                    tabs_layer.layer_mut().set_edge_borders(Borders::ALL);
+                }
                 tabs_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
                 tabs_layer.set_active_with_context(true, ctx);
             }
@@ -257,9 +243,7 @@ fn main() -> tuicore::Result<()> {
                 weather_layer(root).set_active_with_context(false, ctx);
             }
             Msg::OpenAiDock => {
-                root.set_placement(DialogLayerPlacement::Bottom);
-                root.set_layer_percent(80);
-                root.set_layer_cross_percent(80);
+                root.set_docked(DockSpec::bottom(80).cross_percent(80));
                 root.set_backdrop(DialogBackdrop::dim().amount(0.55));
                 root.set_active_with_context(true, ctx);
             }
@@ -530,13 +514,14 @@ impl TuiNode<Msg> for Gallery {
 
 struct PreviewState {
     text_input: TextInput<Msg>,
-    text_input_panel: PanelHost<TextInput<Msg>>,
+    text_input_panel: TextInput<Msg>,
     password_input: PasswordInput<Msg>,
+    password_panel: PasswordInput<Msg>,
     header_plain: Header,
     header_icon: Header,
     paragraph: TuiParagraph,
     textarea_input: TextareaInput<Msg>,
-    textarea_panel: PanelHost<TextareaInput<Msg>>,
+    textarea_panel: TextareaInput<Msg>,
     date_picker: DatePicker<Msg>,
     time_picker: TimePicker<Msg>,
     date_time_picker: DateTimePicker<Msg>,
@@ -605,15 +590,19 @@ impl PreviewState {
                 .placeholder("Type one line...")
                 .hotkey("i")
                 .max_len(80),
-            text_input_panel: Panel::new()
-                .top_left("Description")
+            text_input_panel: TextInput::new()
+                .placeholder("Nested input")
                 .hotkey("p")
-                .host(TextInput::new().placeholder("Nested input")),
+                .style(InputChrome::panel("Description").top_right("Panel style")),
             password_input: PasswordInput::new()
                 .placeholder("Enter password...")
                 .hotkey("pw")
                 .value("hunter2")
                 .max_len(80),
+            password_panel: PasswordInput::new()
+                .placeholder("Nested secret")
+                .hotkey("pp")
+                .style(InputChrome::panel("Secret")),
             header_plain: Header::new("Release Notes"),
             header_icon: Header::new("Settings").icon(""),
             paragraph: TuiParagraph::new(
@@ -622,19 +611,18 @@ impl PreviewState {
             .overflow(ParagraphOverflow::Ellipsis)
             .max_lines(1),
             textarea_input: TextareaInput::new()
-                .placeholder("Write multiple lines...")
-                .value("First line\nSecond line")
+                .placeholder("Write 2-4 rows...")
+                .value("First line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line scrolls")
                 .hotkey("t")
-                .max_lines(8),
-            textarea_panel: Panel::new()
-                .top_left("Description")
+                .min_rows(2)
+                .max_rows(4),
+            textarea_panel: TextareaInput::new()
+                .placeholder("Nested textarea")
+                .value("Draft note\nMore detail\nThird row\nFourth row\nFifth row scrolls")
                 .hotkey("p")
-                .host(
-                    TextareaInput::new()
-                        .placeholder("Nested textarea")
-                        .value("Draft note")
-                        .max_lines(4),
-                ),
+                .min_rows(2)
+                .max_rows(4)
+                .style(InputChrome::panel("Description").top_right("2-4 rows")),
             date_picker: DatePicker::new()
                 .today(demo_date())
                 .value(Some(demo_date()))
@@ -767,9 +755,12 @@ impl PreviewState {
                 });
             }
             PreviewKind::PasswordInput => {
-                let [_, input, _] = password_input_showcase_layout(area);
+                let [_, input, panel, _] = password_input_showcase_layout(area);
                 ctx.push_slot(password_input_child_key(), input, |ctx| {
                     self.password_input.layout(input, ctx);
+                });
+                ctx.push_slot(password_panel_child_key(), panel, |ctx| {
+                    self.password_panel.layout(panel, ctx);
                 });
             }
             PreviewKind::Typography => {
@@ -953,14 +944,21 @@ impl PreviewState {
             return self.text_input_panel.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::PasswordInput {
-            let Some(route) = route
+            if let Some(route) = route
                 .path
                 .without_first_if(&password_input_child_key())
+                .map(EventRoute::new)
+            {
+                return self.password_input.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&password_panel_child_key())
                 .map(EventRoute::new)
             else {
                 return EventOutcome::Ignored;
             };
-            return self.password_input.dispatch_event(&route, event, ctx);
+            return self.password_panel.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::TextareaInput {
             if let Some(route) = route
@@ -1093,10 +1091,19 @@ impl PreviewState {
                 );
             }
             PreviewKind::PasswordInput => {
-                dispatch_focus_child(
+                if dispatch_focus_child(
                     &mut self.password_input,
                     target,
                     password_input_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.password_panel,
+                    target,
+                    password_panel_child_key(),
                     focused,
                     ctx,
                 );
@@ -1420,10 +1427,11 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.menu_trigger, dt, settings))
             .merge(Animated::tick(&mut self.menu, dt, settings))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
-            .merge(self.text_input_panel.tick(dt, settings))
+            .merge(Animated::tick(&mut self.text_input_panel, dt, settings))
             .merge(Animated::tick(&mut self.password_input, dt, settings))
+            .merge(Animated::tick(&mut self.password_panel, dt, settings))
             .merge(Animated::tick(&mut self.textarea_input, dt, settings))
-            .merge(self.textarea_panel.tick(dt, settings))
+            .merge(Animated::tick(&mut self.textarea_panel, dt, settings))
     }
 
     fn panel_title_dropdown_mut(
@@ -1824,11 +1832,11 @@ impl PreviewState {
     }
 
     fn render_password_input(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, input, preview] = password_input_showcase_layout(area);
+        let [instructions, input, panel, preview] = password_input_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
                 "Type a secret. Enter submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Text is masked; current editing shortcuts match TextInput.\n\
+                 Text is masked; current editing shortcuts match TextInput. Nested panel has hotkey |pp|.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -1840,6 +1848,7 @@ impl PreviewState {
             instructions,
         );
         self.password_input.render(frame, input);
+        self.password_panel.render(frame, panel);
         frame.render_widget(
             Paragraph::new(format!(
                 "Current value: {}",
@@ -1925,9 +1934,10 @@ impl PreviewState {
         let [instructions, input, panel] = textarea_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter inserts newline. Ctrl+Enter/Ctrl+D submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Plain textarea has hotkey |t|. Nested panel has hotkey |p|.\n\
+                "Type text. Enter submits. Ctrl+Enter/Ctrl+J inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
+                 Plain textarea uses min_rows(2)/max_rows(4); nested panel uses min_rows(2)/max_rows(4). Overflow shows a scrollbar. Hotkeys: |t| textarea, |p| panel.\n\
                  Shortcuts:\n\
+                 • PgUp / PgDn / Ctrl+U / Ctrl+D          : Scroll overflowing text\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+P / Ctrl+N                        : Move cursor up / down a line\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -2483,6 +2493,10 @@ fn text_input_panel_child_key() -> ChildKey {
 
 fn password_input_child_key() -> ChildKey {
     ChildKey::new("password-input")
+}
+
+fn password_panel_child_key() -> ChildKey {
+    ChildKey::new("password-panel")
 }
 
 fn header_plain_child_key() -> ChildKey {
@@ -3047,7 +3061,7 @@ fn ai_dock_dialog() -> AiDock<Msg> {
             runtime.block_on(async {
                 let model = if model.is_empty() {
                     std::env::var("LLM_MODEL")
-                        .unwrap_or_else(|_| "openai/gpt-5.3-codex-spark".to_string())
+                        .unwrap_or_else(|_| "openai/gpt-5.5".to_string())
                 } else {
                     if model.contains('/') {
                         model
@@ -3104,6 +3118,7 @@ fn ai_dock_dialog() -> AiDock<Msg> {
 
                 let mut output = String::new();
                 let mut updated_history = Vec::new();
+                let mut usage = rig::completion::Usage::new();
 
                 while let Some(chunk) = stream.next().await {
                     match chunk {
@@ -3114,6 +3129,12 @@ fn ai_dock_dialog() -> AiDock<Msg> {
                             let _ = sender.send(LlmEvent::chunk(request_id, text));
                         }
                         Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
+                            usage = final_response
+                                .completion_calls()
+                                .last()
+                                .map(|call| call.usage)
+                                .unwrap_or_else(|| final_response.usage());
+                            usage.total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
                             if let Some(hist) = final_response.history() {
                                 updated_history = hist.to_vec();
                             }
@@ -3126,7 +3147,12 @@ fn ai_dock_dialog() -> AiDock<Msg> {
                     }
                 }
 
-                let _ = sender.send(LlmEvent::complete(request_id, updated_history, output));
+                let _ = sender.send(LlmEvent::complete_with_usage(
+                    request_id,
+                    updated_history,
+                    output,
+                    usage,
+                ));
             });
         });
     };

@@ -54,6 +54,7 @@ struct ThemeChoice {
 struct StatusBarAreas {
     menu: Rect,
     ai: Rect,
+    action_tail: Rect,
     weather: Rect,
     time: Rect,
     theme: Rect,
@@ -210,6 +211,14 @@ where
         self
     }
 
+    pub fn set_weather_report(&mut self, report: WeatherReport) {
+        self.weather.set_report(report);
+    }
+
+    pub fn weather_refresh_needed(&self) -> bool {
+        self.weather.refresh_needed()
+    }
+
     pub fn on_ai_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
         self.ai = self.ai.on_press(handler);
         self
@@ -253,6 +262,11 @@ where
     fn layout_areas(&self, area: Rect, overlay_bounds: Rect) -> StatusBarAreas {
         let menu_width = measured_width(&self.menu_trigger).min(area.width);
         let ai_width = measured_width(&self.ai).min(area.width.saturating_sub(menu_width));
+        let action_tail_width = STATUS_ACTION_TAIL_WIDTH.min(
+            area.width
+                .saturating_sub(menu_width)
+                .saturating_sub(ai_width),
+        );
         let time_width = status_segment_width(&self.time.label()).min(area.width);
         let weather_width =
             status_segment_width(&self.weather.label()).min(area.width.saturating_sub(time_width));
@@ -264,6 +278,12 @@ where
             ai_width,
             area.height,
         );
+        let action_tail = Rect::new(
+            area.x.saturating_add(menu_width).saturating_add(ai_width),
+            area.y,
+            action_tail_width,
+            area.height,
+        );
         let time_x = area.x + area.width.saturating_sub(time_width);
         let weather_x = time_x.saturating_sub(weather_width);
         let time = Rect::new(time_x, area.y, time_width, area.height);
@@ -273,6 +293,7 @@ where
         StatusBarAreas {
             menu,
             ai,
+            action_tail,
             weather,
             time,
             theme,
@@ -312,6 +333,7 @@ where
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let width = measured_width(&self.menu_trigger)
             + measured_width(&self.ai)
+            + STATUS_ACTION_TAIL_WIDTH
             + measured_width(&self.weather)
             + measured_width(&self.time);
         LayoutSizeHint::content(width, 1).normalized(proposal)
@@ -321,13 +343,13 @@ where
         self.layout_overlay(area, area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(
-            Paragraph::new(" ").style(Style::default().bg(theme().border_fg())),
-            area,
-        );
-        self.menu_trigger.render(frame, self.areas.menu);
-        self.ai.render(frame, self.areas.ai);
+    fn render(&self, frame: &mut Frame, _area: Rect) {
+        let action_bg = theme().border_fg();
+        self.menu_trigger
+            .render_with_inactive_background(frame, self.areas.menu, action_bg);
+        self.ai
+            .render_with_inactive_background(frame, self.areas.ai, action_bg);
+        frame.render_widget(Paragraph::new(status_action_tail()), self.areas.action_tail);
         let weather_bg = theme().weather_sun_fg();
         let time_bg = theme().accent_fg();
         let weather_style = status_segment_text_style(self.weather.is_focused(), weather_bg);
@@ -337,7 +359,7 @@ where
                     .label_spans(weather_style, hotkey_underline_style(weather_style)),
                 self.weather.is_focused(),
                 weather_bg,
-                theme().border_fg(),
+                None,
             )),
             self.areas.weather,
         );
@@ -349,7 +371,7 @@ where
                     .label_spans(time_style, hotkey_underline_style(time_style)),
                 time_focused,
                 time_bg,
-                weather_bg,
+                Some(weather_bg),
             )),
             self.areas.time,
         );
@@ -543,11 +565,17 @@ fn status_segment_width(label: &str) -> u16 {
     line_width(&Line::from(format!(" {label} "))).min(u16::MAX as usize) as u16
 }
 
+const STATUS_ACTION_TAIL_WIDTH: u16 = 1;
+
+fn status_action_tail() -> Line<'static> {
+    Line::from(Span::styled("", Style::default().fg(theme().border_fg())))
+}
+
 fn status_segment_line(
     label_spans: Vec<Span<'static>>,
     focused: bool,
     segment_bg: Color,
-    separator_bg: Color,
+    separator_bg: Option<Color>,
 ) -> Line<'static> {
     let theme = theme();
     let background = if focused {
@@ -555,8 +583,12 @@ fn status_segment_line(
     } else {
         segment_bg
     };
+    let mut separator_style = Style::default().fg(background);
+    if let Some(separator_bg) = separator_bg {
+        separator_style = separator_style.bg(separator_bg);
+    }
     let mut spans = vec![
-        Span::styled("", Style::default().fg(background).bg(separator_bg)),
+        Span::styled("", separator_style),
         Span::styled(" ", status_segment_text_style(focused, segment_bg)),
     ];
     spans.extend(label_spans);
@@ -619,7 +651,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn footer_actions_are_hotkey_targets_but_not_tab_stops() {
+    fn footer_hotkeys_are_focus_targets_but_default_weather_is_not_dead_focus() {
         let mut status = StatusBar::<()>::new();
         let mut layout = LayoutCtx::new();
 
@@ -641,7 +673,11 @@ mod tests {
         assert!(!ai.tab_stop);
         assert_eq!(ai.hotkey_sequences, vec![DEFAULT_AI_HOTKEY]);
 
-        let weather = target_by_path(status_bar_weather_key());
-        assert!(!weather.tab_stop);
+        assert!(
+            layout
+                .focus_targets()
+                .iter()
+                .all(|target| target.path.first() != Some(&status_bar_weather_key()))
+        );
     }
 }

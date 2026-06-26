@@ -7,12 +7,17 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::animation::{Animated, AnimationSettings, Easing, TickResult, lerp_color};
-use crate::event::{HotkeyEvent, Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{
+    HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEventKind, TuiEvent,
+};
 use crate::theme;
 use crate::{
-    EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, TuiNode, hotkey_label_spans, hotkey_underline_style, line_width,
+    EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, HotkeyLabelMode, KeySpec, LayoutCtx,
+    LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, hotkey_label_spans,
+    hotkey_underline_style, line_width,
 };
+
+use super::Panel;
 
 const INPUT_FOCUS: &str = "input";
 const PASSWORD_INPUT_FOCUS: &str = "password-input";
@@ -89,11 +94,122 @@ pub struct TextInput<M = ()> {
     keys: TextInputKeyBindings,
     cursor_fade: CursorFade,
     pending_hotkey_prefix: Option<String>,
+    chrome: InputChrome,
+    panel: Panel,
+    area: Rect,
 }
 
 pub struct PasswordInput<M = ()> {
     input: TextInput<M>,
     mask_char: char,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputChrome {
+    Plain,
+    Panel(InputPanelChrome),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InputPanelChrome {
+    top_left: Option<String>,
+    top_right: Option<String>,
+    bottom_left: Option<String>,
+    bottom_right: Option<String>,
+}
+
+impl InputChrome {
+    pub fn plain() -> Self {
+        Self::Plain
+    }
+
+    pub fn panel(title: impl Into<String>) -> Self {
+        Self::Panel(InputPanelChrome::new().top_left(title))
+    }
+
+    pub fn panel_chrome(chrome: InputPanelChrome) -> Self {
+        Self::Panel(chrome)
+    }
+
+    pub fn top_left(mut self, title: impl Into<String>) -> Self {
+        if let Self::Panel(panel) = &mut self {
+            panel.top_left = Some(title.into());
+        }
+        self
+    }
+
+    pub fn top_right(mut self, title: impl Into<String>) -> Self {
+        if let Self::Panel(panel) = &mut self {
+            panel.top_right = Some(title.into());
+        }
+        self
+    }
+
+    pub fn bottom_left(mut self, title: impl Into<String>) -> Self {
+        if let Self::Panel(panel) = &mut self {
+            panel.bottom_left = Some(title.into());
+        }
+        self
+    }
+
+    pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
+        if let Self::Panel(panel) = &mut self {
+            panel.bottom_right = Some(title.into());
+        }
+        self
+    }
+}
+
+impl InputPanelChrome {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn top_left(mut self, title: impl Into<String>) -> Self {
+        self.top_left = Some(title.into());
+        self
+    }
+
+    pub fn top_right(mut self, title: impl Into<String>) -> Self {
+        self.top_right = Some(title.into());
+        self
+    }
+
+    pub fn bottom_left(mut self, title: impl Into<String>) -> Self {
+        self.bottom_left = Some(title.into());
+        self
+    }
+
+    pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
+        self.bottom_right = Some(title.into());
+        self
+    }
+
+    pub(crate) fn panel(&self, focused: bool, hotkey: Option<&str>) -> Panel {
+        let mut panel = Panel::new().focused(focused);
+        if let Some(title) = &self.top_left {
+            panel = panel.top_left(title.clone());
+        }
+        if let Some(title) = &self.top_right {
+            panel = panel.top_right(title.clone());
+        }
+        if let Some(title) = &self.bottom_left {
+            panel = panel.bottom_left(title.clone());
+        }
+        if let Some(title) = &self.bottom_right {
+            panel = panel.bottom_right(title.clone());
+        }
+        if let Some(hotkey) = hotkey {
+            panel = panel.hotkey(hotkey.to_owned());
+        }
+        panel
+    }
+}
+
+impl Default for InputChrome {
+    fn default() -> Self {
+        Self::Plain
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,10 +235,7 @@ pub struct TextInputKeyBindings {
 impl Default for TextInputKeyBindings {
     fn default() -> Self {
         Self {
-            submit: vec![KeySpec::key_with_modifiers(
-                Key::Enter,
-                KeyModifiers::CONTROL,
-            )],
+            submit: vec![KeySpec::key(Key::Enter)],
             cancel: vec![
                 KeySpec::key(Key::Esc),
                 KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
@@ -203,6 +316,9 @@ impl<M> TextInput<M> {
             keys: TextInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
             pending_hotkey_prefix: None,
+            chrome: InputChrome::Plain,
+            panel: Panel::new(),
+            area: Rect::default(),
         }
     }
 
@@ -218,18 +334,74 @@ impl<M> TextInput<M> {
         self
     }
 
+    pub fn style(mut self, chrome: InputChrome) -> Self {
+        self.set_style(chrome);
+        self
+    }
+
+    pub fn panel(mut self, title: impl Into<String>) -> Self {
+        self.set_style(InputChrome::panel(title));
+        self
+    }
+
+    pub fn set_style(&mut self, chrome: InputChrome) {
+        self.chrome = chrome;
+        self.sync_panel();
+    }
+
+    fn sync_panel(&mut self) {
+        self.panel = match &self.chrome {
+            InputChrome::Plain => Panel::new(),
+            InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
+        };
+    }
+
+    fn inline_hotkey(&self) -> Option<&str> {
+        match self.chrome {
+            InputChrome::Plain => self.hotkey.as_deref(),
+            InputChrome::Panel(_) => None,
+        }
+    }
+
+    fn is_panel_mode(&self) -> bool {
+        matches!(self.chrome, InputChrome::Panel(_))
+    }
+
+    fn panel_click_focus(
+        &self,
+        event: &TuiEvent,
+        focus_id: FocusId,
+        ctx: &mut EventCtx<M>,
+    ) -> bool {
+        let TuiEvent::Mouse(mouse) = event else {
+            return false;
+        };
+        if !self.is_panel_mode()
+            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            || !rect_contains(self.area, mouse.column, mouse.row)
+        {
+            return false;
+        }
+
+        ctx.focus(FocusRequest::Target(focus_id));
+        ctx.stop_propagation();
+        true
+    }
+
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
-        self.hotkey = Some(hotkey.into());
+        self.set_hotkey(hotkey);
         self
     }
 
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
         self.hotkey = Some(hotkey.into());
+        self.sync_panel();
     }
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
         self.pending_hotkey_prefix = None;
+        self.sync_panel();
     }
 
     fn handle_visual_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) {
@@ -261,11 +433,13 @@ impl<M> TextInput<M> {
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self.sync_panel();
         self
     }
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.sync_panel();
         if !focused {
             self.insert_mode = false;
         }
@@ -371,7 +545,7 @@ impl<M> TextInput<M> {
         if matches_any(&self.keys.backspace, key) {
             return self.backspace();
         }
-        if matches_any(&self.keys.delete_next, key) {
+        if matches_any(&self.keys.delete_next, key) || delete_forward_key(key) {
             return self.delete_next();
         }
         if matches_any(&self.keys.move_left, key) {
@@ -393,7 +567,33 @@ impl<M> TextInput<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let area = self.render_chrome(frame, area);
         self.render_with_style(frame, area, Style::default());
+    }
+
+    fn content_area(&self, area: Rect) -> Rect {
+        match self.chrome {
+            InputChrome::Plain => area,
+            InputChrome::Panel(_) => Panel::inner_area(area),
+        }
+    }
+
+    fn render_chrome(&self, frame: &mut Frame, area: Rect) -> Rect {
+        match self.chrome {
+            InputChrome::Plain => area,
+            InputChrome::Panel(_) => {
+                self.panel.render(frame, area);
+                Panel::inner_area(area)
+            }
+        }
+    }
+
+    fn chrome_measure(&self, width: u16, height: u16, proposal: LayoutProposal) -> LayoutSizeHint {
+        let (width, height) = match self.chrome {
+            InputChrome::Plain => (width, height),
+            InputChrome::Panel(_) => (width.saturating_add(2), height.saturating_add(2)),
+        };
+        LayoutSizeHint::content(width, height).normalized(proposal)
     }
 
     pub(crate) fn render_with_style(&self, frame: &mut Frame, area: Rect, style: Style) {
@@ -444,7 +644,7 @@ impl<M> TextInput<M> {
         if self.value.is_empty() {
             return placeholder_line(
                 &self.placeholder,
-                self.hotkey.as_deref(),
+                self.inline_hotkey(),
                 width,
                 self.focused && self.insert_mode,
                 self.pending_hotkey_prefix.as_deref(),
@@ -487,7 +687,7 @@ impl<M> TextInput<M> {
             &mut spans,
             &mut drawn,
             width,
-            self.hotkey.as_deref(),
+            self.inline_hotkey(),
             self.focused && self.insert_mode,
             self.pending_hotkey_prefix.as_deref(),
             hotkey_style,
@@ -740,6 +940,16 @@ impl<M> PasswordInput<M> {
         self
     }
 
+    pub fn style(mut self, chrome: InputChrome) -> Self {
+        self.input = self.input.style(chrome);
+        self
+    }
+
+    pub fn panel(mut self, title: impl Into<String>) -> Self {
+        self.input = self.input.panel(title);
+        self
+    }
+
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
         self.input = self.input.hotkey(hotkey);
         self
@@ -808,6 +1018,7 @@ impl<M> PasswordInput<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let area = self.input.render_chrome(frame, area);
         self.render_with_style(frame, area, Style::default());
     }
 
@@ -859,7 +1070,7 @@ impl<M> PasswordInput<M> {
         if self.input.value.is_empty() {
             return placeholder_line(
                 &self.input.placeholder,
-                self.input.hotkey.as_deref(),
+                self.input.inline_hotkey(),
                 width,
                 self.input.focused && self.input.insert_mode,
                 self.input.pending_hotkey_prefix.as_deref(),
@@ -904,7 +1115,7 @@ impl<M> PasswordInput<M> {
             &mut spans,
             &mut drawn,
             width,
-            self.input.hotkey.as_deref(),
+            self.input.inline_hotkey(),
             self.input.focused && self.input.insert_mode,
             self.input.pending_hotkey_prefix.as_deref(),
             hotkey_style,
@@ -917,30 +1128,37 @@ impl<M> PasswordInput<M> {
 impl<M> TuiNode<M> for TextInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let text = if self.value.is_empty() {
-            placeholder_label(&self.placeholder, self.hotkey.as_deref())
+            placeholder_label(&self.placeholder, self.inline_hotkey())
         } else {
             label_with_visible_hotkey(
                 &self.value,
-                self.hotkey.as_deref(),
+                self.inline_hotkey(),
                 !(self.focused && self.insert_mode),
             )
         };
         let width = line_width(&Line::from(text.as_str())).min(u16::MAX as usize) as u16;
-        LayoutSizeHint::content(width.max(1), 1).normalized(proposal)
+        self.chrome_measure(width.max(1), 1, proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        let focus_area = self.content_area(area);
         if let Some(hotkey) = self.hotkey.clone() {
-            ctx.register_focusable_with_hotkey_sequences(
+            ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(INPUT_FOCUS),
-                area,
+                focus_area,
                 true,
                 vec![hotkey],
+                self.insert_mode,
             );
         } else {
-            ctx.register_focusable(FocusId::new(INPUT_FOCUS), area, true);
+            ctx.register_text_entry_focusable(
+                FocusId::new(INPUT_FOCUS),
+                focus_area,
+                true,
+                self.insert_mode,
+            );
         }
-        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(INPUT_FOCUS), self.insert_mode);
         LayoutResult::new(area)
     }
 
@@ -949,6 +1167,9 @@ impl<M> TuiNode<M> for TextInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if self.panel_click_focus(event, FocusId::new(INPUT_FOCUS), ctx) {
+            return EventOutcome::Handled;
+        }
         if let TuiEvent::Hotkey(hotkey) = event {
             self.handle_visual_hotkey(hotkey, ctx);
             if self.handle_focus_hotkey(hotkey, ctx) {
@@ -986,6 +1207,18 @@ impl<M> TuiNode<M> for TextInput<M> {
             ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if delete_forward_key(*key) {
+            self.insert_mode = true;
+            let outcome = self.on_key(*key);
+            ctx.request_layout();
+            if outcome.needs_redraw() {
+                ctx.request_redraw();
+            }
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
         }
         if !self.insert_mode {
             if focus_navigation_key(*key) {
@@ -1039,6 +1272,7 @@ impl<M> TuiNode<M> for TextInput<M> {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.set_focused(focused);
+        self.panel.set_focused(focused, ctx.animation());
         if focused {
             self.cursor_fade.reset();
         } else if let Some(on_blur) = &self.on_blur {
@@ -1055,36 +1289,40 @@ impl<M> TuiNode<M> for TextInput<M> {
 impl<M> TuiNode<M> for PasswordInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let text = if self.input.value.is_empty() {
-            placeholder_label(&self.input.placeholder, self.input.hotkey.as_deref())
+            placeholder_label(&self.input.placeholder, self.input.inline_hotkey())
         } else {
             let value = std::iter::repeat(self.mask_char)
                 .take(self.input.len_chars())
                 .collect::<String>();
             label_with_visible_hotkey(
                 &value,
-                self.input.hotkey.as_deref(),
+                self.input.inline_hotkey(),
                 !(self.input.focused && self.input.insert_mode),
             )
         };
         let width = line_width(&Line::from(text.as_str())).min(u16::MAX as usize) as u16;
-        LayoutSizeHint::content(width.max(1), 1).normalized(proposal)
+        self.input.chrome_measure(width.max(1), 1, proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.input.area = area;
+        let focus_area = self.input.content_area(area);
         if let Some(hotkey) = self.input.hotkey.clone() {
-            ctx.register_focusable_with_hotkey_sequences(
+            ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(PASSWORD_INPUT_FOCUS),
-                area,
+                focus_area,
                 true,
                 vec![hotkey],
+                self.input.insert_mode,
             );
         } else {
-            ctx.register_focusable(FocusId::new(PASSWORD_INPUT_FOCUS), area, true);
+            ctx.register_text_entry_focusable(
+                FocusId::new(PASSWORD_INPUT_FOCUS),
+                focus_area,
+                true,
+                self.input.insert_mode,
+            );
         }
-        ctx.set_focus_suppresses_global_hotkeys(
-            FocusId::new(PASSWORD_INPUT_FOCUS),
-            self.input.insert_mode,
-        );
         LayoutResult::new(area)
     }
 
@@ -1093,6 +1331,12 @@ impl<M> TuiNode<M> for PasswordInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if self
+            .input
+            .panel_click_focus(event, FocusId::new(PASSWORD_INPUT_FOCUS), ctx)
+        {
+            return EventOutcome::Handled;
+        }
         if let TuiEvent::Hotkey(hotkey) = event {
             self.input.handle_visual_hotkey(hotkey, ctx);
             if self.input.handle_focus_hotkey(hotkey, ctx) {
@@ -1118,6 +1362,18 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if delete_forward_key(*key) {
+            self.input.insert_mode = true;
+            let outcome = self.on_key(*key);
+            ctx.request_layout();
+            if outcome.needs_redraw() {
+                ctx.request_redraw();
+            }
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+        }
         if !self.input.insert_mode {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
@@ -1170,6 +1426,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.input.set_focused(focused);
+        self.input.panel.set_focused(focused, ctx.animation());
         if focused {
             self.input.cursor_fade.reset();
         } else if let Some(on_blur) = &self.input.on_blur {
@@ -1188,6 +1445,7 @@ impl<M> Animated for PasswordInput<M> {
         self.input
             .cursor_fade
             .tick(self.input.focused && self.input.insert_mode, dt, settings)
+            .merge(Animated::tick(&mut self.input.panel, dt, settings))
     }
 }
 
@@ -1195,6 +1453,7 @@ impl<M> Animated for TextInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.cursor_fade
             .tick(self.focused && self.insert_mode, dt, settings)
+            .merge(Animated::tick(&mut self.panel, dt, settings))
     }
 }
 
@@ -1245,6 +1504,20 @@ pub(crate) fn selected_input_style(style: Style) -> Style {
 
 pub(crate) fn focus_navigation_key(key: KeyEvent) -> bool {
     matches!(key.code, Key::Tab | Key::BackTab)
+}
+
+fn rect_contains(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
+}
+
+fn delete_forward_key(key: KeyEvent) -> bool {
+    if matches!(key.code, Key::Char('\u{7f}')) {
+        return !key.modifiers.contains(KeyModifiers::ALT);
+    }
+    key.code == Key::Delete
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }
 
 pub(crate) fn placeholder_label(placeholder: &str, hotkey: Option<&str>) -> String {

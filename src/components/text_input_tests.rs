@@ -1,5 +1,5 @@
 use super::*;
-use crate::Propagation;
+use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation};
 
 #[test]
 fn handled_key_stops_propagation() {
@@ -26,6 +26,83 @@ fn tab_bubbles_for_focus_navigation_before_insert_mode() {
 }
 
 #[test]
+fn text_input_marks_focus_as_text_entry_while_typing() {
+    let mut input = TextInput::<()>::new();
+    input.insert_mode = true;
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 10, 1), &mut ctx);
+
+    let target = ctx.focus_targets().first().unwrap();
+    assert!(target.suppress_global_hotkeys);
+    assert!(target.focused_events_before_global_hotkeys);
+}
+
+#[test]
+fn text_input_panel_style_adds_border_space_and_focuses_inner_area() {
+    let mut input = TextInput::<()>::new().placeholder("Name").panel("Label");
+    let hint = input.measure(LayoutProposal::unbounded());
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(2, 3, 12, 3), &mut ctx);
+
+    assert_eq!(hint.preferred.height, 3);
+    assert_eq!(ctx.focus_targets()[0].area, Rect::new(3, 4, 10, 1));
+}
+
+#[test]
+fn text_input_panel_style_moves_hotkey_to_panel() {
+    let mut input = TextInput::<()>::new()
+        .placeholder("Name")
+        .hotkey("n")
+        .style(InputChrome::panel("Label").top_right("Required"));
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(2, 3, 12, 3), &mut ctx);
+
+    assert_eq!(line_text(&input.line(20)), "Name");
+    assert_eq!(ctx.focus_targets()[0].area, Rect::new(3, 4, 10, 1));
+    assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["n"]);
+}
+
+#[test]
+fn text_input_panel_click_requests_input_focus() {
+    let mut input = TextInput::<()>::new().panel("Label");
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(2, 3, 12, 3), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&FocusRequest::Target(FocusId::new("input")))
+    );
+}
+
+#[test]
+fn password_input_marks_focus_as_text_entry_while_typing() {
+    let mut input = PasswordInput::<()>::new();
+    input.input.insert_mode = true;
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 10, 1), &mut ctx);
+
+    let target = ctx.focus_targets().first().unwrap();
+    assert!(target.suppress_global_hotkeys);
+    assert!(target.focused_events_before_global_hotkeys);
+}
+
+#[test]
 fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
     let input = TextInput::<()>::new().value("search").focused(true);
     let line = input.line(20);
@@ -43,10 +120,8 @@ fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
 }
 
 #[test]
-fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
-    let mut input = TextInput::new()
-        .value("ship")
-        .on_submit(|value| format!("submit:{value}"));
+fn control_enter_does_not_submit_text_input() {
+    let mut input = TextInput::<()>::new().value("ship");
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
@@ -57,6 +132,21 @@ fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
 
     let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert!(input.insert_mode);
+    assert!(ctx.messages().is_empty());
+}
+
+#[test]
+fn enter_submit_emits_message_blurs_and_stops_propagation() {
+    let mut input = TextInput::new()
+        .value("ship")
+        .on_submit(|value| format!("submit:{value}"));
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode);
     assert_eq!(ctx.messages(), &["submit:ship".to_string()]);
@@ -66,10 +156,8 @@ fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
 }
 
 #[test]
-fn control_enter_password_submit_emits_message_blurs_and_stops_propagation() {
-    let mut input = PasswordInput::new()
-        .value("secret")
-        .on_submit(|value| format!("submit:{value}"));
+fn control_enter_does_not_submit_password_input() {
+    let mut input = PasswordInput::<()>::new().value("secret");
     input.input.insert_mode = true;
     let mut ctx = EventCtx::default();
     let key = KeyEvent {
@@ -79,12 +167,122 @@ fn control_enter_password_submit_emits_message_blurs_and_stops_propagation() {
 
     let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert!(input.input.insert_mode);
+    assert!(ctx.messages().is_empty());
+}
+
+#[test]
+fn enter_password_submit_emits_message_blurs_and_stops_propagation() {
+    let mut input = PasswordInput::new()
+        .value("secret")
+        .on_submit(|value| format!("submit:{value}"));
+    input.input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.input.insert_mode);
     assert_eq!(ctx.messages(), &["submit:secret".to_string()]);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn delete_removes_next_character_in_text_input() {
+    let mut input = TextInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent::from(Key::Delete));
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+    assert_eq!(input.cursor, 1);
+}
+
+#[test]
+fn shifted_delete_removes_next_character_in_text_input() {
+    let mut input = TextInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent {
+        code: Key::Delete,
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn del_character_removes_next_character_in_text_input() {
+    let mut input = TextInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent::from(Key::Char('\u{7f}')));
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn modified_del_character_removes_next_character_in_text_input() {
+    let mut input = TextInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent {
+        code: Key::Char('\u{7f}'),
+        modifiers: KeyModifiers::CONTROL,
+    });
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn delete_removes_next_character_before_insert_mode_in_text_input() {
+    let mut input = TextInput::<()>::new().value("abcd").focused(true);
+    input.cursor = 1;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.current_value(), "acd");
+    assert!(input.insert_mode);
+    assert!(ctx.layout_requested());
+}
+
+#[test]
+fn delete_removes_next_character_in_password_input() {
+    let mut input = PasswordInput::<()>::new().value("abcd");
+    input.input.insert_mode = true;
+    input.input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent::from(Key::Delete));
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn delete_removes_next_character_before_insert_mode_in_password_input() {
+    let mut input = PasswordInput::<()>::new().value("abcd").focused(true);
+    input.input.cursor = 1;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.current_value(), "acd");
+    assert!(input.input.insert_mode);
+    assert!(ctx.layout_requested());
 }
 
 #[test]
@@ -150,7 +348,7 @@ fn line_clips_wide_unicode_by_terminal_width() {
 }
 
 #[test]
-fn custom_submit_key_replaces_default_control_enter() {
+fn custom_submit_key_replaces_default_enter() {
     let keys = TextInputKeyBindings {
         submit: vec![KeySpec::plain('s')],
         ..TextInputKeyBindings::default()
@@ -160,7 +358,7 @@ fn custom_submit_key_replaces_default_control_enter() {
     assert_eq!(
         input.on_key(KeyEvent {
             code: Key::Enter,
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::NONE,
         }),
         InputOutcome::IDLE
     );

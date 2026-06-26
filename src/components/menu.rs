@@ -13,10 +13,10 @@ use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::KeyEvent;
 use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
-    Animated, AnimationSettings, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest,
-    FocusTarget, HintSource, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TreePath, TuiEvent, TuiNode, border_set,
-    keybindings, line_width, preset, theme,
+    Animated, AnimationSettings, AnimationSpec, EventCtx, EventOutcome, FocusCtx, FocusId,
+    FocusRequest, FocusTarget, HintSource, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx,
+    LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TreePath, TuiEvent,
+    TuiNode, Tween, border_set, keybindings, line_width, preset, theme,
 };
 
 mod types;
@@ -27,6 +27,7 @@ const SEARCH_FOCUS: &str = "search";
 const PANEL_FOCUS: &str = "panel";
 const POPUP_BORDER_HEIGHT: u16 = 2;
 const DEFAULT_VISIBLE_ITEMS: u16 = 10;
+const MENU_BACKDROP_AMOUNT: f64 = 0.55;
 
 fn highlighted_label_line(
     label: String,
@@ -133,6 +134,7 @@ pub struct Menu<Id> {
     action_keys: MenuActionKeys,
     trigger_hotkey: Option<String>,
     trigger_hotkey_matcher: HotkeySequenceMatcher,
+    backdrop_tween: Tween,
     return_focus: Option<(TreePath, FocusId)>,
     on_activate: Option<Box<dyn Fn(Id) + 'static>>,
     activated: Vec<Id>,
@@ -188,6 +190,7 @@ where
             action_keys: MenuActionKeys::default(),
             trigger_hotkey: None,
             trigger_hotkey_matcher: HotkeySequenceMatcher::default(),
+            backdrop_tween: Tween::idle(0.0),
             return_focus: None,
             on_activate: None,
             activated: Vec::new(),
@@ -279,6 +282,7 @@ where
         }
 
         self.open = true;
+        self.backdrop_tween.snap_to(MENU_BACKDROP_AMOUNT);
         self.refresh_filter();
         self.highlight_first_filtered();
         self.focus_region = Some(if self.search_enabled() {
@@ -302,8 +306,27 @@ where
     /// place and focus the popup immediately.
     pub fn open_with_context<M>(&mut self, ctx: &mut EventCtx<M>) -> MenuOutcome {
         let outcome = self.open();
+        if outcome.opened {
+            self.backdrop_tween.snap_to(0.0);
+            self.start_backdrop_tween(true, ctx.animation());
+        }
         self.apply_open_close_context(outcome, ctx);
         outcome
+    }
+
+    fn start_backdrop_tween(&mut self, active: bool, settings: AnimationSettings) {
+        let target = if active { MENU_BACKDROP_AMOUNT } else { 0.0 };
+        let resolved = settings.resolve(AnimationSpec::default());
+        if !resolved.enabled {
+            self.backdrop_tween.snap_to(target);
+            return;
+        }
+        self.backdrop_tween.start(
+            self.backdrop_tween.value(),
+            target,
+            resolved.duration,
+            resolved.easing,
+        );
     }
 
     pub fn close(&mut self) -> MenuOutcome {
@@ -312,6 +335,7 @@ where
         }
 
         self.open = false;
+        self.backdrop_tween.snap_to(0.0);
         self.clear_search_query();
         self.focus_region = None;
         self.sync_child_focus();
@@ -417,9 +441,8 @@ where
         let popup_area = self.popup_area_for(trigger_area, overlay_bounds);
         let [search_area, list_area] = self.popup_inner_areas(popup_area);
         if self.search_enabled() {
-            ctx.register_focusable(FocusId::new(SEARCH_FOCUS), search_area, true);
+            ctx.register_text_entry_focusable(FocusId::new(SEARCH_FOCUS), search_area, true, true);
             ctx.set_focus_tab_stop(FocusId::new(SEARCH_FOCUS), true);
-            ctx.set_focus_suppresses_global_hotkeys(FocusId::new(SEARCH_FOCUS), true);
         } else {
             ctx.register_focusable(FocusId::new(PANEL_FOCUS), popup_area, true);
             ctx.set_focus_tab_stop(FocusId::new(PANEL_FOCUS), true);
@@ -446,6 +469,16 @@ where
             return;
         }
 
+        let trigger_area = self.effective_trigger_area(bounds);
+        let backdrop = self.backdrop_tween.value();
+        if backdrop > 0.0 {
+            super::dialog_layer::dim_backdrop_buffer_except(
+                frame,
+                bounds,
+                backdrop,
+                &[trigger_area, popup_area],
+            );
+        }
         self.render_popup(frame, popup_area);
     }
 
@@ -844,5 +877,39 @@ where
         hotkey_tick
             .merge(Animated::tick(&mut self.data_view, dt, settings))
             .merge(Animated::tick(&mut self.search_input, dt, settings))
+            .merge(self.backdrop_tween.tick(dt, settings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::style::{Modifier, Style};
+
+    use super::*;
+
+    #[test]
+    fn open_popup_dims_background_outside_trigger_and_popup() {
+        let mut menu = Menu::new([MenuItem::new(1, "Alpha"), MenuItem::new(2, "Beta")]);
+        menu.open();
+        menu.layout_overlay::<()>(
+            Rect::new(4, 1, 5, 1),
+            Rect::new(0, 0, 20, 8),
+            &mut LayoutCtx::new(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "background", Style::default());
+                menu.render_popup_overlay(frame, frame.area());
+            })
+            .expect("menu should render");
+
+        let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+        assert!(cell.modifier.contains(Modifier::DIM));
     }
 }

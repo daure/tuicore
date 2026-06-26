@@ -588,6 +588,17 @@ impl LayoutCtx {
         });
     }
 
+    pub fn register_text_entry_focusable(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        enabled: bool,
+        active: bool,
+    ) {
+        self.register_focusable(id.clone(), area, enabled);
+        self.set_focus_text_entry_active(id, active);
+    }
+
     pub fn register_focusable_with_hotkey(
         &mut self,
         id: FocusId,
@@ -666,6 +677,33 @@ impl LayoutCtx {
             suppress_global_hotkeys: false,
             focused_events_before_global_hotkeys: false,
         });
+    }
+
+    pub fn register_text_entry_focusable_with_hotkey_sequences(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        enabled: bool,
+        hotkey_sequences: Vec<String>,
+        active: bool,
+    ) {
+        self.register_focusable_with_hotkey_sequences(id.clone(), area, enabled, hotkey_sequences);
+        self.set_focus_text_entry_active(id, active);
+    }
+
+    pub fn set_focus_text_entry_active(&mut self, id: FocusId, active: bool) -> bool {
+        let path = self.current_path();
+        let Some(target) = self
+            .focus_paths
+            .iter_mut()
+            .rev()
+            .find(|target| target.id == id && target.path == path)
+        else {
+            return false;
+        };
+        target.suppress_global_hotkeys = active;
+        target.focused_events_before_global_hotkeys = active;
+        true
     }
 
     pub fn set_focus_suppresses_global_hotkeys(&mut self, id: FocusId, suppress: bool) -> bool {

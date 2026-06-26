@@ -15,6 +15,8 @@ use crate::{
     border_set, keybindings, line_width, paragraph_scroll, preset, theme,
 };
 
+use super::dialog_layer::DockChrome;
+
 pub(crate) const DIALOG_FOCUS: &str = "dialog";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,6 +814,18 @@ impl<C, M> DialogHost<C, M> {
 
     pub fn child_mut(&mut self) -> &mut C {
         &mut self.child
+    }
+}
+
+impl<M> DockChrome for Dialog<M> {
+    fn set_dock_edge_borders(&mut self, borders: Borders) {
+        self.set_edge_borders(borders);
+    }
+}
+
+impl<C, M> DockChrome for DialogHost<C, M> {
+    fn set_dock_edge_borders(&mut self, borders: Borders) {
+        self.dialog.set_edge_borders(borders);
     }
 }
 

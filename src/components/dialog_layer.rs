@@ -3,6 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
+use ratatui::widgets::Borders;
 
 use crate::event::TuiEvent;
 use crate::{
@@ -28,6 +29,7 @@ pub struct DialogLayer<Base, Layer> {
     active: bool,
     layer_percent: u16,
     layer_cross_percent: u16,
+    layer_edge_offset: u16,
     placement: DialogLayerPlacement,
     base_rect: Rect,
     layer_rect: Rect,
@@ -44,6 +46,98 @@ pub enum DialogLayerPlacement {
     Bottom,
     Left,
     Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockSide {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DockSpec {
+    side: DockSide,
+    main_percent: u16,
+    cross_percent: u16,
+    edge_offset: u16,
+}
+
+pub trait DockChrome {
+    fn set_dock_edge_borders(&mut self, borders: Borders);
+}
+
+impl DockSide {
+    pub fn placement(self) -> DialogLayerPlacement {
+        match self {
+            Self::Top => DialogLayerPlacement::Top,
+            Self::Bottom => DialogLayerPlacement::Bottom,
+            Self::Left => DialogLayerPlacement::Left,
+            Self::Right => DialogLayerPlacement::Right,
+        }
+    }
+}
+
+impl DockSpec {
+    pub fn new(side: DockSide, main_percent: u16) -> Self {
+        Self {
+            side,
+            main_percent: main_percent.clamp(1, 100),
+            cross_percent: 100,
+            edge_offset: 0,
+        }
+    }
+
+    pub fn top(percent: u16) -> Self {
+        Self::new(DockSide::Top, percent)
+    }
+
+    pub fn bottom(percent: u16) -> Self {
+        Self::new(DockSide::Bottom, percent)
+    }
+
+    pub fn left(percent: u16) -> Self {
+        Self::new(DockSide::Left, percent)
+    }
+
+    pub fn right(percent: u16) -> Self {
+        Self::new(DockSide::Right, percent)
+    }
+
+    pub fn side(self) -> DockSide {
+        self.side
+    }
+
+    pub fn main_percent(self) -> u16 {
+        self.main_percent
+    }
+
+    pub fn cross_percent_value(self) -> u16 {
+        self.cross_percent
+    }
+
+    pub fn edge_offset_value(self) -> u16 {
+        self.edge_offset
+    }
+
+    pub fn cross_percent(mut self, percent: u16) -> Self {
+        self.cross_percent = percent.clamp(1, 100);
+        self
+    }
+
+    pub fn edge_offset(mut self, offset: u16) -> Self {
+        self.edge_offset = offset;
+        self
+    }
+
+    pub fn placement(self) -> DialogLayerPlacement {
+        self.side.placement()
+    }
+
+    pub fn edge_borders(self) -> Borders {
+        dock_edge_borders(self.side, self.cross_percent)
+    }
 }
 
 impl DialogBackdrop {
@@ -88,6 +182,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             active: true,
             layer_percent: 100,
             layer_cross_percent: 100,
+            layer_edge_offset: 0,
             placement: DialogLayerPlacement::Center,
             base_rect: Rect::default(),
             layer_rect: Rect::default(),
@@ -195,6 +290,19 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
 
     pub fn set_placement(&mut self, placement: DialogLayerPlacement) {
         self.placement = placement;
+        self.layer_edge_offset = 0;
+    }
+
+    pub fn dock(mut self, spec: DockSpec) -> Self {
+        self.set_dock(spec);
+        self
+    }
+
+    pub fn set_dock(&mut self, spec: DockSpec) {
+        self.placement = spec.placement();
+        self.layer_percent = spec.main_percent();
+        self.layer_cross_percent = spec.cross_percent_value();
+        self.layer_edge_offset = spec.edge_offset_value();
     }
 
     pub fn backdrop(mut self, backdrop: DialogBackdrop) -> Self {
@@ -260,6 +368,21 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
     }
 }
 
+impl<Base, Layer> DialogLayer<Base, Layer>
+where
+    Layer: DockChrome,
+{
+    pub fn docked(mut self, spec: DockSpec) -> Self {
+        self.set_docked(spec);
+        self
+    }
+
+    pub fn set_docked(&mut self, spec: DockSpec) {
+        self.set_dock(spec);
+        self.layer.set_dock_edge_borders(spec.edge_borders());
+    }
+}
+
 impl<Base, Layer, M> TuiNode<M> for DialogLayer<Base, Layer>
 where
     Base: TuiNode<M>,
@@ -272,6 +395,7 @@ where
             self.layer_percent,
             self.layer_cross_percent,
             self.placement,
+            self.layer_edge_offset,
         );
 
         if self.active {
@@ -484,27 +608,44 @@ fn layer_rect(
     percent: u16,
     cross_percent: u16,
     placement: DialogLayerPlacement,
+    edge_offset: u16,
 ) -> Rect {
     match placement {
         DialogLayerPlacement::Center => centered_percent_rect(area, percent),
-        DialogLayerPlacement::Top => horizontal_dock_rect(area, percent, cross_percent, area.y),
+        DialogLayerPlacement::Top => horizontal_dock_rect(
+            area,
+            percent,
+            cross_percent,
+            area.y.saturating_add(edge_offset),
+        ),
         DialogLayerPlacement::Bottom => {
             let height = scaled_dimension(area.height, percent).max((area.height > 0) as u16);
             horizontal_dock_rect(
                 area,
                 percent,
                 cross_percent,
-                area.bottom().saturating_sub(height),
+                area.bottom()
+                    .saturating_sub(height)
+                    .saturating_sub(edge_offset)
+                    .max(area.y),
             )
         }
-        DialogLayerPlacement::Left => vertical_dock_rect(area, percent, cross_percent, area.x),
+        DialogLayerPlacement::Left => vertical_dock_rect(
+            area,
+            percent,
+            cross_percent,
+            area.x.saturating_add(edge_offset),
+        ),
         DialogLayerPlacement::Right => {
             let width = scaled_dimension(area.width, percent).max((area.width > 0) as u16);
             vertical_dock_rect(
                 area,
                 percent,
                 cross_percent,
-                area.right().saturating_sub(width),
+                area.right()
+                    .saturating_sub(width)
+                    .saturating_sub(edge_offset)
+                    .max(area.x),
             )
         }
     }
@@ -536,6 +677,19 @@ fn vertical_dock_rect(area: Rect, percent: u16, cross_percent: u16, x: u16) -> R
     )
 }
 
+fn dock_edge_borders(side: DockSide, cross_percent: u16) -> Borders {
+    match side {
+        DockSide::Top if cross_percent == 100 => Borders::BOTTOM,
+        DockSide::Top => Borders::LEFT | Borders::RIGHT | Borders::BOTTOM,
+        DockSide::Bottom if cross_percent == 100 => Borders::TOP,
+        DockSide::Bottom => Borders::TOP | Borders::LEFT | Borders::RIGHT,
+        DockSide::Left if cross_percent == 100 => Borders::RIGHT,
+        DockSide::Left => Borders::TOP | Borders::RIGHT | Borders::BOTTOM,
+        DockSide::Right if cross_percent == 100 => Borders::LEFT,
+        DockSide::Right => Borders::TOP | Borders::LEFT | Borders::BOTTOM,
+    }
+}
+
 fn scaled_dimension(value: u16, percent: u16) -> u16 {
     ((value as u32 * percent as u32) / 100).min(u16::MAX as u32) as u16
 }
@@ -555,11 +709,30 @@ mod tests {
 
     struct StaticBody;
 
+    #[derive(Default)]
+    struct ChromeBody {
+        borders: Option<Borders>,
+    }
+
     struct ColorBody;
 
     struct PowerlineBody;
 
     impl TuiNode<()> for StaticBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+    }
+
+    impl DockChrome for ChromeBody {
+        fn set_dock_edge_borders(&mut self, borders: Borders) {
+            self.borders = Some(borders);
+        }
+    }
+
+    impl TuiNode<()> for ChromeBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
         }
@@ -834,21 +1007,47 @@ mod tests {
         let area = Rect::new(10, 20, 100, 50);
 
         assert_eq!(
-            layer_rect(area, 40, 80, DialogLayerPlacement::Top),
+            layer_rect(area, 40, 80, DialogLayerPlacement::Top, 0),
             Rect::new(20, 20, 80, 20)
         );
         assert_eq!(
-            layer_rect(area, 40, 80, DialogLayerPlacement::Bottom),
+            layer_rect(area, 40, 80, DialogLayerPlacement::Bottom, 0),
             Rect::new(20, 50, 80, 20)
         );
         assert_eq!(
-            layer_rect(area, 30, 80, DialogLayerPlacement::Left),
+            layer_rect(area, 30, 80, DialogLayerPlacement::Left, 0),
             Rect::new(10, 25, 30, 40)
         );
         assert_eq!(
-            layer_rect(area, 30, 80, DialogLayerPlacement::Right),
+            layer_rect(area, 30, 80, DialogLayerPlacement::Right, 0),
             Rect::new(80, 25, 30, 40)
         );
+    }
+
+    #[test]
+    fn dock_spec_sets_layer_placement_size_and_edge_borders() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, ChromeBody::default())
+            .docked(DockSpec::bottom(40).cross_percent(80));
+
+        assert_eq!(dialog_layer.placement, DialogLayerPlacement::Bottom);
+        assert_eq!(dialog_layer.layer_percent, 40);
+        assert_eq!(dialog_layer.layer_cross_percent, 80);
+        assert_eq!(dialog_layer.layer_edge_offset, 0);
+        assert_eq!(
+            dialog_layer.layer.borders,
+            Some(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+        );
+
+        dialog_layer.layout(Rect::new(10, 20, 100, 50), &mut LayoutCtx::new());
+        assert_eq!(dialog_layer.layer_rect, Rect::new(20, 50, 80, 20));
+
+        dialog_layer.set_docked(DockSpec::left(30));
+
+        assert_eq!(dialog_layer.placement, DialogLayerPlacement::Left);
+        assert_eq!(dialog_layer.layer_percent, 30);
+        assert_eq!(dialog_layer.layer_cross_percent, 100);
+        assert_eq!(dialog_layer.layer_edge_offset, 0);
+        assert_eq!(dialog_layer.layer.borders, Some(Borders::RIGHT));
     }
 
     #[test]

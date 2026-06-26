@@ -1,5 +1,5 @@
 use super::*;
-use crate::Propagation;
+use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation};
 use ratatui::style::Modifier;
 
 #[test]
@@ -14,18 +14,13 @@ fn handled_key_stops_propagation() {
 }
 
 #[test]
-fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
+fn enter_submit_emits_message_blurs_and_stops_propagation() {
     let mut input = TextareaInput::new()
         .value("first\nsecond")
         .on_submit(|value| format!("submit:{value}"));
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
-    let key = KeyEvent {
-        code: Key::Enter,
-        modifiers: KeyModifiers::CONTROL,
-    };
-
-    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode);
@@ -33,6 +28,34 @@ fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn control_enter_inserts_newline() {
+    let mut input = TextareaInput::<()>::new().value("first");
+    input.insert_mode = true;
+
+    let outcome = input.on_key(KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    });
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "first\n");
+}
+
+#[test]
+fn control_j_inserts_newline() {
+    let mut input = TextareaInput::<()>::new().value("first");
+    input.insert_mode = true;
+
+    let outcome = input.on_key(KeyEvent {
+        code: Key::Char('j'),
+        modifiers: KeyModifiers::CONTROL,
+    });
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "first\n");
 }
 
 #[test]
@@ -48,6 +71,75 @@ fn enter_switches_focused_textarea_into_insert_mode() {
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn delete_removes_next_character_in_textarea() {
+    let mut input = TextareaInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent::from(Key::Delete));
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+    assert_eq!(input.cursor, 1);
+}
+
+#[test]
+fn shifted_delete_removes_next_character_in_textarea() {
+    let mut input = TextareaInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent {
+        code: Key::Delete,
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn del_character_removes_next_character_in_textarea() {
+    let mut input = TextareaInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent::from(Key::Char('\u{7f}')));
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn modified_del_character_removes_next_character_in_textarea() {
+    let mut input = TextareaInput::<()>::new().value("abcd");
+    input.insert_mode = true;
+    input.cursor = 1;
+
+    let outcome = input.on_key(KeyEvent {
+        code: Key::Char('\u{7f}'),
+        modifiers: KeyModifiers::CONTROL,
+    });
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "acd");
+}
+
+#[test]
+fn delete_removes_next_character_before_insert_mode_in_textarea() {
+    let mut input = TextareaInput::<()>::new().value("abcd").focused(true);
+    input.cursor = 1;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.current_value(), "acd");
+    assert!(input.insert_mode);
+    assert!(ctx.layout_requested());
 }
 
 #[test]
@@ -98,7 +190,7 @@ fn tab_inserts_tab_character_and_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(input.current_value(), "left    ");
-    assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
+    assert_eq!(line_text(&input.visible_lines(10, 1).lines[0]), "left    ");
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.redraw_requested());
 }
@@ -116,6 +208,19 @@ fn tab_bubbles_for_focus_navigation_before_insert_mode() {
 }
 
 #[test]
+fn textarea_marks_focus_as_text_entry_while_typing() {
+    let mut input = TextareaInput::<()>::new();
+    input.insert_mode = true;
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 10, 1), &mut ctx);
+
+    let target = ctx.focus_targets().first().unwrap();
+    assert!(target.suppress_global_hotkeys);
+    assert!(target.focused_events_before_global_hotkeys);
+}
+
+#[test]
 fn pending_hotkey_underlines_textarea_hotkey() {
     let mut input = TextareaInput::<()>::new().value("Draft note").hotkey("t");
     let mut ctx = EventCtx::<()>::default();
@@ -128,7 +233,7 @@ fn pending_hotkey_underlines_textarea_hotkey() {
 
     assert_eq!(outcome, EventOutcome::Ignored);
     assert!(ctx.redraw_requested());
-    assert!(lines[0].spans.iter().any(|span| {
+    assert!(lines.lines[0].spans.iter().any(|span| {
         span.content.as_ref() == "t" && span.style.add_modifier.contains(Modifier::UNDERLINED)
     }));
 }
@@ -147,7 +252,7 @@ fn control_i_inserts_tab_character_and_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(input.current_value(), "left    ");
-    assert_eq!(line_text(&input.visible_lines(10, 1)[0]), "left    ");
+    assert_eq!(line_text(&input.visible_lines(10, 1).lines[0]), "left    ");
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.redraw_requested());
 }
@@ -158,23 +263,20 @@ fn visible_lines_clip_wide_unicode_by_terminal_width() {
 
     let lines = input.visible_lines(4, 1);
 
-    assert_eq!(line_text(&lines[0]), "ab界");
-    assert_eq!(cell_width(&line_text(&lines[0])), 4);
+    assert_eq!(line_text(&lines.lines[0]), "ab界");
+    assert_eq!(cell_width(&line_text(&lines.lines[0])), 4);
 }
 
 #[test]
-fn custom_submit_key_replaces_default_control_enter() {
+fn custom_submit_key_replaces_default_enter() {
     let keys = TextareaInputKeyBindings {
         submit: vec![KeySpec::plain('s')],
         ..TextareaInputKeyBindings::default()
     };
     let mut input = TextareaInput::<()>::new().keybindings(keys);
-    let control_enter = KeyEvent {
-        code: Key::Enter,
-        modifiers: KeyModifiers::CONTROL,
-    };
+    let enter = KeyEvent::from(Key::Enter);
 
-    assert_eq!(input.on_key(control_enter), InputOutcome::IDLE);
+    assert_eq!(input.on_key(enter), InputOutcome::IDLE);
     assert!(input.on_key(KeyEvent::from(Key::Char('s'))).submitted);
 }
 
@@ -187,8 +289,8 @@ fn focused_placeholder_draws_cursor_over_first_character() {
 
     let lines = input.visible_lines(8, 1);
 
-    assert_eq!(lines[0].spans[0].content.as_ref(), "W");
-    assert_eq!(line_text(&lines[0]), "Write mu");
+    assert_eq!(lines.lines[0].spans[0].content.as_ref(), "W");
+    assert_eq!(line_text(&lines.lines[0]), "Write mu");
 }
 
 #[test]
@@ -197,7 +299,7 @@ fn placeholder_hotkey_renders_at_end() {
 
     let lines = input.visible_lines(20, 1);
 
-    assert_eq!(line_text(&lines[0]), "Write |p|");
+    assert_eq!(line_text(&lines.lines[0]), "Write |p|");
 }
 
 #[test]
@@ -208,8 +310,8 @@ fn unfocused_value_hotkey_renders_after_last_line() {
 
     let lines = input.visible_lines(20, 2);
 
-    assert_eq!(line_text(&lines[0]), "First");
-    assert_eq!(line_text(&lines[1]), "Second |t|");
+    assert_eq!(line_text(&lines.lines[0]), "First");
+    assert_eq!(line_text(&lines.lines[1]), "Second |t|");
 }
 
 #[test]
@@ -221,7 +323,7 @@ fn focused_value_hotkey_renders_before_insert_mode() {
 
     let lines = input.visible_lines(20, 2);
 
-    assert_eq!(line_text(&lines[1]), "Second |t|");
+    assert_eq!(line_text(&lines.lines[1]), "Second |t|");
 }
 
 #[test]
@@ -234,7 +336,7 @@ fn insert_mode_value_hotkey_is_hidden() {
 
     let lines = input.visible_lines(20, 2);
 
-    assert_eq!(line_text(&lines[1]), "Second ");
+    assert_eq!(line_text(&lines.lines[1]), "Second ");
 }
 
 #[test]
@@ -269,6 +371,123 @@ fn measure_counts_trailing_blank_line() {
     let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded());
 
     assert_eq!(hint.preferred.height, 2);
+}
+
+#[test]
+fn measure_respects_min_and_max_rows_without_clamping_value() {
+    let input = TextareaInput::<()>::new()
+        .min_rows(2)
+        .max_rows(3)
+        .value("one\ntwo\nthree\nfour");
+
+    let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded());
+
+    assert_eq!(hint.preferred.height, 3);
+    assert_eq!(input.current_value(), "one\ntwo\nthree\nfour");
+}
+
+#[test]
+fn min_rows_does_not_exceed_max_rows_regardless_of_builder_order() {
+    let input = TextareaInput::<()>::new().max_rows(2).min_rows(4);
+
+    let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded());
+
+    assert_eq!(hint.preferred.height, 2);
+}
+
+#[test]
+fn textarea_panel_style_adds_border_space_and_focuses_inner_area() {
+    let mut input = TextareaInput::<()>::new()
+        .min_rows(2)
+        .max_rows(2)
+        .panel("Notes");
+    let hint = input.measure(LayoutProposal::unbounded());
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(2, 3, 20, 4), &mut ctx);
+
+    assert_eq!(hint.preferred.height, 4);
+    assert_eq!(ctx.focus_targets()[0].area, Rect::new(3, 4, 18, 2));
+}
+
+#[test]
+fn textarea_panel_style_shrinks_to_min_rows_when_content_is_short() {
+    let mut input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .min_rows(2)
+        .max_rows(4)
+        .panel("Notes");
+    input.set_value("");
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(2, 3, 20, 6), &mut ctx);
+
+    assert_eq!(ctx.focus_targets()[0].area, Rect::new(3, 4, 18, 2));
+}
+
+#[test]
+fn textarea_panel_style_moves_hotkey_to_panel() {
+    let mut input = TextareaInput::<()>::new()
+        .placeholder("Notes")
+        .hotkey("n")
+        .style(InputChrome::panel("Label").top_right("Required"));
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(2, 3, 20, 3), &mut ctx);
+
+    assert_eq!(line_text(&input.visible_lines(20, 1).lines[0]), "Notes");
+    assert_eq!(ctx.focus_targets()[0].area, Rect::new(3, 4, 18, 1));
+    assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["n"]);
+}
+
+#[test]
+fn textarea_panel_click_requests_input_focus() {
+    let mut input = TextareaInput::<()>::new().panel("Label");
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(2, 3, 20, 3), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&FocusRequest::Target(FocusId::new("textarea")))
+    );
+}
+
+#[test]
+fn visible_lines_scroll_to_cursor_when_content_exceeds_viewport() {
+    let input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour");
+
+    let visible = input.visible_lines(20, 2);
+
+    assert_eq!(visible.first_line, 2);
+    assert_eq!(line_text(&visible.lines[0]), "three");
+    assert_eq!(line_text(&visible.lines[1]), "four");
+}
+
+#[test]
+fn page_down_uses_scroll_state_when_content_overflows() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour");
+    input.cursor = 0;
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::PageDown)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.scroll.target_offset().y, 1);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]
@@ -405,6 +624,41 @@ fn paste_inserts_multiline_text() {
     assert_eq!(input.current_value(), "hello world\nagain");
     assert!(ctx.redraw_requested());
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn growing_panel_textarea_keeps_new_cursor_row_visible_after_layout() {
+    let mut input = TextareaInput::<()>::new()
+        .value("asdf\nasdf")
+        .min_rows(2)
+        .max_rows(4)
+        .panel("Notes");
+    input.insert_mode = true;
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 4), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    input.layout(Rect::new(0, 0, 20, 6), &mut layout);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.scroll.target_offset().y, 0);
+}
+
+#[test]
+fn entering_insert_mode_scrolls_to_cursor() {
+    let mut input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .max_rows(2);
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(input.insert_mode);
+    assert_eq!(input.scroll.target_offset().y, 2);
 }
 
 #[test]

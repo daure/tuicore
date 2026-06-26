@@ -23,6 +23,7 @@ Use `fill(1)` for main content regions that should consume remaining space.
 - `Grid` — aligned rows/columns. Use when cells need predictable tracks.
 - `Stack` — layered or active-child composition. Use for overlays/alternate bodies.
 - `Overlay` — base + positioned layer. Use when a component must sit above another.
+- `DialogLayer` + `DockSpec` — modal/overlay host. Use `docked(DockSpec::bottom(80))` for top/bottom/left/right docked overlays so placement and chrome borders stay in sync.
 - `Panel` — chrome wrapper with title/border/help. Remember inner area is smaller.
 - `Tabs` — tab header + selected body. Body should own its own layout.
 - `Menu` — trigger-driven popup actions. Use for compact command lists.
@@ -83,7 +84,7 @@ Components query global default configurations from the active preset unless ove
 ## Focus Management
 
 Components participate in focus navigation by registering focus targets and reacting to focus state changes:
-- **Registration**: During `layout(area, ctx)`, components register focusable regions by calling `ctx.register_focusable(FocusId, area, is_active)` or `ctx.register_focusable_with_hotkey_sequences(...)`.
+- **Registration**: During `layout(area, ctx)`, components register focusable regions by calling `ctx.register_focusable(FocusId, area, is_active)` or `ctx.register_focusable_with_hotkey_sequences(...)`. Text-entry wrappers should use `ctx.register_text_entry_focusable(...)` while typing so global hotkeys do not steal input characters.
 - **Focus Lifecycle**: The runtime alerts components to focus changes by calling `focus(target_id, focused, ctx)`:
   - `focused: bool`: indicates if the component gained (`true`) or lost (`false`) focus.
   - `target_id: Option<&FocusId>`: indicates which sub-element within the component gained focus.

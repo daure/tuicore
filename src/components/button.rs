@@ -175,16 +175,39 @@ impl<M> Button<M> {
         frame.render_widget(Paragraph::new(self.line()), area);
     }
 
+    pub(super) fn render_with_inactive_background(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        inactive_background: Color,
+    ) {
+        if area.is_empty() {
+            return;
+        }
+        frame.render_widget(
+            Paragraph::new(self.line_with_inactive_background(inactive_background)),
+            area,
+        );
+    }
+
     fn line(&self) -> Line<'static> {
-        let background = self.visible_background_color();
+        self.line_with_inactive_background(self.visible_background_color())
+    }
+
+    fn line_with_inactive_background(&self, inactive_background: Color) -> Line<'static> {
+        let background = if self.focused || self.is_showing_press_feedback() {
+            self.visible_background_color()
+        } else {
+            inactive_background
+        };
         let text_style = Style::default()
             .fg(self.visible_text_color())
-            .bg(background)
             .add_modifier(if self.focused {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
-            });
+            })
+            .bg(background);
         let mut spans = vec![Span::styled(" ", text_style)];
         let active_prefix = if self.hotkey_matcher.prefix().is_empty() {
             self.pending_hotkey_prefix.as_deref().unwrap_or("")

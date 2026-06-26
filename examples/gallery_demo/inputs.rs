@@ -1,11 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-pub(crate) fn password_input_showcase_layout(area: Rect) -> [Rect; 3] {
+pub(crate) fn password_input_showcase_layout(area: Rect) -> [Rect; 4] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(11),
             Constraint::Length(2),
+            Constraint::Length(3),
             Constraint::Length(2),
         ])
         .areas(area)
@@ -17,7 +18,7 @@ pub(crate) fn text_input_showcase_layout(area: Rect) -> [Rect; 3] {
         .constraints([
             Constraint::Length(11),
             Constraint::Length(1),
-            Constraint::Length(5),
+            Constraint::Length(3),
         ])
         .areas(area)
 }
@@ -60,8 +61,8 @@ pub(crate) fn textarea_showcase_layout(area: Rect) -> [Rect; 3] {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(11),
-            Constraint::Length(4),
-            Constraint::Length(7),
+            Constraint::Length(5),
+            Constraint::Length(6),
         ])
         .areas(area)
 }

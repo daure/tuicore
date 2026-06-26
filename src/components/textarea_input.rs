@@ -1,5 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use std::ops::Deref;
 use std::time::Duration;
 
 use ratatui::style::Style;
@@ -7,15 +8,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::animation::{Animated, AnimationSettings, TickResult};
-use crate::event::{HotkeyEvent, Key, KeyEvent, KeyModifiers, TuiEvent};
-use crate::theme;
-use crate::{
-    EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSizeHint, TuiNode, line_width,
+use crate::event::{
+    HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEventKind, TuiEvent,
 };
+use crate::{
+    EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec, LayoutCtx, LayoutProposal,
+    LayoutResult, LayoutSizeHint, TuiNode, line_width,
+};
+use crate::{ScrollAxes, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui::keybindings};
 
+use super::Panel;
 use super::text_input::{
-    CursorFade, InputOutcome, append_unfocused_hotkey, cell_width, display_char,
+    CursorFade, InputChrome, InputOutcome, append_unfocused_hotkey, cell_width, display_char,
     focus_navigation_key, label_with_visible_hotkey, placeholder_label, placeholder_line,
     selected_input_style, text_char, visible_start_for_cursor,
 };
@@ -31,6 +35,13 @@ pub struct TextareaInput<M = ()> {
     focused: bool,
     insert_mode: bool,
     max_lines: Option<usize>,
+    min_rows: usize,
+    max_rows: Option<usize>,
+    scroll: ScrollState,
+    area: Rect,
+    outer_area: Rect,
+    chrome: InputChrome,
+    panel: Panel,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_blur: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
@@ -67,7 +78,7 @@ impl Default for TextareaInputKeyBindings {
         Self {
             submit: vec![
                 KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::CONTROL),
-                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
+                KeySpec::key(Key::Enter),
             ],
             cancel: vec![
                 KeySpec::key(Key::Esc),
@@ -125,7 +136,10 @@ impl Default for TextareaInputKeyBindings {
                 KeySpec::key(Key::Tab),
                 KeySpec::key_with_modifiers(Key::Char('i'), KeyModifiers::CONTROL),
             ],
-            insert_newline: vec![KeySpec::key(Key::Enter)],
+            insert_newline: vec![
+                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Char('j'), KeyModifiers::CONTROL),
+            ],
         }
     }
 }
@@ -152,6 +166,13 @@ impl<M> TextareaInput<M> {
             focused: false,
             insert_mode: false,
             max_lines: None,
+            min_rows: 1,
+            max_rows: None,
+            scroll: ScrollState::from_preset(ScrollAxes::Vertical, preset().scroll()),
+            area: Rect::default(),
+            outer_area: Rect::default(),
+            chrome: InputChrome::Plain,
+            panel: Panel::new(),
             on_submit: None,
             on_blur: None,
             external_editor_key: Some(ctrl_key('o')),
@@ -173,18 +194,69 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    pub fn style(mut self, chrome: InputChrome) -> Self {
+        self.set_style(chrome);
+        self
+    }
+
+    pub fn panel(mut self, title: impl Into<String>) -> Self {
+        self.set_style(InputChrome::panel(title));
+        self
+    }
+
+    pub fn set_style(&mut self, chrome: InputChrome) {
+        self.chrome = chrome;
+        self.sync_panel();
+    }
+
+    fn sync_panel(&mut self) {
+        self.panel = match &self.chrome {
+            InputChrome::Plain => Panel::new(),
+            InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
+        };
+    }
+
+    fn inline_hotkey(&self) -> Option<&str> {
+        match self.chrome {
+            InputChrome::Plain => self.hotkey.as_deref(),
+            InputChrome::Panel(_) => None,
+        }
+    }
+
+    fn is_panel_mode(&self) -> bool {
+        matches!(self.chrome, InputChrome::Panel(_))
+    }
+
+    fn panel_click_focus(&self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> bool {
+        let TuiEvent::Mouse(mouse) = event else {
+            return false;
+        };
+        if !self.is_panel_mode()
+            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            || !rect_contains(self.outer_area, mouse.column, mouse.row)
+        {
+            return false;
+        }
+
+        ctx.focus(FocusRequest::Target(FocusId::new(TEXTAREA_FOCUS)));
+        ctx.stop_propagation();
+        true
+    }
+
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
-        self.hotkey = Some(hotkey.into());
+        self.set_hotkey(hotkey);
         self
     }
 
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
         self.hotkey = Some(hotkey.into());
+        self.sync_panel();
     }
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
         self.pending_hotkey_prefix = None;
+        self.sync_panel();
     }
 
     fn handle_visual_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) {
@@ -207,6 +279,7 @@ impl<M> TextareaInput<M> {
         };
 
         self.insert_mode = true;
+        self.scroll_cursor_into_view(disabled_animation_settings());
         self.cursor_fade.reset();
         ctx.request_layout();
         ctx.request_redraw();
@@ -216,11 +289,13 @@ impl<M> TextareaInput<M> {
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self.sync_panel();
         self
     }
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.sync_panel();
         if !focused {
             self.insert_mode = false;
         }
@@ -228,6 +303,11 @@ impl<M> TextareaInput<M> {
 
     pub fn insert_mode(&self) -> bool {
         self.insert_mode
+    }
+
+    pub fn set_insert_mode(&mut self, insert_mode: bool) {
+        self.insert_mode = insert_mode;
+        self.cursor_fade.reset();
     }
 
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
@@ -258,6 +338,23 @@ impl<M> TextareaInput<M> {
         self.max_lines = Some(max_lines.max(1));
         self.clamp_lines();
         self.cursor = self.cursor.min(self.len_chars());
+        self
+    }
+
+    pub fn min_rows(mut self, min_rows: usize) -> Self {
+        self.min_rows = self
+            .max_rows
+            .map_or(min_rows.max(1), |max_rows| min_rows.max(1).min(max_rows));
+        self
+    }
+
+    pub fn max_rows(mut self, max_rows: usize) -> Self {
+        self.max_rows = Some(max_rows.max(1));
+        if let Some(max_rows) = self.max_rows
+            && self.min_rows > max_rows
+        {
+            self.min_rows = max_rows;
+        }
         self
     }
 
@@ -335,7 +432,7 @@ impl<M> TextareaInput<M> {
         if matches_any(&self.keys.backspace, key) {
             return self.backspace();
         }
-        if matches_any(&self.keys.delete_next, key) {
+        if matches_any(&self.keys.delete_next, key) || delete_forward_key(key) {
             return self.delete_next();
         }
         if matches_any(&self.keys.move_left, key) {
@@ -364,15 +461,125 @@ impl<M> TextareaInput<M> {
         } else {
             Style::default()
         };
-        let lines = self.visible_lines(area.width as usize, area.height as usize);
-        frame.render_widget(Paragraph::new(lines).style(style), area);
+        let area = self.render_chrome(frame, area);
+        let geometry = self.scroll_geometry(area);
+        let visible = self.visible_lines_from(
+            geometry.layout.viewport.width as usize,
+            geometry.layout.viewport.height as usize,
+            self.scroll.offset().y,
+        );
+        frame.render_widget(
+            Paragraph::new(visible.lines).style(style),
+            geometry.layout.viewport,
+        );
+        self.scroll
+            .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
     }
 
-    fn visible_lines(&self, width: usize, height: usize) -> Vec<Line<'static>> {
+    fn content_area(&self, area: Rect) -> Rect {
+        let height = self.visible_outer_height(area.height);
+        let area = Rect::new(area.x, area.y, area.width, height);
+        match self.chrome {
+            InputChrome::Plain => area,
+            InputChrome::Panel(_) => Panel::inner_area(area),
+        }
+    }
+
+    fn render_chrome(&self, frame: &mut Frame, area: Rect) -> Rect {
+        let height = self.visible_outer_height(area.height);
+        let area = Rect::new(area.x, area.y, area.width, height);
+        match self.chrome {
+            InputChrome::Plain => area,
+            InputChrome::Panel(_) => {
+                self.panel.render(frame, area);
+                Panel::inner_area(area)
+            }
+        }
+    }
+
+    fn chrome_measure(&self, width: u16, height: u16, proposal: LayoutProposal) -> LayoutSizeHint {
+        let (width, height) = match self.chrome {
+            InputChrome::Plain => (width, height),
+            InputChrome::Panel(_) => (width.saturating_add(2), height.saturating_add(2)),
+        };
+        LayoutSizeHint::content(width, height).normalized(proposal)
+    }
+
+    fn visible_outer_height(&self, available: u16) -> u16 {
+        let content = self
+            .preferred_rows(self.line_ranges().len())
+            .min(u16::MAX as usize) as u16;
+        let height = match self.chrome {
+            InputChrome::Plain => content,
+            InputChrome::Panel(_) => content.saturating_add(2),
+        };
+        height.min(available)
+    }
+
+    fn visible_lines(&self, width: usize, height: usize) -> VisibleLines {
         if width == 0 || height == 0 {
-            return Vec::new();
+            return VisibleLines::default();
         }
 
+        let theme = theme();
+        let selected = self.focused && !self.insert_mode;
+        let placeholder_style = if selected {
+            selected_input_style(Style::default().fg(theme.muted_fg()))
+        } else {
+            Style::default().fg(theme.muted_fg())
+        };
+        if self.value.is_empty() {
+            let mut lines = vec![placeholder_line(
+                &self.placeholder,
+                self.inline_hotkey(),
+                width,
+                self.focused && self.insert_mode,
+                self.pending_hotkey_prefix.as_deref(),
+                self.cursor_fade.style(placeholder_style),
+                placeholder_style,
+            )];
+            lines.resize_with(height, Line::default);
+            return VisibleLines {
+                lines,
+                first_line: 0,
+            };
+        }
+
+        let ranges = self.line_ranges();
+        let (cursor_line, cursor_col) = self.cursor_line_col(&ranges);
+        let first_line = cursor_line.saturating_add(1).saturating_sub(height);
+        self.visible_lines_from_with_cursor(
+            width,
+            height,
+            first_line,
+            Some((cursor_line, cursor_col)),
+        )
+    }
+
+    fn visible_lines_from(&self, width: usize, height: usize, first_line: usize) -> VisibleLines {
+        if width == 0 || height == 0 {
+            return VisibleLines::default();
+        }
+        if self.value.is_empty() {
+            return self.visible_lines(width, height);
+        }
+        let ranges = self.line_ranges();
+        let (cursor_line, cursor_col) = self.cursor_line_col(&ranges);
+        self.visible_lines_from_with_cursor(
+            width,
+            height,
+            first_line,
+            Some((cursor_line, cursor_col)),
+        )
+    }
+
+    fn visible_lines_from_with_cursor(
+        &self,
+        width: usize,
+        height: usize,
+        first_line: usize,
+        cursor: Option<(usize, usize)>,
+    ) -> VisibleLines {
         let theme = theme();
         let selected = self.focused && !self.insert_mode;
         let value_style = Style::default().fg(if self.focused {
@@ -385,36 +592,15 @@ impl<M> TextareaInput<M> {
         } else {
             value_style
         };
-        let placeholder_style = if selected {
-            selected_input_style(Style::default().fg(theme.muted_fg()))
-        } else {
-            Style::default().fg(theme.muted_fg())
-        };
         let hotkey_style = if selected {
             selected_input_style(Style::default())
         } else {
             Style::default().fg(theme.muted_fg())
         };
         let cursor_style = self.cursor_fade.style(value_style);
-
-        if self.value.is_empty() {
-            let mut lines = vec![placeholder_line(
-                &self.placeholder,
-                self.hotkey.as_deref(),
-                width,
-                self.focused && self.insert_mode,
-                self.pending_hotkey_prefix.as_deref(),
-                self.cursor_fade.style(placeholder_style),
-                placeholder_style,
-            )];
-            lines.resize_with(height.min(1), Line::default);
-            return lines;
-        }
-
         let ranges = self.line_ranges();
-        let (cursor_line, cursor_col) = self.cursor_line_col(&ranges);
-        let first_line = cursor_line.saturating_add(1).saturating_sub(height);
-        ranges
+        let (cursor_line, cursor_col) = cursor.unwrap_or((usize::MAX, 0));
+        let lines = ranges
             .iter()
             .enumerate()
             .skip(first_line)
@@ -443,7 +629,8 @@ impl<M> TextareaInput<M> {
                     cursor_style,
                 )
             })
-            .collect()
+            .collect();
+        VisibleLines { lines, first_line }
     }
 
     fn render_line(
@@ -495,7 +682,7 @@ impl<M> TextareaInput<M> {
                 &mut spans,
                 &mut drawn,
                 width,
-                self.hotkey.as_deref(),
+                self.inline_hotkey(),
                 self.focused && self.insert_mode,
                 self.pending_hotkey_prefix.as_deref(),
                 hotkey_style,
@@ -719,6 +906,84 @@ impl<M> TextareaInput<M> {
         self.value.chars().filter(|value| *value == '\n').count() + 1
     }
 
+    fn content_size(&self, area: Rect) -> ScrollSize {
+        ScrollSize::new(area.width as usize, self.line_ranges().len())
+    }
+
+    fn scroll_area(&self, area: Rect) -> Rect {
+        let height = self.max_rows.map_or(area.height, |max_rows| {
+            (area.height as usize).min(max_rows) as u16
+        });
+        Rect::new(area.x, area.y, area.width, height)
+    }
+
+    fn scroll_geometry(&self, area: Rect) -> crate::ScrollGeometry {
+        let area = self.scroll_area(area);
+        self.scroll.geometry(area, self.content_size(area))
+    }
+
+    fn has_vertical_overflow(&self) -> bool {
+        let geometry = self.scroll_geometry(self.area);
+        geometry.content.height > geometry.viewport.height
+    }
+
+    fn scroll_page_key(key: KeyEvent) -> bool {
+        let bindings = keybindings();
+        bindings.page_up_matches(key) || bindings.page_down_matches(key)
+    }
+
+    fn handle_scroll_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
+        if self.area.is_empty() || !self.has_vertical_overflow() || !Self::scroll_page_key(key) {
+            return false;
+        }
+
+        let geometry = self.scroll_geometry(self.area);
+        let outcome = self
+            .scroll
+            .on_key(key, geometry.viewport, geometry.content, ctx.animation());
+        if outcome.handled {
+            if outcome.needs_redraw() {
+                ctx.request_redraw();
+            }
+            ctx.stop_propagation();
+            return true;
+        }
+        false
+    }
+
+    fn scroll_cursor_into_view(&mut self, settings: AnimationSettings) -> bool {
+        if self.area.is_empty() {
+            return false;
+        }
+        let geometry = self.scroll_geometry(self.area);
+        let ranges = self.line_ranges();
+        let (cursor_line, _) = self.cursor_line_col(&ranges);
+        let offset = self.scroll.target_offset();
+        let viewport_height = geometry.viewport.height;
+        let target_y = if cursor_line < offset.y {
+            cursor_line
+        } else if cursor_line >= offset.y.saturating_add(viewport_height) {
+            cursor_line
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            offset.y
+        };
+        self.scroll
+            .scroll_to(
+                ScrollOffset::new(offset.x, target_y),
+                geometry.viewport,
+                geometry.content,
+                settings,
+            )
+            .changed
+    }
+
+    fn preferred_rows(&self, content_rows: usize) -> usize {
+        let rows = content_rows.max(self.min_rows);
+        self.max_rows.map_or(rows, |max_rows| rows.min(max_rows))
+    }
+
     fn len_chars(&self) -> usize {
         self.value.chars().count()
     }
@@ -780,7 +1045,7 @@ impl<M> TextareaInput<M> {
 impl<M> TuiNode<M> for TextareaInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let lines = if self.value.is_empty() {
-            vec![placeholder_label(&self.placeholder, self.hotkey.as_deref())]
+            vec![placeholder_label(&self.placeholder, self.inline_hotkey())]
         } else {
             let show_hotkey = !(self.focused && self.insert_mode);
             let mut lines = self
@@ -789,7 +1054,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             if let Some(line) = lines.last_mut() {
-                *line = label_with_visible_hotkey(line, self.hotkey.as_deref(), show_hotkey);
+                *line = label_with_visible_hotkey(line, self.inline_hotkey(), show_hotkey);
             }
             lines
         };
@@ -799,22 +1064,30 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             .max()
             .unwrap_or(1)
             .min(u16::MAX as usize) as u16;
-        let height = lines.len().min(u16::MAX as usize) as u16;
-        LayoutSizeHint::content(width.max(1), height).normalized(proposal)
+        let height = self.preferred_rows(lines.len()).min(u16::MAX as usize) as u16;
+        self.chrome_measure(width.max(1), height, proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.outer_area = area;
+        self.area = self.content_area(area);
+        self.scroll_cursor_into_view(disabled_animation_settings());
         if let Some(hotkey) = self.hotkey.clone() {
-            ctx.register_focusable_with_hotkey_sequences(
+            ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(TEXTAREA_FOCUS),
-                area,
+                self.area,
                 true,
                 vec![hotkey],
+                self.insert_mode,
             );
         } else {
-            ctx.register_focusable(FocusId::new(TEXTAREA_FOCUS), area, true);
+            ctx.register_text_entry_focusable(
+                FocusId::new(TEXTAREA_FOCUS),
+                self.area,
+                true,
+                self.insert_mode,
+            );
         }
-        ctx.set_focus_suppresses_global_hotkeys(FocusId::new(TEXTAREA_FOCUS), self.insert_mode);
         LayoutResult::new(area)
     }
 
@@ -823,6 +1096,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if self.panel_click_focus(event, ctx) {
+            return EventOutcome::Handled;
+        }
         if let TuiEvent::Hotkey(hotkey) = event {
             self.handle_visual_hotkey(hotkey, ctx);
             if self.handle_focus_hotkey(hotkey, ctx) {
@@ -832,6 +1108,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         }
         if let TuiEvent::ExternalEditor(response) = event {
             self.apply_external_editor_response(response);
+            self.scroll_cursor_into_view(disabled_animation_settings());
             self.cursor_fade.reset();
             ctx.request_clear();
             ctx.request_redraw();
@@ -844,7 +1121,14 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 return EventOutcome::Handled;
             }
             let outcome = self.on_paste(value);
+            let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
+            if outcome.changed {
+                ctx.request_layout();
+            }
             if outcome.needs_redraw() {
+                ctx.request_redraw();
+            }
+            if scrolled {
                 ctx.request_redraw();
             }
             if outcome.handled {
@@ -856,18 +1140,37 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.handle_scroll_key(*key, ctx) {
+            return EventOutcome::Handled;
+        }
         if self.external_editor_key_matches(*key) {
             let (line, col) = self.external_editor_request_position();
             ctx.request_external_editor(self.value.clone(), line, col);
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        if delete_forward_key(*key) {
+            self.insert_mode = true;
+            let outcome = self.on_key(*key);
+            let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
+            ctx.request_layout();
+            if outcome.needs_redraw() || scrolled {
+                ctx.request_redraw();
+            }
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+        }
         if !self.insert_mode {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if matches_any(&self.keys.insert_newline, *key) {
+            if KeySpec::key(Key::Enter).matches(*key)
+                || matches_any(&self.keys.insert_newline, *key)
+            {
                 self.insert_mode = true;
+                self.scroll_cursor_into_view(disabled_animation_settings());
                 self.cursor_fade.reset();
                 ctx.request_layout();
                 ctx.request_redraw();
@@ -891,6 +1194,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         let outcome = self.on_key(*key);
+        let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
         if outcome.submitted {
             self.insert_mode = false;
             ctx.request_layout();
@@ -901,7 +1205,13 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         if outcome.clear {
             ctx.request_clear();
         }
+        if outcome.changed {
+            ctx.request_layout();
+        }
         if outcome.needs_redraw() {
+            ctx.request_redraw();
+        }
+        if scrolled {
             ctx.request_redraw();
         }
         if outcome.handled {
@@ -914,6 +1224,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.set_focused(focused);
+        self.panel.set_focused(focused, ctx.animation());
         if focused {
             self.cursor_fade.reset();
         } else if let Some(on_blur) = &self.on_blur {
@@ -931,6 +1242,8 @@ impl<M> Animated for TextareaInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.cursor_fade
             .tick(self.focused && self.insert_mode, dt, settings)
+            .merge(self.scroll.tick(dt, settings))
+            .merge(Animated::tick(&mut self.panel, dt, settings))
     }
 }
 
@@ -938,6 +1251,21 @@ impl<M> Animated for TextareaInput<M> {
 struct LineRange {
     start: usize,
     end: usize,
+}
+
+#[derive(Default)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct VisibleLines {
+    lines: Vec<Line<'static>>,
+    first_line: usize,
+}
+
+impl Deref for VisibleLines {
+    type Target = [Line<'static>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.lines
+    }
 }
 
 impl LineRange {
@@ -951,6 +1279,27 @@ fn ctrl_key(value: char) -> KeyEvent {
         code: Key::Char(value),
         modifiers: KeyModifiers::CONTROL,
     }
+}
+
+fn rect_contains(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
+}
+
+fn disabled_animation_settings() -> AnimationSettings {
+    AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    }
+}
+
+fn delete_forward_key(key: KeyEvent) -> bool {
+    if matches!(key.code, Key::Char('\u{7f}')) {
+        return !key.modifiers.contains(KeyModifiers::ALT);
+    }
+    key.code == Key::Delete
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }
 
 fn key_matches(expected: KeyEvent, actual: KeyEvent) -> bool {

@@ -56,7 +56,7 @@ impl TerminalGuard {
         }
         let keyboard_enhancement = true;
         let backend = CrosstermBackend::new(stdout);
-        let terminal = match Terminal::new(backend) {
+        let mut terminal = match Terminal::new(backend) {
             Ok(terminal) => terminal,
             Err(error) => {
                 cleanup_setup(
@@ -69,6 +69,16 @@ impl TerminalGuard {
                 return Err(error);
             }
         };
+        if let Err(error) = terminal.hide_cursor() {
+            cleanup_setup(
+                raw_enabled,
+                alternate_screen,
+                mouse_capture,
+                bracketed_paste,
+                keyboard_enhancement,
+            );
+            return Err(error);
+        }
 
         Ok(Self {
             terminal,
@@ -262,8 +272,7 @@ fn keyboard_enhancement_flags() -> PushKeyboardEnhancementFlags {
     PushKeyboardEnhancementFlags(
         KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
             | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS,
     )
 }
 

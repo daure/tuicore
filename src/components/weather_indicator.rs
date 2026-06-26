@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use time::OffsetDateTime;
 
 use super::status_action::{StatusAction, measured_line, register_status_focus};
 use crate::{
@@ -25,12 +26,26 @@ pub struct WeatherSummary {
 pub struct WeatherReport {
     raw: String,
     summary: WeatherSummary,
+    hourly: Option<HourlyWeather>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HourlyWeather {
+    hours: Vec<WeatherHour>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WeatherHour {
+    time: String,
+    temperature: String,
+    condition: String,
 }
 
 pub struct WeatherIndicator<M = ()> {
     report: Option<WeatherReport>,
     placeholder: String,
     loading: bool,
+    refresh_needed: bool,
     use_ascii_icon: bool,
     tab_stop: bool,
     action: StatusAction<M>,
@@ -67,7 +82,11 @@ impl WeatherReport {
     pub fn custom(temperature: impl Into<String>, condition: impl Into<String>) -> Self {
         let summary = WeatherSummary::new(temperature, condition);
         let raw = format!("{} {}", summary.temperature, summary.condition);
-        Self { raw, summary }
+        Self {
+            raw,
+            summary,
+            hourly: None,
+        }
     }
 
     pub fn from_wttr_text(text: impl Into<String>) -> Self {
@@ -77,7 +96,11 @@ impl WeatherReport {
             condition: parse_condition(&raw).unwrap_or_else(|| "Weather".to_string()),
             location: parse_location(&raw),
         };
-        Self { raw, summary }
+        Self {
+            raw,
+            summary,
+            hourly: None,
+        }
     }
 
     pub fn raw(&self) -> &str {
@@ -86,6 +109,26 @@ impl WeatherReport {
 
     pub fn summary(&self) -> &WeatherSummary {
         &self.summary
+    }
+
+    pub(crate) fn refresh_summary(&mut self) -> bool {
+        let Some(hourly) = &self.hourly else {
+            return false;
+        };
+        let Some(summary) = hourly.current_summary(self.summary.location.clone()) else {
+            return false;
+        };
+        if summary == self.summary {
+            return false;
+        }
+        self.summary = summary;
+        true
+    }
+
+    pub(crate) fn hourly_data_expired(&self) -> bool {
+        self.hourly
+            .as_ref()
+            .is_some_and(HourlyWeather::expired_for_current_hour)
     }
 
     pub fn with_raw(mut self, raw: impl Into<String>) -> Self {
@@ -97,7 +140,64 @@ impl WeatherReport {
         Self {
             raw: raw.into(),
             summary,
+            hourly: None,
         }
+    }
+
+    pub(crate) fn with_hourly(mut self, hourly: HourlyWeather) -> Self {
+        self.hourly = Some(hourly);
+        self.refresh_summary();
+        self
+    }
+}
+
+impl HourlyWeather {
+    pub(crate) fn new(entries: impl IntoIterator<Item = (String, String, String)>) -> Self {
+        Self {
+            hours: entries
+                .into_iter()
+                .map(|(time, temperature, condition)| WeatherHour {
+                    time,
+                    temperature,
+                    condition,
+                })
+                .collect(),
+        }
+    }
+
+    fn current_summary(&self, location: Option<String>) -> Option<WeatherSummary> {
+        let index = self.current_hour_index()?;
+        let hour = self.hours.get(index)?;
+        let mut summary = WeatherSummary::new(hour.temperature.clone(), hour.condition.clone());
+        summary.location = location;
+        Some(summary)
+    }
+
+    fn expired_for_current_hour(&self) -> bool {
+        self.current_hour_index().is_none()
+    }
+
+    fn current_hour_index(&self) -> Option<usize> {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let today = format!("{}T", now.date());
+        let current_hour = now.time().hour();
+        let same_day = self
+            .hours
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hour)| {
+                hour.time
+                    .strip_prefix(&today)
+                    .and_then(|time| hourly_hour(time).map(|hour| (index, hour)))
+            })
+            .collect::<Vec<_>>();
+
+        same_day
+            .iter()
+            .rev()
+            .find(|(_, hour)| *hour <= current_hour)
+            .or_else(|| same_day.first())
+            .map(|(index, _)| *index)
     }
 }
 
@@ -107,6 +207,7 @@ impl<M> WeatherIndicator<M> {
             report: None,
             placeholder: "Weather".to_string(),
             loading: false,
+            refresh_needed: false,
             use_ascii_icon: false,
             tab_stop: true,
             action: StatusAction::new(),
@@ -116,16 +217,19 @@ impl<M> WeatherIndicator<M> {
     pub fn report(mut self, report: WeatherReport) -> Self {
         self.report = Some(report);
         self.loading = false;
+        self.refresh_needed = false;
         self
     }
 
     pub fn set_report(&mut self, report: WeatherReport) {
         self.report = Some(report);
         self.loading = false;
+        self.refresh_needed = false;
     }
 
     pub fn clear_report(&mut self) {
         self.report = None;
+        self.refresh_needed = false;
     }
 
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
@@ -140,6 +244,10 @@ impl<M> WeatherIndicator<M> {
 
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
+    }
+
+    pub fn refresh_needed(&self) -> bool {
+        self.refresh_needed
     }
 
     pub fn use_ascii_icon(mut self, use_ascii_icon: bool) -> Self {
@@ -227,8 +335,10 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        register_status_focus(ctx, WEATHER_FOCUS, area, self.action.hotkey());
-        ctx.set_focus_tab_stop(FocusId::new(WEATHER_FOCUS), self.tab_stop);
+        if self.action.hotkey().is_some() || self.action.has_press_handler() {
+            register_status_focus(ctx, WEATHER_FOCUS, area, self.action.hotkey());
+            ctx.set_focus_tab_stop(FocusId::new(WEATHER_FOCUS), self.tab_stop);
+        }
         LayoutResult::new(area)
     }
 
@@ -246,8 +356,24 @@ where
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.action.tick(dt, settings)
+        let action_tick = self.action.tick(dt, settings);
+        let Some(report) = &mut self.report else {
+            return action_tick;
+        };
+        let changed = report.refresh_summary();
+        let expired = report.hourly_data_expired();
+        let refresh_changed = self.refresh_needed != expired;
+        self.refresh_needed = expired;
+        if changed || refresh_changed {
+            TickResult::CHANGED.merge(action_tick)
+        } else {
+            action_tick
+        }
     }
+}
+
+fn hourly_hour(time: &str) -> Option<u8> {
+    time.get(..2)?.parse().ok()
 }
 
 pub fn weather_condition_icon(condition: &str, ascii: bool) -> &'static str {
@@ -376,5 +502,62 @@ mod tests {
         assert_eq!(report.summary().condition(), "Sunny");
         assert_eq!(report.summary().temperature(), "+22(25) °C");
         assert!(!report.raw().contains('\u{1b}'));
+    }
+
+    #[test]
+    fn indicator_refreshes_summary_from_hourly_weather_on_tick() {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let current_time = format!("{}T{:02}:00", now.date(), now.time().hour());
+        let hourly = HourlyWeather::new([(current_time, "14 °C".to_string(), "Rain".to_string())]);
+        let report = WeatherReport {
+            raw: "raw".to_string(),
+            summary: WeatherSummary::new("30 °C", "Sunny"),
+            hourly: Some(hourly),
+        };
+        let mut indicator = WeatherIndicator::<()>::new().report(report);
+
+        let tick = indicator.tick(Duration::from_secs(60), AnimationSettings::default());
+
+        assert!(tick.changed);
+        assert_eq!(indicator.report.unwrap().summary().temperature(), "14 °C");
+    }
+
+    #[test]
+    fn indicator_marks_refresh_needed_when_hourly_weather_expires() {
+        let yesterday = OffsetDateTime::now_local()
+            .unwrap_or_else(|_| OffsetDateTime::now_utc())
+            .saturating_sub(time::Duration::days(1));
+        let expired_time = format!("{}T23:00", yesterday.date());
+        let hourly = HourlyWeather::new([(expired_time, "14 °C".to_string(), "Rain".to_string())]);
+        let report = WeatherReport::from_parts("raw", WeatherSummary::new("14 °C", "Rain"))
+            .with_hourly(hourly);
+        let mut indicator = WeatherIndicator::<()>::new().report(report);
+
+        let tick = indicator.tick(Duration::from_secs(60), AnimationSettings::default());
+
+        assert!(tick.changed);
+        assert!(indicator.refresh_needed());
+    }
+
+    #[test]
+    fn indicator_without_action_does_not_register_focus_target() {
+        let mut indicator = WeatherIndicator::<()>::new();
+        let mut ctx = LayoutCtx::new();
+
+        indicator.layout(Rect::new(0, 0, 20, 1), &mut ctx);
+
+        assert!(ctx.focus_targets().is_empty());
+    }
+
+    #[test]
+    fn indicator_with_action_registers_focus_target() {
+        let mut indicator = WeatherIndicator::new().on_open(|| ());
+        let mut ctx = LayoutCtx::new();
+
+        indicator.layout(Rect::new(0, 0, 20, 1), &mut ctx);
+
+        let target = ctx.focus_targets().first().unwrap();
+        assert_eq!(target.id.as_str(), WEATHER_FOCUS);
+        assert!(target.tab_stop);
     }
 }

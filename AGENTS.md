@@ -2,6 +2,7 @@
 
 - Library-first Rust TUI crate. Examples live in `examples/`; reusable code lives in `src/`.
 - Core stack: `ratatui` + direct `crossterm` + tuicore tree runtime. Components should remain usable by downstream apps.
+- AI components may expose `rig` types directly; tuicore is intentionally coupled to Rig for LLM integration.
 - Keep APIs small, composable, and Rust-idiomatic. Prefer explicit state ownership over magic.
 - Project/library depends on Nerd Font. When an icon is needed, search/use Nerd Font first, then ASCII fallback if needed.
 - Render purity: input/update starts animations, `tick(dt)` advances, `view/render` only reads state.

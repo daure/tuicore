@@ -98,14 +98,17 @@ impl<M> StatusAction<M> {
     }
 
     pub(super) fn line(&self, label: String) -> Line<'static> {
-        let style = Style::default()
-            .fg(self.visible_text_color())
-            .bg(self.visible_background_color())
-            .add_modifier(if self.focused {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            });
+        let mut style =
+            Style::default()
+                .fg(self.visible_text_color())
+                .add_modifier(if self.focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                });
+        if self.focused {
+            style = style.bg(self.visible_background_color());
+        }
         let mut spans = vec![Span::styled(" ", style)];
         spans.extend(self.label_spans(label, style, crate::hotkey_underline_style(style)));
         spans.push(Span::styled(" ", style));

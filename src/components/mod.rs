@@ -43,7 +43,9 @@ pub use date_time::{
     PickerOutcome, TimeField, TimePicker, TimePrecision,
 };
 pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition};
-pub use dialog_layer::{DialogBackdrop, DialogLayer, DialogLayerPlacement};
+pub use dialog_layer::{
+    DialogBackdrop, DialogLayer, DialogLayerPlacement, DockChrome, DockSide, DockSpec,
+};
 pub use dropdown::{
     Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,
     DropdownPopupDirection, DropdownSearchMode, DropdownVariant,
@@ -66,7 +68,9 @@ pub use status_bar::{
     WeatherReport, WeatherSummary, weather_condition_icon,
 };
 pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
-pub use text_input::{InputOutcome, PasswordInput, TextInput, TextInputKeyBindings};
+pub use text_input::{
+    InputChrome, InputOutcome, InputPanelChrome, PasswordInput, TextInput, TextInputKeyBindings,
+};
 pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};
 pub use toggle::{Toggle, ToggleOutcome, ToggleStyle};
 pub use typography::{Header, Paragraph, ParagraphOverflow};
