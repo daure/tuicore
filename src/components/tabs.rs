@@ -145,6 +145,17 @@ where
         }
     }
 
+    /// Creates dialog-styled modal tabs for use inside `DialogLayer`.
+    ///
+    /// `DialogLayer` still owns placement, docking, backdrop, and focus trapping. Callers may
+    /// override variant or edge borders with the normal builders after this shortcut.
+    pub fn dialog(tabs: Vec<Tab<M>>) -> Self {
+        Self::new(tabs)
+            .modal()
+            .variant(TabsVariant::Boxed)
+            .edge_borders(Borders::ALL)
+    }
+
     pub fn modal(mut self) -> Self {
         self.modal = true;
         self.selection_memory = TabsSelectionMemory::ResetOnClose;
@@ -1943,6 +1954,29 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(tabs.selected_index(), 0);
         assert_eq!(ctx.messages(), &[ModalCloseReason::CloseKey]);
+    }
+
+    #[test]
+    fn dialog_tabs_use_modal_boxed_all_borders_and_close_handler() {
+        let mut tabs = Tabs::dialog(vec![Tab::text("One", "")]).on_close(|reason| reason);
+        let mut ctx = EventCtx::default();
+
+        let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx);
+
+        assert_eq!(tabs.variant, Some(TabsVariant::Boxed));
+        assert_eq!(tabs.edge_borders, Some(Borders::ALL));
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &[ModalCloseReason::Escape]);
+    }
+
+    #[test]
+    fn dialog_tabs_allow_style_overrides() {
+        let tabs = Tabs::<()>::dialog(vec![Tab::text("One", "")])
+            .variant(TabsVariant::Minimal)
+            .edge_borders(Borders::BOTTOM);
+
+        assert_eq!(tabs.variant, Some(TabsVariant::Minimal));
+        assert_eq!(tabs.edge_borders, Some(Borders::BOTTOM));
     }
 
     #[test]

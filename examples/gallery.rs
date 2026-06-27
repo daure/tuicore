@@ -63,18 +63,19 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use time::{Date, Month, PrimitiveDateTime, Time};
-use tuicore::components::{AiDock, LlmEvent, ToolPolicy};
+use tuicore::components::{AiDock, LlmEvent, StoreDebugView, ToolPolicy};
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, ChildKey, Chip, ChipColorRole, DataView,
     DataViewTypedEvent, DatePicker, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
     DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
-    DialogTitlePosition, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx,
-    FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, Key, KeyEvent, KeyModifiers,
-    LayoutCtx, LayoutResult, Menu, MenuItem, ModalCloseReason, Overlay, Panel, PanelHost,
-    PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, SelectionMode,
-    SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem, Tabs, TabsVariant,
-    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
-    TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherForecastDialog,
+    DialogTitlePosition, DispatchOutcome, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute,
+    Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField,
+    InspectValue, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem,
+    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
+    ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger, Spinner, Split, Stack,
+    StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TextInput,
+    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
+    TuiEvent, TuiNode, WeatherForecastDialog,
 };
 
 #[derive(Debug, PartialEq)]
@@ -88,6 +89,8 @@ enum Msg {
     NotificationTriggered(usize),
     WeatherForecastOpened,
     WeatherForecastClosed(DialogCloseReason),
+    StoreViewOpened,
+    StoreViewClosed(ModalCloseReason),
     OpenAiDock,
     CloseAiDock,
 }
@@ -96,11 +99,16 @@ type DialogDemoLayer = DialogLayer<Gallery, DialogHost<GalleryDialogContent, Msg
 type ModalTabsLayer = DialogLayer<DialogDemoLayer, Tabs<Msg>>;
 type RootLayer = DialogLayer<ModalTabsLayer, DialogHost<GalleryDockOverlayContent, Msg>>;
 type WeatherLayer = DialogLayer<RootLayer, WeatherForecastDialog<Msg>>;
+type StoreViewLayer = DialogLayer<WeatherLayer, StoreDebugView<Msg>>;
 
-type AppRoot = DialogLayer<WeatherLayer, tuicore::components::AiDock<Msg>>;
+type AppRoot = DialogLayer<StoreViewLayer, tuicore::components::AiDock<Msg>>;
+
+fn store_view_layer(root: &mut AppRoot) -> &mut StoreViewLayer {
+    root.base_mut()
+}
 
 fn weather_layer(root: &mut AppRoot) -> &mut WeatherLayer {
-    root.base_mut()
+    store_view_layer(root).base_mut()
 }
 
 fn get_root_layer(root: &mut AppRoot) -> &mut RootLayer {
@@ -136,7 +144,14 @@ fn main() -> tuicore::Result<()> {
     .placement(DialogLayerPlacement::Center)
     .backdrop(DialogBackdrop::dim().amount(0.45));
 
-    let final_root = DialogLayer::new(weather, ai_dock_dialog()).active(false);
+    let store_view = DialogLayer::new(weather, empty_store_debug_dialog())
+        .active(false)
+        .layer_percent(76)
+        .layer_cross_percent(88)
+        .placement(DialogLayerPlacement::Center)
+        .backdrop(DialogBackdrop::dim().amount(0.45));
+
+    let final_root = DialogLayer::new(store_view, ai_dock_dialog()).active(false);
 
     tuicore::TreeApp::new(final_root)
         .on_message(|root, msg, ctx| match msg {
@@ -242,6 +257,16 @@ fn main() -> tuicore::Result<()> {
             Msg::WeatherForecastClosed(_reason) => {
                 weather_layer(root).set_active_with_context(false, ctx);
             }
+            Msg::StoreViewOpened => {
+                let state = gallery(root).store_debug_state();
+                let events = gallery(root).store_debug_events();
+                let layer = store_view_layer(root);
+                layer.layer_mut().set_snapshot(state, events);
+                layer.set_active_with_context(true, ctx);
+            }
+            Msg::StoreViewClosed(_reason) => {
+                store_view_layer(root).set_active_with_context(false, ctx);
+            }
             Msg::OpenAiDock => {
                 root.set_docked(DockSpec::bottom(80).cross_percent(80));
                 root.set_backdrop(DialogBackdrop::dim().amount(0.55));
@@ -303,7 +328,8 @@ impl Gallery {
             .menu_items([StatusBarMenuItem::Theme, StatusBarMenuItem::WeatherForecast])
             .weather_report(demo_weather_report())
             .on_ai_open(|| Msg::OpenAiDock)
-            .on_weather_open(|| Msg::WeatherForecastOpened);
+            .on_weather_open(|| Msg::WeatherForecastOpened)
+            .on_store_view_open(|| Msg::StoreViewOpened);
 
         Self {
             component_list,
@@ -322,6 +348,64 @@ impl Gallery {
     fn select(&mut self, selected: ComponentKind) {
         self.selected = selected;
         self.preview_panel.set_top_left(selected.preview().title());
+    }
+
+    fn store_debug_state(&self) -> InspectValue {
+        InspectValue::object([
+            InspectField::new(
+                "selected_component",
+                InspectValue::string(self.selected.title()),
+            ),
+            InspectField::new(
+                "preview",
+                InspectValue::object([
+                    InspectField::new(
+                        "title",
+                        InspectValue::string(self.selected.preview().title()),
+                    ),
+                    InspectField::new("focused", InspectValue::bool(true)),
+                ]),
+            ),
+            InspectField::new(
+                "sample_todos",
+                InspectValue::list([
+                    InspectValue::object([
+                        InspectField::new("title", InspectValue::string("Wire Store view")),
+                        InspectField::new("done", InspectValue::bool(true)),
+                    ]),
+                    InspectValue::object([
+                        InspectField::new(
+                            "title",
+                            InspectValue::string("Swap in app StateInspect"),
+                        ),
+                        InspectField::new("done", InspectValue::bool(false)),
+                    ]),
+                ]),
+            ),
+        ])
+    }
+
+    fn store_debug_events(&self) -> Vec<StoreLogEntry> {
+        vec![
+            StoreLogEntry {
+                sequence: 1,
+                event_label: format!("SelectComponent({})", self.selected.title()),
+                phase: StoreLogPhase::Received,
+                outcome: None,
+            },
+            StoreLogEntry {
+                sequence: 1,
+                event_label: format!("SelectComponent({})", self.selected.title()),
+                phase: StoreLogPhase::Handled,
+                outcome: Some(DispatchOutcome::layout()),
+            },
+            StoreLogEntry {
+                sequence: 2,
+                event_label: "OpenStoreView".to_string(),
+                phase: StoreLogPhase::Handled,
+                outcome: Some(DispatchOutcome::redraw()),
+            },
+        ]
     }
 
     fn selected_from_list_events(&mut self) -> Option<ComponentKind> {
@@ -647,7 +731,8 @@ impl PreviewState {
                 ])
                 .weather_report(demo_weather_report())
                 .on_ai_open(|| Msg::OpenAiDock)
-                .on_weather_open(|| Msg::WeatherForecastOpened),
+                .on_weather_open(|| Msg::WeatherForecastOpened)
+                .on_store_view_open(|| Msg::StoreViewOpened),
             button: Button::new("button").hotkey("b"),
             button_presses: 0,
             chips: [
@@ -3179,6 +3264,14 @@ fn ai_dock_dialog() -> AiDock<Msg> {
             calculator_schema,
         )
         .tool_policy("calculator", ToolPolicy::AskBeforeRun)
+}
+
+fn empty_store_debug_dialog() -> StoreDebugView<Msg> {
+    store_debug_dialog(InspectValue::object([]), Vec::new())
+}
+
+fn store_debug_dialog(state: InspectValue, events: Vec<StoreLogEntry>) -> StoreDebugView<Msg> {
+    StoreDebugView::dialog(state, events).on_close(Msg::StoreViewClosed)
 }
 
 fn chatgpt_token_dir() -> PathBuf {

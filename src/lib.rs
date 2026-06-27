@@ -14,6 +14,7 @@ pub mod scroll;
 pub mod search;
 pub mod separator;
 mod spacing;
+pub mod store;
 pub mod theme;
 pub mod ui;
 
@@ -38,11 +39,11 @@ pub use components::{
     OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition, Paragraph, ParagraphOverflow,
     PasswordInput, PickerOutcome, SelectionGlyphs, SelectionMode, SelectionPropagation,
     SelectionTrigger, SortDirection, Spinner, Split, Stack, StackAlign, StackItem, StackSize,
-    StatusBar, StatusBarKeyBindings, StatusBarMenuItem, Tab, Tabs, TabsSelectionMemory, TextInput,
-    TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings, TimeField, TimePicker,
-    TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome, ToggleStyle, TreeAdapter,
-    TreeGlyphs, WeatherForecastDay, WeatherForecastDialog, WeatherForecastError, WeatherIndicator,
-    WeatherReport, WeatherSummary, weather_condition_icon,
+    StatusBar, StatusBarKeyBindings, StatusBarMenuItem, StoreDebugView, Tab, Tabs,
+    TabsSelectionMemory, TextInput, TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings,
+    TimeField, TimePicker, TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome,
+    ToggleStyle, TreeAdapter, TreeGlyphs, WeatherForecastDay, WeatherForecastDialog,
+    WeatherForecastError, WeatherIndicator, WeatherReport, WeatherSummary, weather_condition_icon,
 };
 pub use components::{AiDock, LlmEvent, LlmEventKind, ToolPolicy};
 
@@ -83,6 +84,10 @@ pub use search::{
 };
 pub use separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
 pub use spacing::{Gap, Padding};
+pub use store::{
+    DispatchOutcome, EventLog, InspectField, InspectValue, StateInspect, Store, StoreLike,
+    StoreLogEntry, StoreLogPhase, StoreObserver,
+};
 pub use theme::{Theme, ThemeName};
 pub use ui::{
     UiInitError, animation_settings, init, init_from_dir, keybindings, preset, set_keybindings,

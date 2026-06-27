@@ -34,6 +34,7 @@ const DEFAULT_AI_HOTKEY: &str = "'";
 pub enum StatusBarMenuItem {
     Theme,
     WeatherForecast,
+    StoreView,
 }
 
 impl StatusBarMenuItem {
@@ -41,6 +42,7 @@ impl StatusBarMenuItem {
         match self {
             Self::Theme => "Theme",
             Self::WeatherForecast => "Weather forecast",
+            Self::StoreView => "Store view",
         }
     }
 }
@@ -148,10 +150,12 @@ impl StatusBarKeyBindings {
 pub struct StatusBar<M = ()> {
     menu_trigger: Button<M>,
     menu: Menu<StatusBarMenuItem>,
+    menu_items: Vec<StatusBarMenuItem>,
     theme_dropdown: Dropdown<ThemeChoice, ThemeName>,
     ai: Button<M>,
     weather: WeatherIndicator<M>,
     on_weather_open: Option<Box<dyn Fn() -> M>>,
+    on_store_view_open: Option<Box<dyn Fn() -> M>>,
     time: DateTimeIndicator<M>,
     areas: StatusBarAreas,
     keybindings: StatusBarKeyBindings,
@@ -163,20 +167,20 @@ where
 {
     pub fn new() -> Self {
         let keybindings = StatusBarKeyBindings::default();
+        let menu_items = default_status_menu_items();
         Self {
             menu_trigger: Button::new(MENU_ICON)
                 .hotkey(keybindings.menu_hotkey())
                 .tab_stop(false),
-            menu: status_menu(
-                [StatusBarMenuItem::Theme, StatusBarMenuItem::WeatherForecast],
-                keybindings.menu_hotkey(),
-            ),
+            menu: status_menu(menu_items.iter().copied(), keybindings.menu_hotkey()),
+            menu_items,
             theme_dropdown: theme_dropdown(),
             ai: Button::new(AI_ICON)
                 .hotkey(keybindings.ai_hotkey())
                 .tab_stop(false),
             weather: WeatherIndicator::new().tab_stop(false),
             on_weather_open: None,
+            on_store_view_open: None,
             time: DateTimeIndicator::new().format(DateTimeIndicatorFormat::DateTime),
             areas: StatusBarAreas::default(),
             keybindings,
@@ -190,7 +194,8 @@ where
     }
 
     pub fn menu_items(mut self, items: impl IntoIterator<Item = StatusBarMenuItem>) -> Self {
-        self.menu = status_menu(items, self.keybindings.menu_hotkey());
+        self.menu_items = items.into_iter().collect();
+        self.rebuild_menu();
         self
     }
 
@@ -202,8 +207,8 @@ where
     pub fn set_keybindings(&mut self, keybindings: StatusBarKeyBindings) {
         self.keybindings = keybindings;
         self.menu_trigger.set_hotkey(self.keybindings.menu_hotkey());
-        self.menu.set_trigger_hotkey(self.keybindings.menu_hotkey());
         self.ai.set_hotkey(self.keybindings.ai_hotkey());
+        self.rebuild_menu();
     }
 
     pub fn weather_report(mut self, report: WeatherReport) -> Self {
@@ -226,6 +231,12 @@ where
 
     pub fn on_weather_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
         self.on_weather_open = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_store_view_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
+        self.on_store_view_open = Some(Box::new(handler));
+        self.rebuild_menu();
         self
     }
 
@@ -313,7 +324,26 @@ where
                 ctx.request_redraw();
                 ctx.stop_propagation();
             }
+            StatusBarMenuItem::StoreView => {
+                if let Some(on_store_view_open) = &self.on_store_view_open {
+                    ctx.emit(on_store_view_open());
+                }
+                ctx.request_redraw();
+                ctx.stop_propagation();
+            }
         }
+    }
+
+    fn rebuild_menu(&mut self) {
+        self.menu = status_menu(self.effective_menu_items(), self.keybindings.menu_hotkey());
+    }
+
+    fn effective_menu_items(&self) -> Vec<StatusBarMenuItem> {
+        let mut items = self.menu_items.clone();
+        if self.on_store_view_open.is_some() && !items.contains(&StatusBarMenuItem::StoreView) {
+            items.push(StatusBarMenuItem::StoreView);
+        }
+        items
     }
 }
 
@@ -524,6 +554,10 @@ fn status_menu(
     .trigger_hotkey(trigger_hotkey)
 }
 
+fn default_status_menu_items() -> Vec<StatusBarMenuItem> {
+    vec![StatusBarMenuItem::Theme, StatusBarMenuItem::WeatherForecast]
+}
+
 fn status_menu_hotkey(event: &TuiEvent, keybindings: &StatusBarKeyBindings) -> bool {
     matches!(event, TuiEvent::Key(key) if keybindings.menu_toggle_matches(*key))
 }
@@ -649,6 +683,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::*;
+    use crate::Propagation;
 
     #[test]
     fn footer_hotkeys_are_focus_targets_but_default_weather_is_not_dead_focus() {
@@ -679,5 +714,48 @@ mod tests {
                 .iter()
                 .all(|target| target.path.first() != Some(&status_bar_weather_key()))
         );
+    }
+
+    #[test]
+    fn store_view_menu_item_is_opt_in_or_explicit() {
+        let default_status = StatusBar::<()>::new();
+        assert!(
+            !default_status
+                .effective_menu_items()
+                .contains(&StatusBarMenuItem::StoreView)
+        );
+
+        let callback_status = StatusBar::new().on_store_view_open(|| ());
+        assert!(
+            callback_status
+                .effective_menu_items()
+                .contains(&StatusBarMenuItem::StoreView)
+        );
+
+        let explicit_status = StatusBar::<()>::new().menu_items([StatusBarMenuItem::StoreView]);
+        assert_eq!(
+            explicit_status.effective_menu_items(),
+            vec![StatusBarMenuItem::StoreView]
+        );
+
+        let reordered_status = StatusBar::new()
+            .on_store_view_open(|| ())
+            .menu_items([StatusBarMenuItem::Theme]);
+        assert_eq!(
+            reordered_status.effective_menu_items(),
+            vec![StatusBarMenuItem::Theme, StatusBarMenuItem::StoreView]
+        );
+    }
+
+    #[test]
+    fn store_view_activation_emits_callback_message() {
+        let mut status = StatusBar::new().on_store_view_open(|| "store");
+        let mut ctx = EventCtx::default();
+
+        status.activate_menu_item(StatusBarMenuItem::StoreView, &mut ctx);
+
+        assert_eq!(ctx.messages(), &["store"]);
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
     }
 }

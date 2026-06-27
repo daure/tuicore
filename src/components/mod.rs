@@ -18,6 +18,7 @@ mod split;
 mod stack;
 mod status_action;
 mod status_bar;
+mod store_debug;
 mod tabs;
 mod text_input;
 mod textarea_input;
@@ -67,6 +68,7 @@ pub use status_bar::{
     WeatherForecastDay, WeatherForecastDialog, WeatherForecastError, WeatherIndicator,
     WeatherReport, WeatherSummary, weather_condition_icon,
 };
+pub use store_debug::StoreDebugView;
 pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
 pub use text_input::{
     InputChrome, InputOutcome, InputPanelChrome, PasswordInput, TextInput, TextInputKeyBindings,

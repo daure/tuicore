@@ -71,7 +71,7 @@ pub(crate) fn tabs_demo(variant: TabsVariant) -> Tabs<Msg> {
 }
 
 pub(crate) fn modal_tabs_dialog() -> Tabs<Msg> {
-    Tabs::new(vec![
+    Tabs::dialog(vec![
         Tab::text(
             "Overview",
             "This is the actual tabs-as-dialog demo. There is no Dialog wrapper, no extra title, and no nested border.",
@@ -88,7 +88,6 @@ pub(crate) fn modal_tabs_dialog() -> Tabs<Msg> {
         )
         .hotkey("c"),
     ])
-    .modal()
     .on_close(Msg::ModalTabsClosed)
 }
 

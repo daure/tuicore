@@ -52,6 +52,28 @@ All UI elements implement `TuiNode<M>` which drives lifecycle and layout:
 - **Communication**: Emit updates up the tree using `ctx.emit(msg)` (where `M` is the message type).
 - **Propagation**: If you handle a key/hotkey and want to block parent containers from receiving it, call `ctx.stop_propagation()`.
 
+## Store, EventLog & StateInspect
+
+Use `Store` when an app wants a small central place for app state and app events. Define your own state and event enum, then pass a reducer closure:
+
+```rust
+let store = Store::new(AppState::default(), |state, event| {
+    match event {
+        AppEvent::TodosLoaded(todos) => state.todos = todos,
+        AppEvent::ToggleDone(id) => state.toggle_done(id),
+    }
+
+    DispatchOutcome::changed()
+});
+```
+
+- Components still emit messages with `ctx.emit(msg)`; app/root code maps those messages to store events and calls `store.dispatch(event)`.
+- Use `DispatchOutcome::changed()` after state changes, `DispatchOutcome::layout()` when layout size may change, `DispatchOutcome::redraw()` for visual-only redraws, and `DispatchOutcome::unchanged()` when nothing changed.
+- Persistence and data loading live outside the store: load from Postgres/files/HTTP in app code or a service, then dispatch events like `TodosLoaded(todos)` or `TodoSaved(todo)`.
+- Add `EventLog::bounded(n)` only when you want in-app debugging. Connect it with `store.with_observer(log.observer())` or `observer_with_label(...)`. Default labels do not include event payloads.
+- Implement `StateInspect` on app state when you want a safe debug tree for a Store/State view. Expose only fields that are useful and safe to show.
+- Store debug UI is opt-in: wire `StatusBar::on_store_view_open(...)` to an app/root message, then open a `StoreDebugView::dialog(state.inspect(), event_log.entries())` dialog owned by the app.
+
 ## Child Management & Containers
 
 Containers with child elements use the `Children<M>` structure (wrapping list of `ChildSlot`) to properly route layout, events, and focus:

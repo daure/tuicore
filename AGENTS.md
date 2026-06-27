@@ -18,6 +18,8 @@
   - Focus = reusable `FocusChain` / `FocusRouter`; apps own focus topology, components expose focus state and consume focus attrs.
   - Decorators = wrap components via composition to alter behavior (e.g., `NonFocusable` to strip focus registration) without changing inner component code.
   - Scrolling = reusable `ScrollState`; smooth offset animation only, no stagger/per-row delay.
+  - Store = optional sync app-state primitive (`Store`, `StoreLike`, `DispatchOutcome`). Components still emit messages with `ctx.emit`; apps map messages to store events. Keep persistence, HTTP, async runtimes, and domain services outside store v1.
+  - Store debugging = `EventLog` is an optional in-memory dispatch timeline outside app state; `StateInspect` exposes safe state trees for debug views. Do not log event payloads by default.
 - Components live in `src/components/`; treat that directory as the source of truth instead of maintaining a manual component inventory here.
 - Avoid half APIs: public config should be constructible in Rust, not only via TOML.
 - Preferred layout paradigm: Use `Flex` (`Flex::row()` / `Flex::column()`) and `Grid` for UI layout composition. Avoid manual calculations and raw `ratatui::layout::Layout` inside components where possible. By default, children are sized as `FlexItem::fit_content()`, which leverages components' `measure()` hints dynamically.
