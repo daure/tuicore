@@ -16,9 +16,9 @@ use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, EventCtx, EventOutcome, EventRoute,
     FocusCtx, FocusId, FocusRequest, FocusTarget, HintSource, HotkeyEvent, HotkeyLabelMode,
     HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutProposal, LayoutResult, LayoutSize,
-    LayoutSizeHint, TickResult, TreePath, TuiEvent, TuiNode, Tween, border_set, hotkey_badge_width,
-    hotkey_edge_spans, hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style,
-    keybindings, line_width, preset, theme,
+    LayoutSizeHint, OverlayId, OverlayLayer, OverlaySpec, TickResult, TreePath, TuiEvent, TuiNode,
+    Tween, border_set, hotkey_badge_width, hotkey_edge_spans, hotkey_label_spans,
+    hotkey_sequence_to_event, hotkey_underline_style, keybindings, line_width, preset, theme,
 };
 
 use super::text_input::{CursorFade, placeholder_line};
@@ -42,6 +42,7 @@ const SEARCH_FOCUS: &str = "input";
 const POPUP_BORDER_HEIGHT: u16 = 2;
 const DROPDOWN_ARROW_DOWN: &str = "";
 const DROPDOWN_ARROW_UP: &str = "";
+const DROPDOWN_OVERLAY_NAMESPACE: u64 = 0x4452_4f50_444f_574e;
 
 fn highlighted_label_line(
     label: String,
@@ -618,16 +619,22 @@ where
         keybindings().focus().unfocus_matches(key)
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         if area.is_empty() {
             return;
         }
 
         let field_area = self.field_area(area);
         self.render_field(frame, field_area);
+        if self.open {
+            let bounds = self.overlay_bounds;
+            ctx.push_portal(OverlayLayer::Popover, 0, bounds, |frame, bounds| {
+                self.render_portal_popup(frame, bounds);
+            });
+        }
     }
 
-    pub fn render_popup_overlay(&self, frame: &mut Frame, bounds: Rect) {
+    fn render_portal_popup(&self, frame: &mut Frame, bounds: Rect) {
         if !self.open || bounds.is_empty() {
             return;
         }
@@ -654,14 +661,10 @@ where
         self.popup_area_for(field_area, bounds)
     }
 
-    pub fn layout_overlay<M>(
-        &mut self,
-        area: Rect,
-        overlay_bounds: Rect,
-        ctx: &mut LayoutCtx,
-    ) -> LayoutResult {
+    fn layout_with_current_bounds<M>(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.field_area = self.field_area(area);
         self.focus_path = ctx.current_path();
+        let overlay_bounds = ctx.overlay_bounds();
         self.overlay_bounds = overlay_bounds;
         if !self.open {
             if let Some(ref h) = self.hotkey {
@@ -680,6 +683,17 @@ where
         }
 
         let popup_area = self.popup_area_for(self.field_area, overlay_bounds);
+        let mut spec = OverlaySpec::new(
+            OverlayId::for_path(DROPDOWN_OVERLAY_NAMESPACE, &self.focus_path),
+            self.field_area,
+            popup_area,
+        );
+        spec.owner_path = Some(self.focus_path.clone());
+        spec.route_path = Some(self.focus_path.clone());
+        spec.bounds = Some(overlay_bounds);
+        spec.layer = OverlayLayer::Popover;
+        ctx.register_overlay(spec);
+
         let [search_area, list_area] = self.popup_inner_areas(popup_area);
         let rows_area = self.popup_rows_area(list_area);
         if self.scroll_highlight_on_next_layout {
@@ -1197,7 +1211,7 @@ where
         )
     }
 
-    fn render_field(&self, frame: &mut Frame, area: Rect) {
+    pub fn render_field(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
             return;
         }
@@ -1646,15 +1660,11 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        self.layout_overlay::<M>(area, area, ctx)
+        self.layout_with_current_bounds::<M>(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        Self::render(self, frame, area);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.render_popup_overlay(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {

@@ -9,12 +9,13 @@ use crate::event::TuiEvent;
 use crate::{
     AnimationSettings, AnimationSpec, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
     FocusId, FocusRequest, FocusTarget, HitRegion, LayoutCtx, LayoutResult, LifecycleCtx,
-    TickResult, TreePath, TuiNode, Tween, lerp_color, theme,
+    OverlayLayer, OverlaySpec, TickResult, TreePath, TuiNode, Tween, lerp_color, theme,
 };
 
 use super::dialog::DIALOG_FOCUS;
 
 const BACKDROP_BACKGROUND_DIM_FACTOR: f64 = 0.35;
+const MODAL_OVERLAY_ID: u64 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DialogBackdrop {
@@ -401,13 +402,23 @@ where
         if self.active {
             let was_disabled = ctx.focus_disabled();
             ctx.set_focus_disabled(true);
-            ctx.push_slot(ChildKey::first(), self.base_rect, |ctx| {
-                self.base.layout(self.base_rect, ctx);
+            ctx.with_overlays_disabled(|ctx| {
+                ctx.push_slot(ChildKey::first(), self.base_rect, |ctx| {
+                    self.base.layout(self.base_rect, ctx);
+                });
             });
             ctx.set_focus_disabled(was_disabled);
+
+            let mut overlay = OverlaySpec::new(MODAL_OVERLAY_ID, self.layer_rect, self.layer_rect);
+            overlay.bounds = Some(self.base_rect);
+            overlay.layer = OverlayLayer::Modal;
+            ctx.register_overlay(overlay);
+
             ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
-            ctx.push_slot(ChildKey::second(), self.layer_rect, |ctx| {
-                self.layer.layout(self.layer_rect, ctx);
+            ctx.with_overlay_bounds(self.layer_rect, |ctx| {
+                ctx.push_slot(ChildKey::second(), self.layer_rect, |ctx| {
+                    self.layer.layout(self.layer_rect, ctx);
+                });
             });
         } else {
             ctx.push_slot(ChildKey::first(), self.base_rect, |ctx| {
@@ -417,22 +428,25 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
-        self.base.render(frame, self.base_rect);
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        if self.active {
+            ctx.with_overlays_disabled(|ctx| self.base.render(frame, self.base_rect, ctx));
+        } else {
+            self.base.render(frame, self.base_rect, ctx);
+        }
         let dim = self.backdrop_tween.value();
         if dim > 0.0 {
             dim_backdrop_buffer(frame, self.base_rect, dim);
         }
         if self.active {
-            self.layer.render(frame, self.layer_rect);
-        }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        if self.active {
-            self.layer.render_overlay(frame, area);
-        } else {
-            self.base.render_overlay(frame, area);
+            ctx.push_portal_with_ctx(
+                OverlayLayer::Modal,
+                0,
+                self.layer_rect,
+                |frame, area, ctx| {
+                    self.layer.render(frame, area, ctx);
+                },
+            );
         }
     }
 
@@ -697,6 +711,8 @@ fn scaled_dimension(value: u16, percent: u16) -> u16 {
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Style;
@@ -706,6 +722,12 @@ mod tests {
         Button, Dialog, DialogCloseReason, EventRoute, FocusManager, Key, TextInput, TreePath,
         animation_settings,
     };
+
+    fn render_node<M>(node: &impl TuiNode<M>, frame: &mut ratatui::Frame, area: Rect) {
+        let mut ctx = crate::RenderCtx::new();
+        TuiNode::render(node, frame, area, &mut ctx);
+        ctx.flush(frame);
+    }
 
     struct StaticBody;
 
@@ -718,12 +740,28 @@ mod tests {
 
     struct PowerlineBody;
 
+    struct OverlayProbe {
+        id: u64,
+        seen_bounds: Rc<RefCell<Vec<Rect>>>,
+    }
+
+    struct RenderOrderBody {
+        label: &'static str,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+
     impl TuiNode<()> for StaticBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
     }
 
     impl DockChrome for ChromeBody {
@@ -737,7 +775,13 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
     }
 
     impl TuiNode<()> for ColorBody {
@@ -745,7 +789,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
             frame.buffer_mut().set_string(
                 area.x,
                 area.y,
@@ -762,7 +806,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
             let fill = Color::Rgb(10, 120, 200);
             let previous_fill = Color::Rgb(240, 200, 40);
             frame
@@ -789,6 +833,49 @@ mod tests {
         }
     }
 
+    impl OverlayProbe {
+        fn new(id: u64, seen_bounds: Rc<RefCell<Vec<Rect>>>) -> Self {
+            Self { id, seen_bounds }
+        }
+    }
+
+    impl TuiNode<()> for OverlayProbe {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            self.seen_bounds.borrow_mut().push(ctx.overlay_bounds());
+            ctx.register_overlay(OverlaySpec::new(self.id, area, area));
+            LayoutResult::new(area)
+        }
+
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
+    }
+
+    impl RenderOrderBody {
+        fn new(label: &'static str, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
+            Self { label, order }
+        }
+    }
+
+    impl TuiNode<()> for RenderOrderBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+            self.order.borrow_mut().push(self.label);
+        }
+    }
+
     #[test]
     fn backdrop_dim_softens_background_and_fades_foreground_to_it() {
         let base = ColorBody;
@@ -800,7 +887,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
 
         terminal
-            .draw(|frame| dialog_layer.render(frame, frame.area()))
+            .draw(|frame| render_node(&dialog_layer, frame, frame.area()))
             .expect("dialog layer should render");
 
         let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
@@ -824,7 +911,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
 
         terminal
-            .draw(|frame| dialog_layer.render(frame, frame.area()))
+            .draw(|frame| render_node(&dialog_layer, frame, frame.area()))
             .expect("dialog layer should render");
 
         let cap = terminal.backend().buffer().cell((0, 0)).unwrap();
@@ -843,7 +930,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
 
         terminal
-            .draw(|frame| dialog_layer.render(frame, frame.area()))
+            .draw(|frame| render_node(&dialog_layer, frame, frame.area()))
             .expect("dialog layer should render");
 
         let separator = terminal.backend().buffer().cell((0, 1)).unwrap();
@@ -1111,5 +1198,77 @@ mod tests {
             targets[1].path,
             TreePath::default().child(ChildKey::second())
         );
+    }
+
+    #[test]
+    fn active_dialog_layer_disables_base_overlay_registrations() {
+        let base_bounds = Rc::new(RefCell::new(Vec::new()));
+        let layer_bounds = Rc::new(RefCell::new(Vec::new()));
+        let base = OverlayProbe::new(1, Rc::clone(&base_bounds));
+        let layer = OverlayProbe::new(2, Rc::clone(&layer_bounds));
+        let mut dialog_layer = DialogLayer::new(base, layer).dock(DockSpec::bottom(50));
+        let mut ctx = LayoutCtx::new();
+
+        dialog_layer.layout(Rect::new(0, 0, 20, 10), &mut ctx);
+
+        let ids = ctx
+            .overlays()
+            .iter()
+            .map(|entry| entry.id.get())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![MODAL_OVERLAY_ID, 2]);
+        assert_eq!(base_bounds.borrow().len(), 1);
+    }
+
+    #[test]
+    fn active_dialog_layer_scopes_child_overlay_bounds_to_layer_rect() {
+        let base_bounds = Rc::new(RefCell::new(Vec::new()));
+        let layer_bounds = Rc::new(RefCell::new(Vec::new()));
+        let base = OverlayProbe::new(1, base_bounds);
+        let layer = OverlayProbe::new(2, Rc::clone(&layer_bounds));
+        let mut dialog_layer =
+            DialogLayer::new(base, layer).dock(DockSpec::bottom(50).cross_percent(50));
+        let mut ctx = LayoutCtx::new();
+        let area = Rect::new(0, 0, 20, 10);
+        let expected_layer = Rect::new(5, 5, 10, 5);
+
+        dialog_layer.layout(area, &mut ctx);
+
+        assert_eq!(*layer_bounds.borrow(), vec![expected_layer]);
+        let modal = ctx
+            .overlays()
+            .iter()
+            .find(|entry| entry.id.get() == MODAL_OVERLAY_ID)
+            .expect("modal overlay should be registered");
+        let layer_overlay = ctx
+            .overlays()
+            .iter()
+            .find(|entry| entry.id.get() == 2)
+            .expect("layer overlay should be registered");
+        assert_eq!(modal.bounds, area);
+        assert_eq!(modal.area, expected_layer);
+        assert_eq!(layer_overlay.bounds, expected_layer);
+    }
+
+    #[test]
+    fn active_dialog_layer_renders_modal_portal_after_base() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let base = RenderOrderBody::new("base", Rc::clone(&order));
+        let layer = RenderOrderBody::new("layer", Rc::clone(&order));
+        let mut dialog_layer = DialogLayer::new(base, layer);
+        let mut layout = LayoutCtx::new();
+        dialog_layer.layout(Rect::new(0, 0, 10, 4), &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                let mut ctx = crate::RenderCtx::new();
+                dialog_layer.render(frame, frame.area(), &mut ctx);
+                assert_eq!(*order.borrow(), vec!["base"]);
+                ctx.flush(frame);
+            })
+            .expect("dialog layer should render");
+
+        assert_eq!(*order.borrow(), vec!["base", "layer"]);
     }
 }

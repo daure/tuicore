@@ -1442,8 +1442,8 @@ where
         self.tabs.layout(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.tabs.render(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.tabs.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -1765,7 +1765,7 @@ impl TuiNode<AiDockMsg> for ChatTabBody {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         let theme = theme();
         let lines_count = if let Ok(inp) = self.input.lock() {
             inp.current_value().split('\n').count()
@@ -2050,7 +2050,7 @@ impl TuiNode<AiDockMsg> for ToolsTabBody {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         let theme = theme();
         let tools = self.tools.lock().unwrap();
         let policies = self.policies.lock().unwrap();
@@ -2138,7 +2138,7 @@ impl TuiNode<AiDockMsg> for ModelTabBody {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         let theme = theme();
         let [model_area] = Layout::vertical([Constraint::Length(3)]).areas(area);
 

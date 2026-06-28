@@ -159,7 +159,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<&'static str>) -> EventOutcome {
             self.events += 1;
@@ -179,7 +179,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn focus(
             &mut self,
@@ -207,7 +207,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn dispatch_focus(
             &mut self,
@@ -224,7 +224,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn focus(&mut self, _target: Option<&FocusId>, _focused: bool, ctx: &mut FocusCtx<()>) {
             self.animation_enabled = Some(ctx.animation().enabled);

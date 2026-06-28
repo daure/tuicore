@@ -31,17 +31,16 @@ Use `fill(1)` for main content regions that should consume remaining space.
 - `AiDock` — modal chat/tool assistant surface with configurable tool approval policy.
 - `WeatherIndicator` / `WeatherForecastDialog` / `DateTimeIndicator` — status-bar primitives for weather and time display.
 
-## Dropdown overlays
+## Overlay portals
 
-Dropdown popup rendering uses the overlay render pass. Containers should forward `render_overlay` to children. If a custom container owns child nodes, implement overlay forwarding or dropdowns nested inside it may not appear.
+Popup components (`Dropdown`, `Menu`, date/time dropdowns, status menus) register overlay geometry during normal `layout()` via `OverlayManager`, then enqueue portal draws during normal `render(frame, area, ctx)` via `RenderCtx`. Consumers do not host or forward overlays manually. Custom containers only call child `layout()` and `render(..., ctx)`; `ctx.flush(frame)` at root draws queued portals.
 
 ## Core Trait (`TuiNode`)
 
 All UI elements implement `TuiNode<M>` which drives lifecycle and layout:
 - `measure(proposal)` -> `LayoutSizeHint`: sizing hints (min, preferred, stretch).
 - `layout(area, ctx)` -> `LayoutResult`: computes child boundaries. Register focus targets here.
-- `render(frame, area)`: Direct rendering using ratatui.
-- `render_overlay(frame, area)`: Renders dropdowns or modal overlays. Custom containers must forward this.
+- `render(frame, area, ctx)`: Direct rendering using ratatui; popup owners enqueue portals on `RenderCtx` here.
 - `event(event, ctx)` -> `EventOutcome`: Handles key/mouse/hotkey inputs.
 - `tick(dt, settings)` -> `TickResult`: Advances animations. Updating state happens here, leaving render pure.
 - `focus(target, focused, ctx)`: Reacts to focus changes.
@@ -79,7 +78,7 @@ let store = Store::new(AppState::default(), |state, event| {
 Containers with child elements use the `Children<M>` structure (wrapping list of `ChildSlot`) to properly route layout, events, and focus:
 - **Layout**: In `layout()`, position each child by calling `slot.layout(child_area, ctx)` (this registers hierarchy and hit-testing regions).
 - **Event Routing**: Containers must implement `dispatch_event` and `dispatch_focus` explicitly (the default implementations do not descend). Forward events using `slot.dispatch_event(&route, event, ctx)` and `slot.dispatch_focus(&target, focused, ctx)`.
-- **Ticking & Render**: Loop and forward to `slot.tick(dt, settings)` and `slot.render(frame, area)` / `slot.render_overlay(frame, area)`.
+- **Ticking & Render**: Loop and forward to `slot.tick(dt, settings)` and `slot.render(frame, area, ctx)`.
 
 ## Semantic Theming & Colors
 

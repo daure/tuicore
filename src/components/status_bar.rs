@@ -240,12 +240,8 @@ where
         self
     }
 
-    pub fn layout_overlay(
-        &mut self,
-        area: Rect,
-        overlay_bounds: Rect,
-        ctx: &mut LayoutCtx,
-    ) -> LayoutResult {
+    fn layout_with_current_bounds(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let overlay_bounds = ctx.overlay_bounds();
         self.areas = self.layout_areas(area, overlay_bounds);
         ctx.push_slot(status_bar_menu_trigger_key(), self.areas.menu, |ctx| {
             self.menu_trigger.layout(self.areas.menu, ctx);
@@ -260,13 +256,28 @@ where
             self.time.layout(self.areas.time, ctx);
         });
         ctx.push_slot(status_bar_menu_panel_key(), self.areas.menu, |ctx| {
-            self.menu
-                .layout_overlay::<M>(self.areas.menu, overlay_bounds, ctx);
+            <Menu<StatusBarMenuItem> as TuiNode<M>>::layout(&mut self.menu, self.areas.menu, ctx);
         });
-        ctx.push_slot(status_bar_theme_key(), self.areas.theme, |ctx| {
-            self.theme_dropdown
-                .layout_overlay::<M>(self.areas.theme, overlay_bounds, ctx);
-        });
+        if self.theme_dropdown.is_open() {
+            ctx.push_slot(status_bar_theme_key(), self.areas.theme, |ctx| {
+                <Dropdown<ThemeChoice, ThemeName> as TuiNode<M>>::layout(
+                    &mut self.theme_dropdown,
+                    self.areas.theme,
+                    ctx,
+                );
+            });
+        } else {
+            let was_disabled = ctx.focus_disabled();
+            ctx.set_focus_disabled(true);
+            ctx.push_slot_without_hit_region(status_bar_theme_key(), |ctx| {
+                <Dropdown<ThemeChoice, ThemeName> as TuiNode<M>>::layout(
+                    &mut self.theme_dropdown,
+                    self.areas.theme,
+                    ctx,
+                );
+            });
+            ctx.set_focus_disabled(was_disabled);
+        }
         LayoutResult::new(area)
     }
 
@@ -370,10 +381,10 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        self.layout_overlay(area, area, ctx)
+        self.layout_with_current_bounds(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         let action_bg = theme().border_fg();
         self.menu_trigger
             .render_with_inactive_background(frame, self.areas.menu, action_bg);
@@ -405,11 +416,22 @@ where
             )),
             self.areas.time,
         );
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.theme_dropdown.render_popup_overlay(frame, area);
-        self.menu.render_popup_overlay(frame, area);
+        if self.menu.is_open() {
+            <Menu<StatusBarMenuItem> as TuiNode<M>>::render(
+                &self.menu,
+                frame,
+                self.areas.menu,
+                ctx,
+            );
+        }
+        if self.theme_dropdown.is_open() {
+            <Dropdown<ThemeChoice, ThemeName> as TuiNode<M>>::render(
+                &self.theme_dropdown,
+                frame,
+                self.areas.theme,
+                ctx,
+            );
+        }
     }
 
     fn dispatch_event(
@@ -683,7 +705,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::*;
-    use crate::Propagation;
+    use crate::{FocusId, FocusRequest, Propagation, TreePath};
 
     #[test]
     fn footer_hotkeys_are_focus_targets_but_default_weather_is_not_dead_focus() {
@@ -713,6 +735,47 @@ mod tests {
                 .focus_targets()
                 .iter()
                 .all(|target| target.path.first() != Some(&status_bar_weather_key()))
+        );
+    }
+
+    #[test]
+    fn closed_theme_dropdown_does_not_register_hit_or_focus_region() {
+        let mut status = StatusBar::<()>::new();
+        let mut layout = LayoutCtx::new();
+
+        status.layout(Rect::new(0, 0, 80, 1), &mut layout);
+
+        assert!(
+            layout
+                .hit_regions()
+                .iter()
+                .all(|region| region.path.first() != Some(&status_bar_theme_key()))
+        );
+        assert!(
+            layout
+                .focus_targets()
+                .iter()
+                .all(|target| target.path.first() != Some(&status_bar_theme_key()))
+        );
+    }
+
+    #[test]
+    fn opening_theme_dropdown_requests_layout_and_targets_visible_search() {
+        let mut status = StatusBar::<()>::new();
+        let mut layout = LayoutCtx::new();
+        status.layout(Rect::new(0, 0, 80, 1), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        status.activate_menu_item(StatusBarMenuItem::Theme, &mut ctx);
+
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::from_keys([status_bar_theme_key()]),
+                id: FocusId::new("input"),
+            })
         );
     }
 

@@ -4,6 +4,7 @@ use ratatui::{Frame, layout::Rect};
 
 use crate::animation::{AnimationSettings, TickResult};
 use crate::event::{ExternalEditorRequest, KeyEvent, TuiEvent};
+use crate::overlay::{OverlayLayoutEntry, OverlayManager, OverlaySpec, RenderCtx};
 
 pub trait TuiNode<M = ()> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
@@ -12,9 +13,7 @@ pub trait TuiNode<M = ()> {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult;
 
-    fn render(&self, frame: &mut Frame, area: Rect);
-
-    fn render_overlay(&self, _frame: &mut Frame, _area: Rect) {}
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>);
 
     fn event(&mut self, _event: &TuiEvent, _ctx: &mut EventCtx<M>) -> EventOutcome {
         EventOutcome::Ignored
@@ -66,12 +65,8 @@ where
         self.as_mut().layout(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.as_ref().render(frame, area);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.as_ref().render_overlay(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.as_ref().render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -143,11 +138,14 @@ pub enum Propagation {
     Stopped,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutCtx {
     focus_paths: Vec<FocusTarget>,
     hit_regions: Vec<HitRegion>,
     overflow_diagnostics: Vec<LayoutOverflowDiagnostic>,
+    overlays: OverlayManager,
+    overlay_bounds: Rect,
+    overlays_disabled: bool,
     path: TreePath,
     focus_disabled: bool,
 }
@@ -463,6 +461,21 @@ impl EventOutcome {
     }
 }
 
+impl Default for LayoutCtx {
+    fn default() -> Self {
+        Self {
+            focus_paths: Vec::new(),
+            hit_regions: Vec::new(),
+            overflow_diagnostics: Vec::new(),
+            overlays: OverlayManager::new(),
+            overlay_bounds: Rect::default(),
+            overlays_disabled: false,
+            path: TreePath::new(),
+            focus_disabled: false,
+        }
+    }
+}
+
 impl LayoutCtx {
     pub fn new() -> Self {
         Self::default()
@@ -480,6 +493,51 @@ impl LayoutCtx {
         let result = layout(self);
         self.path.0.pop();
         result
+    }
+
+    pub fn push_slot_without_hit_region<R>(
+        &mut self,
+        key: ChildKey,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.path.0.push(key);
+        let result = layout(self);
+        self.path.0.pop();
+        result
+    }
+
+    pub fn overlay_bounds(&self) -> Rect {
+        self.overlay_bounds
+    }
+
+    pub fn with_overlay_bounds<R>(
+        &mut self,
+        bounds: Rect,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.overlay_bounds;
+        self.overlay_bounds = bounds;
+        let result = layout(self);
+        self.overlay_bounds = previous;
+        result
+    }
+
+    pub fn with_overlays_disabled<R>(&mut self, layout: impl FnOnce(&mut Self) -> R) -> R {
+        let was_disabled = self.overlays_disabled;
+        self.overlays_disabled = true;
+        let result = layout(self);
+        self.overlays_disabled = was_disabled;
+        result
+    }
+
+    pub fn register_overlay(&mut self, spec: OverlaySpec) -> Option<OverlayLayoutEntry> {
+        if self.overlays_disabled {
+            return None;
+        }
+        Some(
+            self.overlays
+                .register(spec, self.current_path(), self.overlay_bounds),
+        )
     }
 
     pub fn with_focus_fallback<R>(
@@ -837,6 +895,18 @@ impl LayoutCtx {
         &self.hit_regions
     }
 
+    pub fn overlays(&self) -> &[OverlayLayoutEntry] {
+        self.overlays.entries()
+    }
+
+    pub fn sorted_overlays(&self) -> Vec<OverlayLayoutEntry> {
+        self.overlays.sorted_entries()
+    }
+
+    pub fn drain_overlays(&mut self) -> Vec<OverlayLayoutEntry> {
+        self.overlays.drain_sorted()
+    }
+
     pub fn overflow_diagnostics(&self) -> &[LayoutOverflowDiagnostic] {
         &self.overflow_diagnostics
     }
@@ -1159,7 +1229,7 @@ mod tests {
                 LayoutResult::new(area)
             }
 
-            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+            fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
         }
 
         let hint = Probe.measure(LayoutProposal::at_most(10, 5));
@@ -1178,7 +1248,7 @@ mod tests {
                 ctx.register_focusable(FocusId::new("probe"), area, true);
                 LayoutResult::new(area)
             }
-            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+            fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
         }
 
         // Test normal focusable probe registers focus target
@@ -1251,13 +1321,66 @@ mod tests {
     }
 
     #[test]
+    fn overlay_bounds_restore_after_scoped_layout() {
+        let mut ctx = LayoutCtx::new();
+        let outer = Rect::new(0, 0, 80, 24);
+        let inner = Rect::new(1, 2, 10, 5);
+
+        ctx.with_overlay_bounds(outer, |ctx| {
+            assert_eq!(ctx.overlay_bounds(), outer);
+            ctx.with_overlay_bounds(inner, |ctx| {
+                assert_eq!(ctx.overlay_bounds(), inner);
+            });
+            assert_eq!(ctx.overlay_bounds(), outer);
+        });
+
+        assert_eq!(ctx.overlay_bounds(), Rect::default());
+    }
+
+    #[test]
+    fn overlays_disabled_suppresses_registration_and_restores() {
+        let mut ctx = LayoutCtx::new();
+        let spec = OverlaySpec::new(1, Rect::default(), Rect::default());
+
+        let registered = ctx.with_overlays_disabled(|ctx| ctx.register_overlay(spec.clone()));
+
+        assert!(registered.is_none());
+        assert!(ctx.overlays().is_empty());
+
+        assert!(ctx.register_overlay(spec).is_some());
+        assert_eq!(ctx.overlays().len(), 1);
+    }
+
+    #[test]
+    fn registered_overlay_uses_current_path_and_bounds() {
+        let mut ctx = LayoutCtx::new();
+        let bounds = Rect::new(0, 0, 80, 24);
+        let area = Rect::new(3, 4, 10, 5);
+
+        ctx.with_overlay_bounds(bounds, |ctx| {
+            ctx.push_slot(ChildKey::new("menu"), Rect::new(1, 1, 5, 1), |ctx| {
+                ctx.register_overlay(OverlaySpec::new(7, Rect::new(1, 1, 5, 1), area));
+            });
+        });
+
+        assert_eq!(ctx.overlays().len(), 1);
+        assert_eq!(
+            ctx.overlays()[0].owner_path,
+            TreePath::from_keys([ChildKey::new("menu")])
+        );
+        assert_eq!(ctx.overlays()[0].route_path, ctx.overlays()[0].owner_path);
+        assert_eq!(ctx.overlays()[0].bounds, bounds);
+        assert_eq!(ctx.overlays()[0].area, area);
+    }
+
+    #[test]
     fn on_blur_decorator_emits_message() {
         struct Probe;
         impl TuiNode<&'static str> for Probe {
             fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
                 LayoutResult::new(area)
             }
-            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+            fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
         }
 
         let mut decorator = OnBlur::new(Probe, || "blurred");
@@ -1275,7 +1398,7 @@ mod tests {
             fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
                 LayoutResult::new(area)
             }
-            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+            fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
         }
 
         let target = FocusTarget {
@@ -1408,8 +1531,8 @@ where
         result
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.inner.render(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.inner.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -1486,8 +1609,8 @@ where
         self.inner.layout(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.inner.render(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.inner.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {

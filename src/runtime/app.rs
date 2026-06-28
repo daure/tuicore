@@ -7,10 +7,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use ratatui::layout::Rect;
+
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
     FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
-    Propagation, RuntimeKeyBindings, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
+    OutsideMousePolicy, OverlayLayer, OverlayLayoutEntry, Propagation, RuntimeKeyBindings,
+    TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
 };
 
 use super::{
@@ -528,6 +531,7 @@ where
         let route = EventRoute::new(route_path_for_event(
             &event,
             layout_engine.hit_regions(),
+            layout_engine.overlays(),
             focus_manager.current_path(),
         ));
         if matches!(event, TuiEvent::Resize(_, _)) {
@@ -644,18 +648,59 @@ where
 fn route_path_for_event(
     event: &TuiEvent,
     hit_regions: &[HitRegion],
+    overlays: &[OverlayLayoutEntry],
     focused_path: TreePath,
 ) -> TreePath {
     let TuiEvent::Mouse(mouse) = event else {
         return focused_path;
     };
 
-    hit_regions
+    if let Some(path) = route_path_for_overlay_mouse(mouse.column, mouse.row, overlays, false) {
+        return path;
+    }
+
+    if let Some(path) = hit_regions
         .iter()
         .rev()
         .find(|region| region.contains(mouse.column, mouse.row))
         .map(|region| region.path.clone())
-        .unwrap_or(focused_path)
+    {
+        return path;
+    }
+
+    route_path_for_overlay_mouse(mouse.column, mouse.row, overlays, true).unwrap_or(focused_path)
+}
+
+fn route_path_for_overlay_mouse(
+    column: u16,
+    row: u16,
+    overlays: &[OverlayLayoutEntry],
+    modal_only: bool,
+) -> Option<TreePath> {
+    let mut sorted = overlays.iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|entry| (entry.layer, entry.z_index, entry.order));
+    for entry in sorted.into_iter().rev() {
+        if (entry.layer == OverlayLayer::Modal) != modal_only {
+            continue;
+        }
+        if rect_contains(entry.area, column, row) {
+            return Some(entry.route_path.clone());
+        }
+        match entry.policy.outside_mouse {
+            OutsideMousePolicy::PassThrough => {}
+            OutsideMousePolicy::Dismiss | OutsideMousePolicy::Capture => {
+                return Some(entry.owner_path.clone());
+            }
+        }
+    }
+    None
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
 }
 
 fn runtime_poll_timeout(scheduler: &Scheduler, global_hotkeys: &HotkeySequenceMatcher) -> Duration {
@@ -982,8 +1027,10 @@ mod tests {
     use crate::{
         ChildKey, EventOutcome, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Key, KeyEvent,
         KeyModifiers, KeySpec, LayoutCtx, LayoutResult, MouseButton, MouseEvent, MouseEventKind,
-        Preset, RuntimeKeyBindings, TreePath, preset, set_preset,
+        OverlayId, OverlayLayer, OverlayPolicy, OverlaySpec, Preset, RuntimeKeyBindings, TreePath,
+        preset, set_preset,
     };
+    use crate::{Dialog, DialogLayer, Dropdown, Tab, Tabs, TextInput};
 
     #[derive(Default)]
     struct QuitNode {
@@ -1031,6 +1078,18 @@ mod tests {
         event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
     }
 
+    struct OverlayMouseRouteNode {
+        flex: Flex,
+        event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    struct DialogRouteBody {
+        dropdown: Dropdown<&'static str, &'static str>,
+        input: TextInput<()>,
+    }
+
+    struct EmptyNode;
+
     struct HotkeyRouteNode {
         flex: Flex,
         event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
@@ -1065,7 +1124,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
             self.events += 1;
@@ -1087,7 +1146,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn mount(&mut self, ctx: &mut LifecycleCtx<&'static str>) {
             ctx.emit("mounted");
@@ -1107,7 +1166,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
             self.events += 1;
@@ -1173,8 +1232,8 @@ mod tests {
             self.flex.layout(area, ctx)
         }
 
-        fn render(&self, frame: &mut Frame, area: Rect) {
-            self.flex.render(frame, area);
+        fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+            self.flex.render(frame, area, ctx);
         }
 
         fn dispatch_event(
@@ -1203,7 +1262,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
             EventOutcome::Ignored
@@ -1229,7 +1288,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn dispatch_event(
             &mut self,
@@ -1295,8 +1354,8 @@ mod tests {
             self.flex.layout(area, ctx)
         }
 
-        fn render(&self, frame: &mut Frame, area: Rect) {
-            self.flex.render(frame, area);
+        fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+            self.flex.render(frame, area, ctx);
         }
 
         fn dispatch_event(
@@ -1314,7 +1373,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
             if matches!(event, TuiEvent::Mouse(_)) {
@@ -1324,6 +1383,105 @@ mod tests {
             } else {
                 EventOutcome::Ignored
             }
+        }
+    }
+
+    impl OverlayMouseRouteNode {
+        fn new() -> Self {
+            let event_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let flex = Flex::row()
+                .child(
+                    "underlay",
+                    MouseProbe {
+                        name: "underlay",
+                        event_log: std::rc::Rc::clone(&event_log),
+                    },
+                    FlexItem::fixed(5),
+                )
+                .child(
+                    "overlay_owner",
+                    MouseProbe {
+                        name: "overlay_owner",
+                        event_log: std::rc::Rc::clone(&event_log),
+                    },
+                    FlexItem::fixed(5),
+                );
+
+            Self { flex, event_log }
+        }
+    }
+
+    impl DialogRouteBody {
+        fn new() -> Self {
+            let mut dropdown = Dropdown::single(
+                ["Alpha", "Beta", "Gamma"],
+                |row| *row,
+                |row| row.to_string(),
+            )
+            .max_popup_height(3);
+            dropdown.open();
+            Self {
+                dropdown,
+                input: TextInput::new(),
+            }
+        }
+    }
+
+    impl TuiNode<()> for DialogRouteBody {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            let dropdown_area = Rect::new(area.x, area.y, area.width.min(18), 3.min(area.height));
+            let input_area = Rect::new(
+                area.x,
+                area.y.saturating_add(6),
+                area.width.min(18),
+                3.min(area.height.saturating_sub(6)),
+            );
+            ctx.push_slot(ChildKey::from("dropdown"), dropdown_area, |ctx| {
+                <Dropdown<_, _> as TuiNode<()>>::layout(&mut self.dropdown, dropdown_area, ctx);
+            });
+            ctx.push_slot(ChildKey::from("input"), input_area, |ctx| {
+                <TextInput<()> as TuiNode<()>>::layout(&mut self.input, input_area, ctx);
+            });
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+    }
+
+    impl TuiNode<()> for EmptyNode {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+    }
+
+    impl TuiNode<()> for OverlayMouseRouteNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            let result = self.flex.layout(area, ctx);
+            let mut spec = OverlaySpec::new(
+                OverlayId::new(1),
+                Rect::new(0, 0, 5, 1),
+                Rect::new(0, 0, 5, 1),
+            );
+            spec.owner_path = Some(TreePath::from_keys([ChildKey::from("overlay_owner")]));
+            spec.route_path = Some(TreePath::from_keys([ChildKey::from("overlay_owner")]));
+            spec.layer = OverlayLayer::Popover;
+            ctx.register_overlay(spec);
+            result
+        }
+
+        fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+            self.flex.render(frame, area, ctx);
+        }
+
+        fn dispatch_event(
+            &mut self,
+            route: &EventRoute,
+            event: &TuiEvent,
+            ctx: &mut EventCtx<()>,
+        ) -> EventOutcome {
+            self.flex.dispatch_event(route, event, ctx)
         }
     }
 
@@ -1359,8 +1517,8 @@ mod tests {
             self.flex.layout(area, ctx)
         }
 
-        fn render(&self, frame: &mut Frame, area: Rect) {
-            self.flex.render(frame, area);
+        fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+            self.flex.render(frame, area, ctx);
         }
 
         fn dispatch_event(
@@ -1384,7 +1542,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
             if let TuiEvent::Hotkey(hotkey) = event {
@@ -1409,7 +1567,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
             match event {
@@ -1434,7 +1592,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
             match event {
@@ -1465,7 +1623,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
             if matches!(event, TuiEvent::Hotkey(HotkeyEvent::Commit(sequence)) if sequence == "sa")
@@ -1501,6 +1659,36 @@ mod tests {
             clear: false,
             external_editor: None,
         }
+    }
+
+    fn overlay_entry(
+        order: u64,
+        layer: OverlayLayer,
+        z_index: i32,
+        area: Rect,
+        outside_mouse: OutsideMousePolicy,
+    ) -> OverlayLayoutEntry {
+        OverlayLayoutEntry {
+            id: OverlayId::new(order),
+            owner_path: TreePath::from_keys([ChildKey::from("owner")]),
+            route_path: TreePath::from_keys([ChildKey::from("overlay")]),
+            anchor: area,
+            area,
+            bounds: Rect::new(0, 0, 20, 10),
+            layer,
+            z_index,
+            order,
+            policy: OverlayPolicy { outside_mouse },
+        }
+    }
+
+    fn mouse_down_at(column: u16, row: u16) -> TuiEvent {
+        TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
     }
 
     #[test]
@@ -1809,9 +1997,209 @@ mod tests {
             ),
         ];
 
-        let path = route_path_for_event(&event, &hit_regions, TreePath::new());
+        let path = route_path_for_event(&event, &hit_regions, &[], TreePath::new());
 
         assert_eq!(path.keys(), &[ChildKey::from("front")]);
+    }
+
+    #[test]
+    fn mouse_events_route_to_topmost_overlay_before_hit_regions() {
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let hit_regions = [HitRegion::new(
+            TreePath::from_keys([ChildKey::from("underlay")]),
+            Rect::new(0, 0, 5, 5),
+        )];
+        let overlays = [overlay_entry(
+            1,
+            OverlayLayer::Popover,
+            0,
+            Rect::new(0, 0, 5, 5),
+            OutsideMousePolicy::PassThrough,
+        )];
+
+        let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
+
+        assert_eq!(path.keys(), &[ChildKey::from("overlay")]);
+    }
+
+    #[test]
+    fn outside_mouse_policy_capture_routes_to_overlay_owner() {
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let hit_regions = [HitRegion::new(
+            TreePath::from_keys([ChildKey::from("underlay")]),
+            Rect::new(0, 0, 10, 5),
+        )];
+        let overlays = [overlay_entry(
+            1,
+            OverlayLayer::Popover,
+            0,
+            Rect::new(0, 0, 5, 5),
+            OutsideMousePolicy::Capture,
+        )];
+
+        let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
+
+        assert_eq!(path.keys(), &[ChildKey::from("owner")]);
+    }
+
+    #[test]
+    fn mouse_events_route_to_popover_above_modal_overlay() {
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 4,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        let hit_regions = [HitRegion::new(
+            TreePath::from_keys([ChildKey::from("dialog-child")]),
+            Rect::new(2, 2, 8, 4),
+        )];
+        let overlays = [
+            overlay_entry(
+                1,
+                OverlayLayer::Modal,
+                0,
+                Rect::new(1, 1, 12, 8),
+                OutsideMousePolicy::PassThrough,
+            ),
+            overlay_entry(
+                2,
+                OverlayLayer::Popover,
+                0,
+                Rect::new(3, 3, 6, 3),
+                OutsideMousePolicy::PassThrough,
+            ),
+        ];
+
+        let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
+
+        assert_eq!(path.keys(), &[ChildKey::from("overlay")]);
+    }
+
+    #[test]
+    fn mouse_events_route_to_hit_region_above_modal_overlay() {
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 4,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        let hit_regions = [HitRegion::new(
+            TreePath::from_keys([ChildKey::from("dialog-child")]),
+            Rect::new(2, 2, 8, 4),
+        )];
+        let overlays = [overlay_entry(
+            1,
+            OverlayLayer::Modal,
+            0,
+            Rect::new(1, 1, 12, 8),
+            OutsideMousePolicy::PassThrough,
+        )];
+
+        let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
+
+        assert_eq!(path.keys(), &[ChildKey::from("dialog-child")]);
+    }
+
+    #[test]
+    fn mouse_events_outside_modal_layer_route_to_dialog_backdrop_hit_region() {
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let hit_regions = [HitRegion::new(
+            TreePath::from_keys([ChildKey::from("dialog-layer")]),
+            Rect::new(0, 0, 20, 10),
+        )];
+        let overlays = [overlay_entry(
+            1,
+            OverlayLayer::Modal,
+            0,
+            Rect::new(5, 2, 10, 6),
+            OutsideMousePolicy::PassThrough,
+        )];
+
+        let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
+
+        assert_eq!(path.keys(), &[ChildKey::from("dialog-layer")]);
+    }
+
+    #[test]
+    fn dialog_layer_dialog_tabs_dropdown_mouse_routes_to_popup_child_and_backdrop() {
+        let tabs = Tabs::new(vec![Tab::new("Controls", DialogRouteBody::new())]);
+        let host = Dialog::new().host(tabs);
+        let mut layer = DialogLayer::new(EmptyNode, host)
+            .layer_percent(70)
+            .layer_cross_percent(70)
+            .active(true);
+        let mut layout = LayoutCtx::new();
+        let area = Rect::new(0, 0, 60, 20);
+
+        layer.layout(area, &mut layout);
+
+        let dropdown_overlay = layout
+            .overlays()
+            .iter()
+            .find(|overlay| overlay.layer == OverlayLayer::Popover)
+            .expect("dropdown popover should register overlay");
+        let popup_route = route_path_for_event(
+            &mouse_down_at(dropdown_overlay.area.x, dropdown_overlay.area.y),
+            layout.hit_regions(),
+            layout.overlays(),
+            TreePath::from_keys([ChildKey::from("focused")]),
+        );
+        assert_eq!(popup_route, dropdown_overlay.route_path);
+
+        let input_target = layout
+            .focus_targets()
+            .iter()
+            .find(|target| {
+                target.id == FocusId::new("input")
+                    && target.path.keys().last() == Some(&ChildKey::from("input"))
+            })
+            .expect("dialog text input should register focus target");
+        let input_route = route_path_for_event(
+            &mouse_down_at(input_target.area.x, input_target.area.y),
+            layout.hit_regions(),
+            layout.overlays(),
+            TreePath::from_keys([ChildKey::from("focused")]),
+        );
+        assert_eq!(input_route, input_target.path);
+
+        let outside_route = route_path_for_event(
+            &mouse_down_at(0, 0),
+            layout.hit_regions(),
+            layout.overlays(),
+            TreePath::from_keys([ChildKey::from("focused")]),
+        );
+        assert!(outside_route.is_empty());
+    }
+
+    #[test]
+    fn mouse_events_dispatch_to_overlay_route_before_underlying_region() {
+        let app = TreeApp::new(OverlayMouseRouteNode::new());
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let app = app.run_test_events([event], Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.event_log.borrow().as_slice(), ["overlay_owner"]);
     }
 
     #[test]

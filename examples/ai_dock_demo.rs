@@ -226,8 +226,8 @@ impl TuiNode<Msg> for DemoApp {
         self.dialog_layer.layout(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.dialog_layer.render(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut tuicore::RenderCtx<'a>) {
+        self.dialog_layer.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -311,7 +311,7 @@ impl TuiNode<Msg> for BaseScreen {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut tuicore::RenderCtx<'_>) {
         let theme = theme();
         // Clear background
         let paragraph = Paragraph::new(vec![

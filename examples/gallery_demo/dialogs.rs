@@ -5,8 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Borders, Paragraph};
 use tuicore::{
     Animated, AnimationSettings, Button, ChildKey, DataView, Dialog, DialogHost, Dropdown,
-    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget, LayoutCtx, LayoutResult, Tab, Tabs,
-    TextInput, TickResult, Toggle, TuiEvent, TuiNode,
+    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget, LayoutCtx, LayoutResult, RenderCtx,
+    Tab, Tabs, TextInput, TickResult, Toggle, TuiEvent, TuiNode,
 };
 
 use super::data::{DataViewMode, DemoRow};
@@ -208,10 +208,10 @@ impl TuiNode<Msg> for GalleryDialogContent {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         match self.example {
             DialogExample::Full => {}
-            DialogExample::Large => self.tabs.render(frame, area),
+            DialogExample::Large => self.tabs.render(frame, area, ctx),
             DialogExample::Medium => self.input.render(frame, area),
             DialogExample::Small => self.toggle.render(frame, area),
             DialogExample::Tiny => self.data.render(frame, area),
@@ -262,9 +262,9 @@ impl TuiNode<Msg> for GalleryDockOverlayContent {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         if self.example == DockOverlayExample::BottomTabs {
-            self.tabs.render(frame, area);
+            self.tabs.render(frame, area, ctx);
         } else {
             frame.render_widget(
                 Paragraph::new(format!(
@@ -273,12 +273,6 @@ impl TuiNode<Msg> for GalleryDockOverlayContent {
                 )),
                 area,
             );
-        }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        if self.example == DockOverlayExample::BottomTabs {
-            self.tabs.render_overlay(frame, area);
         }
     }
 
@@ -334,7 +328,13 @@ impl TuiNode<Msg> for DialogControlsTab {
             self.toggle.layout(toggle, ctx);
         });
         ctx.push_slot(dialog_tab_child_key("dropdown"), dropdown, |ctx| {
-            self.dropdown.layout_overlay::<Msg>(dropdown, area, ctx);
+            ctx.with_overlay_bounds(area, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown,
+                    dropdown,
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(dialog_tab_child_key("input"), input, |ctx| {
             self.input.layout(input, ctx);
@@ -342,18 +342,14 @@ impl TuiNode<Msg> for DialogControlsTab {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         frame.render_widget(
             Paragraph::new("First tab: toggle, dropdown, and text input."),
             Rect::new(area.x, area.y, area.width, 1),
         );
         self.toggle.render(frame, self.areas[0]);
-        self.dropdown.render(frame, self.areas[1]);
+        self.dropdown.render(frame, self.areas[1], ctx);
         self.input.render(frame, self.areas[2]);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        TuiNode::<Msg>::render_overlay(&self.dropdown, frame, area);
     }
 
     fn dispatch_event(
@@ -445,7 +441,7 @@ impl TuiNode<Msg> for DialogTreeTab {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
+    fn render(&self, frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {
         frame.render_widget(
             Paragraph::new(
                 "Second tab: paragraph on top and a multi-select tree below. Space toggles rows; Enter activates.",

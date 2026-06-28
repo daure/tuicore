@@ -244,18 +244,10 @@ impl<M> TuiNode<M> for Stack<M> {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         for (key, rect) in &self.rects {
             if let Some(child) = self.children.get(key) {
-                child.render(frame, *rect);
-            }
-        }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        for (key, _) in &self.rects {
-            if let Some(child) = self.children.get(key) {
-                child.render_overlay(frame, area);
+                child.render(frame, *rect, ctx);
             }
         }
     }
@@ -415,7 +407,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     struct LegacyProbe;
@@ -425,7 +417,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     #[test]

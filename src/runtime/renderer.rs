@@ -1,6 +1,6 @@
 use ratatui::{Terminal, backend::Backend, layout::Rect};
 
-use crate::TuiNode;
+use crate::{RenderCtx, TuiNode};
 
 use super::Result;
 
@@ -25,8 +25,9 @@ impl Renderer {
     {
         terminal
             .draw(|frame| {
-                root.render(frame, area);
-                root.render_overlay(frame, area);
+                let mut ctx = RenderCtx::new();
+                root.render(frame, area, &mut ctx);
+                ctx.flush(frame);
             })
             .map_err(Into::into)?;
         Ok(())

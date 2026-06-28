@@ -354,10 +354,10 @@ impl<M> TuiNode<M> for Grid<M> {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         for (key, rect) in &self.rects {
             if let Some(child) = self.children.get(key) {
-                child.render(frame, *rect);
+                child.render(frame, *rect, ctx);
             }
         }
         if let Some(separators) = self.separators {
@@ -509,14 +509,6 @@ impl<M> TuiNode<M> for Grid<M> {
                         frame.buffer_mut().set_string(x, y, sym, separator.style());
                     }
                 }
-            }
-        }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        for (key, _) in &self.rects {
-            if let Some(child) = self.children.get(key) {
-                child.render_overlay(frame, area);
             }
         }
     }
@@ -970,6 +962,12 @@ fn clamp_u32_to_u16(value: u32) -> u16 {
 mod tests {
     use super::*;
 
+    fn render_node<M>(node: &impl TuiNode<M>, frame: &mut Frame, area: Rect) {
+        let mut ctx = crate::RenderCtx::new();
+        TuiNode::render(node, frame, area, &mut ctx);
+        ctx.flush(frame);
+    }
+
     struct Probe {
         size: LayoutSize,
     }
@@ -983,7 +981,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     struct LegacyProbe;
@@ -993,7 +991,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     #[test]
@@ -1237,7 +1235,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal should build");
         terminal
-            .draw(|frame| grid.render(frame, frame.area()))
+            .draw(|frame| render_node(&grid, frame, frame.area()))
             .expect("grid should render");
 
         let buffer = terminal.backend().buffer();
@@ -1274,7 +1272,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal should build");
         terminal
-            .draw(|frame| grid.render(frame, frame.area()))
+            .draw(|frame| render_node(&grid, frame, frame.area()))
             .expect("grid should render");
 
         let buffer = terminal.backend().buffer();
@@ -1301,7 +1299,7 @@ mod tests {
             fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
                 LayoutResult::new(area)
             }
-            fn render(&self, _frame: &mut Frame, _area: Rect) {}
+            fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
         }
 
         let grid = Grid::new()
@@ -1386,7 +1384,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal should build");
         terminal
-            .draw(|frame| grid.render(frame, frame.area()))
+            .draw(|frame| render_node(&grid, frame, frame.area()))
             .expect("grid should render");
 
         let buffer = terminal.backend().buffer();

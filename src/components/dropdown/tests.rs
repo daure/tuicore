@@ -2,16 +2,17 @@ use std::cell::RefCell;
 use std::hash::Hash;
 use std::rc::Rc;
 
-use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
+use ratatui::{Frame, Terminal};
 
 use super::*;
 use crate::event::KeyModifiers;
 use crate::{
-    ChildKey, EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusId, FocusRequest, KeyBindings,
-    KeySpec, LayoutCtx, LayoutProposal, Propagation, TuiEvent, TuiNode,
+    ChildKey, Dialog, DialogLayer, EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
+    FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, NonFocusable, Propagation,
+    RenderCtx, Tab, Tabs, TuiEvent, TuiNode,
 };
 
 fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -24,6 +25,82 @@ fn multi_dropdown() -> Dropdown<&'static str, &'static str> {
 
 fn numeric_dropdown(count: u8) -> Dropdown<u8, u8> {
     Dropdown::single(0..count, |row| *row, |row| row.to_string())
+}
+
+fn render_dropdown<T, Id>(dropdown: &Dropdown<T, Id>, frame: &mut Frame<'_>, area: Rect)
+where
+    T: 'static,
+    Id: Clone + Eq + Hash + 'static,
+{
+    let mut ctx = RenderCtx::new();
+    dropdown.render(frame, area, &mut ctx);
+    ctx.flush(frame);
+}
+
+fn layout_dropdown<T, Id>(dropdown: &mut Dropdown<T, Id>, area: Rect, bounds: Rect) -> LayoutCtx
+where
+    T: 'static,
+    Id: Clone + Eq + Hash + 'static,
+{
+    let mut ctx = LayoutCtx::new();
+    ctx.with_overlay_bounds(bounds, |ctx| {
+        <Dropdown<_, _> as TuiNode<()>>::layout(dropdown, area, ctx);
+    });
+    ctx
+}
+
+struct NonForwardingComposite {
+    dropdown: Dropdown<&'static str, &'static str>,
+}
+
+struct DialogControlsTabBody {
+    dropdown: Dropdown<&'static str, &'static str>,
+    dropdown_area: Rect,
+}
+
+struct EmptyNode;
+
+impl TuiNode<()> for NonForwardingComposite {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut self.dropdown, area, ctx)
+    }
+
+    fn render<'a>(&'a self, frame: &mut ratatui::Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        <Dropdown<_, _> as TuiNode<()>>::render(&self.dropdown, frame, area, ctx);
+    }
+}
+
+impl DialogControlsTabBody {
+    fn open() -> Self {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        Self {
+            dropdown,
+            dropdown_area: Rect::default(),
+        }
+    }
+}
+
+impl TuiNode<()> for EmptyNode {
+    fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+        LayoutResult::new(area)
+    }
+
+    fn render(&self, _frame: &mut ratatui::Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
+}
+
+impl TuiNode<()> for DialogControlsTabBody {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.dropdown_area = Rect::new(area.x, area.y, area.width.min(12), 3.min(area.height));
+        ctx.push_slot(ChildKey::from("dropdown"), self.dropdown_area, |ctx| {
+            <Dropdown<_, _> as TuiNode<()>>::layout(&mut self.dropdown, self.dropdown_area, ctx);
+        });
+        LayoutResult::new(area)
+    }
+
+    fn render<'a>(&'a self, frame: &mut ratatui::Frame, _area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.dropdown.render(frame, self.dropdown_area, ctx);
+    }
 }
 
 const ROWS: [&str; 3] = ["Alpha", "Beta", "Gamma"];
@@ -76,8 +153,7 @@ fn open_popup_dims_backdrop_but_not_trigger() {
         .selected_one("Beta")
         .variant(DropdownVariant::Filled);
     dropdown.open();
-    let mut layout = LayoutCtx::new();
-    dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 1), AREA, &mut layout);
+    layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
     let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
 
     terminal
@@ -90,8 +166,7 @@ fn open_popup_dims_backdrop_but_not_trigger() {
                     .fg(Color::Rgb(200, 200, 200))
                     .bg(Color::Rgb(10, 20, 30)),
             );
-            dropdown.render(frame, Rect::new(0, 0, 12, 1));
-            dropdown.render_popup_overlay(frame, frame.area());
+            render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 1));
         })
         .expect("dropdown should render");
 
@@ -119,7 +194,7 @@ fn normal_render_plus_overlay_dims_backdrop_once() {
         .selected_one("Beta")
         .variant(DropdownVariant::Filled);
     baseline.open();
-    baseline.layout_overlay::<()>(Rect::new(0, 0, 12, 1), AREA, &mut LayoutCtx::new());
+    layout_dropdown(&mut baseline, Rect::new(0, 0, 12, 1), AREA);
     let mut baseline_terminal =
         Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
     baseline_terminal
@@ -132,7 +207,7 @@ fn normal_render_plus_overlay_dims_backdrop_once() {
                     .fg(Color::Rgb(200, 200, 200))
                     .bg(Color::Rgb(10, 20, 30)),
             );
-            baseline.render_popup_overlay(frame, frame.area());
+            render_dropdown(&baseline, frame, Rect::new(0, 0, 12, 1));
         })
         .expect("dropdown should render");
 
@@ -140,7 +215,7 @@ fn normal_render_plus_overlay_dims_backdrop_once() {
         .selected_one("Beta")
         .variant(DropdownVariant::Filled);
     dropdown.open();
-    dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 1), AREA, &mut LayoutCtx::new());
+    layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
     let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
     terminal
         .draw(|frame| {
@@ -152,8 +227,7 @@ fn normal_render_plus_overlay_dims_backdrop_once() {
                     .fg(Color::Rgb(200, 200, 200))
                     .bg(Color::Rgb(10, 20, 30)),
             );
-            dropdown.render(frame, Rect::new(0, 0, 12, 1));
-            dropdown.render_popup_overlay(frame, frame.area());
+            render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 1));
         })
         .expect("dropdown should render");
 
@@ -167,7 +241,7 @@ fn normal_render_plus_overlay_dims_backdrop_once() {
 #[test]
 fn opening_from_event_tweens_backdrop_dim() {
     let mut dropdown = single_dropdown();
-    dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 1), AREA, &mut LayoutCtx::new());
+    layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
     let mut ctx = EventCtx::<()>::new(AnimationSettings::default());
 
     let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
@@ -752,7 +826,7 @@ fn bordered_variant_renders_trigger_with_nerd_font_chevron() {
     let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -768,7 +842,7 @@ fn open_bordered_variant_renders_up_chevron() {
     let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -779,9 +853,12 @@ fn open_bordered_variant_renders_up_chevron() {
 fn open_layout_returns_trigger_field_area_only() {
     let mut dropdown = single_dropdown();
     dropdown.open();
-    let mut ctx = LayoutCtx::new();
 
-    let result = dropdown.layout_overlay::<()>(Rect::new(0, 0, 24, 3), AREA, &mut ctx);
+    let result = <Dropdown<_, _> as TuiNode<()>>::layout(
+        &mut dropdown,
+        Rect::new(0, 0, 24, 3),
+        &mut LayoutCtx::new(),
+    );
 
     assert_eq!(result.area, Rect::new(0, 0, 24, 3));
 }
@@ -794,7 +871,7 @@ fn filled_variant_renders_filled_trigger_with_nerd_font_chevron() {
     let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -812,7 +889,7 @@ fn open_filled_variant_renders_up_chevron() {
     let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -831,7 +908,7 @@ fn filled_inline_label_renders_label_value_and_hotkey_on_one_line() {
     let mut terminal = Terminal::new(TestBackend::new(24, 1)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -860,7 +937,7 @@ fn filled_alt_top_label_trigger_has_no_leading_padding() {
     let mut terminal = Terminal::new(TestBackend::new(24, 2)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -876,17 +953,16 @@ fn no_selection_text_renders_empty_value_and_popup_option() {
         .variant(DropdownVariant::Filled)
         .no_selection_text("--None--");
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 0, 16, 1),
         Rect::new(0, 0, 16, 8),
-        &mut LayoutCtx::new(),
     );
     let mut terminal = Terminal::new(TestBackend::new(16, 8)).expect("terminal should build");
 
     terminal
         .draw(|frame| {
-            dropdown.render(frame, Rect::new(0, 0, 16, 1));
-            dropdown.render_popup_overlay(frame, frame.area());
+            render_dropdown(&dropdown, frame, Rect::new(0, 0, 16, 1));
         })
         .expect("dropdown should render");
 
@@ -941,15 +1017,15 @@ fn no_selection_highlight_uses_same_style_as_focused_rows() {
 
     dropdown.open();
     dropdown.on_key(ctrl('k'), AREA);
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 0, 16, 1),
         Rect::new(0, 0, 16, 8),
-        &mut LayoutCtx::new(),
     );
     let mut terminal = Terminal::new(TestBackend::new(16, 8)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render_popup_overlay(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, Rect::new(0, 0, 16, 1)))
         .expect("dropdown should render");
 
     let cell = terminal.backend().buffer().cell((0, 1)).unwrap();
@@ -970,15 +1046,15 @@ fn focused_bordered_popup_uses_accent_border() {
     let mut focus = FocusCtx::<()>::new(AnimationSettings::default());
     dropdown.dispatch_focus(&field, true, &mut focus);
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 0, 12, 3),
         Rect::new(0, 0, 12, 8),
-        &mut LayoutCtx::new(),
     );
     let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, Rect::new(0, 0, 12, 3)))
+        .draw(|frame| render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 3)))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -989,8 +1065,11 @@ fn focused_bordered_popup_uses_accent_border() {
 fn open_dropdown_keeps_trigger_chrome_accented_under_popup() {
     let mut dropdown = single_dropdown();
     dropdown.open();
-    let mut layout = LayoutCtx::new();
-    dropdown.layout_overlay::<()>(Rect::new(0, 0, 12, 3), Rect::new(0, 0, 12, 8), &mut layout);
+    let layout = layout_dropdown(
+        &mut dropdown,
+        Rect::new(0, 0, 12, 3),
+        Rect::new(0, 0, 12, 8),
+    );
     let search = layout
         .focus_targets()
         .iter()
@@ -1002,7 +1081,7 @@ fn open_dropdown_keeps_trigger_chrome_accented_under_popup() {
     let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, Rect::new(0, 0, 12, 3)))
+        .draw(|frame| render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 3)))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -1017,12 +1096,195 @@ fn open_render_draws_trigger_without_inline_popup() {
     let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
     assert_ne!(buffer.cell((0, 2)).unwrap().symbol(), " ");
     assert_eq!(buffer.cell((0, 3)).unwrap().symbol(), " ");
+}
+
+#[test]
+fn open_node_render_flushes_popup_portal() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, Rect::new(0, 0, 12, 1), ctx);
+    });
+    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            <Dropdown<_, _> as TuiNode<()>>::render(
+                &dropdown,
+                frame,
+                Rect::new(0, 0, 12, 1),
+                &mut render,
+            );
+            render.flush(frame);
+        })
+        .expect("dropdown should render");
+
+    let row = (0..12)
+        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("Alpha"), "{row}");
+}
+
+#[test]
+fn inherent_render_flushes_popup_portal() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, Rect::new(0, 0, 12, 1), ctx);
+    });
+    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            dropdown.render(frame, Rect::new(0, 0, 12, 1), &mut render);
+            assert!(!render.is_empty());
+            render.flush(frame);
+        })
+        .expect("dropdown should render");
+
+    let row = (0..12)
+        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("Alpha"), "{row}");
+}
+
+#[test]
+fn dropdown_inside_tabs_dialog_flushes_popup_from_normal_render() {
+    let tabs = Tabs::new(vec![Tab::new("Controls", DialogControlsTabBody::open())]);
+    let mut dialog = Dialog::new().host(tabs);
+    let area = Rect::new(0, 0, 30, 12);
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(area, |ctx| {
+        <_ as TuiNode<()>>::layout(&mut dialog, area, ctx);
+    });
+    let mut terminal = Terminal::new(TestBackend::new(30, 12)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            <_ as TuiNode<()>>::render(&dialog, frame, area, &mut render);
+            render.flush(frame);
+        })
+        .expect("dialog controls should render");
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..12)
+        .flat_map(|y| (0..30).map(move |x| buffer.cell((x, y)).unwrap().symbol()))
+        .collect::<String>();
+    assert!(rendered.contains("Alpha"), "{rendered}");
+}
+
+#[test]
+fn dropdown_inside_dialog_layer_dialog_tabs_flushes_popup_from_normal_render() {
+    let tabs = Tabs::new(vec![Tab::new("Controls", DialogControlsTabBody::open())]);
+    let host = Dialog::new().host(tabs);
+    let mut layer = DialogLayer::new(EmptyNode, host).active(true);
+    let area = Rect::new(0, 0, 30, 12);
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(area, |ctx| {
+        <_ as TuiNode<()>>::layout(&mut layer, area, ctx);
+    });
+    let mut terminal = Terminal::new(TestBackend::new(30, 12)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            <_ as TuiNode<()>>::render(&layer, frame, area, &mut render);
+            render.flush(frame);
+        })
+        .expect("dialog layer controls should render");
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..12)
+        .flat_map(|y| (0..30).map(move |x| buffer.cell((x, y)).unwrap().symbol()))
+        .collect::<String>();
+    assert!(rendered.contains("Alpha"), "{rendered}");
+}
+
+#[test]
+fn open_node_layout_uses_inherited_overlay_bounds() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    let mut layout = LayoutCtx::new();
+    let bounds = Rect::new(0, 0, 24, 20);
+
+    layout.with_overlay_bounds(bounds, |ctx| {
+        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, Rect::new(0, 0, 24, 3), ctx);
+    });
+
+    assert_eq!(layout.overlays().len(), 1);
+    assert_eq!(layout.overlays()[0].bounds, bounds);
+    assert_eq!(layout.overlays()[0].area, Rect::new(0, 2, 24, 6));
+}
+
+#[test]
+fn dropdown_inside_non_forwarding_composite_flushes_popup_portal() {
+    let mut composite = NonForwardingComposite {
+        dropdown: single_dropdown(),
+    };
+    composite.dropdown.open();
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
+        composite.layout(Rect::new(0, 0, 12, 1), ctx);
+    });
+    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            composite.render(frame, Rect::new(0, 0, 12, 1), &mut render);
+            render.flush(frame);
+        })
+        .expect("dropdown should render");
+
+    let row = (0..12)
+        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("Alpha"), "{row}");
+}
+
+#[test]
+fn non_focusable_dropdown_flushes_popup_portal() {
+    let mut inner = single_dropdown();
+    inner.open();
+    let mut dropdown = NonFocusable::new(inner);
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
+        <NonFocusable<Dropdown<_, _>> as TuiNode<()>>::layout(
+            &mut dropdown,
+            Rect::new(0, 0, 12, 1),
+            ctx,
+        );
+    });
+    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            <NonFocusable<Dropdown<_, _>> as TuiNode<()>>::render(
+                &dropdown,
+                frame,
+                Rect::new(0, 0, 12, 1),
+                &mut render,
+            );
+            render.flush(frame);
+        })
+        .expect("dropdown should render");
+
+    let row = (0..12)
+        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("Alpha"), "{row}");
 }
 
 #[test]
@@ -1059,9 +1321,12 @@ fn open_search_dropdown_suppresses_global_hotkeys_on_field_focus() {
 fn open_layout_focus_targets_use_overlay_popup_areas() {
     let mut dropdown = single_dropdown();
     dropdown.open();
-    let mut ctx = LayoutCtx::new();
 
-    dropdown.layout_overlay::<()>(Rect::new(0, 0, 24, 3), Rect::new(0, 0, 24, 20), &mut ctx);
+    let ctx = layout_dropdown(
+        &mut dropdown,
+        Rect::new(0, 0, 24, 3),
+        Rect::new(0, 0, 24, 20),
+    );
 
     let targets = ctx.focus_targets();
     assert_eq!(targets[0].area, Rect::new(1, 3, 22, 1));
@@ -1164,17 +1429,16 @@ fn open_layout_centers_selected_row_in_popup_view_when_possible() {
         .search_mode(DropdownSearchMode::None)
         .max_popup_height(5);
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 0, 12, 1),
         Rect::new(0, 0, 12, 8),
-        &mut LayoutCtx::new(),
     );
     let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
 
     terminal
         .draw(|frame| {
-            dropdown.render(frame, Rect::new(0, 0, 12, 1));
-            dropdown.render_popup_overlay(frame, frame.area());
+            render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 1));
         })
         .expect("dropdown should render");
 
@@ -1219,10 +1483,10 @@ fn bordered_popup_area_overlaps_field_bottom_row() {
 fn overlay_popup_extends_beyond_trigger_field_when_bounds_allow() {
     let mut dropdown = single_dropdown();
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 0, 24, 3),
         Rect::new(0, 0, 24, 20),
-        &mut LayoutCtx::new(),
     );
 
     let popup_area = dropdown.popup_overlay_area(Rect::new(0, 0, 24, 20));
@@ -1235,10 +1499,10 @@ fn overlay_popup_extends_beyond_trigger_field_when_bounds_allow() {
 fn centered_popup_overlay_centers_popup_within_bounds() {
     let mut dropdown = single_dropdown().centered(true);
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(2, 2, 24, 3),
         Rect::new(0, 0, 100, 40),
-        &mut LayoutCtx::new(),
     );
 
     let popup_area = dropdown.popup_overlay_area(Rect::new(0, 0, 100, 40));
@@ -1250,10 +1514,10 @@ fn centered_popup_overlay_centers_popup_within_bounds() {
 fn upward_popup_opens_above_trigger() {
     let mut dropdown = single_dropdown().popup_direction(DropdownPopupDirection::Up);
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 10, 24, 1),
         Rect::new(0, 0, 24, 12),
-        &mut LayoutCtx::new(),
     );
 
     let popup_area = dropdown.popup_overlay_area(Rect::new(0, 0, 24, 12));
@@ -1322,17 +1586,16 @@ fn filled_popup_caps_height_without_border_chrome() {
 fn filled_popup_applies_background_to_content_rows() {
     let mut dropdown = single_dropdown().variant(DropdownVariant::Filled);
     dropdown.open();
-    dropdown.layout_overlay::<()>(
+    layout_dropdown(
+        &mut dropdown,
         Rect::new(0, 0, 12, 1),
         Rect::new(0, 0, 12, 6),
-        &mut LayoutCtx::new(),
     );
     let mut terminal = Terminal::new(TestBackend::new(12, 6)).expect("terminal should build");
 
     terminal
         .draw(|frame| {
-            dropdown.render(frame, Rect::new(0, 0, 12, 1));
-            dropdown.render_popup_overlay(frame, frame.area());
+            render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 1));
         })
         .expect("dropdown should render");
 
@@ -1453,7 +1716,7 @@ fn dropdown_with_label_and_hotkey_renders_in_borders() {
     let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -1484,7 +1747,7 @@ fn dropdown_with_alternative_style_layout_and_render() {
 
     let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
     terminal
-        .draw(|frame| dropdown.render(frame, frame.area()))
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();

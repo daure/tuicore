@@ -623,11 +623,11 @@ where
         }
     }
 
-    fn render_selected_body(&self, frame: &mut Frame) {
+    fn render_selected_body<'a>(&'a self, frame: &mut Frame, ctx: &mut crate::RenderCtx<'a>) {
         if let Some(key) = self.selected_key()
             && let Some(body) = self.bodies.get(key)
         {
-            body.render(frame, self.body_area);
+            body.render(frame, self.body_area, ctx);
         }
     }
 
@@ -1512,13 +1512,13 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         if self.modal {
             frame.render_widget(Clear, area);
         }
         let tabs_area = self.modal_render_area(area);
         self.render_tabs(frame, tabs_area);
-        self.render_selected_body(frame);
+        self.render_selected_body(frame, ctx);
         if self.modal {
             let border = self.border.unwrap_or_else(|| preset().border());
             self.render_modal_close_label(frame, tabs_area, border);
@@ -1529,14 +1529,6 @@ where
                 border,
                 self.border_style(),
             );
-        }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        if let Some(key) = self.selected_key()
-            && let Some(body) = self.bodies.get(key)
-        {
-            body.render_overlay(frame, area);
         }
     }
 
@@ -1733,7 +1725,7 @@ impl<M> TuiNode<M> for TextTabBody {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         frame.render_widget(
             Paragraph::new(self.body.as_str()).wrap(Wrap { trim: true }),
             area,
@@ -1749,6 +1741,12 @@ mod tests {
 
     use super::*;
     use crate::{Key, KeyEvent, Propagation, TreePath};
+
+    fn render_node<M>(node: &impl TuiNode<M>, frame: &mut Frame, area: Rect) {
+        let mut ctx = crate::RenderCtx::new();
+        TuiNode::render(node, frame, area, &mut ctx);
+        ctx.flush(frame);
+    }
 
     fn char_positions(value: &str, needle: char) -> Vec<usize> {
         value
@@ -1768,7 +1766,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn tick(&mut self, _dt: Duration, _settings: AnimationSettings) -> TickResult {
             *self.ticks.borrow_mut() += 1;
@@ -2266,7 +2264,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2295,7 +2293,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 4)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2323,7 +2321,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(16, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2350,7 +2348,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2377,7 +2375,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2404,7 +2402,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2436,7 +2434,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(64, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2460,7 +2458,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2480,7 +2478,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2519,7 +2517,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(32, 8)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2545,7 +2543,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(32, 8)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2568,7 +2566,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(32, 8)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2592,7 +2590,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(8, 8)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();
@@ -2616,7 +2614,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(8, 8)).expect("terminal should build");
 
         terminal
-            .draw(|frame| tabs.render(frame, frame.area()))
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
             .expect("tabs should render");
 
         let buffer = terminal.backend().buffer();

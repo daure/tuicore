@@ -764,7 +764,7 @@ impl<M> TuiNode<M> for Dialog<M> {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         Self::render(self, frame, area);
     }
 
@@ -850,9 +850,9 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         self.dialog.render(frame, area);
-        self.child.render(frame, self.child_area);
+        self.child.render(frame, self.child_area, ctx);
         crate::separator::patch_border_joins(
             frame,
             area,
@@ -860,10 +860,6 @@ where
             self.dialog.border.unwrap_or_else(|| preset().border()),
             Style::default().fg(self.dialog.visible_border_color()),
         );
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.child.render_overlay(frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -988,6 +984,12 @@ mod tests {
     use super::*;
     use crate::{Key, TextInput, animation_settings};
 
+    fn render_node<M>(node: &impl TuiNode<M>, frame: &mut ratatui::Frame, area: Rect) {
+        let mut ctx = crate::RenderCtx::new();
+        TuiNode::render(node, frame, area, &mut ctx);
+        ctx.flush(frame);
+    }
+
     struct StaticBody;
 
     struct TopRightVerticalBody;
@@ -1001,7 +1003,13 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
     }
 
     impl TuiNode<()> for TopRightVerticalBody {
@@ -1009,7 +1017,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
             frame.buffer_mut().set_string(
                 area.right().saturating_sub(1),
                 area.y,
@@ -1024,7 +1032,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, frame: &mut ratatui::Frame, area: Rect) {
+        fn render(&self, frame: &mut ratatui::Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
             frame.buffer_mut().set_string(
                 area.right().saturating_sub(1),
                 area.bottom().saturating_sub(1),
@@ -1049,7 +1057,13 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
 
         fn dispatch_event(
             &mut self,
@@ -1242,7 +1256,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| host.render(frame, frame.area()))
+            .draw(|frame| render_node(&host, frame, frame.area()))
             .expect("dialog host should render");
 
         let buffer = terminal.backend().buffer();
@@ -1260,7 +1274,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("terminal should build");
 
         terminal
-            .draw(|frame| host.render(frame, frame.area()))
+            .draw(|frame| render_node(&host, frame, frame.area()))
             .expect("dialog host should render");
 
         let buffer = terminal.backend().buffer();

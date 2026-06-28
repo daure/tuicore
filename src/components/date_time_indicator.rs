@@ -154,7 +154,7 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         frame.render_widget(Paragraph::new(self.line()), area);
     }
 

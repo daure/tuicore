@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 
-use crate::{FocusTarget, HitRegion, LayoutCtx, LayoutResult, TuiNode};
+use crate::{FocusTarget, HitRegion, LayoutCtx, LayoutResult, OverlayLayoutEntry, TuiNode};
 
 #[derive(Debug, Clone)]
 pub struct LayoutEngine {
@@ -30,7 +30,7 @@ impl LayoutEngine {
         N: TuiNode<M>,
     {
         let mut ctx = LayoutCtx::new();
-        let result = root.layout(area, &mut ctx);
+        let result = ctx.with_overlay_bounds(area, |ctx| root.layout(area, ctx));
         self.ctx = ctx;
         self.area = area;
         self.result = result;
@@ -56,6 +56,10 @@ impl LayoutEngine {
     pub fn hit_regions(&self) -> &[HitRegion] {
         self.ctx.hit_regions()
     }
+
+    pub fn overlays(&self) -> &[OverlayLayoutEntry] {
+        self.ctx.overlays()
+    }
 }
 
 #[cfg(test)]
@@ -73,7 +77,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     #[test]

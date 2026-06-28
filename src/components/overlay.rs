@@ -113,14 +113,9 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
-        self.base.render(frame, self.base_rect);
-        self.layer.render(frame, self.layer_rect);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.base.render_overlay(frame, area);
-        self.layer.render_overlay(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.base.render(frame, self.base_rect, ctx);
+        self.layer.render(frame, self.layer_rect, ctx);
     }
 
     fn dispatch_event(
@@ -275,7 +270,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     #[test]

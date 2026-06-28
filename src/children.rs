@@ -5,7 +5,7 @@ use ratatui::{Frame, layout::Rect};
 use crate::{
     AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
     FocusRepair, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
-    LifecycleCtx, TickResult, TuiEvent, TuiNode,
+    LifecycleCtx, RenderCtx, TickResult, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,12 +101,8 @@ where
         self.child.measure(proposal)
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
-        self.child.render(frame, area);
-    }
-
-    pub fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.child.render_overlay(frame, area);
+    pub fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.child.render(frame, area, ctx);
     }
 
     pub fn dispatch_event(
@@ -475,7 +471,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
 
         fn tick(&mut self, _dt: Duration, _settings: AnimationSettings) -> TickResult {
             self.tick_count += 1;
@@ -510,7 +506,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<&'static str>) -> EventOutcome {
             ctx.emit(self.message);
@@ -541,7 +537,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<&'static str>) -> EventOutcome {
             ctx.emit(self.message);
@@ -569,7 +565,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
 
         fn focus(
             &mut self,
@@ -586,7 +582,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
 
         fn init(&mut self, ctx: &mut LifecycleCtx<&'static str>) {
             ctx.emit("init");
@@ -602,7 +598,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
 
         fn init(&mut self, _ctx: &mut LifecycleCtx<()>) {
             self.log.borrow_mut().push(match self.name {

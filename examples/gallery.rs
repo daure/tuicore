@@ -21,7 +21,7 @@ use gallery_demo::inputs::{
     typography_showcase_layout,
 };
 use gallery_demo::layouts::{
-    DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_overlay_demo,
+    DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
     layout_split_demo, layout_stack_demo, render_layout_intro,
 };
 use gallery_demo::notifications::{
@@ -30,12 +30,12 @@ use gallery_demo::notifications::{
     notification_trigger_layout,
 };
 use gallery_demo::panels::{
-    PANEL_TITLE_CONTROL_COUNT, PanelTitleChoice, apply_panel_choice, panel_demo,
-    panel_demo_child_key, panel_demo_child_route, panel_join_demo, panel_join_demo_child_key,
-    panel_join_demo_child_route, panel_preview_layout, panel_separator_preview_layout,
-    panel_tabs_join_demo, panel_tabs_join_demo_child_key, panel_tabs_join_demo_child_route,
-    panel_title_child_key, panel_title_child_route, panel_title_column_layout,
-    panel_title_control_areas, panel_title_dropdown, panel_title_dropdown_area, panel_title_index,
+    PanelTitleChoice, apply_panel_choice, panel_demo, panel_demo_child_key, panel_demo_child_route,
+    panel_join_demo, panel_join_demo_child_key, panel_join_demo_child_route, panel_preview_layout,
+    panel_separator_preview_layout, panel_tabs_join_demo, panel_tabs_join_demo_child_key,
+    panel_tabs_join_demo_child_route, panel_title_child_key, panel_title_child_route,
+    panel_title_column_layout, panel_title_control_areas, panel_title_dropdown,
+    panel_title_dropdown_area, panel_title_index,
 };
 use gallery_demo::status_bar::demo_weather_report;
 use gallery_demo::tabs::{
@@ -72,10 +72,10 @@ use tuicore::{
     Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField,
     InspectValue, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem,
     ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
-    ParagraphOverflow, PasswordInput, SelectionMode, SelectionTrigger, Spinner, Split, Stack,
-    StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TextInput,
-    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
-    TuiEvent, TuiNode, WeatherForecastDialog,
+    ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
+    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant,
+    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
+    TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherForecastDialog,
 };
 
 #[derive(Debug, PartialEq)]
@@ -464,27 +464,21 @@ impl TuiNode<Msg> for Gallery {
             },
         );
         ctx.push_slot(gallery_footer_child_key(), footer, |ctx| {
-            self.footer.layout_overlay(footer, area, ctx);
+            ctx.with_overlay_bounds(area, |ctx| self.footer.layout(footer, ctx));
         });
 
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut RenderCtx<'a>) {
         self.list_panel.render(frame, self.areas.list_panel);
         self.component_list.render(frame, self.areas.list_body);
 
         self.preview_panel.render(frame, self.areas.preview_panel);
         self.previews
-            .render(self.selected.preview(), frame, self.areas.preview_body);
+            .render(self.selected.preview(), frame, self.areas.preview_body, ctx);
 
-        self.footer.render(frame, self.areas.footer);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.previews
-            .render_overlay(self.selected.preview(), frame, area);
-        self.footer.render_overlay(frame, area);
+        self.footer.render(frame, self.areas.footer, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -663,7 +657,7 @@ struct PreviewState {
     layout_flex: Flex<Msg>,
     layout_split: Split<DemoBox, DemoBox>,
     layout_stack: Stack<Msg>,
-    layout_overlay: Overlay<DemoBox, DemoBox>,
+    layout_layered: Overlay<DemoBox, DemoBox>,
     layout_grid: Grid<Msg>,
 }
 
@@ -809,7 +803,7 @@ impl PreviewState {
             layout_flex: layout_flex_demo(),
             layout_split: layout_split_demo(),
             layout_stack: layout_stack_demo(),
-            layout_overlay: layout_overlay_demo(),
+            layout_layered: layout_layered_demo(),
             layout_grid: layout_grid_demo(),
         }
     }
@@ -898,7 +892,7 @@ impl PreviewState {
                 self.layout_stack.layout(layout_demo_body(area), ctx);
             }
             PreviewKind::LayoutOverlay => {
-                self.layout_overlay.layout(layout_demo_body(area), ctx);
+                self.layout_layered.layout(layout_demo_body(area), ctx);
             }
             PreviewKind::LayoutGrid => {
                 self.layout_grid.layout(layout_demo_body(area), ctx);
@@ -907,12 +901,20 @@ impl PreviewState {
         }
     }
 
-    fn render(&self, preview: PreviewKind, frame: &mut Frame, area: Rect) {
+    fn render<'a>(
+        &'a self,
+        preview: PreviewKind,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &mut RenderCtx<'a>,
+    ) {
         match preview {
-            PreviewKind::Tabs => self.render_tabs(frame, area),
-            PreviewKind::Panel => self.render_panel_preview(frame, area),
-            PreviewKind::PanelJoinedSeparators => self.render_panel_join_preview(frame, area),
-            PreviewKind::PanelTabSeparators => self.render_panel_tabs_join_preview(frame, area),
+            PreviewKind::Tabs => self.render_tabs(frame, area, ctx),
+            PreviewKind::Panel => self.render_panel_preview(frame, area, ctx),
+            PreviewKind::PanelJoinedSeparators => self.render_panel_join_preview(frame, area, ctx),
+            PreviewKind::PanelTabSeparators => {
+                self.render_panel_tabs_join_preview(frame, area, ctx)
+            }
             PreviewKind::Dialog => self.render_dialog(frame, area),
             PreviewKind::Spinner => self.render_spinner(frame, area),
             PreviewKind::NotificationTriggers => self.render_notification_triggers(frame, area),
@@ -921,8 +923,8 @@ impl PreviewState {
             PreviewKind::Typography => self.render_typography(frame, area),
             PreviewKind::Colors => self.render_colors(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
-            PreviewKind::DateTimePicker => self.render_date_time(frame, area),
-            PreviewKind::StatusBar => self.render_status_bar(frame, area),
+            PreviewKind::DateTimePicker => self.render_date_time(frame, area, ctx),
+            PreviewKind::StatusBar => self.render_status_bar(frame, area, ctx),
             PreviewKind::Button => self.render_button(frame, area),
             PreviewKind::Chip => self.render_chips(frame, area),
             PreviewKind::Toggle => self.render_toggle(frame, area),
@@ -934,42 +936,13 @@ impl PreviewState {
             | PreviewKind::DataMultiSelect
             | PreviewKind::DataChecklistTree
             | PreviewKind::DataActivateOnNavigate => self.render_data_view(preview, frame, area),
-            PreviewKind::Dropdown => self.render_dropdown_preview(frame, area),
-            PreviewKind::Menu => self.render_menu(frame, area),
-            PreviewKind::LayoutFlex => self.render_layout_flex(frame, area),
-            PreviewKind::LayoutSplit => self.render_layout_split(frame, area),
-            PreviewKind::LayoutStack => self.render_layout_stack(frame, area),
-            PreviewKind::LayoutOverlay => self.render_layout_overlay(frame, area),
-            PreviewKind::LayoutGrid => self.render_layout_grid(frame, area),
-        }
-    }
-
-    fn render_overlay(&self, preview: PreviewKind, frame: &mut Frame, overlay_bounds: Rect) {
-        if preview == PreviewKind::Dropdown {
-            for index in 0..6 {
-                TuiNode::<Msg>::render_overlay(self.dropdown(index), frame, overlay_bounds);
-            }
-        }
-        if preview == PreviewKind::Menu {
-            TuiNode::<Msg>::render_overlay(&self.menu, frame, overlay_bounds);
-        }
-        if preview == PreviewKind::StatusBar {
-            self.status_bar.render_overlay(frame, overlay_bounds);
-        }
-        if preview == PreviewKind::NotificationTriggers {
-            self.notification_triggers.render(frame, overlay_bounds);
-        }
-        if preview == PreviewKind::DateTimePicker {
-            TuiNode::<Msg>::render_overlay(&self.date_time_dropdown, frame, overlay_bounds);
-        }
-        if preview == PreviewKind::Panel {
-            for index in 0..PANEL_TITLE_CONTROL_COUNT {
-                TuiNode::<Msg>::render_overlay(
-                    self.panel_title_dropdown(index),
-                    frame,
-                    overlay_bounds,
-                );
-            }
+            PreviewKind::Dropdown => self.render_dropdown_preview(frame, area, ctx),
+            PreviewKind::Menu => self.render_menu(frame, area, ctx),
+            PreviewKind::LayoutFlex => self.render_layout_flex(frame, area, ctx),
+            PreviewKind::LayoutSplit => self.render_layout_split(frame, area, ctx),
+            PreviewKind::LayoutStack => self.render_layout_stack(frame, area, ctx),
+            PreviewKind::LayoutOverlay => self.render_layout_layered(frame, area, ctx),
+            PreviewKind::LayoutGrid => self.render_layout_grid(frame, area, ctx),
         }
     }
 
@@ -1617,7 +1590,12 @@ impl PreviewState {
         self.active_data_view(preview).render(frame, body);
     }
 
-    fn render_dropdown_preview(&self, frame: &mut Frame, area: Rect) {
+    fn render_dropdown_preview<'a>(
+        &'a self,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &mut RenderCtx<'a>,
+    ) {
         let [help, body] = dropdown_preview_layout(area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -1697,7 +1675,7 @@ impl PreviewState {
         );
 
         for (index, area) in areas.iter().copied().enumerate() {
-            self.dropdown(index).render(frame, dropdown_area(area));
+            self.dropdown(index).render(frame, dropdown_area(area), ctx);
         }
     }
 
@@ -1788,31 +1766,58 @@ impl PreviewState {
         let areas = grid_areas.map(dropdown_area);
 
         ctx.push_slot(dropdown_child_key(0), areas[0], |ctx| {
-            self.dropdown_fuzzy_single
-                .layout_overlay::<Msg>(areas[0], overlay_bounds, ctx);
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_fuzzy_single,
+                    areas[0],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(dropdown_child_key(1), areas[1], |ctx| {
-            self.dropdown_multi_contains
-                .layout_overlay::<Msg>(areas[1], overlay_bounds, ctx);
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_multi_contains,
+                    areas[1],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(dropdown_child_key(2), areas[2], |ctx| {
-            self.dropdown_no_search_immediate
-                .layout_overlay::<Msg>(areas[2], overlay_bounds, ctx);
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_no_search_immediate,
+                    areas[2],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(dropdown_child_key(3), areas[3], |ctx| {
-            self.dropdown_filled_fuzzy_single
-                .layout_overlay::<Msg>(areas[3], overlay_bounds, ctx);
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_filled_fuzzy_single,
+                    areas[3],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(dropdown_child_key(4), areas[4], |ctx| {
-            self.dropdown_filled_multi_contains.layout_overlay::<Msg>(
-                areas[4],
-                overlay_bounds,
-                ctx,
-            );
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_filled_multi_contains,
+                    areas[4],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(dropdown_child_key(5), areas[5], |ctx| {
-            self.dropdown_filled_no_search_immediate
-                .layout_overlay::<Msg>(areas[5], overlay_bounds, ctx);
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_filled_no_search_immediate,
+                    areas[5],
+                    ctx,
+                );
+            });
         });
     }
 
@@ -1864,20 +1869,40 @@ impl PreviewState {
         });
 
         ctx.push_slot(panel_title_child_key(0), areas[0], |ctx| {
-            self.panel_top_left
-                .layout_overlay::<Msg>(areas[0], area, ctx);
+            ctx.with_overlay_bounds(area, |ctx| {
+                <Dropdown<PanelTitleChoice, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.panel_top_left,
+                    areas[0],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(panel_title_child_key(1), areas[1], |ctx| {
-            self.panel_top_right
-                .layout_overlay::<Msg>(areas[1], area, ctx);
+            ctx.with_overlay_bounds(area, |ctx| {
+                <Dropdown<PanelTitleChoice, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.panel_top_right,
+                    areas[1],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(panel_title_child_key(2), areas[2], |ctx| {
-            self.panel_bottom_left
-                .layout_overlay::<Msg>(areas[2], area, ctx);
+            ctx.with_overlay_bounds(area, |ctx| {
+                <Dropdown<PanelTitleChoice, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.panel_bottom_left,
+                    areas[2],
+                    ctx,
+                );
+            });
         });
         ctx.push_slot(panel_title_child_key(3), areas[3], |ctx| {
-            self.panel_bottom_right
-                .layout_overlay::<Msg>(areas[3], area, ctx);
+            ctx.with_overlay_bounds(area, |ctx| {
+                <Dropdown<PanelTitleChoice, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.panel_bottom_right,
+                    areas[3],
+                    ctx,
+                );
+            });
         });
     }
 
@@ -2060,7 +2085,7 @@ impl PreviewState {
         });
     }
 
-    fn render_date_time(&self, frame: &mut Frame, area: Rect) {
+    fn render_date_time<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let [
             instructions,
             date_area,
@@ -2083,7 +2108,7 @@ impl PreviewState {
         self.time_picker.render(frame, time_picker_area);
         frame.render_widget(Paragraph::new(self.date_time_status.clone()), status_area);
         self.date_time_picker.render(frame, combo_area);
-        self.date_time_dropdown.render(frame, dropdown_area);
+        self.date_time_dropdown.render(frame, dropdown_area, ctx);
         frame.render_widget(
             Paragraph::new(
                 "Dropdown datetime field starts with date, then centers time in the same popup. Ctrl+O edits the full datetime.",
@@ -2137,16 +2162,18 @@ impl PreviewState {
 
     fn layout_status_bar(&mut self, area: Rect, overlay_bounds: Rect, ctx: &mut LayoutCtx) {
         let [_, bar, _] = status_bar_preview_layout(area);
-        self.status_bar.layout_overlay(bar, overlay_bounds, ctx);
+        ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+            <StatusBar<Msg> as TuiNode<Msg>>::layout(&mut self.status_bar, bar, ctx);
+        });
     }
 
-    fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
+    fn render_status_bar<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let [help, bar, note] = status_bar_preview_layout(area);
         frame.render_widget(
             Paragraph::new("Reusable status bar: ` opens the menu, Theme opens a centered dropdown, ' opens AI dock. Weather and time sit on the right."),
             help,
         );
-        self.status_bar.render(frame, bar);
+        self.status_bar.render(frame, bar, ctx);
         frame.render_widget(
             Paragraph::new("Menu contents are configured with StatusBar::menu_items([...])."),
             note,
@@ -2233,12 +2260,13 @@ impl PreviewState {
             self.menu_trigger.layout(trigger_area, ctx);
         });
         ctx.push_slot(menu_panel_child_key(), trigger_area, |ctx| {
-            self.menu
-                .layout_overlay::<Msg>(trigger_area, overlay_bounds, ctx);
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Menu<&'static str> as TuiNode<Msg>>::layout(&mut self.menu, trigger_area, ctx);
+            });
         });
     }
 
-    fn render_menu(&self, frame: &mut Frame, area: Rect) {
+    fn render_menu<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let [help, trigger_row, status] = menu_preview_layout(area);
         let trigger_area = Rect::new(trigger_row.x, trigger_row.y, trigger_row.width.min(15), 1);
         frame.render_widget(
@@ -2248,6 +2276,7 @@ impl PreviewState {
             help,
         );
         self.menu_trigger.render(frame, trigger_area);
+        self.menu.render(frame, trigger_area, ctx);
         frame.render_widget(Paragraph::new(self.menu_status.clone()), status);
     }
 
@@ -2375,7 +2404,7 @@ impl PreviewState {
         self.notification_buttons[index].dispatch_event(&route, event, ctx)
     }
 
-    fn render_panel_preview(&self, frame: &mut Frame, area: Rect) {
+    fn render_panel_preview<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let [help, controls, panel_area] = panel_preview_layout(area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -2388,31 +2417,48 @@ impl PreviewState {
         self.panel_demo.render(frame, panel_area);
 
         let areas = panel_title_control_areas(controls);
-        self.render_panel_title_control(frame, areas[0], 0, "Top left");
-        self.render_panel_title_control(frame, areas[1], 1, "Top right");
-        self.render_panel_title_control(frame, areas[2], 2, "Bottom left");
-        self.render_panel_title_control(frame, areas[3], 3, "Bottom right");
+        self.render_panel_title_control(frame, areas[0], 0, "Top left", ctx);
+        self.render_panel_title_control(frame, areas[1], 1, "Top right", ctx);
+        self.render_panel_title_control(frame, areas[2], 2, "Bottom left", ctx);
+        self.render_panel_title_control(frame, areas[3], 3, "Bottom right", ctx);
     }
 
-    fn render_panel_join_preview(&self, frame: &mut Frame, area: Rect) {
+    fn render_panel_join_preview<'a>(
+        &'a self,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &mut RenderCtx<'a>,
+    ) {
         let [help, body] = panel_separator_preview_layout(area);
         frame.render_widget(
             Paragraph::new("Split/Flex/Grid separators share one Separator model. PanelHost patches edge contacts into join glyphs."),
             help,
         );
-        self.panel_join_demo.render(frame, body);
+        self.panel_join_demo.render(frame, body, ctx);
     }
 
-    fn render_panel_tabs_join_preview(&self, frame: &mut Frame, area: Rect) {
+    fn render_panel_tabs_join_preview<'a>(
+        &'a self,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &mut RenderCtx<'a>,
+    ) {
         let [help, body] = panel_separator_preview_layout(area);
         frame.render_widget(
             Paragraph::new("Tabs can host split/nested separators. Focus lands on Tabs/body components; separator glyphs are not focus targets."),
             help,
         );
-        self.panel_tabs_join_demo.render(frame, body);
+        self.panel_tabs_join_demo.render(frame, body, ctx);
     }
 
-    fn render_panel_title_control(&self, frame: &mut Frame, area: Rect, index: usize, title: &str) {
+    fn render_panel_title_control<'a>(
+        &'a self,
+        frame: &mut Frame,
+        area: Rect,
+        index: usize,
+        title: &str,
+        ctx: &mut RenderCtx<'a>,
+    ) {
         let [label, field] = panel_title_column_layout(area);
         let active = self.panel_title_dropdown(index).is_focused();
         let marker = if active { "▶ " } else { "  " };
@@ -2427,7 +2473,7 @@ impl PreviewState {
             Paragraph::new(format!("{marker}{}", title)).style(style),
             label,
         );
-        self.panel_title_dropdown(index).render(frame, field);
+        self.panel_title_dropdown(index).render(frame, field, ctx);
     }
 
     fn layout_tabs(&mut self, area: Rect, ctx: &mut LayoutCtx) {
@@ -2453,7 +2499,7 @@ impl PreviewState {
         });
     }
 
-    fn render_tabs(&self, frame: &mut Frame, area: Rect) {
+    fn render_tabs<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let [buttons_area, demos_area] = modal_tabs_preview_layout(area);
         let button_areas = modal_tabs_button_areas(buttons_area);
         for (index, button_area) in button_areas.into_iter().enumerate() {
@@ -2465,56 +2511,57 @@ impl PreviewState {
         let [boxed_label, boxed_tabs] = labeled_area(boxed);
 
         frame.render_widget(Paragraph::new("Style 1: minimal (m)"), minimal_label);
-        self.tabs_minimal.render(frame, minimal_tabs);
+        self.tabs_minimal.render(frame, minimal_tabs, ctx);
         frame.render_widget(Paragraph::new("Style 2: underline (l)"), underline_label);
-        self.tabs_underline.render(frame, underline_tabs);
+        self.tabs_underline.render(frame, underline_tabs, ctx);
         frame.render_widget(Paragraph::new("Style 3: boxed (b)"), boxed_label);
-        self.tabs_boxed.render(frame, boxed_tabs);
+        self.tabs_boxed.render(frame, boxed_tabs, ctx);
     }
 
-    fn render_layout_flex(&self, frame: &mut Frame, area: Rect) {
+    fn render_layout_flex<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         render_layout_intro(
             frame,
             area,
             "Flex: fixed + fit-content + fill with gap 2 and horizontal/vertical padding 2/1.",
         );
-        self.layout_flex.render(frame, layout_demo_body(area));
+        self.layout_flex.render(frame, layout_demo_body(area), ctx);
     }
 
-    fn render_layout_split(&self, frame: &mut Frame, area: Rect) {
+    fn render_layout_split<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         render_layout_intro(
             frame,
             area,
             "Split: two panes with ratio/content+fill style composition.",
         );
-        self.layout_split.render(frame, layout_demo_body(area));
+        self.layout_split.render(frame, layout_demo_body(area), ctx);
     }
 
-    fn render_layout_stack(&self, frame: &mut Frame, area: Rect) {
+    fn render_layout_stack<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         render_layout_intro(
             frame,
             area,
             "Stack: children share one area; later layers render on top with alignment/inset.",
         );
-        self.layout_stack.render(frame, layout_demo_body(area));
+        self.layout_stack.render(frame, layout_demo_body(area), ctx);
     }
 
-    fn render_layout_overlay(&self, frame: &mut Frame, area: Rect) {
+    fn render_layout_layered<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         render_layout_intro(
             frame,
             area,
             "Overlay: base gets normal flow; anchored layer floats without taking height.",
         );
-        self.layout_overlay.render(frame, layout_demo_body(area));
+        self.layout_layered
+            .render(frame, layout_demo_body(area), ctx);
     }
 
-    fn render_layout_grid(&self, frame: &mut Frame, area: Rect) {
+    fn render_layout_grid<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         render_layout_intro(
             frame,
             area,
             "Grid: tracks mix fixed/fit/percent/fill with row gap 1, column gap 2, padding 1.",
         );
-        self.layout_grid.render(frame, layout_demo_body(area));
+        self.layout_grid.render(frame, layout_demo_body(area), ctx);
     }
 }
 

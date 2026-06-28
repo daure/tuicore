@@ -355,10 +355,10 @@ impl<M> TuiNode<M> for Flex<M> {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         for (key, rect) in &self.rects {
             if let Some(child) = self.children.get(key) {
-                child.render(frame, *rect);
+                child.render(frame, *rect, ctx);
             }
         }
         if let Some(separator) = self.separator {
@@ -367,14 +367,6 @@ impl<M> TuiNode<M> for Flex<M> {
                     Direction::Horizontal => separator::draw_vertical(frame, *rect, separator),
                     Direction::Vertical => separator::draw_horizontal(frame, *rect, separator),
                 }
-            }
-        }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        for (key, _) in &self.rects {
-            if let Some(child) = self.children.get(key) {
-                child.render_overlay(frame, area);
             }
         }
     }
@@ -912,7 +904,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
             ctx.stop_propagation();
@@ -945,7 +937,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
     }
 
     #[test]

@@ -595,7 +595,7 @@ impl<M> TuiNode<M> for Panel {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         Self::render(self, frame, area);
     }
 
@@ -696,9 +696,9 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         self.panel.render(frame, area);
-        self.child.render(frame, self.child_area);
+        self.child.render(frame, self.child_area, ctx);
         crate::separator::patch_border_joins(
             frame,
             area,
@@ -706,10 +706,6 @@ where
             self.panel.border.unwrap_or_else(|| preset().border()),
             Style::default().fg(self.panel.visible_border_color()),
         );
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.child.render_overlay(frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -965,9 +961,9 @@ mod tests {
     use ratatui::style::Color;
 
     use crate::{
-        EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusManager, Key, KeyEvent, KeyModifiers,
-        LayoutCtx, ScrollbarConfig, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility, TreePath,
-        TuiEvent, TuiNode, animation_settings,
+        EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusManager, Key, KeyEvent, LayoutCtx,
+        ScrollbarConfig, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility, TreePath, TuiEvent,
+        TuiNode, animation_settings,
     };
 
     use super::super::{PasswordInput, TextInput, TextareaInput};
@@ -1088,7 +1084,13 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
     }
 
     #[test]

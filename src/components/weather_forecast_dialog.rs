@@ -312,7 +312,7 @@ impl<M> TuiNode<M> for WeatherForecastDialog<M> {
         self.dialog.layout(self.dialog_area(area), ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         self.dialog.render_with_content_lines(
             frame,
             self.dialog_area(area),

@@ -9,8 +9,9 @@ use time::{Date, PrimitiveDateTime};
 
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher,
-    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, TickResult, TuiEvent, TuiNode,
-    border_set, hotkey_label_spans, hotkey_underline_style, keybindings, line_width, preset, theme,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, OverlayId, OverlayLayer, OverlaySpec,
+    TickResult, TuiEvent, TuiNode, border_set, hotkey_label_spans, hotkey_underline_style,
+    keybindings, line_width, preset, theme,
 };
 
 use super::{
@@ -25,12 +26,15 @@ enum DateTimeDropdownStep {
     Time,
 }
 
+const DATE_TIME_PICKER_DROPDOWN_OVERLAY_NAMESPACE: u64 = 0x4441_5445_5449_4d45;
+
 pub struct DateTimePickerDropdown<M = ()> {
     date: DatePicker<M>,
     time: TimePicker<M>,
     open: bool,
     focused: bool,
     field_area: Rect,
+    overlay_bounds: Rect,
     step: DateTimeDropdownStep,
     placeholder: String,
     hotkey: Option<String>,
@@ -47,6 +51,7 @@ impl<M> DateTimePickerDropdown<M> {
             open: false,
             focused: false,
             field_area: Rect::default(),
+            overlay_bounds: Rect::default(),
             step: DateTimeDropdownStep::Date,
             placeholder: String::from("Select date & time"),
             hotkey: None,
@@ -110,7 +115,17 @@ impl<M> DateTimePickerDropdown<M> {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.render_field(frame, area);
+        if self.open {
+            let bounds = self.overlay_bounds;
+            ctx.push_portal(OverlayLayer::Popover, 0, bounds, |frame, bounds| {
+                self.render_portal_popup(frame, bounds);
+            });
+        }
+    }
+
+    pub fn render_field(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
             return;
         }
@@ -118,7 +133,7 @@ impl<M> DateTimePickerDropdown<M> {
         frame.render_widget(Paragraph::new(self.field_line(area.width)), field);
     }
 
-    pub fn render_popup_overlay(&self, frame: &mut Frame, bounds: Rect) {
+    fn render_portal_popup(&self, frame: &mut Frame, bounds: Rect) {
         if !self.open || bounds.is_empty() {
             return;
         }
@@ -228,6 +243,7 @@ impl<M> DateTimePickerDropdown<M> {
                         == crate::hotkey::normalize_hotkey(sequence)
                 }) {
                     self.set_open(true);
+                    ctx.request_layout();
                     ctx.request_redraw();
                     ctx.stop_propagation();
                     EventOutcome::Handled
@@ -278,6 +294,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.field_area = Rect::new(area.x, area.y, area.width, 1.min(area.height));
+        self.overlay_bounds = ctx.overlay_bounds();
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATE_TIME_PICKER_DROPDOWN_FOCUS),
@@ -296,15 +313,28 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             FocusId::new(DATE_TIME_PICKER_DROPDOWN_FOCUS),
             true,
         );
+        if self.open {
+            let popup = self.popup_area(self.overlay_bounds);
+            let mut spec = OverlaySpec::new(
+                OverlayId::for_path(
+                    DATE_TIME_PICKER_DROPDOWN_OVERLAY_NAMESPACE,
+                    &ctx.current_path(),
+                ),
+                self.field_area,
+                popup,
+            );
+            let path = ctx.current_path();
+            spec.owner_path = Some(path.clone());
+            spec.route_path = Some(path);
+            spec.bounds = Some(self.overlay_bounds);
+            spec.layer = OverlayLayer::Popover;
+            ctx.register_overlay(spec);
+        }
         LayoutResult::new(self.field_area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        Self::render(self, frame, area);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.render_popup_overlay(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -312,6 +342,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             return self.handle_hotkey(hotkey, ctx);
         }
         if let TuiEvent::ExternalEditor(response) = event {
+            let was_open = self.open;
             if !self.open {
                 if let Some(value) = parse_editor_datetime(&response.value) {
                     self.set_value(Some(value));
@@ -339,6 +370,9 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
                 }
             }
             ctx.request_clear();
+            if was_open != self.open {
+                ctx.request_layout();
+            }
             ctx.request_redraw();
             return EventOutcome::Handled;
         }
@@ -383,6 +417,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             match self.hotkey_matcher.on_key(*key) {
                 HotkeyMatch::Matched(_) => {
                     self.set_open(true);
+                    ctx.request_layout();
                     ctx.request_redraw();
                     ctx.stop_propagation();
                     return EventOutcome::Handled;
@@ -396,6 +431,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             }
             if bindings.button().press_matches(*key) {
                 self.set_open(true);
+                ctx.request_layout();
                 ctx.request_redraw();
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
@@ -405,6 +441,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
         if bindings.focus().next_matches(*key) {
             self.close();
             ctx.focus_next();
+            ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
@@ -412,6 +449,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
         if bindings.focus().previous_matches(*key) {
             self.close();
             ctx.focus_previous();
+            ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
@@ -426,12 +464,14 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
                 DateTimeDropdownStep::Time => {
                     self.close();
                     self.emit_selection(ctx);
+                    ctx.request_layout();
                 }
             }
             ctx.request_redraw();
         }
         if outcome.canceled {
             self.close();
+            ctx.request_layout();
             ctx.request_redraw();
         }
         finish_event(ctx, outcome)

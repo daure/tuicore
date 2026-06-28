@@ -8,6 +8,7 @@ pub mod focus;
 pub mod hotkey;
 pub mod keybindings;
 pub mod node;
+pub mod overlay;
 pub mod preset;
 pub mod runtime;
 pub mod scroll;
@@ -68,6 +69,10 @@ pub use node::{
     FocusRepair, FocusRequest, FocusTarget, HintSource, HitRegion, LayoutAxis, LayoutCtx,
     LayoutOverflowDiagnostic, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
     LifecycleCtx, NonFocusable, OnBlur, OverflowPolicyName, Propagation, TreePath, TuiNode,
+};
+pub use overlay::{
+    OutsideMousePolicy, OverlayId, OverlayLayer, OverlayLayoutEntry, OverlayManager, OverlayPolicy,
+    OverlaySpec, RenderCtx,
 };
 pub use preset::{BorderKind, DataViewPreset, DropdownPreset, Preset, TabsPreset, TabsVariant};
 pub use runtime::{

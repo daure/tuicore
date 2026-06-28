@@ -15,8 +15,9 @@ use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, EventCtx, EventOutcome, FocusCtx, FocusId,
     FocusRequest, FocusTarget, HintSource, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TreePath, TuiEvent,
-    TuiNode, Tween, border_set, keybindings, line_width, preset, theme,
+    LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, OverlayId, OverlayLayer, OverlaySpec,
+    TickResult, TreePath, TuiEvent, TuiNode, Tween, border_set, keybindings, line_width, preset,
+    theme,
 };
 
 mod types;
@@ -28,6 +29,7 @@ const PANEL_FOCUS: &str = "panel";
 const POPUP_BORDER_HEIGHT: u16 = 2;
 const DEFAULT_VISIBLE_ITEMS: u16 = 10;
 const MENU_BACKDROP_AMOUNT: f64 = 0.55;
+const MENU_OVERLAY_NAMESPACE: u64 = 0x4d45_4e55_504f_5055;
 
 fn highlighted_label_line(
     label: String,
@@ -422,16 +424,13 @@ where
         MenuOutcome::IDLE
     }
 
-    /// Lays out popup using external overlay bounds.
-    ///
-    /// Call during parent layout before opening so focus path and anchor are current.
-    pub fn layout_overlay<M>(
+    fn layout_with_current_bounds<M>(
         &mut self,
         trigger_area: Rect,
-        overlay_bounds: Rect,
         ctx: &mut LayoutCtx,
     ) -> LayoutResult {
         self.trigger_area = trigger_area;
+        let overlay_bounds = ctx.overlay_bounds();
         self.overlay_bounds = overlay_bounds;
         self.focus_path = ctx.current_path();
         if !self.open {
@@ -439,6 +438,17 @@ where
         }
 
         let popup_area = self.popup_area_for(trigger_area, overlay_bounds);
+        let mut spec = OverlaySpec::new(
+            OverlayId::for_path(MENU_OVERLAY_NAMESPACE, &self.focus_path),
+            trigger_area,
+            popup_area,
+        );
+        spec.owner_path = Some(self.focus_path.clone());
+        spec.route_path = Some(self.focus_path.clone());
+        spec.bounds = Some(overlay_bounds);
+        spec.layer = OverlayLayer::Popover;
+        ctx.register_overlay(spec);
+
         let [search_area, list_area] = self.popup_inner_areas(popup_area);
         if self.search_enabled() {
             ctx.register_text_entry_focusable(FocusId::new(SEARCH_FOCUS), search_area, true, true);
@@ -460,7 +470,7 @@ where
         LayoutResult::new(trigger_area)
     }
 
-    pub fn render_popup_overlay(&self, frame: &mut Frame, bounds: Rect) {
+    fn render_portal_popup(&self, frame: &mut Frame, bounds: Rect) {
         if !self.open || bounds.is_empty() {
             return;
         }
@@ -480,6 +490,15 @@ where
             );
         }
         self.render_popup(frame, popup_area);
+    }
+
+    pub fn render<'a>(&'a self, _frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        if self.open {
+            let bounds = self.overlay_bounds;
+            ctx.push_portal(OverlayLayer::Popover, 0, bounds, |frame, bounds| {
+                self.render_portal_popup(frame, bounds);
+            });
+        }
     }
 
     fn apply_open_close_context<M>(&self, outcome: MenuOutcome, ctx: &mut EventCtx<M>) {
@@ -782,13 +801,11 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        self.layout_overlay::<M>(area, area, ctx)
+        self.layout_with_current_bounds::<M>(area, ctx)
     }
 
-    fn render(&self, _frame: &mut Frame, _area: Rect) {}
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.render_popup_overlay(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -893,11 +910,10 @@ mod tests {
     fn open_popup_dims_background_outside_trigger_and_popup() {
         let mut menu = Menu::new([MenuItem::new(1, "Alpha"), MenuItem::new(2, "Beta")]);
         menu.open();
-        menu.layout_overlay::<()>(
-            Rect::new(4, 1, 5, 1),
-            Rect::new(0, 0, 20, 8),
-            &mut LayoutCtx::new(),
-        );
+        let mut layout = LayoutCtx::new();
+        layout.with_overlay_bounds(Rect::new(0, 0, 20, 8), |ctx| {
+            <Menu<_> as TuiNode<()>>::layout(&mut menu, Rect::new(4, 1, 5, 1), ctx);
+        });
         let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal should build");
 
         terminal
@@ -905,7 +921,9 @@ mod tests {
                 frame
                     .buffer_mut()
                     .set_string(0, 0, "background", Style::default());
-                menu.render_popup_overlay(frame, frame.area());
+                let mut render = crate::RenderCtx::new();
+                <Menu<_> as TuiNode<()>>::render(&menu, frame, Rect::new(4, 1, 5, 1), &mut render);
+                render.flush(frame);
             })
             .expect("menu should render");
 

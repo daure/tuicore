@@ -43,7 +43,7 @@ impl TuiNode<Msg> for DemoBox {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut tuicore::RenderCtx<'_>) {
         let title_style = Style::default()
             .fg(tuicore::theme().muted_fg())
             .add_modifier(Modifier::BOLD);
@@ -112,7 +112,7 @@ pub(crate) fn layout_stack_demo() -> Stack<Msg> {
         )
 }
 
-pub(crate) fn layout_overlay_demo() -> Overlay<DemoBox, DemoBox> {
+pub(crate) fn layout_layered_demo() -> Overlay<DemoBox, DemoBox> {
     Overlay::new(
         DemoBox::new(
             "Base content",

@@ -1091,7 +1091,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         Self::render(self, frame, area);
     }
 

@@ -129,12 +129,8 @@ where
         self.tabs.layout(area, ctx)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        self.tabs.render(frame, area);
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.tabs.render_overlay(frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.tabs.render(frame, area, ctx);
     }
 
     fn event(&mut self, event: &crate::TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {

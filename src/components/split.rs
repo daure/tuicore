@@ -159,20 +159,15 @@ where
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, _area: Rect) {
-        self.first.render(frame, self.first_area);
-        self.second.render(frame, self.second_area);
+    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        self.first.render(frame, self.first_area, ctx);
+        self.second.render(frame, self.second_area, ctx);
         if let (Some(separator), Some(area)) = (self.separator, self.separator_area) {
             match self.direction {
                 Direction::Horizontal => separator::draw_vertical(frame, area, separator),
                 Direction::Vertical => separator::draw_horizontal(frame, area, separator),
             }
         }
-    }
-
-    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
-        self.first.render_overlay(frame, area);
-        self.second.render_overlay(frame, area);
     }
 
     fn dispatch_event(
@@ -326,7 +321,7 @@ mod tests {
             LayoutResult::new(area)
         }
 
-        fn render(&self, _frame: &mut Frame, _area: Rect) {}
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
         fn tick(&mut self, _dt: Duration, _settings: AnimationSettings) -> TickResult {
             *self.ticks.borrow_mut() += 1;
