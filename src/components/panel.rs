@@ -581,7 +581,11 @@ impl Animated for Panel {
 
 impl<M> TuiNode<M> for Panel {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
+        if width_changed && let Some(scroll) = &mut self.scroll {
+            scroll.snap_horizontal_to_start();
+        }
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(PANEL_FOCUS),
@@ -667,7 +671,11 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let width_changed = self.panel.area.width != 0 && self.panel.area.width != area.width;
         self.panel.area = area;
+        if width_changed && let Some(scroll) = &mut self.panel.scroll {
+            scroll.snap_horizontal_to_start();
+        }
         let inner = Panel::inner_area(area);
         self.child_area = inner;
         let fallback_inserted = if let Some(hotkey) = self.panel.hotkey.clone() {

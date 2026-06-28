@@ -941,23 +941,17 @@ where
         let top_border = bordered && edge_borders.contains(Borders::TOP);
         let left_border = bordered && edge_borders.contains(Borders::LEFT);
         let right_border = bordered && edge_borders.contains(Borders::RIGHT);
-        let mut widths = self
+        let widths = self
             .titles
             .iter()
             .enumerate()
             .map(|(index, _)| self.boxed_tab_width(index))
             .collect::<Vec<_>>();
-        if !left_border && let Some(first_width) = widths.first_mut() {
-            *first_width = first_width.saturating_sub(1);
-        }
         let used = usize::from(left_border)
             + usize::from(right_border)
             + widths.iter().sum::<usize>()
             + tab_count;
         let fill = (width as usize).saturating_sub(used);
-        let bottom_fill = fill.saturating_sub(usize::from(
-            self.tab_hotkeys.first().and_then(Option::as_ref).is_some(),
-        ));
         let mut top = if top_border && left_border {
             vec![Span::styled(chars.top_left, border_style)]
         } else {
@@ -988,17 +982,14 @@ where
             } else {
                 self.tab_style()
             };
-            bottom.extend(self.boxed_tab_bottom_spans(
-                index,
-                &label,
-                cell_width,
-                title_style,
-                left_border,
-            ));
-            let left_pad = usize::from(left_border || index > 0);
-            if left_pad > 0 {
-                middle.push(Span::raw(" "));
-            }
+            let has_hotkey = self
+                .tab_hotkeys
+                .get(index)
+                .and_then(Option::as_ref)
+                .is_some();
+            bottom.extend(self.boxed_tab_bottom_spans(index, cell_width, title_style));
+            let left_pad = 1;
+            middle.push(Span::raw(" "));
             middle.extend(self.tab_title_spans(index, &label, selected, title_style));
             let right_pad = cell_width.saturating_sub(text_width(&label) + left_pad);
             middle.push(Span::raw(" ".repeat(right_pad)));
@@ -1007,15 +998,14 @@ where
                     top.push(Span::styled(chars.top_join, border_style));
                 }
                 middle.push(Span::styled(chars.vertical, border_style));
-                bottom.push(Span::styled(chars.horizontal, border_style));
+                if !has_hotkey {
+                    bottom.push(Span::styled(chars.horizontal, border_style));
+                }
                 if fill > 0 {
                     if top_border {
                         top.push(Span::styled(chars.horizontal.repeat(fill), border_style));
                     }
-                    bottom.push(Span::styled(
-                        chars.horizontal.repeat(bottom_fill),
-                        border_style,
-                    ));
+                    bottom.push(Span::styled(chars.horizontal.repeat(fill), border_style));
                 }
                 middle.push(Span::raw(" ".repeat(fill)));
                 if right_border {
@@ -1030,7 +1020,9 @@ where
                     top.push(Span::styled(chars.top_join, border_style));
                 }
                 middle.push(Span::styled(chars.vertical, border_style));
-                bottom.push(Span::styled(chars.horizontal, border_style));
+                if !has_hotkey {
+                    bottom.push(Span::styled(chars.horizontal, border_style));
+                }
             }
         }
 
@@ -1050,21 +1042,19 @@ where
             .map(|hotkey| hotkey_badge_width(hotkey))
             .unwrap_or_default();
 
-        title_width
-            + if hotkey_width > 0 {
-                hotkey_width + 1
-            } else {
-                2
-            }
+        let title_cell_width = title_width + 2;
+        if hotkey_width > 0 {
+            title_cell_width.max(hotkey_width + 1)
+        } else {
+            title_cell_width
+        }
     }
 
     fn boxed_tab_bottom_spans(
         &self,
         index: usize,
-        title: &str,
         cell_width: usize,
         title_style: Style,
-        left_border: bool,
     ) -> Vec<Span<'static>> {
         let border = self.border.unwrap_or_else(|| preset().border());
         let chars = border_chars(border);
@@ -1076,13 +1066,8 @@ where
             )];
         };
 
-        let title_width = text_width(title);
         let badge_width = hotkey_badge_width(hotkey);
-        let base_left_width = title_width.saturating_add(1).min(cell_width);
-        let base_right_width = cell_width.saturating_sub(base_left_width + badge_width);
-        let shift = usize::from(index == 0 && left_border) + usize::from(base_right_width > 0);
-        let left_width = base_left_width.saturating_add(shift).min(cell_width);
-        let right_width = base_right_width.saturating_sub(shift);
+        let left_width = cell_width.saturating_add(1).saturating_sub(badge_width);
         let mut spans = vec![Span::styled(
             chars.horizontal.repeat(left_width),
             border_style,
@@ -1094,10 +1079,6 @@ where
             border_style,
             title_style,
             hotkey_underline_style(title_style),
-        ));
-        spans.push(Span::styled(
-            chars.horizontal.repeat(right_width),
-            border_style,
         ));
         spans
     }
@@ -2307,9 +2288,9 @@ mod tests {
             .join("\n");
 
         let expected = [
-            "╭─────────┬────────────┬─────────┬───────────┬────────┬────────────────────────╮",
-            "│ Intro   │ Overview   │ Usage   │ State     │ Logs   │                        │",
-            "├───────┤i├──────────┤w├───────┤e├───────┤tat├──────┤l├────────────────────────┤",
+            "╭───────┬──────────┬───────┬───────┬──────┬────────────────────────────────────╮",
+            "│ Intro │ Overview │ Usage │ State │ Logs │                                    │",
+            "├─────┤i├────────┤w├─────┤e├───┤tat├────┤l├────────────────────────────────────┤",
         ]
         .join("\n");
         assert_eq!(rendered, expected);
@@ -2332,7 +2313,7 @@ mod tests {
             .map(|x| buffer.cell((x, 2)).unwrap().symbol())
             .collect::<String>();
 
-        assert_eq!(title, "│ State     │  │");
+        assert_eq!(title, "│ State │      │");
         assert!(bottom.contains("┤tat├─"), "{bottom}");
         assert!(!bottom.contains("┤tat├┴"), "{bottom}");
     }
@@ -2445,10 +2426,14 @@ mod tests {
         };
         let top = row(0);
         let middle = row(1);
+        let bottom = row(2);
 
         let top_joins = char_positions(&top, '┬');
         let middle_joins = char_positions(&middle, '│');
 
+        assert!(top.starts_with("──────────┬"), "{top}");
+        assert!(middle.starts_with(" Overview │"), "{middle}");
+        assert!(bottom.starts_with("────────┤o├"), "{bottom}");
         assert_eq!(&top_joins[..3], &middle_joins[..3], "{top}\n{middle}");
     }
 

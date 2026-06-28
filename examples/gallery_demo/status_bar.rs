@@ -1,4 +1,5 @@
 use serde_json::json;
+use time::OffsetDateTime;
 
 use tuicore::WeatherReport;
 
@@ -10,15 +11,16 @@ pub(crate) fn demo_weather_report() -> WeatherReport {
 }
 
 fn open_meteo_fixture() -> String {
-    let dates = [
-        "2026-06-25",
-        "2026-06-26",
-        "2026-06-27",
-        "2026-06-28",
-        "2026-06-29",
-        "2026-06-30",
-        "2026-07-01",
-    ];
+    let today = OffsetDateTime::now_local()
+        .unwrap_or_else(|_| OffsetDateTime::now_utc())
+        .date();
+    let dates = (0..7)
+        .map(|offset| {
+            today
+                .saturating_add(time::Duration::days(offset))
+                .to_string()
+        })
+        .collect::<Vec<_>>();
     let daily_codes = [0, 61, 80, 3, 51, 2, 0];
     let highs = [30.0, 35.0, 33.0, 28.0, 24.0, 23.0, 22.0];
     let lows = [16.0, 26.0, 25.0, 20.0, 17.0, 15.0, 16.0];
@@ -81,4 +83,23 @@ fn open_meteo_fixture() -> String {
         }
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demo_weather_report_renders_seven_forecast_days() {
+        let report = demo_weather_report();
+
+        assert_eq!(
+            report
+                .raw()
+                .lines()
+                .filter(|line| line.starts_with('┌'))
+                .count(),
+            7
+        );
+    }
 }

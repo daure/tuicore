@@ -160,7 +160,7 @@ fn horizontal_scroll_offsets_rendered_cells() {
 }
 
 #[test]
-fn shifted_horizontal_keys_jump_eight_columns() {
+fn controlled_horizontal_keys_jump_eight_columns() {
     let mut view = DataView::new([Row::new(1, "ABCDEFGHIJKLMNOPQRST")], |row| row.id).column(
         Column::text("name", "Name", Constraint::Length(20), |row: &Row| {
             row.name.to_string()
@@ -172,8 +172,8 @@ fn shifted_horizontal_keys_jump_eight_columns() {
 
     let right = view.on_key_with_settings(
         KeyEvent {
-            code: Key::Right,
-            modifiers: KeyModifiers::SHIFT,
+            code: Key::Char('L'),
+            modifiers: KeyModifiers::CONTROL,
         },
         area,
         settings,
@@ -184,13 +184,44 @@ fn shifted_horizontal_keys_jump_eight_columns() {
     let left = view.on_key_with_settings(
         KeyEvent {
             code: Key::Char('H'),
-            modifiers: KeyModifiers::NONE,
+            modifiers: KeyModifiers::CONTROL,
         },
         area,
         settings,
     );
     assert!(left.handled);
     assert_eq!(view.scroll.offset().x, 0);
+}
+
+#[test]
+fn width_change_resets_horizontal_scroll_to_start() {
+    let mut view = DataView::new([Row::new(1, "ABCDEFGHIJKLMNOPQRST")], |row| row.id).column(
+        Column::text("name", "Name", Constraint::Length(20), |row: &Row| {
+            row.name.to_string()
+        }),
+    );
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let narrow = Rect::new(0, 0, 10, 2);
+    let wide = Rect::new(0, 0, 18, 2);
+    let mut layout = LayoutCtx::new();
+
+    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, narrow, &mut layout);
+    let outcome = view.on_key_with_settings(
+        KeyEvent {
+            code: Key::Char('L'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        narrow,
+        settings,
+    );
+    assert!(outcome.handled);
+    assert_eq!(view.scroll.offset().x, 8);
+
+    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, wide, &mut layout);
+
+    assert_eq!(view.scroll.offset().x, 0);
+    assert_eq!(view.scroll.target_offset().x, 0);
 }
 
 #[test]
@@ -250,7 +281,7 @@ fn cleared_hotkey_is_not_registered_on_focus_target() {
 }
 
 #[test]
-fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
+fn controlled_horizontal_keys_scroll_tree_instead_of_expanding() {
     let mut view = DataView::new(
         [
             Row {
@@ -279,7 +310,7 @@ fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
     let outcome = view.on_key_with_settings(
         KeyEvent {
             code: Key::Char('L'),
-            modifiers: KeyModifiers::NONE,
+            modifiers: KeyModifiers::CONTROL,
         },
         Rect::new(0, 0, 8, 3),
         settings,
@@ -291,7 +322,7 @@ fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
 }
 
 #[test]
-fn shifted_horizontal_keys_follow_configured_navigation_keys() {
+fn controlled_horizontal_keys_follow_configured_navigation_keys() {
     let bindings = KeyBindings::new()
         .with_nav_line_left([
             KeySpec::key(Key::Left),
@@ -315,7 +346,7 @@ fn shifted_horizontal_keys_follow_configured_navigation_keys() {
     let right = view.on_key_with_settings_and_bindings(
         KeyEvent {
             code: Key::Char('D'),
-            modifiers: KeyModifiers::NONE,
+            modifiers: KeyModifiers::CONTROL,
         },
         area,
         settings,
@@ -327,7 +358,7 @@ fn shifted_horizontal_keys_follow_configured_navigation_keys() {
     let left = view.on_key_with_settings_and_bindings(
         KeyEvent {
             code: Key::Char('A'),
-            modifiers: KeyModifiers::NONE,
+            modifiers: KeyModifiers::CONTROL,
         },
         area,
         settings,

@@ -900,17 +900,16 @@ where
 }
 
 fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
-    let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
-        || matches!(key.code, Key::Char(c) if c.is_ascii_uppercase());
-    let plain_shift = shifted
+    let plain_control = key.modifiers.contains(KeyModifiers::CONTROL)
         && !key
             .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    if !plain_shift {
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+        && matches!(key.code, Key::Char(_));
+    if !plain_control {
         return None;
     }
 
-    let base_key = unshift_key(key);
+    let base_key = uncontrol_key(key);
     if keys.line_left_matches(base_key) {
         Some(-HORIZONTAL_JUMP)
     } else if keys.line_right_matches(base_key) {
@@ -920,8 +919,8 @@ fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
     }
 }
 
-fn unshift_key(mut key: KeyEvent) -> KeyEvent {
-    key.modifiers.remove(KeyModifiers::SHIFT);
+fn uncontrol_key(mut key: KeyEvent) -> KeyEvent {
+    key.modifiers.remove(KeyModifiers::CONTROL);
     if let Key::Char(c) = key.code {
         key.code = Key::Char(c.to_ascii_lowercase());
     }
@@ -953,7 +952,11 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
+        if width_changed {
+            self.scroll.snap_horizontal_to_start();
+        }
         if let Some(hotkey) = &self.hotkey {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATA_VIEW_FOCUS),

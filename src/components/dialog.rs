@@ -759,7 +759,11 @@ impl<M> Animated for Dialog<M> {
 
 impl<M> TuiNode<M> for Dialog<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
+        if width_changed && let Some(scroll) = &mut self.scroll {
+            scroll.snap_horizontal_to_start();
+        }
         ctx.register_focusable(FocusId::new(DIALOG_FOCUS), area, true);
         LayoutResult::new(area)
     }
@@ -834,7 +838,11 @@ where
     C: TuiNode<M>,
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let width_changed = self.dialog.area.width != 0 && self.dialog.area.width != area.width;
         self.dialog.area = area;
+        if width_changed && let Some(scroll) = &mut self.dialog.scroll {
+            scroll.snap_horizontal_to_start();
+        }
         let inner = Dialog::<M>::inner_area_for(area, self.dialog.resolved_edge_borders());
         self.child_area = inner;
         let fallback_inserted = ctx

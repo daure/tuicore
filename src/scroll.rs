@@ -429,6 +429,15 @@ impl ScrollState {
         }
     }
 
+    pub fn snap_horizontal_to_start(&mut self) -> ScrollOutcome {
+        let changed = self.x.snap_to(0);
+        ScrollOutcome {
+            handled: changed,
+            changed,
+            active: self.is_active(),
+        }
+    }
+
     pub fn layout(&self, area: Rect, content: ScrollSize) -> ScrollLayout {
         if area.is_empty() {
             return ScrollLayout {
@@ -631,17 +640,16 @@ impl Animated for ScrollState {
 }
 
 fn horizontal_jump(keybindings: &KeyBindings, key: KeyEvent) -> Option<isize> {
-    let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
-        || matches!(key.code, Key::Char(c) if c.is_ascii_uppercase());
-    let plain_shift = shifted
+    let plain_control = key.modifiers.contains(KeyModifiers::CONTROL)
         && !key
             .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    if !plain_shift {
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+        && matches!(key.code, Key::Char(_));
+    if !plain_control {
         return None;
     }
 
-    let base_key = unshift_key(key);
+    let base_key = uncontrol_key(key);
     if keybindings.line_left_matches(base_key) {
         Some(-HORIZONTAL_JUMP)
     } else if keybindings.line_right_matches(base_key) {
@@ -651,8 +659,8 @@ fn horizontal_jump(keybindings: &KeyBindings, key: KeyEvent) -> Option<isize> {
     }
 }
 
-fn unshift_key(mut key: KeyEvent) -> KeyEvent {
-    key.modifiers.remove(KeyModifiers::SHIFT);
+fn uncontrol_key(mut key: KeyEvent) -> KeyEvent {
+    key.modifiers.remove(KeyModifiers::CONTROL);
     if let Key::Char(c) = key.code {
         key.code = Key::Char(c.to_ascii_lowercase());
     }
@@ -965,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn shifted_horizontal_vim_keys_jump_eight_columns() {
+    fn controlled_horizontal_vim_keys_jump_eight_columns() {
         let mut scroll = ScrollState::new(ScrollAxes::Horizontal);
         let mut settings = AnimationSettings::default();
         settings.enabled = false;
@@ -973,7 +981,7 @@ mod tests {
         let right = scroll.on_key(
             KeyEvent {
                 code: Key::Char('l'),
-                modifiers: KeyModifiers::SHIFT,
+                modifiers: KeyModifiers::CONTROL,
             },
             ScrollSize::new(5, 1),
             ScrollSize::new(20, 1),
@@ -987,7 +995,7 @@ mod tests {
         let left = scroll.on_key(
             KeyEvent {
                 code: Key::Char('h'),
-                modifiers: KeyModifiers::SHIFT,
+                modifiers: KeyModifiers::CONTROL,
             },
             ScrollSize::new(5, 1),
             ScrollSize::new(20, 1),
@@ -1064,6 +1072,34 @@ mod tests {
 
         assert_eq!(scroll.offset().y, 10);
         assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn horizontal_snap_to_start_clears_target_and_animation() {
+        let mut scroll = ScrollState::new(ScrollAxes::Both).behavior(ScrollBehavior {
+            line_step: 1,
+            page_overlap: 1,
+            animation: AnimationSpec {
+                enabled: None,
+                duration: Some(Duration::from_millis(100)),
+                easing: Some(crate::Easing::Linear),
+            },
+        });
+
+        scroll.scroll_to(
+            ScrollOffset::new(10, 4),
+            ScrollSize::new(5, 5),
+            ScrollSize::new(20, 20),
+            AnimationSettings::default(),
+        );
+        scroll.tick(Duration::from_millis(50), AnimationSettings::default());
+
+        let outcome = scroll.snap_horizontal_to_start();
+
+        assert!(outcome.handled);
+        assert!(outcome.changed);
+        assert_eq!(scroll.offset(), ScrollOffset::new(0, 2));
+        assert_eq!(scroll.target_offset(), ScrollOffset::new(0, 4));
     }
 
     #[test]

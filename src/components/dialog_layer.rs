@@ -34,6 +34,7 @@ pub struct DialogLayer<Base, Layer> {
     placement: DialogLayerPlacement,
     base_rect: Rect,
     layer_rect: Rect,
+    layer_path: TreePath,
     backdrop: DialogBackdrop,
     backdrop_tween: Tween,
     restore_focus_on_close: bool,
@@ -187,6 +188,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             placement: DialogLayerPlacement::Center,
             base_rect: Rect::default(),
             layer_rect: Rect::default(),
+            layer_path: TreePath::from_keys([ChildKey::second()]),
             backdrop: DialogBackdrop::none(),
             backdrop_tween: Tween::idle(0.0),
             restore_focus_on_close: true,
@@ -241,7 +243,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
     fn focus_request_for_active_change(&mut self, active: bool) -> FocusRequest {
         if active {
             self.reset_open_focus_bookkeeping();
-            FocusRequest::Next
+            FocusRequest::Path(self.layer_path.clone())
         } else if self.restore_focus_on_close {
             FocusRequest::Last
         } else {
@@ -398,6 +400,7 @@ where
             self.placement,
             self.layer_edge_offset,
         );
+        self.layer_path = ctx.current_path().child(ChildKey::second());
 
         if self.active {
             let was_disabled = ctx.focus_disabled();
@@ -950,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn set_active_with_context_requests_layout_redraw_and_focus() {
+    fn set_active_with_context_requests_layout_redraw_and_layer_focus() {
         let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
         let mut ctx = EventCtx::<()>::default();
 
@@ -959,7 +962,32 @@ mod tests {
         assert!(dialog_layer.is_active());
         assert!(ctx.layout_requested());
         assert!(ctx.redraw_requested());
-        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Next));
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::Path(TreePath::from_keys([
+                ChildKey::second()
+            ])))
+        );
+    }
+
+    #[test]
+    fn nested_dialog_layer_open_focuses_its_own_layer_path() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
+        let mut layout = LayoutCtx::new();
+        layout.push_slot(ChildKey::new("nested"), Rect::new(0, 0, 10, 4), |ctx| {
+            dialog_layer.layout(Rect::new(0, 0, 10, 4), ctx);
+        });
+        let mut ctx = EventCtx::<()>::default();
+
+        dialog_layer.set_active_with_context(true, &mut ctx);
+
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::Path(TreePath::from_keys([
+                ChildKey::new("nested"),
+                ChildKey::second(),
+            ])))
+        );
     }
 
     #[test]
