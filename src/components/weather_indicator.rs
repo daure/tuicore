@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 
 use super::status_action::{StatusAction, measured_line, register_status_focus};
 use crate::{
@@ -32,6 +32,7 @@ pub struct WeatherReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HourlyWeather {
     hours: Vec<WeatherHour>,
+    utc_offset_seconds: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,7 +163,13 @@ impl HourlyWeather {
                     condition,
                 })
                 .collect(),
+            utc_offset_seconds: None,
         }
+    }
+
+    pub(crate) fn with_utc_offset(mut self, utc_offset_seconds: Option<i32>) -> Self {
+        self.utc_offset_seconds = utc_offset_seconds;
+        self
     }
 
     fn current_summary(&self, location: Option<String>) -> Option<WeatherSummary> {
@@ -178,7 +185,7 @@ impl HourlyWeather {
     }
 
     fn current_hour_index(&self) -> Option<usize> {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let now = self.now();
         let today = format!("{}T", now.date());
         let current_hour = now.time().hour();
         let same_day = self
@@ -198,6 +205,15 @@ impl HourlyWeather {
             .find(|(_, hour)| *hour <= current_hour)
             .or_else(|| same_day.first())
             .map(|(index, _)| *index)
+    }
+
+    fn now(&self) -> OffsetDateTime {
+        self.utc_offset_seconds
+            .and_then(|seconds| UtcOffset::from_whole_seconds(seconds).ok())
+            .map(|offset| OffsetDateTime::now_utc().to_offset(offset))
+            .unwrap_or_else(|| {
+                OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
+            })
     }
 }
 
@@ -235,6 +251,10 @@ impl<M> WeatherIndicator<M> {
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: impl Into<String>) {
+        self.placeholder = placeholder.into();
     }
 
     pub fn loading(mut self, loading: bool) -> Self {

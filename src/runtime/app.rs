@@ -203,6 +203,9 @@ where
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
                 flags.redraw |= tick.changed || tick.active;
                 scheduler.set_active(tick.active);
+                if let Some(delay) = tick.next_tick {
+                    scheduler.schedule_after(delay);
+                }
             }
         }
 
@@ -231,7 +234,9 @@ where
             focus_request: None,
             focus_repair: None,
             clear: false,
-            wake_animations: ctx.redraw_requested() || ctx.layout_requested(),
+            wake_animations: ctx.redraw_requested()
+                || ctx.layout_requested()
+                || ctx.tick_requested(),
         };
         let messages = ctx.drain_messages().collect();
         self.handle_messages(&mut flags, messages);
@@ -637,6 +642,9 @@ where
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
                 flags.redraw |= tick.changed || tick.active;
                 scheduler.set_active(tick.active);
+                if let Some(delay) = tick.next_tick {
+                    scheduler.schedule_after(delay);
+                }
             }
         }
 

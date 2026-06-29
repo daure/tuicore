@@ -234,7 +234,10 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
         ctx.request_redraw();
         ctx.focus(if active {
             self.reset_open_focus_bookkeeping();
-            FocusRequest::Target(FocusId::new(DIALOG_FOCUS))
+            FocusRequest::TargetAt {
+                path: self.layer_path.clone(),
+                id: FocusId::new(DIALOG_FOCUS),
+            }
         } else {
             self.focus_request_for_active_change(false)
         });
@@ -991,6 +994,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn set_active_with_dialog_focus_targets_dialog_chrome() {
         let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody).active(false);
         let mut ctx = EventCtx::<()>::default();
@@ -999,7 +1003,10 @@ mod tests {
 
         assert_eq!(
             ctx.focus_request(),
-            Some(&FocusRequest::Target(FocusId::new(DIALOG_FOCUS)))
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::from_keys([ChildKey::second()]),
+                id: FocusId::new(DIALOG_FOCUS),
+            })
         );
     }
 

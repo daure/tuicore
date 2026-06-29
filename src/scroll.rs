@@ -723,6 +723,7 @@ impl AxisScroll {
             return TickResult {
                 changed,
                 active: false,
+                next_tick: None,
             };
         }
 
@@ -730,6 +731,7 @@ impl AxisScroll {
         TickResult {
             changed: before_offset != self.offset(),
             active: self.is_active(),
+            next_tick: None,
         }
     }
 }

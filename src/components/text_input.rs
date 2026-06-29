@@ -383,7 +383,10 @@ impl<M> TextInput<M> {
             return false;
         }
 
-        ctx.focus(FocusRequest::Target(focus_id));
+        ctx.focus(FocusRequest::TargetAt {
+            path: ctx.current_path(),
+            id: focus_id,
+        });
         ctx.stop_propagation();
         true
     }
@@ -1179,8 +1182,10 @@ impl<M> TuiNode<M> for TextInput<M> {
         }
         if let TuiEvent::ExternalEditor(response) = event {
             self.apply_external_editor_response(response);
+            self.insert_mode = false;
             self.cursor_fade.reset();
             ctx.request_clear();
+            ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
@@ -1655,6 +1660,7 @@ impl CursorFade {
             return TickResult {
                 changed,
                 active: false,
+                next_tick: None,
             };
         }
 
@@ -1664,6 +1670,7 @@ impl CursorFade {
         TickResult {
             changed: before != self.elapsed,
             active: true,
+            next_tick: None,
         }
     }
 

@@ -26,7 +26,8 @@ pub use animation::{
 pub use border::{BorderChars, border_chars, border_set};
 pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
-    ActivationMode, AiDockKeyBindings, Button, ButtonOutcome, CellContext, CheckState, Chip,
+    ActivationMode, AiDockKeyBindings, Button, ButtonOutcome, Calendar, CalendarEntryRole,
+    CalendarOutcome, CalendarSpan, CalendarTypedEvent, CalendarView, CellContext, CheckState, Chip,
     ChipColorRole, Column, CrossAlign, CrossSize, DataView, DataViewEvent, DataViewOutcome,
     DataViewPagination, DataViewSort, DataViewTypedEvent, DatePicker, DatePickerDropdown,
     DateTimeIndicator, DateTimeIndicatorFormat, DateTimePicker, DateTimePickerDropdown,
@@ -43,8 +44,9 @@ pub use components::{
     StatusBar, StatusBarKeyBindings, StatusBarMenuItem, StoreDebugView, Tab, Tabs,
     TabsSelectionMemory, TextInput, TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings,
     TimeField, TimePicker, TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome,
-    ToggleStyle, TreeAdapter, TreeGlyphs, WeatherForecastDay, WeatherForecastDialog,
-    WeatherForecastError, WeatherIndicator, WeatherReport, WeatherSummary, weather_condition_icon,
+    ToggleStyle, TreeAdapter, TreeGlyphs, WeatherFetchError, WeatherForecastDay,
+    WeatherForecastDialog, WeatherForecastError, WeatherIndicator, WeatherProviderConfig,
+    WeatherReport, WeatherSummary, weather_condition_icon,
 };
 pub use components::{AiDock, LlmEvent, LlmEventKind, ToolPolicy};
 

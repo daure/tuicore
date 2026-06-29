@@ -238,7 +238,10 @@ impl<M> TextareaInput<M> {
             return false;
         }
 
-        ctx.focus(FocusRequest::Target(FocusId::new(TEXTAREA_FOCUS)));
+        ctx.focus(FocusRequest::TargetAt {
+            path: ctx.current_path(),
+            id: FocusId::new(TEXTAREA_FOCUS),
+        });
         ctx.stop_propagation();
         true
     }
@@ -1108,9 +1111,11 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         }
         if let TuiEvent::ExternalEditor(response) = event {
             self.apply_external_editor_response(response);
+            self.insert_mode = false;
             self.scroll_cursor_into_view(disabled_animation_settings());
             self.cursor_fade.reset();
             ctx.request_clear();
+            ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;

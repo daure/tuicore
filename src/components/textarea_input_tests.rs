@@ -1,5 +1,5 @@
 use super::*;
-use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation};
+use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
 use ratatui::style::Modifier;
 
 #[test]
@@ -460,7 +460,10 @@ fn textarea_panel_click_requests_input_focus() {
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(
         ctx.focus_request(),
-        Some(&FocusRequest::Target(FocusId::new("textarea")))
+        Some(&FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new("textarea"),
+        })
     );
 }
 
@@ -594,6 +597,7 @@ fn ctrl_o_requests_external_editor() {
 #[test]
 fn external_editor_response_clamps_column_to_selected_line() {
     let mut input = TextareaInput::<()>::new().value("initial");
+    input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
     let outcome = input.event(
@@ -608,6 +612,8 @@ fn external_editor_response_clamps_column_to_selected_line() {
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(input.current_value(), "edited\nlines\n");
     assert_eq!(input.cursor, "edited\nlines".chars().count());
+    assert!(!input.insert_mode);
+    assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
     assert!(ctx.clear_requested());
 }

@@ -39,7 +39,7 @@ impl TreeDispatcher {
     where
         N: TuiNode<M>,
     {
-        let mut ctx = EventCtx::new(settings);
+        let mut ctx = EventCtx::new_at_path(settings, route.path.clone());
         let outcome = root.dispatch_event(route, event, &mut ctx);
         DispatchEffects::from_event_ctx(outcome, ctx)
     }

@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
-use time::{Date, Month, OffsetDateTime};
+use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use super::weather_indicator::{
     HourlyWeather, WeatherReport, WeatherSummary, weather_condition_icon,
@@ -13,7 +13,7 @@ use super::weather_indicator::{
 use crate::{
     Animated, AnimationSettings, Dialog, DialogCloseReason, EventCtx, EventOutcome, FocusCtx,
     FocusId, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, ScrollAxes, TickResult,
-    TuiNode, theme,
+    TuiNode, line_width, theme,
 };
 
 const PERIOD_WIDTHS: [usize; 4] = [30, 30, 29, 29];
@@ -21,6 +21,7 @@ const FORECAST_DAY_TABLE_WIDTH: usize = 123;
 const FORECAST_DAY_HEADER_LEFT: usize = 30;
 const FORECAST_DAY_HEADER_RIGHT: usize = 29;
 const WEATHER_ART_WIDTH: usize = 12;
+const DIALOG_HEIGHT_PERCENT: u16 = 80;
 
 pub struct WeatherForecastDialog<M = ()> {
     dialog: Dialog<M>,
@@ -93,7 +94,11 @@ impl<M> WeatherForecastDialog<M> {
     fn dialog_area(&self, area: Rect) -> Rect {
         let content = self.dialog.content_size();
         let width = (content.width as u16).saturating_add(3).min(area.width);
-        let height = (content.height as u16).saturating_add(3).min(area.height);
+        let max_height = percent_of(area.height, DIALOG_HEIGHT_PERCENT).max(1);
+        let height = (content.height as u16)
+            .saturating_add(3)
+            .min(max_height)
+            .min(area.height);
         Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
@@ -101,6 +106,10 @@ impl<M> WeatherForecastDialog<M> {
             height,
         )
     }
+}
+
+fn percent_of(value: u16, percent: u16) -> u16 {
+    ((u32::from(value) * u32::from(percent)) / 100).min(u32::from(u16::MAX)) as u16
 }
 
 impl std::fmt::Display for WeatherForecastError {
@@ -148,7 +157,8 @@ impl WeatherReport {
         let hourly_precip_probability = optional_f64_array(hourly, "precipitation_probability");
         let hourly_visibility = optional_f64_array(hourly, "visibility");
 
-        let start_index = current_forecast_start_index(&dates);
+        let utc_offset_seconds = open_meteo_utc_offset_seconds(&root);
+        let start_index = current_forecast_start_index(&dates, provider_today(utc_offset_seconds));
         let mut rendered_days = Vec::new();
         for (index, date) in dates.iter().enumerate().skip(start_index).take(7) {
             let date = date.as_str();
@@ -253,7 +263,8 @@ impl WeatherReport {
                     .map(|code| condition_for_wmo(*code).to_string())
                     .unwrap_or_else(|| "Weather".to_string());
                 (time.clone(), temperature, condition)
-            }));
+            }))
+            .with_utc_offset(utc_offset_seconds);
         let raw = format!(
             "Weather report: {location}\n\n{}\nLocation: {location}",
             rendered_days.join("\n")
@@ -262,12 +273,28 @@ impl WeatherReport {
     }
 }
 
-fn current_forecast_start_index(dates: &[String]) -> usize {
-    let today = OffsetDateTime::now_local()
+fn current_forecast_start_index(dates: &[String], today: Date) -> usize {
+    let today = today.to_string();
+    dates.iter().position(|date| date >= &today).unwrap_or(0)
+}
+
+fn provider_today(utc_offset_seconds: Option<i32>) -> Date {
+    utc_offset_seconds
+        .and_then(|seconds| UtcOffset::from_whole_seconds(seconds).ok())
+        .map(|offset| OffsetDateTime::now_utc().to_offset(offset).date())
+        .unwrap_or_else(local_today)
+}
+
+fn local_today() -> Date {
+    OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
         .date()
-        .to_string();
-    dates.iter().position(|date| date >= &today).unwrap_or(0)
+}
+
+fn open_meteo_utc_offset_seconds(root: &Value) -> Option<i32> {
+    root.get("utc_offset_seconds")
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
 }
 
 impl WeatherForecastDay {
@@ -456,10 +483,7 @@ fn art_value_cell(art: &str, value: &str, width: usize) -> String {
         .saturating_sub(WEATHER_ART_WIDTH)
         .saturating_sub(gap.len());
     let cell = format!("{art}{gap}{}", truncate(value, available));
-    cell.chars()
-        .chain(std::iter::repeat(' '))
-        .take(width)
-        .collect()
+    pad_right(&truncate(&cell, width), width)
 }
 
 fn weather_ascii_art(code: i64) -> [&'static str; 5] {
@@ -572,18 +596,27 @@ fn pad_right(value: &str, width: usize) -> String {
 }
 
 fn display_width(value: &str) -> usize {
-    value.chars().count()
+    line_width(&Line::from(value))
 }
 
 fn truncate(value: &str, width: usize) -> String {
     if display_width(value) <= width {
         return value.to_string();
     }
-    value
-        .chars()
-        .take(width.saturating_sub(1))
-        .chain(['…'])
-        .collect()
+    let ellipsis_width = display_width("…");
+    let max_width = width.saturating_sub(ellipsis_width);
+    let mut truncated = String::new();
+    let mut current_width = 0;
+    for ch in value.chars() {
+        let char_width = display_width(&ch.to_string());
+        if current_width + char_width > max_width {
+            break;
+        }
+        truncated.push(ch);
+        current_width += char_width;
+    }
+    truncated.push('…');
+    truncated
 }
 
 fn string_array(parent: &Value, key: &str) -> Result<Vec<String>, WeatherForecastError> {
@@ -1088,6 +1121,48 @@ mod tests {
     }
 
     #[test]
+    fn open_meteo_forecast_uses_response_timezone_for_today() {
+        let provider_now = OffsetDateTime::now_utc()
+            .to_offset(UtcOffset::from_whole_seconds(14 * 60 * 60).expect("valid offset"));
+        let yesterday_utc = OffsetDateTime::now_utc()
+            .saturating_sub(time::Duration::days(1))
+            .date()
+            .to_string();
+        let provider_today = provider_now.date().to_string();
+        let json = serde_json::json!({
+            "utc_offset_seconds": 14 * 60 * 60,
+            "hourly": {
+                "time": [format!("{yesterday_utc}T12:00"), format!("{provider_today}T12:00")],
+                "temperature_2m": [10.0, 22.0],
+                "apparent_temperature": [11.0, 23.0],
+                "weather_code": [0, 61],
+                "wind_speed_10m": [7.0, 8.0],
+                "precipitation": [0.0, 0.4]
+            },
+            "daily": {
+                "time": [yesterday_utc, provider_today.clone()],
+                "weather_code": [0, 61],
+                "temperature_2m_max": [30.0, 22.0],
+                "temperature_2m_min": [18.0, 14.0]
+            }
+        });
+
+        let report = WeatherReport::from_open_meteo_json("Here", json.to_string())
+            .expect("valid Open-Meteo report");
+
+        let today_label = date_label(&provider_today).expect("provider today should format");
+        assert!(report.raw().contains(&today_label));
+    }
+
+    #[test]
+    fn dialog_height_is_capped_at_eighty_percent_of_app_height() {
+        let dialog = WeatherForecastDialog::<()>::new()
+            .content((0..100).map(|index| format!("forecast line {index}")));
+
+        assert_eq!(dialog.dialog_area(Rect::new(0, 0, 120, 50)).height, 40);
+    }
+
+    #[test]
     fn prints_one_full_weather_day_for_visual_tuning() {
         let day = r#"┌──────────────────────────────┬─────────────────┤ Thu 25 Jun  16/30 °C ├──────────────────┬─────────────────────────────┐
 │           Morning            │             Noon             │           Evening           │            Night            │
@@ -1104,7 +1179,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .all(|line| line.chars().count() == lines[0].chars().count())
+                .all(|line| display_width(line) == display_width(lines[0]))
         );
         assert_eq!(
             WeatherForecastDay::new("Thu 25 Jun", "Sunny", "16/30 °C", body).render_text(),

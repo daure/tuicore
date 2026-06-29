@@ -151,28 +151,44 @@ impl Easing {
 pub struct TickResult {
     pub changed: bool,
     pub active: bool,
+    pub next_tick: Option<Duration>,
 }
 
 impl TickResult {
     pub const IDLE: Self = Self {
         changed: false,
         active: false,
+        next_tick: None,
     };
 
     pub const CHANGED: Self = Self {
         changed: true,
         active: false,
+        next_tick: None,
     };
 
     pub const ACTIVE: Self = Self {
         changed: true,
         active: true,
+        next_tick: None,
     };
+
+    pub fn scheduled_after(delay: Duration) -> Self {
+        Self {
+            next_tick: Some(delay),
+            ..Self::IDLE
+        }
+    }
 
     pub fn merge(self, other: Self) -> Self {
         Self {
             changed: self.changed || other.changed,
             active: self.active || other.active,
+            next_tick: match (self.next_tick, other.next_tick) {
+                (Some(left), Some(right)) => Some(left.min(right)),
+                (Some(delay), None) | (None, Some(delay)) => Some(delay),
+                (None, None) => None,
+            },
         }
     }
 }
@@ -253,6 +269,7 @@ impl Tween {
         TickResult {
             changed,
             active: false,
+            next_tick: None,
         }
     }
 
@@ -267,6 +284,7 @@ impl Tween {
         TickResult {
             changed,
             active: false,
+            next_tick: None,
         }
     }
 
@@ -341,6 +359,7 @@ impl ColorTween {
         TickResult {
             changed,
             active: false,
+            next_tick: None,
         }
     }
 
@@ -423,6 +442,7 @@ impl ScrollAnimator {
             return TickResult {
                 changed,
                 active: false,
+                next_tick: None,
             };
         }
 
@@ -438,6 +458,7 @@ impl ScrollAnimator {
         TickResult {
             changed: before != self.current,
             active: self.is_active(),
+            next_tick: None,
         }
     }
 }

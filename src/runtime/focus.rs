@@ -10,6 +10,7 @@ pub struct FocusTransition {
 pub struct FocusManager {
     current: Option<FocusTarget>,
     last_focused: Option<FocusTarget>,
+    history: Vec<FocusTarget>,
 }
 
 impl FocusManager {
@@ -109,7 +110,8 @@ impl FocusManager {
                 true,
             ),
             FocusRequest::Last => {
-                self.set_current_if_found(self.last_enabled_target(targets), targets, true)
+                let last = self.last_enabled_target(targets);
+                self.set_current_if_found(last, targets, true)
             }
             FocusRequest::Target(id) => self.set_current_if_found(
                 unique_enabled_target(targets, |target| &target.id == id),
@@ -251,6 +253,10 @@ impl FocusManager {
 
         if let Some(ref prev) = previous {
             self.last_focused = Some(prev.clone());
+            self.history.push(prev.clone());
+            if self.history.len() > 32 {
+                self.history.remove(0);
+            }
         }
 
         Some(FocusTransition {
@@ -271,12 +277,28 @@ impl FocusManager {
         }
     }
 
-    fn last_enabled_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
-        let last = self.last_focused.as_ref()?;
-        targets
-            .iter()
-            .find(|target| target.enabled && same_focus(target, last))
-            .cloned()
+    fn last_enabled_target(&mut self, targets: &[FocusTarget]) -> Option<FocusTarget> {
+        if let Some(last) = self.last_focused.as_ref()
+            && let Some(target) = targets
+                .iter()
+                .find(|target| target.enabled && same_focus(target, last))
+                .cloned()
+        {
+            return Some(target);
+        }
+
+        while let Some(last) = self.history.pop() {
+            if let Some(target) = targets
+                .iter()
+                .find(|target| target.enabled && same_focus(target, &last))
+                .cloned()
+            {
+                self.last_focused = Some(target.clone());
+                return Some(target);
+            }
+        }
+
+        None
     }
 
     fn parent_target(&self, targets: &[FocusTarget]) -> Option<FocusTarget> {
@@ -633,6 +655,42 @@ mod tests {
         manager.apply_request(&FocusRequest::Last, &targets);
 
         assert_eq!(manager.current().unwrap().id.as_str(), "one");
+    }
+
+    #[test]
+    fn last_request_skips_removed_transient_targets() {
+        let main = target_at_path("main", TreePath::from_keys([ChildKey::new("main")]));
+        let menu = target_at_path("menu", TreePath::from_keys([ChildKey::new("status-menu")]));
+        let dialog = target_at_path("dialog", TreePath::from_keys([ChildKey::new("weather")]));
+        let with_menu = [main.clone(), menu.clone()];
+        let with_dialog = [main.clone(), menu, dialog.clone()];
+        let after_close = [main.clone()];
+        let mut manager = FocusManager::new();
+
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: main.path.clone(),
+                id: main.id.clone(),
+            },
+            &with_menu,
+        );
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: TreePath::from_keys([ChildKey::new("status-menu")]),
+                id: FocusId::new("menu"),
+            },
+            &with_menu,
+        );
+        manager.apply_request(
+            &FocusRequest::TargetAt {
+                path: dialog.path.clone(),
+                id: dialog.id.clone(),
+            },
+            &with_dialog,
+        );
+        manager.apply_request(&FocusRequest::Last, &after_close);
+
+        assert_eq!(manager.current(), Some(&main));
     }
 
     #[test]

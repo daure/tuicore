@@ -1,11 +1,19 @@
 use std::hash::Hash;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+use std::{env, thread};
 
+use futures::StreamExt;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use rig::agent::{MultiTurnStreamItem, Text as RigText};
+use rig::client::CompletionClient;
+use rig::providers::chatgpt;
+use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 
 pub use super::date_time_indicator::{DateTimeIndicator, DateTimeIndicatorFormat};
 use super::dropdown::{
@@ -17,11 +25,14 @@ pub use super::weather_forecast_dialog::{
 pub use super::weather_indicator::{
     WeatherIndicator, WeatherReport, WeatherSummary, weather_condition_icon,
 };
-use super::{Button, Dropdown, Menu, MenuItem, MenuPopupDirection};
+pub use super::weather_provider::WeatherProviderConfig;
+use super::weather_provider::{WeatherFetchReceiver, spawn_weather_fetch};
+use super::{AiDock, Button, Dropdown, LlmEvent, Menu, MenuItem, MenuPopupDirection};
 use crate::{
-    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
-    FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, Theme, ThemeName,
-    TickResult, TuiEvent, TuiNode, hotkey_underline_style, line_width, set_theme, theme,
+    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
+    FocusRequest, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    LifecycleCtx, Theme, ThemeName, TickResult, TreePath, TuiEvent, TuiNode,
+    hotkey_underline_style, keybindings, line_width, set_theme, theme,
 };
 use crate::{KeyEvent, KeySpec};
 
@@ -153,7 +164,20 @@ pub struct StatusBar<M = ()> {
     menu_items: Vec<StatusBarMenuItem>,
     theme_dropdown: Dropdown<ThemeChoice, ThemeName>,
     ai: Button<M>,
+    ai_dock: AiDock<M>,
+    ai_dock_open: bool,
+    ai_dock_area: Rect,
+    ai_dock_path: TreePath,
+    custom_ai_open: bool,
     weather: WeatherIndicator<M>,
+    weather_dialog: WeatherForecastDialog<M>,
+    weather_dialog_open: bool,
+    weather_dialog_area: Rect,
+    weather_dialog_path: TreePath,
+    weather_return_focus: Option<FocusRequest>,
+    weather_provider: WeatherProviderConfig,
+    weather_fetch: Option<WeatherFetchReceiver>,
+    weather_last_fetch: Option<Instant>,
     on_weather_open: Option<Box<dyn Fn() -> M>>,
     on_store_view_open: Option<Box<dyn Fn() -> M>>,
     time: DateTimeIndicator<M>,
@@ -178,7 +202,20 @@ where
             ai: Button::new(AI_ICON)
                 .hotkey(keybindings.ai_hotkey())
                 .tab_stop(false),
+            ai_dock: default_ai_dock(),
+            ai_dock_open: false,
+            ai_dock_area: Rect::default(),
+            ai_dock_path: TreePath::new(),
+            custom_ai_open: false,
             weather: WeatherIndicator::new().tab_stop(false),
+            weather_dialog: empty_weather_dialog(),
+            weather_dialog_open: false,
+            weather_dialog_area: Rect::default(),
+            weather_dialog_path: TreePath::from_keys([status_bar_weather_dialog_key()]),
+            weather_return_focus: None,
+            weather_provider: WeatherProviderConfig::new().enabled(true),
+            weather_fetch: None,
+            weather_last_fetch: None,
             on_weather_open: None,
             on_store_view_open: None,
             time: DateTimeIndicator::new().format(DateTimeIndicatorFormat::DateTime),
@@ -212,11 +249,12 @@ where
     }
 
     pub fn weather_report(mut self, report: WeatherReport) -> Self {
-        self.weather = self.weather.report(report);
+        self.set_weather_report(report);
         self
     }
 
     pub fn set_weather_report(&mut self, report: WeatherReport) {
+        self.weather_dialog.set_report(report.clone());
         self.weather.set_report(report);
     }
 
@@ -224,11 +262,27 @@ where
         self.weather.refresh_needed()
     }
 
-    pub fn on_ai_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
-        self.ai = self.ai.on_press(handler);
+    pub fn weather_provider(mut self, provider: WeatherProviderConfig) -> Self {
+        self.set_weather_provider(provider);
         self
     }
 
+    pub fn set_weather_provider(&mut self, provider: WeatherProviderConfig) {
+        self.weather_provider = provider;
+        self.weather_fetch = None;
+        self.weather_last_fetch = None;
+    }
+
+    pub fn on_ai_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
+        self.ai = self.ai.on_press(handler);
+        self.custom_ai_open = true;
+        self
+    }
+
+    #[deprecated(
+        since = "0.1.0",
+        note = "Weather forecast now opens the built-in StatusBar dialog; use `weather_report` or `weather_provider` to configure content"
+    )]
     pub fn on_weather_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
         self.on_weather_open = Some(Box::new(handler));
         self
@@ -277,6 +331,32 @@ where
                 );
             });
             ctx.set_focus_disabled(was_disabled);
+        }
+        if self.weather_dialog_open {
+            self.weather_dialog_area = overlay_bounds;
+            self.weather_dialog_path = ctx.current_path().child(status_bar_weather_dialog_key());
+            ctx.push_slot(
+                status_bar_weather_dialog_key(),
+                self.weather_dialog_area,
+                |ctx| {
+                    <WeatherForecastDialog<M> as TuiNode<M>>::layout(
+                        &mut self.weather_dialog,
+                        self.weather_dialog_area,
+                        ctx,
+                    );
+                },
+            );
+        } else {
+            self.weather_dialog_path = ctx.current_path().child(status_bar_weather_dialog_key());
+        }
+        if self.ai_dock_open {
+            self.ai_dock_area = bottom_dock_area(overlay_bounds, 80, 80);
+            self.ai_dock_path = ctx.current_path().child(status_bar_ai_dock_key());
+            ctx.push_slot(status_bar_ai_dock_key(), self.ai_dock_area, |ctx| {
+                <AiDock<M> as TuiNode<M>>::layout(&mut self.ai_dock, self.ai_dock_area, ctx);
+            });
+        } else {
+            self.ai_dock_path = ctx.current_path().child(status_bar_ai_dock_key());
         }
         LayoutResult::new(area)
     }
@@ -329,9 +409,7 @@ where
                 ctx.stop_propagation();
             }
             StatusBarMenuItem::WeatherForecast => {
-                if let Some(on_weather_open) = &self.on_weather_open {
-                    ctx.emit(on_weather_open());
-                }
+                self.open_weather_dialog(ctx);
                 ctx.request_redraw();
                 ctx.stop_propagation();
             }
@@ -341,6 +419,126 @@ where
                 }
                 ctx.request_redraw();
                 ctx.stop_propagation();
+            }
+        }
+    }
+
+    fn open_weather_dialog(&mut self, ctx: &mut EventCtx<M>) {
+        self.weather_dialog_open = true;
+        self.weather_return_focus = ctx.focus_request().cloned();
+        if let Some(on_weather_open) = &self.on_weather_open {
+            ctx.emit(on_weather_open());
+        }
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(FocusRequest::TargetAt {
+            path: self.weather_dialog_path.clone(),
+            id: FocusId::new(crate::components::dialog::DIALOG_FOCUS),
+        });
+    }
+
+    fn open_ai_dock(&mut self, ctx: &mut EventCtx<M>) {
+        self.ai_dock_open = true;
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(FocusRequest::Path(self.ai_dock_path.clone()));
+        ctx.stop_propagation();
+    }
+
+    fn close_ai_dock(&mut self, ctx: &mut EventCtx<M>) {
+        self.ai_dock_open = false;
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(FocusRequest::Last);
+        ctx.stop_propagation();
+    }
+
+    fn close_ai_dock_if_requested(&mut self, ctx: &mut EventCtx<M>) {
+        if self.ai_dock.take_close_requested() {
+            self.close_ai_dock(ctx);
+        }
+    }
+
+    fn close_weather_dialog(&mut self, ctx: &mut EventCtx<M>) {
+        self.weather_dialog_open = false;
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(
+            self.weather_return_focus
+                .take()
+                .unwrap_or(FocusRequest::Last),
+        );
+        ctx.stop_propagation();
+    }
+
+    fn start_weather_fetch_if_due(&mut self) -> TickResult {
+        if !self.weather_provider.is_enabled() || self.weather_fetch.is_some() {
+            return TickResult::IDLE;
+        }
+        let now = Instant::now();
+        let refresh_interval = self.weather_provider.refresh_interval_value();
+        let due = self.weather_refresh_needed()
+            || self
+                .weather_last_fetch
+                .map(|last| now.duration_since(last) >= refresh_interval)
+                .unwrap_or(true);
+        if !due {
+            return self
+                .weather_last_fetch
+                .map(|last| {
+                    let elapsed = now.duration_since(last);
+                    TickResult::scheduled_after(refresh_interval.saturating_sub(elapsed))
+                })
+                .unwrap_or(TickResult::IDLE);
+        }
+
+        self.weather_fetch = Some(spawn_weather_fetch(self.weather_provider.clone()));
+        self.weather_last_fetch = Some(now);
+        self.weather.set_loading(true);
+        self.weather_dialog.set_content([
+            "Loading weather forecast…",
+            "",
+            "Status bar weather is fetching the latest Open-Meteo report.",
+        ]);
+        TickResult::ACTIVE
+    }
+
+    fn drain_weather_fetch(&mut self) -> TickResult {
+        let Some(fetch) = self.weather_fetch.take() else {
+            return TickResult::IDLE;
+        };
+        match fetch.try_recv() {
+            Ok(Ok(report)) => {
+                self.set_weather_report(report);
+                TickResult::CHANGED
+            }
+            Ok(Err(error)) => {
+                self.weather.set_loading(false);
+                self.weather.set_placeholder("Weather unavailable");
+                self.weather_dialog.set_content([
+                    "Weather unavailable.",
+                    "",
+                    error.message(),
+                    "",
+                    "Status bar weather will retry automatically.",
+                ]);
+                TickResult::CHANGED
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.weather_fetch = Some(fetch);
+                TickResult::ACTIVE
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.weather.set_loading(false);
+                self.weather.set_placeholder("Weather unavailable");
+                self.weather_dialog.set_content([
+                    "Weather unavailable.",
+                    "",
+                    "Weather fetch worker disconnected.",
+                    "",
+                    "Status bar weather will retry automatically.",
+                ]);
+                TickResult::CHANGED
             }
         }
     }
@@ -432,6 +630,17 @@ where
                 ctx,
             );
         }
+        if self.weather_dialog_open {
+            <WeatherForecastDialog<M> as TuiNode<M>>::render(
+                &self.weather_dialog,
+                frame,
+                self.weather_dialog_area,
+                ctx,
+            );
+        }
+        if self.ai_dock_open {
+            <AiDock<M> as TuiNode<M>>::render(&self.ai_dock, frame, self.ai_dock_area, ctx);
+        }
     }
 
     fn dispatch_event(
@@ -461,7 +670,11 @@ where
             .without_first_if(&status_bar_ai_key())
             .map(EventRoute::new)
         {
-            return self.ai.dispatch_event(&route, event, ctx);
+            let outcome = self.ai.dispatch_event(&route, event, ctx);
+            if outcome.handled() && !self.custom_ai_open {
+                self.open_ai_dock(ctx);
+            }
+            return outcome;
         }
 
         if let Some(route) = route
@@ -500,15 +713,69 @@ where
             return self.theme_dropdown.dispatch_event(&route, event, ctx);
         }
 
+        if let Some(route) = route
+            .path
+            .without_first_if(&status_bar_weather_dialog_key())
+            .map(EventRoute::new)
+        {
+            if weather_dialog_close_event(event) {
+                self.close_weather_dialog(ctx);
+                return EventOutcome::Handled;
+            }
+            return self.weather_dialog.dispatch_event(&route, event, ctx);
+        }
+
+        if let Some(route) = route
+            .path
+            .without_first_if(&status_bar_ai_dock_key())
+            .map(EventRoute::new)
+        {
+            let outcome = self.ai_dock.dispatch_event(&route, event, ctx);
+            self.close_ai_dock_if_requested(ctx);
+            if outcome.handled() {
+                return outcome;
+            }
+            if ai_dock_close_event(event) {
+                self.close_ai_dock(ctx);
+                return EventOutcome::Handled;
+            }
+            return outcome;
+        }
+
         EventOutcome::Ignored
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if self.ai_dock_open {
+            let outcome = self.ai_dock.event(event, ctx);
+            self.close_ai_dock_if_requested(ctx);
+            if outcome.handled() {
+                return outcome;
+            }
+            if ai_dock_close_event(event) {
+                self.close_ai_dock(ctx);
+                return EventOutcome::Handled;
+            }
+        }
+        if self.weather_dialog_open {
+            if weather_dialog_close_event(event) {
+                self.close_weather_dialog(ctx);
+                return EventOutcome::Handled;
+            }
+            let outcome = self.weather_dialog.event(event, ctx);
+            if outcome.handled() {
+                return outcome;
+            }
+        }
         if status_menu_hotkey(event, &self.keybindings) {
             return self.toggle_menu(ctx);
         }
         if status_ai_hotkey(event, &self.keybindings) {
-            return self.ai.event(event, ctx);
+            let outcome = self.ai.event(event, ctx);
+            if !self.custom_ai_open {
+                self.open_ai_dock(ctx);
+            }
+            return outcome;
         }
         if self.theme_dropdown.is_open() {
             let outcome = self.theme_dropdown.event(event, ctx);
@@ -541,25 +808,234 @@ where
             self.menu.dispatch_focus(&target, focused, ctx);
         } else if let Some(target) = target.for_child(&status_bar_theme_key()) {
             self.theme_dropdown.dispatch_focus(&target, focused, ctx);
+        } else if let Some(target) = target.for_child(&status_bar_weather_dialog_key()) {
+            self.weather_dialog.dispatch_focus(&target, focused, ctx);
+        } else if let Some(target) = target.for_child(&status_bar_ai_dock_key()) {
+            self.ai_dock.dispatch_focus(&target, focused, ctx);
+        }
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        let tick = self.start_weather_fetch_if_due();
+        if tick.changed {
+            ctx.request_redraw();
+        }
+        if tick.active {
+            ctx.request_tick();
         }
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         Animated::tick(&mut self.menu_trigger, dt, settings)
             .merge(Animated::tick(&mut self.ai, dt, settings))
+            .merge(self.drain_weather_fetch())
             .merge(<WeatherIndicator<M> as TuiNode<M>>::tick(
                 &mut self.weather,
                 dt,
                 settings,
             ))
+            .merge(self.start_weather_fetch_if_due())
             .merge(<DateTimeIndicator<M> as TuiNode<M>>::tick(
                 &mut self.time,
                 dt,
                 settings,
             ))
+            .merge(<WeatherForecastDialog<M> as TuiNode<M>>::tick(
+                &mut self.weather_dialog,
+                dt,
+                settings,
+            ))
+            .merge(if self.ai_dock_open {
+                <AiDock<M> as TuiNode<M>>::tick(&mut self.ai_dock, dt, settings)
+            } else {
+                TickResult::IDLE
+            })
             .merge(Animated::tick(&mut self.menu, dt, settings))
             .merge(Animated::tick(&mut self.theme_dropdown, dt, settings))
     }
+}
+
+fn empty_weather_dialog<M>() -> WeatherForecastDialog<M> {
+    let mut dialog = WeatherForecastDialog::new().content([
+        "No weather report loaded.",
+        "",
+        "Pass `StatusBar::weather_report(...)` to show a forecast here.",
+    ]);
+    dialog.dialog_mut().set_top_left("Weather forecast");
+    dialog
+}
+
+fn default_ai_dock<M>() -> AiDock<M>
+where
+    M: 'static,
+{
+    AiDock::new(default_ai_runner)
+}
+
+fn default_ai_runner(
+    prompt: String,
+    history: Vec<rig::message::Message>,
+    sender: mpsc::Sender<LlmEvent>,
+    request_id: u64,
+    provider: String,
+    model: String,
+) {
+    thread::spawn(move || {
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = sender.send(LlmEvent::error(
+                    request_id,
+                    format!("Tokio runtime error: {error}"),
+                ));
+                return;
+            }
+        };
+
+        runtime.block_on(async move {
+            if !provider.is_empty() && provider != "openai" {
+                let _ = sender.send(LlmEvent::error(
+                    request_id,
+                    format!("Unsupported default AI provider: {provider}"),
+                ));
+                return;
+            }
+
+            let model = resolve_chatgpt_model(model);
+            let status_sender = sender.clone();
+            let token_dir = chatgpt_token_dir();
+            let client = match chatgpt::Client::builder()
+                .oauth()
+                .token_dir(token_dir.clone())
+                .on_device_code(move |code| {
+                    let _ = status_sender.send(LlmEvent::status(
+                        request_id,
+                        format!(
+                            "OAuth: Open {} and enter code {}",
+                            code.verification_uri, code.user_code
+                        ),
+                    ));
+                })
+                .build()
+            {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = sender.send(LlmEvent::error(
+                        request_id,
+                        format!("Failed to build ChatGPT client: {error}"),
+                    ));
+                    return;
+                }
+            };
+
+            let _ = sender.send(LlmEvent::status(request_id, "Authorizing..."));
+            if let Err(error) = client.authorize().await {
+                let _ = sender.send(LlmEvent::error(
+                    request_id,
+                    format!("ChatGPT OAuth failed: {error}"),
+                ));
+                return;
+            }
+
+            let model_name = model.strip_prefix("openai/").unwrap_or(&model).to_string();
+            let agent = client
+                .agent(&model_name)
+                .preamble("You are a concise assistant inside a terminal UI. Help with the current app workflow and keep answers practical.")
+                .build();
+
+            let _ = sender.send(LlmEvent::status(
+                request_id,
+                format!("Calling {model_name}..."),
+            ));
+            let mut stream = agent
+                .stream_prompt(prompt)
+                .with_history(history)
+                .multi_turn(4)
+                .await;
+
+            let mut output = String::new();
+            let mut updated_history = Vec::new();
+            let mut usage = rig::completion::Usage::new();
+
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(
+                        StreamedAssistantContent::Text(RigText { text, .. }),
+                    )) => {
+                        output.push_str(&text);
+                        let _ = sender.send(LlmEvent::chunk(request_id, text));
+                    }
+                    Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
+                        usage = final_response
+                            .completion_calls()
+                            .last()
+                            .map(|call| call.usage)
+                            .unwrap_or_else(|| final_response.usage());
+                        usage.total_tokens =
+                            usage.input_tokens.saturating_add(usage.output_tokens);
+                        if let Some(history) = final_response.history() {
+                            updated_history = history.to_vec();
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(LlmEvent::error(
+                            request_id,
+                            format!("Stream error: {error}"),
+                        ));
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
+            let _ = sender.send(LlmEvent::complete_with_usage(
+                request_id,
+                updated_history,
+                output,
+                usage,
+            ));
+        });
+    });
+}
+
+fn resolve_chatgpt_model(model: String) -> String {
+    if model.is_empty() {
+        env::var("LLM_MODEL").unwrap_or_else(|_| "openai/gpt-5.5".to_string())
+    } else if model.contains('/') {
+        model
+    } else {
+        format!("openai/{model}")
+    }
+}
+
+fn chatgpt_token_dir() -> PathBuf {
+    if let Ok(dir) = env::var("TUICORE_CHATGPT_TOKEN_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join("tuicore").join("rig-chatgpt");
+    }
+    if let Ok(dir) = env::var("APPDATA") {
+        return PathBuf::from(dir).join("tuicore").join("rig-chatgpt");
+    }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join("tuicore")
+            .join("rig-chatgpt");
+    }
+    env::temp_dir().join("tuicore").join("rig-chatgpt")
+}
+
+fn bottom_dock_area(area: Rect, height_percent: u16, width_percent: u16) -> Rect {
+    let width = area.width.saturating_mul(width_percent.min(100)) / 100;
+    let height = area.height.saturating_mul(height_percent.min(100)) / 100;
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height),
+        width,
+        height,
+    )
 }
 
 fn status_menu(
@@ -586,6 +1062,14 @@ fn status_menu_hotkey(event: &TuiEvent, keybindings: &StatusBarKeyBindings) -> b
 
 fn status_ai_hotkey(event: &TuiEvent, keybindings: &StatusBarKeyBindings) -> bool {
     matches!(event, TuiEvent::Key(key) if keybindings.ai_open_matches(*key))
+}
+
+fn weather_dialog_close_event(event: &TuiEvent) -> bool {
+    matches!(event, TuiEvent::Key(key) if KeySpec::plain('x').matches(*key) || keybindings().focus().unfocus_matches(*key))
+}
+
+fn ai_dock_close_event(event: &TuiEvent) -> bool {
+    matches!(event, TuiEvent::Key(key) if keybindings().focus().unfocus_matches(*key))
 }
 
 fn theme_dropdown() -> Dropdown<ThemeChoice, ThemeName> {
@@ -692,6 +1176,10 @@ fn status_bar_ai_key() -> ChildKey {
     ChildKey::new("status-ai")
 }
 
+fn status_bar_ai_dock_key() -> ChildKey {
+    ChildKey::new("status-ai-dock")
+}
+
 fn status_bar_weather_key() -> ChildKey {
     ChildKey::new("status-weather")
 }
@@ -700,12 +1188,17 @@ fn status_bar_time_key() -> ChildKey {
     ChildKey::new("status-time")
 }
 
+fn status_bar_weather_dialog_key() -> ChildKey {
+    ChildKey::new("status-weather-dialog")
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::layout::Rect;
 
     use super::*;
-    use crate::{FocusId, FocusRequest, Propagation, TreePath};
+    use crate::components::weather_provider::WeatherFetchError;
+    use crate::{FocusId, FocusRequest, Key, Propagation, TreePath, TuiEvent};
 
     #[test]
     fn footer_hotkeys_are_focus_targets_but_default_weather_is_not_dead_focus() {
@@ -820,5 +1313,229 @@ mod tests {
         assert_eq!(ctx.messages(), &["store"]);
         assert!(ctx.redraw_requested());
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn ai_dock_open_focuses_dock_path_not_global_textarea_id() {
+        let mut status = StatusBar::<()>::new();
+        let mut layout = LayoutCtx::new();
+        layout.push_slot(ChildKey::new("footer"), Rect::new(0, 0, 100, 1), |ctx| {
+            status.layout(Rect::new(0, 0, 100, 1), ctx);
+        });
+        let mut ctx = EventCtx::default();
+
+        status.open_ai_dock(&mut ctx);
+
+        assert!(status.ai_dock_open);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::Path(TreePath::from_keys([
+                ChildKey::new("footer"),
+                status_bar_ai_dock_key(),
+            ])))
+        );
+    }
+
+    #[test]
+    fn ai_dock_prompt_escape_does_not_close_status_bar_dock() {
+        let mut status = StatusBar::<()>::new();
+        let mut open_ctx = EventCtx::default();
+        status.open_ai_dock(&mut open_ctx);
+        let mut layout = LayoutCtx::new();
+        layout.with_overlay_bounds(Rect::new(0, 0, 100, 40), |ctx| {
+            status.layout(Rect::new(0, 39, 100, 1), ctx);
+        });
+        let prompt = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == "textarea")
+            .cloned()
+            .expect("AI prompt should register textarea focus");
+        let mut focus_ctx = FocusCtx::default();
+        status.dispatch_focus(&prompt, true, &mut focus_ctx);
+
+        let mut enter_ctx = EventCtx::default();
+        status.dispatch_event(
+            &EventRoute::new(prompt.path.clone()),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut enter_ctx,
+        );
+        let mut escape_ctx = EventCtx::default();
+        let outcome = status.dispatch_event(
+            &EventRoute::new(prompt.path.clone()),
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut escape_ctx,
+        );
+
+        assert!(outcome.handled());
+        assert!(status.ai_dock_open);
+    }
+
+    #[test]
+    fn weather_forecast_menu_opens_built_in_dialog_without_callback() {
+        let mut status = StatusBar::<()>::new();
+        let mut layout = LayoutCtx::new();
+        layout.push_slot(ChildKey::new("footer"), Rect::new(0, 0, 100, 1), |ctx| {
+            status.layout(Rect::new(0, 0, 100, 1), ctx);
+        });
+        let mut ctx = EventCtx::default();
+
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut ctx);
+
+        assert!(status.weather_dialog_open);
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::from_keys([
+                    ChildKey::new("footer"),
+                    status_bar_weather_dialog_key(),
+                ]),
+                id: FocusId::new(crate::components::dialog::DIALOG_FOCUS),
+            })
+        );
+    }
+
+    #[test]
+    fn default_status_bar_enables_builtin_weather_provider() {
+        let status = StatusBar::<()>::new();
+
+        assert!(status.weather_provider.is_enabled());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn weather_forecast_callback_is_emitted_when_dialog_opens() {
+        let mut status = StatusBar::new().on_weather_open(|| "weather");
+        let mut ctx = EventCtx::default();
+
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut ctx);
+
+        assert!(status.weather_dialog_open);
+        assert_eq!(ctx.messages(), &["weather"]);
+    }
+
+    #[test]
+    fn built_in_weather_dialog_closes_on_dialog_close_key() {
+        let mut status = StatusBar::<()>::new();
+        let mut ctx = EventCtx::default();
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut ctx);
+        let mut close_ctx = EventCtx::default();
+
+        let outcome = status.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut close_ctx,
+        );
+
+        assert!(outcome.handled());
+        assert!(!status.weather_dialog_open);
+        assert!(close_ctx.layout_requested());
+        assert!(close_ctx.redraw_requested());
+        assert_eq!(close_ctx.focus_request(), Some(&FocusRequest::Last));
+    }
+
+    #[test]
+    fn built_in_weather_dialog_restores_menu_return_focus_on_close() {
+        let mut status = StatusBar::<()>::new();
+        let return_focus = FocusRequest::TargetAt {
+            path: TreePath::from_keys([ChildKey::new("main")]),
+            id: FocusId::new("list"),
+        };
+        let mut ctx = EventCtx::default();
+        ctx.focus(return_focus.clone());
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut ctx);
+        let mut close_ctx = EventCtx::default();
+
+        let outcome = status.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut close_ctx,
+        );
+
+        assert!(outcome.handled());
+        assert_eq!(close_ctx.focus_request(), Some(&return_focus));
+    }
+
+    #[test]
+    fn completed_builtin_weather_fetch_updates_indicator_and_dialog() {
+        let mut status =
+            StatusBar::<()>::new().weather_provider(WeatherProviderConfig::new().enabled(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        status.weather_fetch = Some(rx);
+        let report = open_meteo_test_report();
+        assert_eq!(
+            report
+                .raw()
+                .lines()
+                .filter(|line| line.starts_with('┌'))
+                .count(),
+            7
+        );
+        tx.send(Ok(report)).expect("test receiver should be alive");
+
+        let result = status.tick(Duration::from_millis(16), AnimationSettings::default());
+
+        assert!(result.changed);
+        assert!(!result.active);
+        assert!(status.weather_fetch.is_none());
+        assert!(status.weather.label().contains("21(23) °C"));
+        assert!(status.weather.label().contains("Sunny"));
+    }
+
+    fn open_meteo_test_report() -> WeatherReport {
+        let now =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let dates = (0..7)
+            .map(|offset| {
+                now.date()
+                    .saturating_add(time::Duration::days(offset))
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        let hourly_times = dates
+            .iter()
+            .flat_map(|date| {
+                ["00:00", "06:00", "12:00", "18:00"].map(move |hour| format!("{date}T{hour}"))
+            })
+            .collect::<Vec<_>>();
+        let hourly_len = hourly_times.len();
+        let json = serde_json::json!({
+            "hourly": {
+                "time": hourly_times,
+                "temperature_2m": vec![21.0; hourly_len],
+                "apparent_temperature": vec![23.0; hourly_len],
+                "weather_code": vec![0; hourly_len],
+                "wind_speed_10m": vec![8.0; hourly_len],
+                "precipitation": vec![0.0; hourly_len],
+                "precipitation_probability": vec![1.0; hourly_len],
+                "visibility": vec![10000.0; hourly_len]
+            },
+            "daily": {
+                "time": dates,
+                "weather_code": [0, 0, 0, 0, 0, 0, 0],
+                "temperature_2m_max": [24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0],
+                "temperature_2m_min": [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+            }
+        });
+        WeatherReport::from_open_meteo_json("Here", json.to_string())
+            .expect("test report should parse")
+    }
+
+    #[test]
+    fn failed_builtin_weather_fetch_shows_unavailable_state() {
+        let mut status =
+            StatusBar::<()>::new().weather_provider(WeatherProviderConfig::new().enabled(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        status.weather_fetch = Some(rx);
+        tx.send(Err(WeatherFetchError::new("offline")))
+            .expect("test receiver should be alive");
+
+        let result = status.tick(Duration::from_millis(16), AnimationSettings::default());
+
+        assert!(result.changed);
+        assert!(!result.active);
+        assert!(status.weather_fetch.is_none());
+        assert!(status.weather.label().contains("Weather unavailable"));
     }
 }

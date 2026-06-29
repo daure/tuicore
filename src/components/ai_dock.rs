@@ -498,6 +498,7 @@ pub struct AiDock<M = ()> {
     follow_log_bottom: Arc<Mutex<bool>>,
     request_id: u64,
     pending_interrupt_escape: bool,
+    close_requested: bool,
     runner: Box<
         dyn Fn(String, Vec<rig::message::Message>, mpsc::Sender<LlmEvent>, u64, String, String)
             + Send
@@ -605,6 +606,7 @@ where
             follow_log_bottom,
             request_id: 0,
             pending_interrupt_escape: false,
+            close_requested: false,
             runner: Box::new(runner),
             on_close: None,
         }
@@ -628,6 +630,12 @@ where
 
     pub fn set_dock_edge_borders(&mut self, borders: Borders) {
         self.tabs.set_edge_borders(borders);
+    }
+
+    pub fn take_close_requested(&mut self) -> bool {
+        let requested = self.close_requested;
+        self.close_requested = false;
+        requested
     }
 
     pub fn tool(
@@ -1477,6 +1485,7 @@ where
                     ctx.request_redraw();
                 }
                 AiDockMsg::Close => {
+                    self.close_requested = true;
                     if let Some(ref handler) = self.on_close {
                         ctx.emit(handler());
                     }
@@ -1522,6 +1531,7 @@ where
                     ctx.request_redraw();
                 }
                 AiDockMsg::Close => {
+                    self.close_requested = true;
                     if let Some(ref handler) = self.on_close {
                         ctx.emit(handler());
                     }
@@ -1561,6 +1571,7 @@ where
         TickResult {
             changed: changed || tabs_tick.changed,
             active: { *self.waiting.lock().unwrap() } || changed || tabs_tick.active,
+            next_tick: tabs_tick.next_tick,
         }
     }
 
@@ -1573,6 +1584,9 @@ where
         if child_ctx.layout_requested() {
             ctx.request_layout();
         }
+        if child_ctx.tick_requested() {
+            ctx.request_tick();
+        }
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
@@ -1583,6 +1597,9 @@ where
         }
         if child_ctx.layout_requested() {
             ctx.request_layout();
+        }
+        if child_ctx.tick_requested() {
+            ctx.request_tick();
         }
     }
 
@@ -1595,6 +1612,9 @@ where
         if child_ctx.layout_requested() {
             ctx.request_layout();
         }
+        if child_ctx.tick_requested() {
+            ctx.request_tick();
+        }
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
@@ -1605,6 +1625,9 @@ where
         }
         if child_ctx.layout_requested() {
             ctx.request_layout();
+        }
+        if child_ctx.tick_requested() {
+            ctx.request_tick();
         }
     }
 }
@@ -2032,11 +2055,19 @@ impl TuiNode<AiDockMsg> for ChatTabBody {
         } else {
             TickResult::IDLE
         };
+        let input_tick = self
+            .input
+            .lock()
+            .map(|mut input| input.tick(dt, settings))
+            .unwrap_or(TickResult::IDLE);
 
         TickResult {
-            changed: scrolled || spinner_tick.changed,
-            active: spinner_tick.active,
+            changed: scrolled,
+            active: false,
+            next_tick: None,
         }
+        .merge(spinner_tick)
+        .merge(input_tick)
     }
 }
 
@@ -2206,5 +2237,12 @@ impl TuiNode<AiDockMsg> for ModelTabBody {
         if let Ok(mut model) = self.model_input.lock() {
             model.set_focused(focused);
         }
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.model_input
+            .lock()
+            .map(|mut model| model.tick(dt, settings))
+            .unwrap_or(TickResult::IDLE)
     }
 }

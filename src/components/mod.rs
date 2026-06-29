@@ -1,4 +1,5 @@
 mod button;
+mod calendar;
 mod chip;
 mod data_view;
 mod date_time;
@@ -26,6 +27,7 @@ mod toggle;
 mod typography;
 mod weather_forecast_dialog;
 mod weather_indicator;
+mod weather_provider;
 
 mod ai_dock;
 pub use ai_dock::{AiDock, AiDockKeyBindings, LlmEvent, LlmEventKind, ToolPolicy};
@@ -33,6 +35,10 @@ pub use ai_dock::{AiDock, AiDockKeyBindings, LlmEvent, LlmEventKind, ToolPolicy}
 pub use crate::separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
 pub use crate::spacing::{Gap, Padding};
 pub use button::{Button, ButtonOutcome};
+pub use calendar::{
+    Calendar, CalendarEntryRole, CalendarKeyBindings, CalendarOutcome, CalendarSpan,
+    CalendarTypedEvent, CalendarView,
+};
 pub use chip::{Chip, ChipColorRole};
 pub use data_view::{
     ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
@@ -76,3 +82,4 @@ pub use text_input::{
 pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};
 pub use toggle::{Toggle, ToggleOutcome, ToggleStyle};
 pub use typography::{Header, Paragraph, ParagraphOverflow};
+pub use weather_provider::{WeatherFetchError, WeatherProviderConfig};

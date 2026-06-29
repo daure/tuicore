@@ -193,7 +193,11 @@ impl NotificationCenter {
         self.active.retain(|toast| !toast.is_finished());
         changed |= self.active.len() != before;
 
-        TickResult { changed, active }
+        TickResult {
+            changed,
+            active,
+            next_tick: None,
+        }
     }
 }
 

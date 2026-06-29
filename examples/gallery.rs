@@ -47,7 +47,7 @@ use gallery_demo::tabs::{
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 
 use futures::StreamExt;
 use ratatui::widgets::{Borders, Paragraph};
@@ -65,17 +65,18 @@ use std::thread;
 use time::{Date, Month, PrimitiveDateTime, Time};
 use tuicore::components::{AiDock, LlmEvent, StoreDebugView, ToolPolicy};
 use tuicore::{
-    ActivationMode, Animated, AnimationSettings, Button, ChildKey, Chip, ChipColorRole, DataView,
-    DataViewTypedEvent, DatePicker, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
-    DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
-    DialogTitlePosition, DispatchOutcome, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute,
-    Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField,
-    InspectValue, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem,
-    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
-    ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
-    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant,
-    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
-    TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherForecastDialog,
+    ActivationMode, Animated, AnimationSettings, Button, Calendar, CalendarEntryRole, CalendarSpan,
+    CalendarTypedEvent, ChildKey, Chip, ChipColorRole, DataView, DataViewTypedEvent, DatePicker,
+    DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, DialogBackdrop,
+    DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DialogTitlePosition,
+    DispatchOutcome, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx,
+    FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue,
+    Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem, ModalCloseReason,
+    Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow,
+    PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar,
+    StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TextInput, TextareaInput,
+    TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent,
+    TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -87,8 +88,6 @@ enum Msg {
     ModalTabsOpened(ModalTabsExample),
     ModalTabsClosed(ModalCloseReason),
     NotificationTriggered(usize),
-    WeatherForecastOpened,
-    WeatherForecastClosed(DialogCloseReason),
     StoreViewOpened,
     StoreViewClosed(ModalCloseReason),
     OpenAiDock,
@@ -98,8 +97,7 @@ enum Msg {
 type DialogDemoLayer = DialogLayer<Gallery, DialogHost<GalleryDialogContent, Msg>>;
 type ModalTabsLayer = DialogLayer<DialogDemoLayer, Tabs<Msg>>;
 type RootLayer = DialogLayer<ModalTabsLayer, DialogHost<GalleryDockOverlayContent, Msg>>;
-type WeatherLayer = DialogLayer<RootLayer, WeatherForecastDialog<Msg>>;
-type StoreViewLayer = DialogLayer<WeatherLayer, StoreDebugView<Msg>>;
+type StoreViewLayer = DialogLayer<RootLayer, StoreDebugView<Msg>>;
 
 type AppRoot = DialogLayer<StoreViewLayer, tuicore::components::AiDock<Msg>>;
 
@@ -107,12 +105,8 @@ fn store_view_layer(root: &mut AppRoot) -> &mut StoreViewLayer {
     root.base_mut()
 }
 
-fn weather_layer(root: &mut AppRoot) -> &mut WeatherLayer {
-    store_view_layer(root).base_mut()
-}
-
 fn get_root_layer(root: &mut AppRoot) -> &mut RootLayer {
-    weather_layer(root).base_mut()
+    store_view_layer(root).base_mut()
 }
 
 fn dialog_demo_layer(root: &mut AppRoot) -> &mut DialogDemoLayer {
@@ -132,19 +126,7 @@ fn main() -> tuicore::Result<()> {
     let dialog_layer = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
     let tabs_layer = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
     let root = DialogLayer::new(tabs_layer, gallery_dock_overlay()).active(false);
-    let weather = DialogLayer::new(
-        root,
-        WeatherForecastDialog::new()
-            .report(demo_weather_report())
-            .on_close(Msg::WeatherForecastClosed),
-    )
-    .active(false)
-    .layer_percent(78)
-    .layer_cross_percent(88)
-    .placement(DialogLayerPlacement::Center)
-    .backdrop(DialogBackdrop::dim().amount(0.45));
-
-    let store_view = DialogLayer::new(weather, empty_store_debug_dialog())
+    let store_view = DialogLayer::new(root, empty_store_debug_dialog())
         .active(false)
         .layer_percent(76)
         .layer_cross_percent(88)
@@ -251,12 +233,6 @@ fn main() -> tuicore::Result<()> {
                     .push(notification_for_index(index).ttl(Duration::from_secs(4)));
                 ctx.request_redraw();
             }
-            Msg::WeatherForecastOpened => {
-                weather_layer(root).set_active_with_context(true, ctx);
-            }
-            Msg::WeatherForecastClosed(_reason) => {
-                weather_layer(root).set_active_with_context(false, ctx);
-            }
             Msg::StoreViewOpened => {
                 let state = gallery(root).store_debug_state();
                 let events = gallery(root).store_debug_events();
@@ -328,7 +304,6 @@ impl Gallery {
             .menu_items([StatusBarMenuItem::Theme, StatusBarMenuItem::WeatherForecast])
             .weather_report(demo_weather_report())
             .on_ai_open(|| Msg::OpenAiDock)
-            .on_weather_open(|| Msg::WeatherForecastOpened)
             .on_store_view_open(|| Msg::StoreViewOpened);
 
         Self {
@@ -470,7 +445,7 @@ impl TuiNode<Msg> for Gallery {
         LayoutResult::new(area)
     }
 
-    fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut RenderCtx<'a>) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         self.list_panel.render(frame, self.areas.list_panel);
         self.component_list.render(frame, self.areas.list_body);
 
@@ -479,6 +454,7 @@ impl TuiNode<Msg> for Gallery {
             .render(self.selected.preview(), frame, self.areas.preview_body, ctx);
 
         self.footer.render(frame, self.areas.footer, ctx);
+        self.previews.notification_triggers.render(frame, area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -605,6 +581,8 @@ struct PreviewState {
     date_time_picker: DateTimePicker<Msg>,
     date_time_dropdown: DateTimePickerDropdown<Msg>,
     date_time_status: String,
+    calendar: Calendar<DemoCalendarEntry, &'static str, Msg>,
+    calendar_status: String,
     status_bar: StatusBar<Msg>,
     button: Button<Msg>,
     button_presses: u32,
@@ -659,6 +637,15 @@ struct PreviewState {
     layout_stack: Stack<Msg>,
     layout_layered: Overlay<DemoBox, DemoBox>,
     layout_grid: Grid<Msg>,
+}
+
+#[derive(Clone)]
+struct DemoCalendarEntry {
+    id: &'static str,
+    title: &'static str,
+    span: CalendarSpan,
+    role: Option<CalendarEntryRole>,
+    detail: &'static str,
 }
 
 impl PreviewState {
@@ -718,6 +705,8 @@ impl PreviewState {
                 .value(Some(demo_datetime()))
                 .hotkey("dt"),
             date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
+            calendar: demo_calendar(),
+            calendar_status: String::from("No calendar event yet"),
             status_bar: StatusBar::new()
                 .menu_items([
                     StatusBarMenuItem::Theme,
@@ -725,7 +714,6 @@ impl PreviewState {
                 ])
                 .weather_report(demo_weather_report())
                 .on_ai_open(|| Msg::OpenAiDock)
-                .on_weather_open(|| Msg::WeatherForecastOpened)
                 .on_store_view_open(|| Msg::StoreViewOpened),
             button: Button::new("button").hotkey("b"),
             button_presses: 0,
@@ -864,6 +852,7 @@ impl PreviewState {
                 });
             }
             PreviewKind::DateTimePicker => self.layout_date_time(area, ctx),
+            PreviewKind::Calendar => self.layout_calendar(area, ctx),
             PreviewKind::StatusBar => self.layout_status_bar(area, overlay_bounds, ctx),
             PreviewKind::DataList
             | PreviewKind::DataTable
@@ -924,6 +913,7 @@ impl PreviewState {
             PreviewKind::Colors => self.render_colors(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
             PreviewKind::DateTimePicker => self.render_date_time(frame, area, ctx),
+            PreviewKind::Calendar => self.render_calendar(frame, area, ctx),
             PreviewKind::StatusBar => self.render_status_bar(frame, area, ctx),
             PreviewKind::Button => self.render_button(frame, area),
             PreviewKind::Chip => self.render_chips(frame, area),
@@ -1037,6 +1027,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::DateTimePicker {
             return self.date_time_dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::Calendar {
+            return self.calendar_dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::StatusBar {
             return self.status_bar.dispatch_event(route, event, ctx);
@@ -1216,6 +1209,15 @@ impl PreviewState {
                     &mut self.date_time_dropdown,
                     target,
                     date_dropdown_child_key(),
+                    focused,
+                    ctx,
+                );
+            }
+            PreviewKind::Calendar => {
+                dispatch_focus_child(
+                    &mut self.calendar,
+                    target,
+                    calendar_child_key(),
                     focused,
                     ctx,
                 );
@@ -2160,6 +2162,64 @@ impl PreviewState {
         outcome
     }
 
+    fn layout_calendar(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let [_, calendar_area, _] = calendar_preview_layout(area);
+        ctx.push_slot(calendar_child_key(), calendar_area, |ctx| {
+            <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::layout(
+                &mut self.calendar,
+                calendar_area,
+                ctx,
+            );
+        });
+    }
+
+    fn render_calendar<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        let [help, calendar_area, status] = calendar_preview_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "Calendar: m/w/d switches views, t jumps today, arrows/hjkl navigate, Enter drills Month → Week → Day → Detail, Esc/Ctrl+[ goes back.",
+            ),
+            help,
+        );
+        <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::render(
+            &self.calendar,
+            frame,
+            calendar_area,
+            ctx,
+        );
+        frame.render_widget(Paragraph::new(self.calendar_status.clone()), status);
+    }
+
+    fn calendar_dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> EventOutcome {
+        let Some(route) = route
+            .path
+            .without_first_if(&calendar_child_key())
+            .map(EventRoute::new)
+        else {
+            return EventOutcome::Ignored;
+        };
+        let outcome = self.calendar.dispatch_event(&route, event, ctx);
+        self.record_calendar_events();
+        outcome
+    }
+
+    fn record_calendar_events(&mut self) {
+        let statuses = self
+            .calendar
+            .take_events()
+            .into_iter()
+            .map(calendar_event_status)
+            .collect::<Vec<_>>();
+        if !statuses.is_empty() {
+            self.calendar_status = statuses.join(" • ");
+        }
+    }
+
     fn layout_status_bar(&mut self, area: Rect, overlay_bounds: Rect, ctx: &mut LayoutCtx) {
         let [_, bar, _] = status_bar_preview_layout(area);
         ctx.with_overlay_bounds(overlay_bounds, |ctx| {
@@ -2667,6 +2727,10 @@ fn date_dropdown_child_key() -> ChildKey {
     ChildKey::new("date-dropdown")
 }
 
+fn calendar_child_key() -> ChildKey {
+    ChildKey::new("calendar")
+}
+
 fn menu_trigger_child_key() -> ChildKey {
     ChildKey::new("menu-trigger")
 }
@@ -2686,8 +2750,97 @@ fn status_bar_preview_layout(area: Rect) -> [Rect; 3] {
         .areas(area)
 }
 
+fn calendar_preview_layout(area: Rect) -> [Rect; 3] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(2),
+        ])
+        .areas(area)
+}
+
 fn demo_date() -> Date {
     Date::from_calendar_date(2026, Month::June, 22).expect("valid demo date")
+}
+
+fn demo_calendar() -> Calendar<DemoCalendarEntry, &'static str, Msg> {
+    Calendar::new(
+        demo_calendar_entries(),
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .cursor(demo_date())
+    .role(|entry| entry.role)
+    .render_entry(|entry| Line::from(entry.title))
+    .render_detail(|entry| {
+        Text::from(vec![
+            Line::from(entry.title),
+            Line::from(""),
+            Line::from(entry.detail),
+        ])
+    })
+}
+
+fn demo_calendar_entries() -> Vec<DemoCalendarEntry> {
+    vec![
+        DemoCalendarEntry {
+            id: "planning",
+            title: "Sprint planning",
+            span: CalendarSpan::timed(
+                demo_date().with_time(Time::from_hms(9, 30, 0).expect("valid time")),
+                demo_date().with_time(Time::from_hms(10, 30, 0).expect("valid time")),
+            ),
+            role: Some(CalendarEntryRole::Accent),
+            detail: "Review backlog, capacity, and goal for sprint 42.",
+        },
+        DemoCalendarEntry {
+            id: "lunch",
+            title: "Design lunch",
+            span: CalendarSpan::timed(
+                demo_date().with_time(Time::from_hms(12, 0, 0).expect("valid time")),
+                demo_date().with_time(Time::from_hms(13, 0, 0).expect("valid time")),
+            ),
+            role: Some(CalendarEntryRole::Success),
+            detail: "Informal design review over lunch.",
+        },
+        DemoCalendarEntry {
+            id: "release",
+            title: "Release freeze",
+            span: CalendarSpan::all_day(demo_date() + time::Duration::days(2)),
+            role: Some(CalendarEntryRole::Warning),
+            detail: "All-day release freeze marker.",
+        },
+        DemoCalendarEntry {
+            id: "incident",
+            title: "Incident retro",
+            span: CalendarSpan::timed(
+                (demo_date() + time::Duration::days(4))
+                    .with_time(Time::from_hms(15, 0, 0).expect("valid time")),
+                (demo_date() + time::Duration::days(4))
+                    .with_time(Time::from_hms(16, 0, 0).expect("valid time")),
+            ),
+            role: Some(CalendarEntryRole::Error),
+            detail: "Retrospective for failed deploy alert noise.",
+        },
+    ]
+}
+
+fn calendar_event_status(event: CalendarTypedEvent<&'static str>) -> String {
+    match event {
+        CalendarTypedEvent::ViewChanged { view } => format!("view {view:?}"),
+        CalendarTypedEvent::RangeChanged { start, end } => format!("range {start}..{end}"),
+        CalendarTypedEvent::CursorChanged { date } => format!("cursor {date}"),
+        CalendarTypedEvent::DateActivated { date } => format!("activated {date}"),
+        CalendarTypedEvent::EntryHighlighted { entry_id } => {
+            format!("highlight {}", entry_id.unwrap_or("none"))
+        }
+        CalendarTypedEvent::EntryActivated { entry_id } => format!("activated {entry_id}"),
+        CalendarTypedEvent::DrillDown { from, to } => format!("drill {from:?}->{to:?}"),
+        CalendarTypedEvent::Back { from, to } => format!("back {from:?}->{to:?}"),
+    }
 }
 
 fn demo_time() -> Time {
@@ -2795,6 +2948,7 @@ enum ComponentKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    Calendar,
     Toggle,
     Dropdown,
     Menu,
@@ -2811,7 +2965,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 36] = [
+    const ALL: [Self; 37] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -2835,6 +2989,7 @@ impl ComponentKind {
         Self::PasswordInput,
         Self::TextareaInput,
         Self::DateTimePicker,
+        Self::Calendar,
         Self::Toggle,
         Self::Dropdown,
         Self::Menu,
@@ -2875,6 +3030,7 @@ impl ComponentKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::Calendar => "Calendar",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
             Self::Menu => "Menu",
@@ -2907,6 +3063,7 @@ impl ComponentKind {
             | Self::PasswordInput
             | Self::TextareaInput
             | Self::DateTimePicker
+            | Self::Calendar
             | Self::Toggle
             | Self::Dropdown
             | Self::Menu => Some(Self::Inputs),
@@ -2944,6 +3101,7 @@ impl ComponentKind {
             Self::PasswordInput => PreviewKind::PasswordInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
             Self::DateTimePicker => PreviewKind::DateTimePicker,
+            Self::Calendar => PreviewKind::Calendar,
             Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
             Self::Menu => PreviewKind::Menu,
@@ -2980,6 +3138,7 @@ enum PreviewKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    Calendar,
     StatusBar,
     Button,
     Chip,
@@ -3017,6 +3176,7 @@ impl PreviewKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::Calendar => "Calendar",
             Self::StatusBar => "Status Bar",
             Self::Button => "Button",
             Self::Chip => "Chip",
@@ -3052,6 +3212,7 @@ impl PreviewKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn panel_preview_layout_keeps_panel_focus_state() {
@@ -3081,6 +3242,40 @@ mod tests {
         assert_eq!(ComponentKind::Layouts.preview(), PreviewKind::LayoutFlex);
         assert_eq!(ComponentKind::Inputs.preview(), PreviewKind::Button);
         assert_eq!(ComponentKind::DataView.preview(), PreviewKind::DataList);
+    }
+
+    #[test]
+    fn notification_trigger_toasts_render_over_gallery() {
+        let mut gallery = Gallery::new();
+        gallery
+            .previews
+            .notification_triggers
+            .push(notification_for_index(0).sticky());
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+        gallery.tick(Duration::ZERO, settings);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal should build");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let mut layout_ctx = LayoutCtx::new();
+                gallery.layout(area, &mut layout_ctx);
+                let mut render_ctx = RenderCtx::new();
+                gallery.render(frame, area, &mut render_ctx);
+            })
+            .expect("gallery should render");
+
+        assert!(buffer_contains(terminal.backend().buffer(), "One line"));
+    }
+
+    fn buffer_contains(buffer: &ratatui::buffer::Buffer, needle: &str) -> bool {
+        (0..buffer.area.height).any(|y| {
+            let row = (0..buffer.area.width)
+                .map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()).unwrap_or(" "))
+                .collect::<String>();
+            row.contains(needle)
+        })
     }
 }
 

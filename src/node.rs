@@ -123,6 +123,7 @@ pub struct EventCtx<M> {
     animation: AnimationSettings,
     clear: bool,
     external_editor: Option<ExternalEditorRequest>,
+    current_path: TreePath,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +229,7 @@ pub struct LifecycleCtx<M> {
     messages: Vec<M>,
     redraw: bool,
     layout: bool,
+    tick: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -301,7 +303,14 @@ impl<M> EventCtx<M> {
             animation,
             clear: false,
             external_editor: None,
+            current_path: TreePath::new(),
         }
+    }
+
+    pub(crate) fn new_at_path(animation: AnimationSettings, current_path: TreePath) -> Self {
+        let mut ctx = Self::new(animation);
+        ctx.current_path = current_path;
+        ctx
     }
 
     pub fn emit(&mut self, msg: M) {
@@ -336,6 +345,10 @@ impl<M> EventCtx<M> {
 
     pub fn focus(&mut self, target: FocusRequest) {
         self.focus_request = Some(target);
+    }
+
+    pub fn current_path(&self) -> TreePath {
+        self.current_path.clone()
     }
 
     pub fn focus_next(&mut self) {
@@ -1081,6 +1094,10 @@ impl<M> LifecycleCtx<M> {
         self.layout = true;
     }
 
+    pub fn request_tick(&mut self) {
+        self.tick = true;
+    }
+
     pub fn messages(&self) -> &[M] {
         &self.messages
     }
@@ -1096,6 +1113,10 @@ impl<M> LifecycleCtx<M> {
     pub fn layout_requested(&self) -> bool {
         self.layout
     }
+
+    pub fn tick_requested(&self) -> bool {
+        self.tick
+    }
 }
 
 impl<M> Default for LifecycleCtx<M> {
@@ -1104,6 +1125,7 @@ impl<M> Default for LifecycleCtx<M> {
             messages: Vec::new(),
             redraw: false,
             layout: false,
+            tick: false,
         }
     }
 }
