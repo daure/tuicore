@@ -150,6 +150,10 @@ impl Panel {
         self.hotkey_matcher = HotkeySequenceMatcher::default();
     }
 
+    pub(crate) fn set_pending_hotkey_prefix(&mut self, prefix: Option<String>) {
+        self.pending_hotkey_prefix = prefix;
+    }
+
     pub fn border(mut self, border: BorderKind) -> Self {
         self.border = Some(border);
         self

@@ -12,8 +12,8 @@ use crate::event::{
     HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEventKind, TuiEvent,
 };
 use crate::{
-    EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, TuiNode, line_width,
+    AxisProposal, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec, LayoutCtx,
+    LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, line_width,
 };
 use crate::{ScrollAxes, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui::keybindings};
 
@@ -37,6 +37,7 @@ pub struct TextareaInput<M = ()> {
     max_lines: Option<usize>,
     min_rows: usize,
     max_rows: Option<usize>,
+    wrap: bool,
     scroll: ScrollState,
     area: Rect,
     outer_area: Rect,
@@ -168,6 +169,7 @@ impl<M> TextareaInput<M> {
             max_lines: None,
             min_rows: 1,
             max_rows: None,
+            wrap: true,
             scroll: ScrollState::from_preset(ScrollAxes::Vertical, preset().scroll()),
             area: Rect::default(),
             outer_area: Rect::default(),
@@ -210,10 +212,12 @@ impl<M> TextareaInput<M> {
     }
 
     fn sync_panel(&mut self) {
-        self.panel = match &self.chrome {
+        let mut panel = match &self.chrome {
             InputChrome::Plain => Panel::new(),
             InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
         };
+        panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
+        self.panel = panel;
     }
 
     fn inline_hotkey(&self) -> Option<&str> {
@@ -266,10 +270,12 @@ impl<M> TextareaInput<M> {
         match hotkey {
             HotkeyEvent::Pending(prefix) => {
                 self.pending_hotkey_prefix = Some(prefix.clone());
+                self.sync_panel();
                 ctx.request_redraw();
             }
             HotkeyEvent::Canceled | HotkeyEvent::Commit(_) => {
                 if self.pending_hotkey_prefix.take().is_some() {
+                    self.sync_panel();
                     ctx.request_redraw();
                 }
             }
@@ -359,6 +365,15 @@ impl<M> TextareaInput<M> {
             self.min_rows = max_rows;
         }
         self
+    }
+
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.set_wrap(wrap);
+        self
+    }
+
+    pub fn set_wrap(&mut self, wrap: bool) {
+        self.wrap = wrap;
     }
 
     pub fn current_value(&self) -> &str {
@@ -480,7 +495,7 @@ impl<M> TextareaInput<M> {
     }
 
     fn content_area(&self, area: Rect) -> Rect {
-        let height = self.visible_outer_height(area.height);
+        let height = self.visible_outer_height(area.width, area.height);
         let area = Rect::new(area.x, area.y, area.width, height);
         match self.chrome {
             InputChrome::Plain => area,
@@ -489,7 +504,7 @@ impl<M> TextareaInput<M> {
     }
 
     fn render_chrome(&self, frame: &mut Frame, area: Rect) -> Rect {
-        let height = self.visible_outer_height(area.height);
+        let height = self.visible_outer_height(area.width, area.height);
         let area = Rect::new(area.x, area.y, area.width, height);
         match self.chrome {
             InputChrome::Plain => area,
@@ -508,15 +523,21 @@ impl<M> TextareaInput<M> {
         LayoutSizeHint::content(width, height).normalized(proposal)
     }
 
-    fn visible_outer_height(&self, available: u16) -> u16 {
-        let content = self
-            .preferred_rows(self.line_ranges().len())
-            .min(u16::MAX as usize) as u16;
+    fn visible_outer_height(&self, width: u16, available: u16) -> u16 {
+        let content = self.preferred_rows(self.content_rows_for_width(self.inner_width(width)));
+        let content = content.min(u16::MAX as usize) as u16;
         let height = match self.chrome {
             InputChrome::Plain => content,
             InputChrome::Panel(_) => content.saturating_add(2),
         };
         height.min(available)
+    }
+
+    fn inner_width(&self, width: u16) -> usize {
+        match self.chrome {
+            InputChrome::Plain => width as usize,
+            InputChrome::Panel(_) => width.saturating_sub(2) as usize,
+        }
     }
 
     fn visible_lines(&self, width: usize, height: usize) -> VisibleLines {
@@ -550,7 +571,8 @@ impl<M> TextareaInput<M> {
 
         let ranges = self.line_ranges();
         let (cursor_line, cursor_col) = self.cursor_line_col(&ranges);
-        let first_line = cursor_line.saturating_add(1).saturating_sub(height);
+        let cursor_row = self.cursor_visual_row(width, &ranges, cursor_line, cursor_col);
+        let first_line = cursor_row.saturating_add(1).saturating_sub(height);
         self.visible_lines_from_with_cursor(
             width,
             height,
@@ -602,6 +624,18 @@ impl<M> TextareaInput<M> {
         };
         let cursor_style = self.cursor_fade.style(value_style);
         let ranges = self.line_ranges();
+        if self.wrap {
+            return self.visible_wrapped_lines_from_with_cursor(
+                width,
+                height,
+                first_line,
+                cursor,
+                value_style,
+                hotkey_style,
+                cursor_style,
+                &ranges,
+            );
+        }
         let (cursor_line, cursor_col) = cursor.unwrap_or((usize::MAX, 0));
         let lines = ranges
             .iter()
@@ -629,6 +663,42 @@ impl<M> TextareaInput<M> {
                     (!(self.focused && self.insert_mode)
                         && line_index == ranges.len().saturating_sub(1))
                     .then_some(hotkey_style),
+                    cursor_style,
+                )
+            })
+            .collect();
+        VisibleLines { lines, first_line }
+    }
+
+    fn visible_wrapped_lines_from_with_cursor(
+        &self,
+        width: usize,
+        height: usize,
+        first_line: usize,
+        cursor: Option<(usize, usize)>,
+        value_style: Style,
+        hotkey_style: Style,
+        cursor_style: Style,
+        ranges: &[LineRange],
+    ) -> VisibleLines {
+        let rows = self.visual_rows(width, ranges);
+        let (cursor_line, cursor_col) = cursor.unwrap_or((usize::MAX, 0));
+        let last_row = rows.len().saturating_sub(1);
+        let lines = rows
+            .iter()
+            .enumerate()
+            .skip(first_line)
+            .take(height)
+            .map(|(row_index, row)| {
+                let cursor_row = row.contains_cursor(cursor_line, cursor_col);
+                self.render_line(
+                    row.range,
+                    cursor_row,
+                    0,
+                    width,
+                    value_style,
+                    (!(self.focused && self.insert_mode) && row_index == last_row)
+                        .then_some(hotkey_style),
                     cursor_style,
                 )
             })
@@ -910,7 +980,157 @@ impl<M> TextareaInput<M> {
     }
 
     fn content_size(&self, area: Rect) -> ScrollSize {
-        ScrollSize::new(area.width as usize, self.line_ranges().len())
+        self.content_size_for_width(area.width as usize)
+    }
+
+    fn content_size_for_width(&self, width: usize) -> ScrollSize {
+        ScrollSize::new(width, self.content_rows_for_width(width))
+    }
+
+    fn content_rows_for_width(&self, width: usize) -> usize {
+        if self.value.is_empty() {
+            return 1;
+        }
+        let ranges = self.line_ranges();
+        if self.wrap {
+            self.visual_rows(width, &ranges).len()
+        } else {
+            ranges.len()
+        }
+    }
+
+    fn visual_rows(&self, width: usize, ranges: &[LineRange]) -> Vec<VisualLineRange> {
+        if !self.wrap || width == 0 {
+            return ranges
+                .iter()
+                .enumerate()
+                .map(|(line_index, range)| VisualLineRange {
+                    line_index,
+                    range: *range,
+                    start_col: 0,
+                    end_col: range.len(),
+                    line_len: range.len(),
+                })
+                .collect();
+        }
+
+        let chars = self.value.chars().collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        let cursor_line_col = (self.focused && self.insert_mode).then(|| {
+            let ranges = self.line_ranges();
+            self.cursor_line_col(&ranges)
+        });
+        for (line_index, range) in ranges.iter().enumerate() {
+            let row_width = cursor_line_col
+                .filter(|(cursor_line, cursor_col)| {
+                    *cursor_line == line_index && *cursor_col == range.len()
+                })
+                .map_or(width, |_| width.saturating_sub(1).max(1));
+            if range.len() == 0 {
+                rows.push(VisualLineRange {
+                    line_index,
+                    range: *range,
+                    start_col: 0,
+                    end_col: 0,
+                    line_len: 0,
+                });
+                continue;
+            }
+
+            let mut start_col = 0;
+            let mut col = 0;
+            let mut drawn = 0;
+            let mut last_space_col = None;
+            while col < range.len() {
+                let value = chars[range.start + col];
+                let char_width = visual_char_width(value, row_width);
+                if drawn > 0 && drawn + char_width > row_width {
+                    if value.is_whitespace() {
+                        rows.push(VisualLineRange {
+                            line_index,
+                            range: LineRange {
+                                start: range.start + start_col,
+                                end: range.start + col,
+                            },
+                            start_col,
+                            end_col: col,
+                            line_len: range.len(),
+                        });
+                        col += 1;
+                        start_col = col;
+                        drawn = 0;
+                        last_space_col = None;
+                        continue;
+                    }
+                    if let Some(space_col) = last_space_col
+                        && space_col >= start_col
+                    {
+                        let next_start = space_col + 1;
+                        rows.push(VisualLineRange {
+                            line_index,
+                            range: LineRange {
+                                start: range.start + start_col,
+                                end: range.start + next_start,
+                            },
+                            start_col,
+                            end_col: next_start,
+                            line_len: range.len(),
+                        });
+                        start_col = next_start;
+                        col = next_start;
+                        drawn = 0;
+                        last_space_col = None;
+                        continue;
+                    }
+                    rows.push(VisualLineRange {
+                        line_index,
+                        range: LineRange {
+                            start: range.start + start_col,
+                            end: range.start + col,
+                        },
+                        start_col,
+                        end_col: col,
+                        line_len: range.len(),
+                    });
+                    start_col = col;
+                    drawn = 0;
+                    last_space_col = None;
+                    continue;
+                }
+                if value.is_whitespace() {
+                    last_space_col = Some(col);
+                }
+                col += 1;
+                drawn += char_width.min(row_width).max(1);
+            }
+            rows.push(VisualLineRange {
+                line_index,
+                range: LineRange {
+                    start: range.start + start_col,
+                    end: range.end,
+                },
+                start_col,
+                end_col: range.len(),
+                line_len: range.len(),
+            });
+        }
+        rows
+    }
+
+    fn cursor_visual_row(
+        &self,
+        width: usize,
+        ranges: &[LineRange],
+        cursor_line: usize,
+        cursor_col: usize,
+    ) -> usize {
+        if !self.wrap {
+            return cursor_line;
+        }
+        self.visual_rows(width, ranges)
+            .iter()
+            .position(|row| row.contains_cursor(cursor_line, cursor_col))
+            .unwrap_or_else(|| self.content_rows_for_width(width).saturating_sub(1))
     }
 
     fn scroll_area(&self, area: Rect) -> Rect {
@@ -922,7 +1142,15 @@ impl<M> TextareaInput<M> {
 
     fn scroll_geometry(&self, area: Rect) -> crate::ScrollGeometry {
         let area = self.scroll_area(area);
-        self.scroll.geometry(area, self.content_size(area))
+        let content = self.content_size(area);
+        let layout = self.scroll.layout(area, content);
+        let content = self.content_size_for_width(layout.viewport.width as usize);
+        let layout = self.scroll.layout(area, content);
+        crate::ScrollGeometry {
+            layout,
+            viewport: ScrollSize::from_area(layout.viewport),
+            content,
+        }
     }
 
     fn has_vertical_overflow(&self) -> bool {
@@ -960,15 +1188,19 @@ impl<M> TextareaInput<M> {
         }
         let geometry = self.scroll_geometry(self.area);
         let ranges = self.line_ranges();
-        let (cursor_line, _) = self.cursor_line_col(&ranges);
+        let (cursor_line, cursor_col) = self.cursor_line_col(&ranges);
+        let cursor_row = self.cursor_visual_row(
+            geometry.viewport.width as usize,
+            &ranges,
+            cursor_line,
+            cursor_col,
+        );
         let offset = self.scroll.target_offset();
         let viewport_height = geometry.viewport.height;
-        let target_y = if cursor_line < offset.y {
-            cursor_line
-        } else if cursor_line >= offset.y.saturating_add(viewport_height) {
-            cursor_line
-                .saturating_add(1)
-                .saturating_sub(viewport_height)
+        let target_y = if cursor_row < offset.y {
+            cursor_row
+        } else if cursor_row >= offset.y.saturating_add(viewport_height) {
+            cursor_row.saturating_add(1).saturating_sub(viewport_height)
         } else {
             offset.y
         };
@@ -985,6 +1217,16 @@ impl<M> TextareaInput<M> {
     fn preferred_rows(&self, content_rows: usize) -> usize {
         let rows = content_rows.max(self.min_rows);
         self.max_rows.map_or(rows, |max_rows| rows.min(max_rows))
+    }
+
+    fn measure_content_width(&self, natural_width: u16, proposal: LayoutProposal) -> Option<usize> {
+        match proposal.width {
+            AxisProposal::Unbounded => return None,
+            AxisProposal::AtMost(width) => {
+                Some(self.inner_width(width).min(natural_width as usize).max(1))
+            }
+            AxisProposal::Exact(width) => Some(self.inner_width(width).max(1)),
+        }
     }
 
     fn len_chars(&self) -> usize {
@@ -1067,7 +1309,13 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             .max()
             .unwrap_or(1)
             .min(u16::MAX as usize) as u16;
-        let height = self.preferred_rows(lines.len()).min(u16::MAX as usize) as u16;
+        let content_width = self.measure_content_width(width, proposal);
+        let rows = if self.wrap {
+            content_width.map_or(lines.len(), |width| wrapped_text_rows(&lines, width))
+        } else {
+            lines.len()
+        };
+        let height = self.preferred_rows(rows).min(u16::MAX as usize) as u16;
         self.chrome_measure(width.max(1), height, proposal)
     }
 
@@ -1141,6 +1389,11 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 return EventOutcome::Handled;
             }
             return EventOutcome::Ignored;
+        }
+        if matches!(event, TuiEvent::Yank) {
+            ctx.copy_to_clipboard(self.value.clone());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
@@ -1258,6 +1511,15 @@ struct LineRange {
     end: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct VisualLineRange {
+    line_index: usize,
+    range: LineRange,
+    start_col: usize,
+    end_col: usize,
+    line_len: usize,
+}
+
 #[derive(Default)]
 #[cfg_attr(not(test), allow(dead_code))]
 struct VisibleLines {
@@ -1276,6 +1538,18 @@ impl Deref for VisibleLines {
 impl LineRange {
     fn len(self) -> usize {
         self.end.saturating_sub(self.start)
+    }
+}
+
+impl VisualLineRange {
+    fn contains_cursor(self, cursor_line: usize, cursor_col: usize) -> bool {
+        if self.line_index != cursor_line
+            || cursor_col < self.start_col
+            || cursor_col > self.end_col
+        {
+            return false;
+        }
+        cursor_col < self.end_col || self.end_col == self.line_len
     }
 }
 
@@ -1305,6 +1579,68 @@ fn delete_forward_key(key: KeyEvent) -> bool {
         && !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+}
+
+fn visual_char_width(value: char, row_width: usize) -> usize {
+    if value == '\t' {
+        return TAB_INSERT.len().min(row_width).max(1);
+    }
+    cell_width(&value.to_string()).min(row_width).max(1)
+}
+
+fn wrapped_text_rows(lines: &[String], width: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| wrapped_line_rows(line, width))
+        .sum()
+}
+
+fn wrapped_line_rows(line: &str, width: usize) -> usize {
+    if line.is_empty() || width == 0 {
+        return 1;
+    }
+
+    let mut rows = 1;
+    let mut drawn = 0;
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut start_col = 0;
+    let mut col = 0;
+    let mut last_space_col = None;
+    while col < chars.len() {
+        let value = chars[col];
+        let char_width = visual_char_width(value, width);
+        if drawn > 0 && drawn + char_width > width {
+            if value.is_whitespace() {
+                rows += 1;
+                col += 1;
+                start_col = col;
+                drawn = 0;
+                last_space_col = None;
+                continue;
+            }
+            if let Some(space_col) = last_space_col
+                && space_col >= start_col
+            {
+                rows += 1;
+                start_col = space_col + 1;
+                col = start_col;
+                drawn = 0;
+                last_space_col = None;
+                continue;
+            }
+            rows += 1;
+            start_col = col;
+            drawn = 0;
+            last_space_col = None;
+            continue;
+        }
+        if value.is_whitespace() {
+            last_space_col = Some(col);
+        }
+        col += 1;
+        drawn += char_width.min(width).max(1);
+    }
+    rows
 }
 
 fn key_matches(expected: KeyEvent, actual: KeyEvent) -> bool {

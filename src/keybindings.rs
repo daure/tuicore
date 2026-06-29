@@ -9,6 +9,7 @@ pub struct KeyBindings {
     runtime: RuntimeKeyBindings,
     nav: NavKeyBindings,
     focus: FocusKeyBindings,
+    clipboard: ClipboardKeyBindings,
     button: ButtonKeyBindings,
     tabs: TabsKeyBindings,
     toggle: ToggleKeyBindings,
@@ -44,6 +45,11 @@ pub struct FocusKeyBindings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardKeyBindings {
+    yank: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ButtonKeyBindings {
     press: Vec<KeySpec>,
 }
@@ -69,6 +75,10 @@ pub struct DataViewKeyBindings {
     previous_page: Vec<KeySpec>,
     collapse_all: Vec<KeySpec>,
     expand_all: Vec<KeySpec>,
+    search: Vec<KeySpec>,
+    clear_search: Vec<KeySpec>,
+    filter: Vec<KeySpec>,
+    clear_filters: Vec<KeySpec>,
     top_prefix: Vec<KeySpec>,
     bottom: Vec<KeySpec>,
 }
@@ -149,6 +159,14 @@ impl Default for FocusKeyBindings {
     }
 }
 
+impl Default for ClipboardKeyBindings {
+    fn default() -> Self {
+        Self {
+            yank: vec![String::from("yy")],
+        }
+    }
+}
+
 impl Default for ButtonKeyBindings {
     fn default() -> Self {
         Self {
@@ -175,6 +193,16 @@ impl Default for DataViewKeyBindings {
             previous_page: vec![KeySpec::plain('p')],
             collapse_all: vec![KeySpec::plain('z')],
             expand_all: vec![KeySpec::shifted('z')],
+            search: vec![KeySpec::plain('/')],
+            clear_search: vec![KeySpec::key_with_modifiers(
+                Key::Char('/'),
+                KeyModifiers::CONTROL,
+            )],
+            filter: vec![KeySpec::plain('f')],
+            clear_filters: vec![KeySpec::key_with_modifiers(
+                Key::Char('f'),
+                KeyModifiers::CONTROL,
+            )],
             top_prefix: vec![KeySpec::plain('g')],
             bottom: vec![KeySpec::shifted('g')],
         }
@@ -230,6 +258,7 @@ impl Default for KeyBindings {
             runtime: RuntimeKeyBindings::default(),
             nav: NavKeyBindings::default(),
             focus: FocusKeyBindings::default(),
+            clipboard: ClipboardKeyBindings::default(),
             button: ButtonKeyBindings::default(),
             tabs: TabsKeyBindings::default(),
             toggle: ToggleKeyBindings::default(),
@@ -300,6 +329,7 @@ impl KeyBindings {
         set_keys(&value, "focus", "next", &mut bindings.focus.next)?;
         set_keys(&value, "focus", "previous", &mut bindings.focus.previous)?;
         set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus)?;
+        set_string_keys(&value, "clipboard", "yank", &mut bindings.clipboard.yank)?;
         set_keys(&value, "button", "press", &mut bindings.button.press)?;
         set_key(&value, "tabs", "previous_tab", &mut bindings.tabs.previous)?;
         set_key(&value, "tabs", "next_tab", &mut bindings.tabs.next)?;
@@ -346,6 +376,30 @@ impl KeyBindings {
             "data_view",
             "expand_all",
             &mut bindings.data_view.expand_all,
+        )?;
+        set_keys(
+            &value,
+            "data_view",
+            "search",
+            &mut bindings.data_view.search,
+        )?;
+        set_keys(
+            &value,
+            "data_view",
+            "clear_search",
+            &mut bindings.data_view.clear_search,
+        )?;
+        set_keys(
+            &value,
+            "data_view",
+            "filter",
+            &mut bindings.data_view.filter,
+        )?;
+        set_keys(
+            &value,
+            "data_view",
+            "clear_filters",
+            &mut bindings.data_view.clear_filters,
         )?;
         set_keys(
             &value,
@@ -431,6 +485,10 @@ impl KeyBindings {
         &self.focus
     }
 
+    pub fn clipboard(&self) -> &ClipboardKeyBindings {
+        &self.clipboard
+    }
+
     pub fn data_view(&self) -> &DataViewKeyBindings {
         &self.data_view
     }
@@ -507,6 +565,18 @@ impl KeyBindings {
 
     pub fn set_focus_unfocus(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
         self.focus.unfocus = keys.into_iter().collect();
+    }
+
+    pub fn set_clipboard_yank(&mut self, keys: impl IntoIterator<Item = impl Into<String>>) {
+        self.clipboard.yank = keys.into_iter().map(Into::into).collect();
+    }
+
+    pub fn with_clipboard_yank(
+        mut self,
+        keys: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.set_clipboard_yank(keys);
+        self
     }
 
     pub fn with_focus_unfocus(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
@@ -679,6 +749,42 @@ impl KeyBindings {
 
     pub fn with_data_view_expand_all(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_data_view_expand_all(keys);
+        self
+    }
+
+    pub fn set_data_view_search(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.search = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_search(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_search(keys);
+        self
+    }
+
+    pub fn set_data_view_clear_search(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.clear_search = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_clear_search(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_clear_search(keys);
+        self
+    }
+
+    pub fn set_data_view_filter(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.filter = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_filter(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_filter(keys);
+        self
+    }
+
+    pub fn set_data_view_clear_filters(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.clear_filters = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_clear_filters(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_data_view_clear_filters(keys);
         self
     }
 
@@ -957,6 +1063,25 @@ impl FocusKeyBindings {
     }
 }
 
+impl ClipboardKeyBindings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_yank(&mut self, keys: impl IntoIterator<Item = impl Into<String>>) {
+        self.yank = keys.into_iter().map(Into::into).collect();
+    }
+
+    pub fn with_yank(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.set_yank(keys);
+        self
+    }
+
+    pub fn yank_sequences(&self) -> &[String] {
+        &self.yank
+    }
+}
+
 impl ButtonKeyBindings {
     pub fn press_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.press, key.into())
@@ -1014,6 +1139,38 @@ impl DataViewKeyBindings {
 
     pub fn expand_all_label(&self) -> String {
         labels(&self.expand_all)
+    }
+
+    pub fn search_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.search, key.into())
+    }
+
+    pub fn search_label(&self) -> String {
+        labels(&self.search)
+    }
+
+    pub fn clear_search_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.clear_search, key.into())
+    }
+
+    pub fn clear_search_label(&self) -> String {
+        labels(&self.clear_search)
+    }
+
+    pub fn filter_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.filter, key.into())
+    }
+
+    pub fn filter_label(&self) -> String {
+        labels(&self.filter)
+    }
+
+    pub fn clear_filters_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.clear_filters, key.into())
+    }
+
+    pub fn clear_filters_label(&self) -> String {
+        labels(&self.clear_filters)
     }
 
     pub fn top_prefix_matches(&self, key: impl Into<KeyEvent>) -> bool {
@@ -1386,6 +1543,39 @@ fn set_keys(
     Ok(())
 }
 
+fn set_string_keys(
+    value: &toml::Table,
+    section: &str,
+    key: &str,
+    destination: &mut Vec<String>,
+) -> Result<(), KeyBindingsError> {
+    let Some(configured) = value.get(section).and_then(|section| section.get(key)) else {
+        return Ok(());
+    };
+
+    let keys = if let Some(text) = configured.as_str() {
+        vec![text.to_owned()]
+    } else if let Some(values) = configured.as_array() {
+        values
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    KeyBindingsError(format!(
+                        "Keybindings `{section}.{key}` array entries must be strings"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        return Err(KeyBindingsError(format!(
+            "Keybindings `{section}.{key}` must be a string or string array"
+        )));
+    };
+
+    *destination = keys;
+    Ok(())
+}
+
 fn invalid_key(section: &str, key: &str, value: &str) -> KeyBindingsError {
     KeyBindingsError(format!(
         "Keybindings `{section}.{key}` contains unsupported key `{value}`"
@@ -1492,6 +1682,9 @@ mod tests {
             previous_page = "p"
             collapse_all = "z"
             expand_all = "shift+z"
+            search = "/"
+            filter = "f"
+            group = "r"
             top_prefix = "g"
             bottom = "shift+g"
 
@@ -1592,6 +1785,14 @@ mod tests {
             code: Key::Char('Z'),
             modifiers: KeyModifiers::SHIFT,
         }));
+        assert!(bindings.data_view().search_matches(KeyEvent {
+            code: Key::Char('/'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().filter_matches(KeyEvent {
+            code: Key::Char('f'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.data_view().top_prefix_matches(KeyEvent {
             code: Key::Char('g'),
             modifiers: KeyModifiers::NONE,
@@ -1653,6 +1854,8 @@ mod tests {
             .with_data_view_previous_page([KeySpec::plain('p')])
             .with_data_view_collapse_all([KeySpec::plain('c')])
             .with_data_view_expand_all([KeySpec::plain('x')])
+            .with_data_view_search([KeySpec::plain('/')])
+            .with_data_view_filter([KeySpec::plain('f')])
             .with_data_view_top_prefix([KeySpec::plain('t')])
             .with_data_view_bottom([KeySpec::plain('b')])
             .with_dropdown_next([KeySpec::plain('j')])
@@ -1741,6 +1944,14 @@ mod tests {
         }));
         assert!(bindings.data_view().expand_all_matches(KeyEvent {
             code: Key::Char('x'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().search_matches(KeyEvent {
+            code: Key::Char('/'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(bindings.data_view().filter_matches(KeyEvent {
+            code: Key::Char('f'),
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.data_view().top_prefix_matches(KeyEvent {

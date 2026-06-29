@@ -4,8 +4,13 @@ use std::hash::Hash;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 
-use super::{CellContext, Column, DataView, SelectionMode, SortDirection, VisibleRow};
-use crate::{ScrollGeometry, ScrollOffset, ScrollSize, line_width, preset};
+use super::{
+    CellContext, Column, DataView, DataViewInteraction, FILTER_DROPDOWN_SLOT, SEARCH_SLOT,
+    SelectionMode, SortDirection, VisibleRow, column_key,
+};
+use crate::{
+    ChildKey, LayoutCtx, ScrollGeometry, ScrollOffset, ScrollSize, TuiNode, line_width, preset,
+};
 
 impl<T, Id> DataView<T, Id>
 where
@@ -29,15 +34,58 @@ where
     }
 
     pub(super) fn body_area(&self, area: Rect) -> Rect {
-        if self.headers {
+        let reserved = u16::from(self.action_bar) + u16::from(self.headers);
+        if reserved > 0 {
             Rect::new(
                 area.x,
-                area.y.saturating_add(1),
+                area.y.saturating_add(reserved),
                 area.width,
-                area.height.saturating_sub(1),
+                area.height.saturating_sub(reserved),
             )
         } else {
             area
+        }
+    }
+
+    pub(super) fn action_bar_areas(&self, area: Rect) -> (Rect, Rect) {
+        if !self.action_bar || area.is_empty() {
+            return (Rect::default(), Rect::default());
+        }
+        let search_width = area.width.min(28);
+        let [search_area, summary_area] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(search_width), Constraint::Fill(1)])
+            .areas(Rect::new(area.x, area.y, area.width, 1));
+        (search_area, summary_area)
+    }
+
+    pub(super) fn popup_field_area(&self, area: Rect) -> Rect {
+        if area.width == 0 || area.height == 0 {
+            return Rect::default();
+        }
+        let width = area.width.min(40);
+        Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(1) / 2,
+            width,
+            1,
+        )
+    }
+
+    pub(super) fn layout_children<M>(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        if self.action_bar {
+            let (search_area, _) = self.action_bar_areas(area);
+            ctx.push_slot(ChildKey::new(SEARCH_SLOT), search_area, |ctx| {
+                self.search_input.layout(search_area, ctx);
+                ctx.set_focus_tab_stop(super::search_focus_id(), false);
+            });
+        }
+
+        let popup_area = self.popup_field_area(area);
+        if let Some(dropdown) = self.filter_dropdown.as_mut() {
+            ctx.push_slot(ChildKey::new(FILTER_DROPDOWN_SLOT), popup_area, |ctx| {
+                <Box<super::ChoiceDropdown> as TuiNode<M>>::layout(dropdown, popup_area, ctx);
+            });
         }
     }
 
@@ -131,7 +179,10 @@ where
     }
 
     fn header_width(&self, column: &Column<T, Id>) -> usize {
-        let mut header = column.header.clone();
+        let mut header = self.header_label(column);
+        if self.filter_active(&column.id) {
+            header.push_str(" ");
+        }
         if let Some(sort) = &self.sort
             && sort.column_id == column.id
         {
@@ -141,6 +192,20 @@ where
             });
         }
         line_width(&Line::from(header))
+    }
+
+    pub(crate) fn header_label(&self, column: &Column<T, Id>) -> String {
+        if self.interaction == DataViewInteraction::HeaderFilter
+            && column.filter_key.is_some()
+            && let Some(index) = self
+                .columns
+                .iter()
+                .position(|candidate| candidate.id == column.id)
+            && let Some(key) = column_key(index)
+        {
+            return format!("{key} {}", column.header);
+        }
+        column.header.clone()
     }
 
     fn rendered_cell_width(

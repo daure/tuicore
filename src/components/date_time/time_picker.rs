@@ -7,11 +7,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use time::Time;
 
-use crate::event::{Key, KeyEvent, TuiEvent};
+use crate::event::{KeyEvent, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_underline_style, keybindings, theme,
+    LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_underline_style, keybindings,
+    line_width, theme,
 };
+
+use crate::components::{InputChrome, Panel};
 
 use super::{
     PickerOutcome, TIME_PICKER_FOCUS, finish_event, picker_size_hint, plain_digit, wrap_step,
@@ -42,6 +45,8 @@ pub struct TimePicker<M = ()> {
     pending_top_prefix: bool,
     typed_digits: String,
     on_select: Option<Box<dyn Fn(Time) -> M>>,
+    chrome: InputChrome,
+    panel: Panel,
 }
 
 impl<M> TimePicker<M> {
@@ -59,6 +64,8 @@ impl<M> TimePicker<M> {
             pending_top_prefix: false,
             typed_digits: String::new(),
             on_select: None,
+            chrome: InputChrome::Plain,
+            panel: Panel::new(),
         }
     }
 
@@ -85,11 +92,28 @@ impl<M> TimePicker<M> {
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
         self.hotkey = Some(hotkey.into());
         self.pending_hotkey_prefix = None;
+        self.sync_panel();
     }
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
         self.pending_hotkey_prefix = None;
+        self.sync_panel();
+    }
+
+    pub fn style(mut self, chrome: InputChrome) -> Self {
+        self.set_style(chrome);
+        self
+    }
+
+    pub fn panel(mut self, title: impl Into<String>) -> Self {
+        self.set_style(InputChrome::panel(title));
+        self
+    }
+
+    pub fn set_style(&mut self, chrome: InputChrome) {
+        self.chrome = chrome;
+        self.sync_panel();
     }
 
     pub fn on_select(mut self, handler: impl Fn(Time) -> M + 'static) -> Self {
@@ -117,6 +141,7 @@ impl<M> TimePicker<M> {
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.sync_panel();
     }
 
     #[cfg(test)]
@@ -128,13 +153,18 @@ impl<M> TimePicker<M> {
         let key = key.into();
         let bindings = keybindings();
         let date_keys = bindings.date_time_picker();
-        if key.code == Key::Char('n') && key.modifiers.is_empty() {
+        if date_keys.today_matches(key) {
             let now = super::today_time();
-            let changed = self.draft != now || self.value != now;
+            let draft_changed = self.draft != now;
+            let committed_changed = self.value != now;
             self.draft = now;
             self.value = now;
             self.typed_digits.clear();
-            return PickerOutcome::handled(changed);
+            return if committed_changed {
+                PickerOutcome::selected(true)
+            } else {
+                PickerOutcome::handled(draft_changed)
+            };
         }
         if date_keys.top_prefix_matches(key) {
             if self.pending_top_prefix {
@@ -203,7 +233,42 @@ impl<M> TimePicker<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let area = self.render_chrome(frame, area);
         frame.render_widget(Paragraph::new(self.time_line()), area);
+    }
+
+    fn sync_panel(&mut self) {
+        let mut panel = match &self.chrome {
+            InputChrome::Plain => Panel::new(),
+            InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
+        };
+        panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
+        self.panel = panel;
+    }
+
+    fn render_chrome(&self, frame: &mut Frame, area: Rect) -> Rect {
+        match self.chrome {
+            InputChrome::Plain => area,
+            InputChrome::Panel(_) => {
+                self.panel.render(frame, area);
+                Panel::inner_area(area)
+            }
+        }
+    }
+
+    fn content_area(&self, area: Rect) -> Rect {
+        match self.chrome {
+            InputChrome::Plain => area,
+            InputChrome::Panel(_) => Panel::inner_area(area),
+        }
+    }
+
+    fn measure_size(&self) -> (u16, u16) {
+        let width = self.time_line_width();
+        match self.chrome {
+            InputChrome::Plain => (width, 1),
+            InputChrome::Panel(_) => (width.saturating_add(2), 3),
+        }
     }
 
     fn time_line(&self) -> Line<'static> {
@@ -234,7 +299,9 @@ impl<M> TimePicker<M> {
             ));
         }
         let mut spans = value_spans;
-        if let Some(hotkey) = self.hotkey.as_deref() {
+        if matches!(self.chrome, InputChrome::Plain)
+            && let Some(hotkey) = self.hotkey.as_deref()
+        {
             let hotkey = crate::hotkey::normalize_hotkey(hotkey);
             let active_prefix = self
                 .pending_hotkey_prefix
@@ -262,10 +329,7 @@ impl<M> TimePicker<M> {
     }
 
     fn time_line_width(&self) -> u16 {
-        match self.precision {
-            TimePrecision::HourMinute => 8,
-            TimePrecision::HourMinuteSecond => 11,
-        }
+        line_width(&self.time_line()).min(u16::MAX as usize) as u16
     }
 
     fn field_span(
@@ -388,19 +452,21 @@ impl<M> Default for TimePicker<M> {
 
 impl<M: 'static> TuiNode<M> for TimePicker<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        picker_size_hint(self.time_line_width(), 1).normalized(proposal)
+        let (width, height) = self.measure_size();
+        picker_size_hint(width, height).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let focus_area = self.content_area(area);
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(TIME_PICKER_FOCUS),
-                area,
+                focus_area,
                 true,
                 vec![hotkey],
             );
         } else {
-            ctx.register_focusable(FocusId::new(TIME_PICKER_FOCUS), area, true);
+            ctx.register_focusable(FocusId::new(TIME_PICKER_FOCUS), focus_area, true);
         }
         ctx.set_focus_receives_events_before_global_hotkeys(FocusId::new(TIME_PICKER_FOCUS), true);
         LayoutResult::new(area)
@@ -415,17 +481,20 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
             match hotkey {
                 HotkeyEvent::Pending(prefix) => {
                     self.pending_hotkey_prefix = Some(prefix.clone());
+                    self.sync_panel();
                     ctx.request_redraw();
                     return EventOutcome::Ignored;
                 }
                 HotkeyEvent::Canceled => {
                     if self.pending_hotkey_prefix.take().is_some() {
+                        self.sync_panel();
                         ctx.request_redraw();
                     }
                     return EventOutcome::Ignored;
                 }
                 HotkeyEvent::Commit(sequence) => {
                     self.pending_hotkey_prefix = None;
+                    self.sync_panel();
                     if self.hotkey.as_deref().is_some_and(|hotkey| {
                         crate::hotkey::normalize_hotkey(hotkey)
                             == crate::hotkey::normalize_hotkey(sequence)
@@ -447,6 +516,11 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
             }
             ctx.request_clear();
             ctx.request_redraw();
+            return EventOutcome::Handled;
+        }
+        if matches!(event, TuiEvent::Yank) {
+            ctx.copy_to_clipboard(super::format_iso_time(self.draft));
+            ctx.stop_propagation();
             return EventOutcome::Handled;
         }
         let TuiEvent::Key(key) = event else {

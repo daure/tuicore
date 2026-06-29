@@ -560,6 +560,22 @@ fn immediate_commit_calls_on_select_when_highlight_changes() {
 }
 
 #[test]
+fn multi_close_on_select_calls_on_select() {
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&selected);
+    let mut dropdown = multi_dropdown()
+        .close_on_select(true)
+        .on_select(move |ids| *captured.borrow_mut() = ids);
+
+    dropdown.open();
+    dropdown.on_key(ctrl('j'), AREA);
+    let outcome = dropdown.on_key(Key::Char(' '), AREA);
+
+    assert!(outcome.committed);
+    assert_eq!(&*selected.borrow(), &["Beta"]);
+}
+
+#[test]
 fn immediate_commit_updates_selection_while_filtering() {
     let mut dropdown = single_dropdown()
         .commit_mode(DropdownCommitMode::Immediate)

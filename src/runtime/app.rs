@@ -7,13 +7,14 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine;
 use ratatui::layout::Rect;
 
 use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
     FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
-    OutsideMousePolicy, OverlayLayer, OverlayLayoutEntry, Propagation, RuntimeKeyBindings,
-    TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
+    Notification, OutsideMousePolicy, OverlayLayer, OverlayLayoutEntry, Propagation,
+    RuntimeKeyBindings, ToastRack, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
 };
 
 use super::{
@@ -22,6 +23,7 @@ use super::{
 };
 
 type MessageHandler<N, M> = dyn FnMut(&mut N, M, &mut EventCtx<M>);
+type NotificationHandler<N, M> = dyn FnMut(&mut N, Notification, &mut EventCtx<M>);
 
 pub struct TreeApp<N, M = ()> {
     root: N,
@@ -29,6 +31,8 @@ pub struct TreeApp<N, M = ()> {
     runtime_keybindings: RuntimeKeyBindings,
     runtime_keybindings_overridden: bool,
     on_message: Option<Box<MessageHandler<N, M>>>,
+    on_notification: Option<Box<NotificationHandler<N, M>>>,
+    notifications: ToastRack,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +61,8 @@ impl<N, M> TreeApp<N, M> {
             runtime_keybindings: keybindings().runtime().clone(),
             runtime_keybindings_overridden: false,
             on_message: None,
+            on_notification: None,
+            notifications: ToastRack::new(),
         }
     }
 
@@ -78,6 +84,19 @@ impl<N, M> TreeApp<N, M> {
         self.on_message = Some(Box::new(handler));
         self
     }
+
+    pub fn on_notification(
+        mut self,
+        handler: impl FnMut(&mut N, Notification, &mut EventCtx<M>) + 'static,
+    ) -> Self {
+        self.on_notification = Some(Box::new(handler));
+        self
+    }
+
+    pub fn notifications(mut self, notifications: ToastRack) -> Self {
+        self.notifications = notifications;
+        self
+    }
 }
 
 impl<N, M> TreeApp<N, M>
@@ -93,6 +112,7 @@ where
         let mut dispatcher = TreeDispatcher::new();
         let mut renderer = Renderer::new();
         let mut global_hotkeys = HotkeySequenceMatcher::default();
+        let mut clipboard_hotkeys = HotkeySequenceMatcher::default();
         let mut flags = RuntimeFlags {
             redraw: true,
             layout: true,
@@ -114,6 +134,7 @@ where
             &mut dispatcher,
             &mut renderer,
             &mut global_hotkeys,
+            &mut clipboard_hotkeys,
             &mut flags,
         );
 
@@ -136,6 +157,7 @@ where
         dispatcher: &mut TreeDispatcher,
         renderer: &mut Renderer,
         global_hotkeys: &mut HotkeySequenceMatcher,
+        clipboard_hotkeys: &mut HotkeySequenceMatcher,
         flags: &mut RuntimeFlags,
     ) -> Result<()> {
         let mut global_hotkey_tick = Instant::now();
@@ -158,7 +180,12 @@ where
                 if flags.layout || layout_engine.area() != area {
                     self.layout_root(flags, focus_manager, layout_engine, dispatcher, area);
                 }
-                renderer.render(terminal.terminal_mut(), &self.root, area)?;
+                renderer.render_with_toasts(
+                    terminal.terminal_mut(),
+                    &self.root,
+                    &self.notifications,
+                    area,
+                )?;
                 flags.redraw = false;
             }
 
@@ -178,6 +205,7 @@ where
                     layout_engine,
                     dispatcher,
                     global_hotkeys,
+                    clipboard_hotkeys,
                     event,
                 );
             }
@@ -201,9 +229,17 @@ where
 
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
-                flags.redraw |= tick.changed || tick.active;
-                scheduler.set_active(tick.active);
+                let notification_tick = self.notifications.tick(dt, self.animation_settings);
+                let active = tick.active || notification_tick.active;
+                flags.redraw |= tick.changed
+                    || tick.active
+                    || notification_tick.changed
+                    || notification_tick.active;
+                scheduler.set_active(active);
                 if let Some(delay) = tick.next_tick {
+                    scheduler.schedule_after(delay);
+                }
+                if let Some(delay) = notification_tick.next_tick {
                     scheduler.schedule_after(delay);
                 }
             }
@@ -245,8 +281,40 @@ where
 
     fn handle_effects(&mut self, effects: DispatchEffects<M>) -> RuntimeFlags {
         let mut flags = RuntimeFlags::from_effects(&effects);
+        self.handle_notifications(&mut flags, VecDeque::from(effects.notifications));
         self.handle_messages(&mut flags, VecDeque::from(effects.messages));
         flags
+    }
+
+    fn handle_notifications(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        mut notifications: VecDeque<Notification>,
+    ) {
+        while let Some(notification) = notifications.pop_front() {
+            self.notifications.push(notification.clone());
+            flags.redraw = true;
+            flags.wake_animations = true;
+            let Some(handler) = self.on_notification.as_mut() else {
+                continue;
+            };
+
+            let mut ctx = EventCtx::new(self.animation_settings);
+            handler(&mut self.root, notification, &mut ctx);
+
+            flags.redraw |= ctx.redraw_requested();
+            flags.layout |= ctx.layout_requested();
+            flags.wake_animations |= ctx.redraw_requested() || ctx.layout_requested();
+            flags.clear |= ctx.clear_requested();
+            flags.quit |= ctx.quit_requested();
+            if let Some(request) = ctx.focus_request().cloned() {
+                flags.focus_request = Some(request);
+            }
+            if let Some(repair) = ctx.focus_repair() {
+                flags.focus_repair = Some(repair);
+            }
+            notifications.extend(ctx.drain_notifications());
+        }
     }
 
     fn handle_messages(&mut self, flags: &mut RuntimeFlags, mut messages: VecDeque<M>) {
@@ -269,6 +337,7 @@ where
             if let Some(repair) = ctx.focus_repair() {
                 flags.focus_repair = Some(repair);
             }
+            self.handle_notifications(flags, ctx.drain_notifications().collect());
             messages.extend(ctx.drain_messages());
         }
     }
@@ -411,6 +480,7 @@ where
         layout_engine: &LayoutEngine,
         dispatcher: &mut TreeDispatcher,
         global_hotkeys: &mut HotkeySequenceMatcher,
+        clipboard_hotkeys: &mut HotkeySequenceMatcher,
         event: TuiEvent,
     ) {
         let event = event;
@@ -426,6 +496,32 @@ where
                 flags.quit = true;
                 return;
             }
+            clipboard_hotkeys.set_hotkeys(
+                keybindings()
+                    .clipboard()
+                    .yank_sequences()
+                    .iter()
+                    .map(String::as_str),
+            );
+            match clipboard_hotkeys.on_key(*key) {
+                HotkeyMatch::Matched(_) => {
+                    let route = EventRoute::new(focus_manager.current_path());
+                    let effects = dispatcher.dispatch_event(
+                        &mut self.root,
+                        &route,
+                        &TuiEvent::Yank,
+                        self.animation_settings,
+                    );
+                    let clipboard = effects.clipboard.clone();
+                    flags.merge(self.handle_effects(effects));
+                    if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
+                        let _ = write_clipboard_osc52(terminal, &value);
+                    }
+                    return;
+                }
+                HotkeyMatch::Pending | HotkeyMatch::Canceled => return,
+                HotkeyMatch::Ignored => {}
+            }
             if focus_manager
                 .current()
                 .is_some_and(|target| target.focused_events_before_global_hotkeys)
@@ -438,6 +534,7 @@ where
                     self.animation_settings,
                 );
                 let external_editor = effects.external_editor.clone();
+                let clipboard = effects.clipboard.clone();
                 let focus_request = focus_request_from_event(&event, &effects);
                 let handled = effects.outcome.handled();
                 flags.merge(self.handle_effects(effects));
@@ -447,6 +544,9 @@ where
                 if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_editor)
                 {
                     self.handle_external_editor(flags, dispatcher, terminal, route, request);
+                }
+                if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
+                    let _ = write_clipboard_osc52(terminal, &value);
                 }
                 if handled {
                     return;
@@ -545,6 +645,7 @@ where
         let effects =
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
         let external_editor = effects.external_editor.clone();
+        let clipboard = effects.clipboard.clone();
         let focus_request = focus_request_from_event(&event, &effects);
         flags.merge(self.handle_effects(effects));
         if flags.focus_request.is_none() {
@@ -552,6 +653,9 @@ where
         }
         if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_editor) {
             self.handle_external_editor(flags, dispatcher, terminal, route, request);
+        }
+        if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
+            let _ = write_clipboard_osc52(terminal, &value);
         }
     }
 
@@ -583,6 +687,7 @@ where
         let mut focus_manager = FocusManager::new();
         let mut dispatcher = TreeDispatcher::new();
         let mut global_hotkeys = HotkeySequenceMatcher::default();
+        let mut clipboard_hotkeys = HotkeySequenceMatcher::default();
         let mut flags = RuntimeFlags {
             redraw: true,
             layout: true,
@@ -632,6 +737,7 @@ where
                 &layout_engine,
                 &mut dispatcher,
                 &mut global_hotkeys,
+                &mut clipboard_hotkeys,
                 event,
             );
             if flags.wake_animations {
@@ -640,9 +746,17 @@ where
             }
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
-                flags.redraw |= tick.changed || tick.active;
-                scheduler.set_active(tick.active);
+                let notification_tick = self.notifications.tick(dt, self.animation_settings);
+                let active = tick.active || notification_tick.active;
+                flags.redraw |= tick.changed
+                    || tick.active
+                    || notification_tick.changed
+                    || notification_tick.active;
+                scheduler.set_active(active);
                 if let Some(delay) = tick.next_tick {
+                    scheduler.schedule_after(delay);
+                }
+                if let Some(delay) = notification_tick.next_tick {
                     scheduler.schedule_after(delay);
                 }
             }
@@ -751,6 +865,14 @@ fn edit_in_external_editor(
 
     temp_files.cleanup();
     Ok(result)
+}
+
+fn write_clipboard_osc52(terminal: &mut TerminalGuard, value: &str) -> std::io::Result<()> {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
+    write!(
+        terminal.terminal_mut().backend_mut(),
+        "\x1b]52;c;{encoded}\x07"
+    )
 }
 
 struct EditorTempFiles {
@@ -1666,6 +1788,8 @@ mod tests {
             propagation,
             clear: false,
             external_editor: None,
+            clipboard: None,
+            notifications: Vec::new(),
         }
     }
 
@@ -2331,6 +2455,7 @@ mod tests {
         let mut focus_manager = FocusManager::new();
         let mut dispatcher = TreeDispatcher::new();
         let mut global_hotkeys = HotkeySequenceMatcher::default();
+        let mut clipboard_hotkeys = HotkeySequenceMatcher::default();
         let mut flags = RuntimeFlags {
             redraw: true,
             layout: true,
@@ -2356,6 +2481,7 @@ mod tests {
             &layout_engine,
             &mut dispatcher,
             &mut global_hotkeys,
+            &mut clipboard_hotkeys,
             TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
         );
 
@@ -2385,6 +2511,7 @@ mod tests {
         let mut focus_manager = FocusManager::new();
         let mut dispatcher = TreeDispatcher::new();
         let mut global_hotkeys = HotkeySequenceMatcher::default();
+        let mut clipboard_hotkeys = HotkeySequenceMatcher::default();
         let mut flags = RuntimeFlags {
             redraw: true,
             layout: true,
@@ -2410,6 +2537,7 @@ mod tests {
             &layout_engine,
             &mut dispatcher,
             &mut global_hotkeys,
+            &mut clipboard_hotkeys,
             TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
         );
         let events_before_idle_tick = app.root.event_log.borrow().len();

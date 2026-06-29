@@ -49,6 +49,8 @@ All UI elements implement `TuiNode<M>` which drives lifecycle and layout:
 - **Outcomes**: Return `EventOutcome::Handled` to claim an event, or `EventOutcome::Ignored` to let others handle it.
 - **Redraws**: If state changes, call `ctx.request_redraw()` (and optionally `ctx.request_layout()` if layout size changes).
 - **Communication**: Emit updates up the tree using `ctx.emit(msg)` (where `M` is the message type).
+- **Notifications**: Use `ctx.notify(Notification::info/success/warning/error(title, body))` for user-facing toasts. `TreeApp` displays them automatically with its built-in `ToastRack`; apps only customize by passing `.notifications(ToastRack::new().max_visible(...))` or observing via `.on_notification(...)`.
+- **Clipboard/Yank**: Components that support `TuiEvent::Yank` should call `ctx.copy_to_clipboard(value)`. This requests clipboard copy and automatically queues an info toast titled `Copied to clipboard` with the copied text in quotes.
 - **Propagation**: If you handle a key/hotkey and want to block parent containers from receiving it, call `ctx.stop_propagation()`.
 
 ## Store, EventLog & StateInspect

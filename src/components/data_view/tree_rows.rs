@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use super::model::{LevelFn, ParentIdFn};
-use super::{DataView, SortDirection, TreeAdapter, VisibleRow};
+use super::{DataView, DataViewTransformMode, SortDirection, TreeAdapter, VisibleRow};
+use crate::search::{SearchMode, search_match};
 
 impl<T, Id> DataView<T, Id>
 where
@@ -100,6 +101,14 @@ where
     }
 
     fn row_refs(&self) -> Vec<&T> {
+        if self.transform_mode == DataViewTransformMode::External {
+            return self.base_row_refs();
+        }
+
+        self.filtered_row_refs()
+    }
+
+    pub(super) fn base_row_refs(&self) -> Vec<&T> {
         if let Some(indices) = &self.visible_row_indices {
             indices
                 .iter()
@@ -108,6 +117,120 @@ where
         } else {
             self.rows.iter().collect()
         }
+    }
+
+    fn filtered_row_refs(&self) -> Vec<&T> {
+        if !self.local_transform_active() {
+            return self.base_row_refs();
+        }
+
+        match &self.tree {
+            Some(TreeAdapter::ParentId(parent_id)) => {
+                self.filtered_parent_tree_row_refs(parent_id.as_ref())
+            }
+            Some(TreeAdapter::Level(level)) => self.filtered_level_tree_row_refs(level.as_ref()),
+            None => self
+                .base_row_refs()
+                .into_iter()
+                .filter(|row| self.row_matches_transform(row))
+                .collect(),
+        }
+    }
+
+    fn filtered_parent_tree_row_refs(&self, parent_id: &ParentIdFn<T, Id>) -> Vec<&T> {
+        let rows = self.base_row_refs();
+        let ids = rows
+            .iter()
+            .map(|row| (self.row_id)(row))
+            .collect::<Vec<_>>();
+        let index_by_id = ids
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, id)| (id, index))
+            .collect::<HashMap<_, _>>();
+        let parents = rows.iter().map(|row| parent_id(row)).collect::<Vec<_>>();
+        let mut included = HashSet::new();
+
+        for (index, row) in rows.iter().enumerate() {
+            if self.row_matches_transform(row) {
+                included.insert(index);
+                let mut parent = parents[index].clone();
+                let mut visited = HashSet::new();
+                while let Some(parent_id) = parent {
+                    let Some(parent_index) = index_by_id.get(&parent_id).copied() else {
+                        break;
+                    };
+                    if !visited.insert(parent_index) {
+                        break;
+                    }
+                    included.insert(parent_index);
+                    parent = parents[parent_index].clone();
+                }
+            }
+        }
+
+        rows.into_iter()
+            .enumerate()
+            .filter_map(|(index, row)| included.contains(&index).then_some(row))
+            .collect()
+    }
+
+    fn filtered_level_tree_row_refs(&self, level: &LevelFn<T>) -> Vec<&T> {
+        let rows = self.base_row_refs();
+        let levels = rows.iter().map(|row| level(row)).collect::<Vec<_>>();
+        let mut included = HashSet::new();
+
+        for (index, row) in rows.iter().enumerate() {
+            if self.row_matches_transform(row) {
+                included.insert(index);
+                let mut current_level = levels[index];
+                for ancestor_index in (0..index).rev() {
+                    if levels[ancestor_index] < current_level {
+                        included.insert(ancestor_index);
+                        current_level = levels[ancestor_index];
+                    }
+                    if current_level == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        rows.into_iter()
+            .enumerate()
+            .filter_map(|(index, row)| included.contains(&index).then_some(row))
+            .collect()
+    }
+
+    fn row_matches_transform(&self, row: &T) -> bool {
+        let search = self.transform_state.search.trim();
+        (search.is_empty() || self.row_matches_search(row, search)) && self.row_matches_filters(row)
+    }
+
+    fn local_transform_active(&self) -> bool {
+        self.transform_mode == DataViewTransformMode::Local
+            && (!self.transform_state.search.trim().is_empty()
+                || !self.transform_state.filters.is_empty())
+    }
+
+    fn row_matches_search(&self, row: &T, search: &str) -> bool {
+        self.columns
+            .iter()
+            .filter_map(|column| column.search_key.as_deref())
+            .any(|search_key| {
+                search_match(search, &search_key(row), SearchMode::Contains).is_some()
+            })
+    }
+
+    fn row_matches_filters(&self, row: &T) -> bool {
+        self.transform_state.filters.iter().all(|filter| {
+            self.columns
+                .iter()
+                .find(|column| column.id == filter.column_id)
+                .and_then(|column| column.filter_key.as_deref())
+                .is_none_or(|filter_key| filter_key(row) == filter.value)
+        })
     }
 
     fn parent_descendant_ids_by_id(&self, parent_id: &ParentIdFn<T, Id>) -> HashMap<Id, Vec<Id>> {

@@ -570,6 +570,11 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
             ctx.request_clear();
             return finish_event(ctx, outcome);
         }
+        if matches!(event, TuiEvent::Yank) {
+            ctx.copy_to_clipboard(self.cursor.to_string());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };

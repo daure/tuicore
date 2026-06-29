@@ -6,6 +6,7 @@ use crossterm::event as crossterm_event;
 pub enum TuiEvent {
     Key(KeyEvent),
     Hotkey(HotkeyEvent),
+    Yank,
     ExternalEditor(ExternalEditorResponse),
     Mouse(MouseEvent),
     Resize(u16, u16),

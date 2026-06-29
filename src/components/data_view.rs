@@ -2,34 +2,60 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::time::Duration;
 
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 
+mod filters;
 mod layout;
 mod model;
+mod node;
 mod render;
 mod selection;
 #[cfg(test)]
 mod tests;
 mod tree_rows;
 
+#[cfg(test)]
+use crate::Animated;
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
-    Animated, AnimationSettings, EventCtx, EventOutcome, FocusCtx, FocusId, KeyBindings, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, ScrollAxes, ScrollBehavior, ScrollDelta,
-    ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig, TickResult, TuiNode,
+    AnimationSettings, ChildKey, EventCtx, FocusId, FocusRequest, KeyBindings, ScrollAxes,
+    ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig,
     animation_settings, keybindings, preset,
 };
 
+use super::{
+    Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownSearchMode,
+    DropdownVariant, text_input::TextInput,
+};
+
 pub use model::{
-    ActivationMode, CellContext, CheckState, Column, DataViewEvent, DataViewOutcome,
-    DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
+    ActivationMode, CellContext, CheckState, Column, DataViewEvent, DataViewFilter,
+    DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
+    DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
 use model::{RowIdFn, VisibleRow};
 
 const HORIZONTAL_JUMP: isize = 8;
 const DATA_VIEW_FOCUS: &str = "data-view";
+const SEARCH_SLOT: &str = "search";
+const FILTER_DROPDOWN_SLOT: &str = "filter-dropdown";
+const TEXT_INPUT_FOCUS: &str = "input";
+const DROPDOWN_SEARCH_FOCUS: &str = "input";
+const EMPTY_CHOICE_ID: &str = "";
+const HEADER_PICK_TIMEOUT: Duration = Duration::from_secs(1);
+
+type ChoiceDropdown = Dropdown<DataViewChoice, String>;
+
+pub(crate) fn search_focus_id() -> FocusId {
+    FocusId::new(TEXT_INPUT_FOCUS)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DataViewChoice {
+    id: String,
+    label: String,
+}
 
 pub struct DataView<T, Id> {
     rows: Vec<T>,
@@ -56,6 +82,21 @@ pub struct DataView<T, Id> {
     hotkey: Option<String>,
     pending_g: bool,
     area: Rect,
+    action_bar: bool,
+    transform_state: DataViewTransformState,
+    transform_mode: DataViewTransformMode,
+    interaction: DataViewInteraction,
+    search_input: TextInput<()>,
+    filter_dropdown: Option<Box<ChoiceDropdown>>,
+    header_pick_elapsed: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DataViewInteraction {
+    Grid,
+    Search,
+    HeaderFilter,
+    FilterValues { column_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +136,16 @@ where
             hotkey: None,
             pending_g: false,
             area: Rect::default(),
+            action_bar: false,
+            transform_state: DataViewTransformState::default(),
+            transform_mode: DataViewTransformMode::Local,
+            interaction: DataViewInteraction::Grid,
+            search_input: TextInput::new()
+                .placeholder("Search...")
+                .hotkey("/")
+                .hotkey_focus_enabled(false),
+            filter_dropdown: None,
+            header_pick_elapsed: Duration::ZERO,
         }
     }
 
@@ -123,6 +174,11 @@ where
 
     pub fn headers(mut self, headers: bool) -> Self {
         self.headers = headers;
+        self
+    }
+
+    pub fn action_bar(mut self, action_bar: bool) -> Self {
+        self.action_bar = action_bar;
         self
     }
 
@@ -182,6 +238,122 @@ where
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
+    }
+
+    pub fn transform_state(&self) -> &DataViewTransformState {
+        &self.transform_state
+    }
+
+    pub fn transform_mode(&self) -> DataViewTransformMode {
+        self.transform_mode
+    }
+
+    pub fn set_transform_mode(&mut self, mode: DataViewTransformMode) -> DataViewOutcome {
+        if self.transform_mode == mode {
+            return DataViewOutcome::IDLE;
+        }
+        let before_id = self.highlighted_id();
+        self.transform_mode = mode;
+        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
+    }
+
+    pub fn set_search_query(&mut self, query: impl Into<String>) -> DataViewOutcome {
+        let query = query.into();
+        if self.transform_state.search == query {
+            return DataViewOutcome::IDLE;
+        }
+        let before_id = self.highlighted_id();
+        self.transform_state.search = query;
+        self.search_input
+            .set_value(self.transform_state.search.clone());
+        self.emit_transform_changed();
+        self.outcome_after_transform_change(before_id)
+    }
+
+    pub fn clear_search(&mut self) -> DataViewOutcome {
+        self.set_search_query(String::new())
+    }
+
+    pub fn set_filter(
+        &mut self,
+        column_id: impl Into<String>,
+        value: impl Into<String>,
+    ) -> DataViewOutcome {
+        let column_id = column_id.into();
+        let value = value.into();
+        if value.is_empty() {
+            return self.clear_filter(&column_id);
+        }
+        let before_id = self.highlighted_id();
+        if let Some(filter) = self
+            .transform_state
+            .filters
+            .iter_mut()
+            .find(|filter| filter.column_id == column_id)
+        {
+            if filter.value == value {
+                return DataViewOutcome::IDLE;
+            }
+            filter.value = value;
+        } else {
+            self.transform_state
+                .filters
+                .push(DataViewFilter { column_id, value });
+        }
+        self.emit_transform_changed();
+        self.outcome_after_transform_change(before_id)
+    }
+
+    pub fn clear_filter(&mut self, column_id: &str) -> DataViewOutcome {
+        let before_id = self.highlighted_id();
+        let before_len = self.transform_state.filters.len();
+        self.transform_state
+            .filters
+            .retain(|filter| filter.column_id != column_id);
+        if self.transform_state.filters.len() == before_len {
+            return DataViewOutcome::IDLE;
+        }
+        self.emit_transform_changed();
+        self.outcome_after_transform_change(before_id)
+    }
+
+    pub fn clear_filters(&mut self) -> DataViewOutcome {
+        if self.transform_state.filters.is_empty() {
+            return DataViewOutcome::IDLE;
+        }
+        let before_id = self.highlighted_id();
+        self.transform_state.filters.clear();
+        self.emit_transform_changed();
+        self.outcome_after_transform_change(before_id)
+    }
+
+    pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
+        let before_id = self.highlighted_id();
+        self.rows = rows.into_iter().collect();
+        self.trim_visible_row_indices();
+        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
+    }
+
+    pub fn append_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
+        self.extend_rows(rows)
+    }
+
+    pub fn extend_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
+        self.rows.extend(rows);
+        self.clamp_visible_state();
+        DataViewOutcome::CHANGED
     }
 
     #[cfg(test)]
@@ -401,6 +573,33 @@ where
             .map(|row| row.id.clone())
     }
 
+    pub fn highlighted_json(&self) -> Option<String> {
+        let rows = self.visible_rows();
+        let row = rows.get(self.highlighted)?;
+        let mut value = serde_json::Map::new();
+        for column in &self.columns {
+            let line = (column.renderer)(
+                row.row,
+                &CellContext {
+                    row_id: row.id.clone(),
+                    column_id: column.id.clone(),
+                    depth: row.depth,
+                    has_children: row.has_children,
+                    expanded: row.expanded,
+                    highlighted: true,
+                    focused: self.focused,
+                },
+            );
+            let text = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            value.insert(column.id.clone(), serde_json::Value::String(text));
+        }
+        Some(serde_json::Value::Object(value).to_string())
+    }
+
     pub fn highlight_id(&mut self, id: &Id) -> DataViewOutcome {
         let Some(index) = self.visible_rows().iter().position(|row| &row.id == id) else {
             return DataViewOutcome::IDLE;
@@ -442,9 +641,32 @@ where
         settings: AnimationSettings,
         keys: &KeyBindings,
     ) -> DataViewOutcome {
+        if !matches!(self.interaction, DataViewInteraction::Grid) {
+            return self.on_interaction_key(key, area, settings);
+        }
         let page = self.visible_page_step(area);
         let data_keys = keys.data_view();
-        if let Some(delta) = horizontal_jump(keys, key) {
+        if self.action_bar && data_keys.clear_search_matches(key) {
+            self.pending_g = false;
+            self.clear_search_to_top(area, settings)
+        } else if self.table_transform_controls_enabled() && data_keys.clear_filters_matches(key) {
+            self.pending_g = false;
+            self.clear_filters_to_top(area, settings)
+        } else if self.action_bar && data_keys.search_matches(key) {
+            self.pending_g = false;
+            self.interaction = DataViewInteraction::Search;
+            self.search_input.set_focused(true);
+            self.search_input.set_insert_mode(true);
+            DataViewOutcome::CHANGED
+        } else if data_keys.filter_matches(key)
+            && self.table_transform_controls_enabled()
+            && !self.filterable_columns().is_empty()
+        {
+            self.pending_g = false;
+            self.interaction = DataViewInteraction::HeaderFilter;
+            self.header_pick_elapsed = Duration::ZERO;
+            DataViewOutcome::CHANGED
+        } else if let Some(delta) = horizontal_jump(keys, key) {
             self.pending_g = false;
             self.scroll_horizontal_by(delta, area, settings)
         } else if keys.line_up_matches(key) {
@@ -513,6 +735,171 @@ where
             self.pending_g = false;
             DataViewOutcome::IDLE
         }
+    }
+
+    fn on_interaction_key(
+        &mut self,
+        key: KeyEvent,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        match self.interaction.clone() {
+            DataViewInteraction::Search => self.on_search_key(key, area, settings),
+            DataViewInteraction::HeaderFilter => self.on_header_filter_key(key),
+            DataViewInteraction::FilterValues { column_id } => {
+                self.on_filter_values_key(key, area, settings, &column_id)
+            }
+            DataViewInteraction::Grid => DataViewOutcome::IDLE,
+        }
+    }
+
+    fn on_search_key(
+        &mut self,
+        key: KeyEvent,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        if matches!(key.code, Key::Enter) || keybindings().focus().unfocus_matches(key) {
+            self.interaction = DataViewInteraction::Grid;
+            self.search_input.set_focused(false);
+            return DataViewOutcome::CHANGED;
+        }
+
+        if keybindings().data_view().clear_search_matches(key) {
+            return self.clear_search_to_top(area, settings);
+        }
+
+        let before = self.search_input.current_value().to_owned();
+        let input_outcome = self.search_input.on_key(key);
+        let after = self.search_input.current_value().to_owned();
+        if before != after {
+            self.set_search_query_with_settings(after, area, settings)
+        } else if input_outcome.needs_redraw() {
+            DataViewOutcome::CHANGED
+        } else {
+            DataViewOutcome::HANDLED
+        }
+    }
+
+    fn on_search_event<M>(
+        &mut self,
+        event: &TuiEvent,
+        area: Rect,
+        settings: AnimationSettings,
+        ctx: &mut EventCtx<M>,
+    ) -> DataViewOutcome {
+        if let TuiEvent::ExternalEditor(response) = event {
+            let before = self.search_input.current_value().to_owned();
+            self.search_input.apply_external_editor_response(response);
+            self.search_input.set_insert_mode(false);
+            ctx.request_clear();
+            ctx.request_layout();
+            let after = self.search_input.current_value().to_owned();
+            return if before != after {
+                self.set_search_query_with_settings(after, area, settings)
+            } else {
+                DataViewOutcome::CHANGED
+            };
+        }
+
+        if let TuiEvent::Paste(value) = event {
+            if !self.search_input.insert_mode() {
+                return DataViewOutcome::HANDLED;
+            }
+            let before = self.search_input.current_value().to_owned();
+            let input_outcome = self.search_input.on_paste(value);
+            let after = self.search_input.current_value().to_owned();
+            return if before != after {
+                self.set_search_query_with_settings(after, area, settings)
+            } else if input_outcome.needs_redraw() {
+                DataViewOutcome::CHANGED
+            } else {
+                DataViewOutcome::HANDLED
+            };
+        }
+
+        let TuiEvent::Key(key) = event else {
+            return DataViewOutcome::IDLE;
+        };
+        if self.search_input.external_editor_key_matches(*key) {
+            let (value, line, col) = self.search_input.external_editor_request();
+            ctx.request_external_editor(value, line, col);
+            return DataViewOutcome::HANDLED;
+        }
+        self.on_search_key(*key, area, settings)
+    }
+
+    fn focus_self<M>(&self, ctx: &mut EventCtx<M>) {
+        let current = ctx.current_path();
+        let path = if current.keys().last().is_some_and(|key| {
+            key == &ChildKey::new(SEARCH_SLOT) || key == &ChildKey::new(FILTER_DROPDOWN_SLOT)
+        }) {
+            current.parent().unwrap_or(current)
+        } else {
+            current
+        };
+        ctx.focus(FocusRequest::TargetAt {
+            path,
+            id: FocusId::new(DATA_VIEW_FOCUS),
+        });
+    }
+
+    fn focus_filter_dropdown_search<M>(&self, ctx: &mut EventCtx<M>) {
+        ctx.focus(FocusRequest::TargetAt {
+            path: ctx
+                .current_path()
+                .child(ChildKey::new(FILTER_DROPDOWN_SLOT)),
+            id: FocusId::new(DROPDOWN_SEARCH_FOCUS),
+        });
+    }
+
+    fn search_exited(before: &DataViewInteraction, after: &DataViewInteraction) -> bool {
+        matches!(before, DataViewInteraction::Search)
+            && !matches!(after, DataViewInteraction::Search)
+    }
+
+    fn on_header_filter_key(&mut self, key: KeyEvent) -> DataViewOutcome {
+        if keybindings().focus().unfocus_matches(key) {
+            self.interaction = DataViewInteraction::Grid;
+            return DataViewOutcome::CHANGED;
+        }
+        let Key::Char(value) = key.code else {
+            return DataViewOutcome::HANDLED;
+        };
+        let Some(column_id) = self.filter_column_id_for_key(value) else {
+            return DataViewOutcome::HANDLED;
+        };
+        self.open_filter_values(column_id);
+        DataViewOutcome::CHANGED
+    }
+
+    fn on_filter_values_key(
+        &mut self,
+        key: KeyEvent,
+        area: Rect,
+        settings: AnimationSettings,
+        column_id: &str,
+    ) -> DataViewOutcome {
+        let Some(dropdown) = self.filter_dropdown.as_mut() else {
+            return DataViewOutcome::HANDLED;
+        };
+        let outcome = dropdown.on_key(key, area);
+        self.apply_filter_dropdown_outcome(column_id, outcome, area, settings)
+    }
+
+    fn on_filter_values_event<M>(
+        &mut self,
+        event: &TuiEvent,
+        area: Rect,
+        settings: AnimationSettings,
+        column_id: &str,
+        ctx: &mut EventCtx<M>,
+    ) -> DataViewOutcome {
+        let Some(dropdown) = self.filter_dropdown.as_mut() else {
+            return DataViewOutcome::HANDLED;
+        };
+        let outcome = dropdown.event_outcome(event, ctx);
+        self.apply_filter_dropdown_outcome(column_id, outcome, area, settings)
     }
 
     fn toggle_highlighted_expansion(
@@ -766,6 +1153,75 @@ where
         self.visible_rows().len()
     }
 
+    fn set_search_query_with_settings(
+        &mut self,
+        query: String,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        let outcome = self.set_search_query(query);
+        if outcome.changed {
+            let mut scrolled = self
+                .ensure_highlight_visible(area, settings)
+                .into_data_view_outcome(outcome.handled, outcome.changed);
+            scrolled.activated = outcome.activated;
+            scrolled
+        } else {
+            DataViewOutcome::HANDLED
+        }
+    }
+
+    fn clear_search_to_top(&mut self, area: Rect, settings: AnimationSettings) -> DataViewOutcome {
+        let outcome = self.clear_search();
+        self.to_top_after_clear(outcome, area, settings)
+    }
+
+    fn clear_filters_to_top(&mut self, area: Rect, settings: AnimationSettings) -> DataViewOutcome {
+        let outcome = self.clear_filters();
+        self.to_top_after_clear(outcome, area, settings)
+    }
+
+    fn to_top_after_clear(
+        &mut self,
+        outcome: DataViewOutcome,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        if !outcome.changed {
+            return DataViewOutcome::HANDLED;
+        }
+        let top = self.highlight_with_settings(0, area, settings);
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: top.active,
+            activated: outcome.activated || top.activated,
+        }
+    }
+
+    fn outcome_after_transform_change(&mut self, before_id: Option<Id>) -> DataViewOutcome {
+        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
+    }
+
+    fn emit_transform_changed(&mut self) {
+        self.events.push(DataViewTypedEvent::TransformChanged {
+            state: self.transform_state.clone(),
+        });
+    }
+
+    fn trim_visible_row_indices(&mut self) {
+        if let Some(indices) = &mut self.visible_row_indices {
+            let len = self.rows.len();
+            indices.retain(|index| *index < len);
+        }
+    }
+
     fn row_indices_for_ids(&self, ids: impl IntoIterator<Item = Id>) -> Vec<usize> {
         let mut used = HashSet::new();
         let mut indices = Vec::new();
@@ -927,76 +1383,20 @@ fn uncontrol_key(mut key: KeyEvent) -> KeyEvent {
     key
 }
 
-impl<T, Id> Animated for DataView<T, Id>
-where
-    Id: Clone + Eq + Hash,
-{
-    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.scroll.tick(dt, settings)
+fn dropdown_outcome(outcome: DropdownOutcome) -> DataViewOutcome {
+    DataViewOutcome {
+        handled: outcome.handled,
+        changed: outcome.changed || outcome.opened || outcome.closed || outcome.canceled,
+        active: false,
+        activated: false,
     }
 }
 
-impl<T, Id, M> TuiNode<M> for DataView<T, Id>
-where
-    Id: Clone + Eq + Hash,
-{
-    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        let width = self.columns.len().max(1).min(u16::MAX as usize) as u16;
-        let header = self.headers as u16;
-        let rows = self
-            .visible_row_indices
-            .as_ref()
-            .map_or(self.rows.len(), Vec::len)
-            .min(u16::MAX as usize) as u16;
-        LayoutSizeHint::content(width, header.saturating_add(rows).max(1)).normalized(proposal)
-    }
-
-    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        let width_changed = self.area.width != 0 && self.area.width != area.width;
-        self.area = area;
-        if width_changed {
-            self.scroll.snap_horizontal_to_start();
-        }
-        if let Some(hotkey) = &self.hotkey {
-            ctx.register_focusable_with_hotkey_sequences(
-                FocusId::new(DATA_VIEW_FOCUS),
-                area,
-                true,
-                vec![hotkey.clone()],
-            );
-        } else {
-            ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
-        }
-        LayoutResult::new(area)
-    }
-
-    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
-        Self::render(self, frame, area);
-    }
-
-    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
-        let TuiEvent::Key(key) = event else {
-            return EventOutcome::Ignored;
-        };
-        let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
-        if outcome.needs_redraw() {
-            ctx.request_redraw();
-        }
-        if outcome.handled {
-            ctx.stop_propagation();
-            EventOutcome::Handled
-        } else {
-            EventOutcome::Ignored
-        }
-    }
-
-    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        Animated::tick(self, dt, settings)
-    }
-
-    fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
-        self.focused = focused;
-        ctx.request_redraw();
+pub(crate) fn column_key(index: usize) -> Option<char> {
+    match index {
+        0..=8 => Some((b'1' + index as u8) as char),
+        9..=34 => Some((b'a' + (index - 9) as u8) as char),
+        _ => None,
     }
 }
 

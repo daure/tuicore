@@ -14,6 +14,8 @@ use crate::{
     line_width, theme,
 };
 
+use crate::components::{InputChrome, Panel};
+
 use super::{DATE_PICKER_DROPDOWN_FOCUS, DatePicker, finish_event, picker_size_hint};
 
 const DATE_PICKER_DROPDOWN_OVERLAY_NAMESPACE: u64 = 0x4441_5445_5049_434b;
@@ -29,6 +31,8 @@ pub struct DatePickerDropdown<M = ()> {
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
     on_select: Option<Box<dyn Fn(Date) -> M>>,
+    chrome: InputChrome,
+    panel: Panel,
 }
 
 impl<M> DatePickerDropdown<M> {
@@ -44,6 +48,8 @@ impl<M> DatePickerDropdown<M> {
             hotkey_matcher: HotkeySequenceMatcher::default(),
             pending_hotkey_prefix: None,
             on_select: None,
+            chrome: InputChrome::Plain,
+            panel: Panel::new(),
         }
     }
 
@@ -71,6 +77,22 @@ impl<M> DatePickerDropdown<M> {
         let hotkey = hotkey.into();
         self.hotkey = Some(hotkey.clone());
         self.hotkey_matcher = HotkeySequenceMatcher::new([hotkey]);
+        self.sync_panel();
+    }
+
+    pub fn style(mut self, chrome: InputChrome) -> Self {
+        self.set_style(chrome);
+        self
+    }
+
+    pub fn panel(mut self, title: impl Into<String>) -> Self {
+        self.set_style(InputChrome::panel(title));
+        self
+    }
+
+    pub fn set_style(&mut self, chrome: InputChrome) {
+        self.chrome = chrome;
+        self.sync_panel();
     }
 
     pub fn on_select(mut self, handler: impl Fn(Date) -> M + 'static) -> Self {
@@ -105,8 +127,41 @@ impl<M> DatePickerDropdown<M> {
         if area.is_empty() {
             return;
         }
-        let field = Rect::new(area.x, area.y, area.width, 1);
-        frame.render_widget(Paragraph::new(self.field_line(area.width)), field);
+        let field = self.render_chrome(frame, area);
+        frame.render_widget(Paragraph::new(self.field_line(field.width)), field);
+    }
+
+    fn sync_panel(&mut self) {
+        let mut panel = match &self.chrome {
+            InputChrome::Plain => Panel::new(),
+            InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
+        };
+        panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
+        self.panel = panel;
+    }
+
+    fn render_chrome(&self, frame: &mut Frame, area: Rect) -> Rect {
+        match self.chrome {
+            InputChrome::Plain => Rect::new(area.x, area.y, area.width, 1.min(area.height)),
+            InputChrome::Panel(_) => {
+                self.panel.render(frame, area);
+                Panel::inner_area(area)
+            }
+        }
+    }
+
+    fn content_area(&self, area: Rect) -> Rect {
+        match self.chrome {
+            InputChrome::Plain => Rect::new(area.x, area.y, area.width, 1.min(area.height)),
+            InputChrome::Panel(_) => Panel::inner_area(area),
+        }
+    }
+
+    fn measure_size(&self) -> (u16, u16) {
+        match self.chrome {
+            InputChrome::Plain => (24, 1),
+            InputChrome::Panel(_) => (26, 3),
+        }
     }
 
     fn render_portal_popup(&self, frame: &mut Frame, bounds: Rect) {
@@ -171,7 +226,7 @@ impl<M> DatePickerDropdown<M> {
         let mut spans = vec![Span::styled(icon.to_string(), style)];
         spans.extend(hotkey_label_spans(
             &value,
-            self.hotkey.as_deref(),
+            self.inline_hotkey(),
             crate::HotkeyLabelMode::PreferMnemonic,
             self.pending_hotkey_prefix.as_deref(),
             style,
@@ -184,20 +239,38 @@ impl<M> DatePickerDropdown<M> {
         Line::from(spans)
     }
 
+    fn inline_hotkey(&self) -> Option<&str> {
+        match self.chrome {
+            InputChrome::Plain => self.hotkey.as_deref(),
+            InputChrome::Panel(_) => None,
+        }
+    }
+
+    fn sync_pending_hotkey_prefix_from_matcher(&mut self) {
+        self.pending_hotkey_prefix = self
+            .hotkey_matcher
+            .is_pending()
+            .then(|| self.hotkey_matcher.prefix().to_owned());
+        self.sync_panel();
+    }
+
     fn handle_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         match hotkey {
             HotkeyEvent::Pending(prefix) => {
                 self.pending_hotkey_prefix = Some(prefix.clone());
+                self.sync_panel();
                 ctx.request_redraw();
                 EventOutcome::Ignored
             }
             HotkeyEvent::Canceled => {
                 self.pending_hotkey_prefix = None;
+                self.sync_panel();
                 ctx.request_redraw();
                 EventOutcome::Ignored
             }
             HotkeyEvent::Commit(sequence) => {
                 self.pending_hotkey_prefix = None;
+                self.sync_panel();
                 if self.hotkey.as_deref().is_some_and(|hotkey| {
                     crate::hotkey::normalize_hotkey(hotkey)
                         == crate::hotkey::normalize_hotkey(sequence)
@@ -223,11 +296,12 @@ impl<M> Default for DatePickerDropdown<M> {
 
 impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        picker_size_hint(24, 1).normalized(proposal)
+        let (width, height) = self.measure_size();
+        picker_size_hint(width, height).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        self.field_area = Rect::new(area.x, area.y, area.width, 1.min(area.height));
+        self.field_area = self.content_area(area);
         self.overlay_bounds = ctx.overlay_bounds();
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
@@ -247,6 +321,10 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
             FocusId::new(DATE_PICKER_DROPDOWN_FOCUS),
             true,
         );
+        ctx.set_focus_suppresses_global_hotkeys(
+            FocusId::new(DATE_PICKER_DROPDOWN_FOCUS),
+            self.open,
+        );
         if self.open {
             let popup = self.popup_area(self.overlay_bounds);
             let mut spec = OverlaySpec::new(
@@ -261,7 +339,7 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
             spec.layer = OverlayLayer::Popover;
             ctx.register_overlay(spec);
         }
-        LayoutResult::new(self.field_area)
+        LayoutResult::new(area)
     }
 
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
@@ -289,6 +367,11 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
             ctx.request_redraw();
             return finish_event(ctx, outcome);
         }
+        if matches!(event, TuiEvent::Yank) {
+            ctx.copy_to_clipboard(self.picker.cursor().to_string());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -302,17 +385,10 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
         }
         if !self.open {
             match self.hotkey_matcher.on_key(*key) {
-                HotkeyMatch::Matched(_) => {
-                    self.set_open(true);
-                    ctx.request_layout();
-                    ctx.request_redraw();
-                    ctx.stop_propagation();
-                    return EventOutcome::Handled;
-                }
+                HotkeyMatch::Matched(_) => self.sync_pending_hotkey_prefix_from_matcher(),
                 HotkeyMatch::Pending | HotkeyMatch::Canceled => {
+                    self.sync_pending_hotkey_prefix_from_matcher();
                     ctx.request_redraw();
-                    ctx.stop_propagation();
-                    return EventOutcome::Handled;
                 }
                 HotkeyMatch::Ignored => {}
             }
@@ -362,6 +438,7 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.focused = focused;
+        self.sync_panel();
         if !focused && self.open {
             self.set_open(false);
         }
@@ -371,6 +448,7 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
 
     fn tick(&mut self, dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
         if self.hotkey_matcher.tick(dt) {
+            self.sync_pending_hotkey_prefix_from_matcher();
             TickResult::CHANGED
         } else {
             TickResult::IDLE

@@ -199,6 +199,13 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
                 }
             }
         }
+        if matches!(event, TuiEvent::Yank) {
+            if let Some(value) = self.current_value() {
+                ctx.copy_to_clipboard(super::format_iso_datetime(value));
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };

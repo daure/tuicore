@@ -3,11 +3,12 @@ use crate::{KeyBindings, KeySpec};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
 use crate::{
-    EventCtx, EventOutcome, Key, KeyEvent, KeyModifiers, LayoutCtx, Propagation, TuiEvent, TuiNode,
+    ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key, KeyEvent, KeyModifiers,
+    LayoutCtx, Propagation, TreePath, TuiEvent, TuiNode,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -24,6 +25,14 @@ struct LevelRow {
     id: usize,
     level: usize,
     name: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct TransformRow {
+    id: usize,
+    task: &'static str,
+    owner: &'static str,
+    status: &'static str,
 }
 
 #[test]
@@ -123,6 +132,234 @@ fn toggle_sort_can_target_any_sortable_column() {
 
     assert!(view.toggle_sort("id").changed);
     assert_eq!(visible_ids(&view), vec![1, 2, 3]);
+}
+
+#[test]
+fn local_search_filters_rows_using_search_key_columns() {
+    let mut view = transform_view();
+
+    let outcome = view.set_search_query("api");
+
+    assert!(outcome.changed);
+    assert_eq!(visible_ids(&view), vec![1, 3]);
+}
+
+#[test]
+fn tree_search_keeps_matching_child_ancestors_visible() {
+    let mut view = tree_view().expanded([1, 3]);
+
+    view.set_search_query("task 3");
+
+    assert_eq!(visible_ids(&view), vec![1, 3, 6]);
+}
+
+#[test]
+fn level_tree_search_keeps_matching_child_ancestors_visible() {
+    let mut view = DataView::list(level_rows(), |row| row.id, |row| row.name.to_string())
+        .tree(TreeAdapter::level(|row: &LevelRow| row.level))
+        .expanded([1, 2]);
+
+    view.set_search_query("z child");
+
+    assert_eq!(visible_ids(&view), vec![1, 2, 3]);
+}
+
+#[test]
+fn active_tree_transform_still_allows_node_toggle() {
+    let mut view = tree_view().expanded([1, 3]);
+    view.set_search_query("task 3");
+
+    assert_eq!(visible_ids(&view), vec![1, 3, 6]);
+    view.highlight_id(&3);
+    view.toggle_highlighted_expansion(Rect::new(0, 0, 40, 5), AnimationSettings::default());
+
+    assert_eq!(visible_ids(&view), vec![1, 3]);
+}
+
+#[test]
+fn search_matches_are_underlined_when_rendered() {
+    let mut view = transform_view();
+    view.set_search_query("api");
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 40, 3)))
+        .expect("data view should render");
+
+    let buffer = terminal.backend().buffer();
+    for x in 0..3 {
+        assert!(
+            buffer
+                .cell((x, 0))
+                .unwrap()
+                .style()
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
+    }
+}
+
+#[test]
+fn unicode_search_highlight_uses_original_char_boundaries() {
+    let mut view = DataView::new([Row::new(1, "İstanbul")], |row| row.id).column(Column::text(
+        "name",
+        "Name",
+        Constraint::Percentage(100),
+        |row: &Row| row.name.to_string(),
+    ));
+    view.set_transform_mode(DataViewTransformMode::External);
+    view.set_search_query("i");
+
+    let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 20, 2)))
+        .expect("unicode search should render without panic");
+
+    let mut rendered_row = false;
+    for y in 0..2 {
+        for x in 0..20 {
+            rendered_row |= terminal.backend().buffer().cell((x, y)).unwrap().symbol() == "İ";
+        }
+    }
+    assert!(rendered_row);
+}
+
+#[test]
+fn routed_search_paste_updates_transform_query() {
+    let mut view = transform_view().action_bar(true);
+    view.set_focused(true);
+    let mut layout = LayoutCtx::new();
+    <DataView<TransformRow, usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 60, 6),
+        &mut layout,
+    );
+    view.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('/'))),
+        &mut EventCtx::<()>::default(),
+    );
+    let route = EventRoute::new(TreePath::from_keys([ChildKey::new(SEARCH_SLOT)]));
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = view.dispatch_event(&route, &TuiEvent::Paste(String::from("api")), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(view.transform_state().search, "api");
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn local_filters_are_exact_match_and_combined_with_and() {
+    let mut view = transform_view();
+
+    view.set_filter("owner", "Ada");
+    view.set_filter("status", "Ready");
+
+    assert_eq!(visible_ids(&view), vec![1]);
+}
+
+#[test]
+fn filter_dropdown_transform_preserves_navigation_activation() {
+    let mut view = transform_view().activation_mode(ActivationMode::OnNavigate);
+    view.highlight_id(&2);
+    let transform = view.set_filter("owner", "Ada");
+
+    let outcome = view.transform_dropdown_outcome(
+        transform,
+        Rect::new(0, 0, 40, 3),
+        AnimationSettings::default(),
+    );
+
+    assert!(outcome.activated);
+    assert_eq!(
+        view.take_last_activated().map(|event| event.row_id),
+        Some(1)
+    );
+}
+
+#[test]
+fn empty_transform_result_renders_no_results_message() {
+    let mut view = transform_view();
+    view.set_search_query("not present");
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 40, 3)))
+        .expect("data view should render");
+
+    let buffer = terminal.backend().buffer();
+    let message = (0..17)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+
+    assert_eq!(message, "No results found.");
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, crate::theme().subtle_fg());
+}
+
+#[test]
+fn visible_row_ids_remain_base_subset_when_local_filter_changes() {
+    let mut view = transform_view().visible_row_ids([1, 2, 3]);
+
+    view.set_filter("owner", "Ada");
+    assert_eq!(visible_ids(&view), vec![1, 3]);
+
+    view.clear_filter("owner");
+    assert_eq!(visible_ids(&view), vec![1, 2, 3]);
+}
+
+#[test]
+fn external_transform_mode_updates_state_without_local_filtering() {
+    let mut view = transform_view();
+    view.set_transform_mode(DataViewTransformMode::External);
+
+    view.set_search_query("api");
+    view.set_filter("owner", "Ada");
+
+    assert_eq!(visible_ids(&view), vec![1, 2, 3, 4]);
+    assert_eq!(view.transform_state().search, "api");
+    assert_eq!(view.transform_state().filters.len(), 1);
+}
+
+#[test]
+fn filter_header_label_includes_active_filter_icon() {
+    let mut view = transform_view().headers(true);
+    view.set_filter("owner", "Ada");
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 40, 3)))
+        .expect("data view should render");
+
+    let header = (0..40)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert!(header.contains(""));
+}
+
+#[test]
+fn default_data_view_transform_keys_match_oracle_plan() {
+    let bindings = KeyBindings::default();
+
+    assert!(
+        bindings
+            .data_view()
+            .search_matches(KeyEvent::from(Key::Char('/')))
+    );
+    assert!(
+        bindings
+            .data_view()
+            .filter_matches(KeyEvent::from(Key::Char('f')))
+    );
+}
+
+#[test]
+fn search_hotkey_is_ignored_without_action_bar() {
+    let mut view = transform_view();
+
+    let outcome = view.on_key(KeyEvent::from(Key::Char('/')), Rect::new(0, 0, 40, 6));
+
+    assert_eq!(outcome, DataViewOutcome::IDLE);
+    assert_eq!(view.interaction, DataViewInteraction::Grid);
 }
 
 #[test]
@@ -231,6 +468,7 @@ fn handled_key_stops_propagation() {
             row.name.to_string()
         }),
     );
+    view.set_focused(true);
     let mut layout = LayoutCtx::new();
     <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
     let mut ctx = EventCtx::<()>::default();
@@ -239,6 +477,94 @@ fn handled_key_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn action_bar_search_registers_text_entry_focus_target() {
+    let mut view = transform_view().action_bar(true);
+    let mut layout = LayoutCtx::new();
+
+    <DataView<TransformRow, usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 60, 6),
+        &mut layout,
+    );
+    let mut ctx = EventCtx::<()>::default();
+    view.event(&TuiEvent::Key(KeyEvent::from(Key::Char('/'))), &mut ctx);
+    let mut layout = LayoutCtx::new();
+    <DataView<TransformRow, usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 60, 6),
+        &mut layout,
+    );
+
+    let target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.path.keys() == [ChildKey::new(SEARCH_SLOT)])
+        .expect("search child should register focus target");
+    assert_eq!(target.id.as_str(), TEXT_INPUT_FOCUS);
+    assert!(!target.tab_stop);
+    assert!(target.hotkey_sequences.is_empty());
+}
+
+#[test]
+fn opening_search_focuses_child_and_characters_stop_propagation() {
+    let mut view = transform_view().action_bar(true);
+    view.set_focused(true);
+    let mut layout = LayoutCtx::new();
+    <DataView<TransformRow, usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 60, 6),
+        &mut layout,
+    );
+    let mut ctx = EventCtx::<()>::default();
+
+    let slash = view.event(&TuiEvent::Key(KeyEvent::from(Key::Char('/'))), &mut ctx);
+
+    assert_eq!(slash, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&FocusRequest::TargetAt {
+            path: TreePath::from_keys([ChildKey::new(SEARCH_SLOT)]),
+            id: FocusId::new(TEXT_INPUT_FOCUS),
+        })
+    );
+
+    let route = EventRoute::new(TreePath::from_keys([ChildKey::new(SEARCH_SLOT)]));
+    let mut ctx = EventCtx::<()>::default();
+    let outcome = view.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('c'))),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert_eq!(view.transform_state().search, "c");
+}
+
+#[test]
+fn filter_picker_uses_dropdown_state() {
+    let mut view = transform_view().headers(true).action_bar(true);
+
+    assert!(
+        view.on_key(KeyEvent::from(Key::Char('f')), Rect::new(0, 0, 60, 6))
+            .changed
+    );
+    assert!(
+        view.on_key(KeyEvent::from(Key::Char('2')), Rect::new(0, 0, 60, 6))
+            .changed
+    );
+    assert!(matches!(
+        view.interaction,
+        DataViewInteraction::FilterValues { .. }
+    ));
+    assert!(
+        view.filter_dropdown
+            .as_ref()
+            .is_some_and(|dropdown| dropdown.is_open())
+    );
 }
 
 #[test]
@@ -1432,6 +1758,33 @@ fn tree_view() -> DataView<Row, usize> {
         .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
 }
 
+fn transform_view() -> DataView<TransformRow, usize> {
+    DataView::new(transform_rows(), |row| row.id).columns([
+        Column::text(
+            "task",
+            "Task",
+            Constraint::Percentage(40),
+            |row: &TransformRow| row.task.to_string(),
+        )
+        .sortable(|row| row.task.to_string())
+        .search_key(|row| row.task.to_string()),
+        Column::text(
+            "owner",
+            "Owner",
+            Constraint::Percentage(30),
+            |row: &TransformRow| row.owner.to_string(),
+        )
+        .filter_key(|row| row.owner.to_string()),
+        Column::text(
+            "status",
+            "Status",
+            Constraint::Percentage(30),
+            |row: &TransformRow| row.status.to_string(),
+        )
+        .filter_key(|row| row.status.to_string()),
+    ])
+}
+
 fn visible_ids<T>(view: &DataView<T, usize>) -> Vec<usize> {
     view.visible_rows().iter().map(|row| row.id).collect()
 }
@@ -1515,6 +1868,35 @@ fn rows() -> Vec<Row> {
             id: 7,
             parent: Some(3),
             name: "task 4",
+        },
+    ]
+}
+
+fn transform_rows() -> Vec<TransformRow> {
+    vec![
+        TransformRow {
+            id: 1,
+            task: "API auth",
+            owner: "Ada",
+            status: "Ready",
+        },
+        TransformRow {
+            id: 2,
+            task: "CLI polish",
+            owner: "Lin",
+            status: "Active",
+        },
+        TransformRow {
+            id: 3,
+            task: "API docs",
+            owner: "Ada",
+            status: "Blocked",
+        },
+        TransformRow {
+            id: 4,
+            task: "TUI layout",
+            owner: "Mia",
+            status: "Ready",
         },
     ]
 }

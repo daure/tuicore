@@ -316,6 +316,13 @@ impl<M> TuiNode<M> for List {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if matches!(event, TuiEvent::Yank) {
+            if let Some(item) = self.selected_item() {
+                ctx.copy_to_clipboard(item.to_owned());
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };

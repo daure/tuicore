@@ -84,6 +84,7 @@ pub struct TextInput<M = ()> {
     value: String,
     placeholder: String,
     hotkey: Option<String>,
+    hotkey_focus_enabled: bool,
     cursor: usize,
     focused: bool,
     insert_mode: bool,
@@ -306,6 +307,7 @@ impl<M> TextInput<M> {
             value: String::new(),
             placeholder: String::new(),
             hotkey: None,
+            hotkey_focus_enabled: true,
             cursor: 0,
             focused: false,
             insert_mode: false,
@@ -350,10 +352,12 @@ impl<M> TextInput<M> {
     }
 
     fn sync_panel(&mut self) {
-        self.panel = match &self.chrome {
+        let mut panel = match &self.chrome {
             InputChrome::Plain => Panel::new(),
             InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
         };
+        panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
+        self.panel = panel;
     }
 
     fn inline_hotkey(&self) -> Option<&str> {
@@ -396,6 +400,11 @@ impl<M> TextInput<M> {
         self
     }
 
+    pub(crate) fn hotkey_focus_enabled(mut self, enabled: bool) -> Self {
+        self.hotkey_focus_enabled = enabled;
+        self
+    }
+
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
         self.hotkey = Some(hotkey.into());
         self.sync_panel();
@@ -411,10 +420,12 @@ impl<M> TextInput<M> {
         match hotkey {
             HotkeyEvent::Pending(prefix) => {
                 self.pending_hotkey_prefix = Some(prefix.clone());
+                self.sync_panel();
                 ctx.request_redraw();
             }
             HotkeyEvent::Canceled | HotkeyEvent::Commit(_) => {
                 if self.pending_hotkey_prefix.take().is_some() {
+                    self.sync_panel();
                     ctx.request_redraw();
                 }
             }
@@ -450,6 +461,10 @@ impl<M> TextInput<M> {
 
     pub fn insert_mode(&self) -> bool {
         self.insert_mode
+    }
+
+    pub(crate) fn external_editor_request(&self) -> (String, usize, usize) {
+        (self.value.clone(), 1, self.cursor + 1)
     }
 
     pub(crate) fn set_insert_mode(&mut self, insert_mode: bool) {
@@ -890,12 +905,15 @@ impl<M> TextInput<M> {
         }
     }
 
-    fn external_editor_key_matches(&self, key: KeyEvent) -> bool {
+    pub(crate) fn external_editor_key_matches(&self, key: KeyEvent) -> bool {
         self.external_editor_key
             .is_some_and(|expected| key_matches(expected, key))
     }
 
-    fn apply_external_editor_response(&mut self, response: &crate::ExternalEditorResponse) {
+    pub(crate) fn apply_external_editor_response(
+        &mut self,
+        response: &crate::ExternalEditorResponse,
+    ) {
         let mut collapsed_cursor = 0;
         let lines: Vec<&str> = response.value.split('\n').collect();
         let target_line_idx = response
@@ -1146,7 +1164,7 @@ impl<M> TuiNode<M> for TextInput<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
         let focus_area = self.content_area(area);
-        if let Some(hotkey) = self.hotkey.clone() {
+        if let Some(hotkey) = self.hotkey.clone().filter(|_| self.hotkey_focus_enabled) {
             ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(INPUT_FOCUS),
                 focus_area,
@@ -1204,6 +1222,11 @@ impl<M> TuiNode<M> for TextInput<M> {
                 return EventOutcome::Handled;
             }
             return EventOutcome::Ignored;
+        }
+        if matches!(event, TuiEvent::Yank) {
+            ctx.copy_to_clipboard(self.value.clone());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;

@@ -259,12 +259,67 @@ fn control_i_inserts_tab_character_and_stops_propagation() {
 
 #[test]
 fn visible_lines_clip_wide_unicode_by_terminal_width() {
-    let input = TextareaInput::<()>::new().value("ab界d");
+    let input = TextareaInput::<()>::new().wrap(false).value("ab界d");
 
     let lines = input.visible_lines(4, 1);
 
     assert_eq!(line_text(&lines.lines[0]), "ab界");
     assert_eq!(cell_width(&line_text(&lines.lines[0])), 4);
+}
+
+#[test]
+fn text_wraps_visually_by_default_without_changing_value() {
+    let input = TextareaInput::<()>::new().value("abcdef");
+
+    let lines = input.visible_lines(3, 2);
+
+    assert_eq!(line_text(&lines.lines[0]), "abc");
+    assert_eq!(line_text(&lines.lines[1]), "def");
+    assert_eq!(input.current_value(), "abcdef");
+}
+
+#[test]
+fn wrapping_moves_whole_word_instead_of_leaving_leading_space() {
+    let input = TextareaInput::<()>::new().value("aaa we");
+
+    let lines = input.visible_lines(5, 2);
+
+    assert_eq!(line_text(&lines.lines[0]), "aaa ");
+    assert_eq!(line_text(&lines.lines[1]), "we");
+}
+
+#[test]
+fn wrapping_moves_word_as_soon_as_next_typed_char_overflows() {
+    let input = TextareaInput::<()>::new().value("see whe");
+
+    let lines = input.visible_lines(6, 2);
+
+    assert_eq!(line_text(&lines.lines[0]), "see ");
+    assert_eq!(line_text(&lines.lines[1]), "whe");
+}
+
+#[test]
+fn insert_mode_wraps_when_cursor_would_overflow_full_row() {
+    let mut input = TextareaInput::<()>::new().value("aaa beeeee").focused(true);
+    input.insert_mode = true;
+
+    let lines = input.visible_lines(10, 2);
+
+    assert_eq!(line_text(&lines.lines[0]), "aaa ");
+    assert_eq!(line_text(&lines.lines[1]), "beeeee ");
+}
+
+#[test]
+fn disabled_wrap_preserves_horizontal_cursor_scrolling() {
+    let mut input = TextareaInput::<()>::new()
+        .wrap(false)
+        .value("abcdef")
+        .focused(true);
+    input.insert_mode = true;
+
+    let lines = input.visible_lines(3, 1);
+
+    assert_eq!(line_text(&lines.lines[0]), "ef ");
 }
 
 #[test]
@@ -370,6 +425,16 @@ fn measure_counts_trailing_blank_line() {
 
     let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded());
 
+    assert_eq!(hint.preferred.height, 2);
+}
+
+#[test]
+fn measure_counts_wrapped_rows_for_bounded_width() {
+    let input = TextareaInput::<()>::new().value("abcdef");
+
+    let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::at_most(3, 10));
+
+    assert_eq!(hint.preferred.width, 3);
     assert_eq!(hint.preferred.height, 2);
 }
 
@@ -491,6 +556,27 @@ fn page_down_uses_scroll_state_when_content_overflows() {
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(input.scroll.target_offset().y, 1);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn wrapped_cursor_row_scrolls_into_view_after_layout() {
+    let mut input = TextareaInput::<()>::new().value("abcdefghi");
+    input.insert_mode = true;
+    let mut layout = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 3, 2), &mut layout);
+
+    assert_eq!(input.scroll.target_offset().y, 1);
+}
+
+#[test]
+fn wrapped_content_height_uses_viewport_width_after_scrollbar_gutter() {
+    let input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour five");
+
+    let geometry = input.scroll_geometry(Rect::new(0, 0, 10, 4));
+
+    assert_eq!(geometry.layout.viewport.width, 9);
+    assert_eq!(geometry.content.height, 5);
 }
 
 #[test]

@@ -49,20 +49,26 @@ impl DataViewMode {
         );
         match self {
             Self::List => format!(
-                "100 rows • one column • no header • {scroll_keys} scroll • {} activates row",
+                "100 rows • {} search • one column • no header • {scroll_keys} scroll • {} activates row",
+                data_keys.search_label(),
                 data_keys.activate_label()
             ),
             Self::Table => {
                 format!(
-                    "100 rows • headers + rich cells • {scroll_keys} scroll • s sorts task column"
+                    "100 rows • {} search • {} filter header key • {scroll_keys} scroll • s sorts task column",
+                    data_keys.search_label(),
+                    data_keys.filter_label()
                 )
             }
             Self::ListTree => format!(
-                "100 rows • {} node • {all_tree_keys} collapse/expand all • using tree glyphs /",
+                "100 rows • {} search • {} node • {all_tree_keys} collapse/expand all • using tree glyphs /",
+                data_keys.search_label(),
                 data_keys.toggle_expansion_label()
             ),
             Self::TableTree => format!(
-                "100 rows • rich cells • {} node • {all_tree_keys} all • s sorts • using tree glyphs /",
+                "100 rows • {} search • {} filter header key • rich cells • {} node • {all_tree_keys} all • s sorts • using tree glyphs /",
+                data_keys.search_label(),
+                data_keys.filter_label(),
                 data_keys.toggle_expansion_label()
             ),
             Self::SingleSelect => format!(
@@ -94,16 +100,21 @@ impl DataViewMode {
             .collect::<Vec<_>>();
 
         match self {
-            Self::List => DataView::list(rows, |row| row.id, |row| row.name.clone()),
+            Self::List => {
+                DataView::list(rows, |row| row.id, |row| row.name.clone()).action_bar(true)
+            }
             Self::Table => DataView::new(rows, |row| row.id)
                 .headers(true)
+                .action_bar(true)
                 .columns(demo_columns()),
             Self::ListTree => DataView::list(rows, |row| row.id, |row| row.name.clone())
+                .action_bar(true)
                 .tree(TreeAdapter::parent_id(|row: &DemoRow| row.parent))
                 .tree_glyphs(TreeGlyphs::NERD_FONT)
                 .expanded(expanded),
             Self::TableTree => DataView::new(rows, |row| row.id)
                 .headers(true)
+                .action_bar(true)
                 .columns(demo_columns())
                 .tree(TreeAdapter::parent_id(|row: &DemoRow| row.parent))
                 .tree_glyphs(TreeGlyphs::NERD_FONT)
@@ -154,6 +165,13 @@ pub(crate) fn data_event_status(event: DataViewTypedEvent<usize>) -> String {
         DataViewTypedEvent::HighlightChanged { row_id } => format!("highlight → {row_id:?}"),
         DataViewTypedEvent::Activated { row_id } => format!("activated #{row_id}"),
         DataViewTypedEvent::SelectionChanged { selected, .. } => format!("selected {selected:?}"),
+        DataViewTypedEvent::TransformChanged { state } => {
+            format!(
+                "search {:?} • filters {}",
+                state.search,
+                state.filters.len()
+            )
+        }
     }
 }
 
@@ -165,14 +183,18 @@ fn demo_columns() -> Vec<Column<DemoRow, usize>> {
             Constraint::Percentage(45),
             |row: &DemoRow| row.name.clone(),
         )
-        .sortable(|row| row.name.clone()),
+        .sortable(|row| row.name.clone())
+        .search_key(|row| row.name.clone())
+        .filter_key(|row| row.name.clone()),
         Column::text(
             "owner",
             "Owner",
             Constraint::Percentage(20),
             |row: &DemoRow| row.owner.to_string(),
         )
-        .sortable(|row| row.owner.to_string()),
+        .sortable(|row| row.owner.to_string())
+        .search_key(|row| row.owner.to_string())
+        .filter_key(|row| row.owner.to_string()),
         Column::rich(
             "status",
             "Status",
@@ -185,11 +207,13 @@ fn demo_columns() -> Vec<Column<DemoRow, usize>> {
                     Status::Blocked => ("BLOCKED", theme.error_fg()),
                 };
                 Line::from(Span::styled(
-                    format!(" {label} "),
+                    label,
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ))
             },
-        ),
+        )
+        .search_key(|row| status_label(row.status).to_string())
+        .filter_key(|row| status_label(row.status).to_string()),
         Column::rich(
             "progress",
             "Progress",
@@ -205,8 +229,27 @@ fn demo_columns() -> Vec<Column<DemoRow, usize>> {
                     ),
                 ])
             },
-        ),
+        )
+        .search_key(|row| row.progress.to_string())
+        .filter_key(|row| progress_bucket(row.progress).to_string()),
     ]
+}
+
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::Ready => "READY",
+        Status::Active => "ACTIVE",
+        Status::Blocked => "BLOCKED",
+    }
+}
+
+fn progress_bucket(progress: u8) -> &'static str {
+    match progress {
+        0..=24 => "0-24%",
+        25..=49 => "25-49%",
+        50..=74 => "50-74%",
+        _ => "75-100%",
+    }
 }
 
 fn demo_rows() -> Vec<DemoRow> {

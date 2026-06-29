@@ -3,6 +3,7 @@ use std::time::Duration;
 use ratatui::{Frame, layout::Rect};
 
 use crate::animation::{AnimationSettings, TickResult};
+use crate::components::Notification;
 use crate::event::{ExternalEditorRequest, KeyEvent, TuiEvent};
 use crate::overlay::{OverlayLayoutEntry, OverlayManager, OverlaySpec, RenderCtx};
 
@@ -123,6 +124,8 @@ pub struct EventCtx<M> {
     animation: AnimationSettings,
     clear: bool,
     external_editor: Option<ExternalEditorRequest>,
+    clipboard: Option<String>,
+    notifications: Vec<Notification>,
     current_path: TreePath,
 }
 
@@ -303,6 +306,8 @@ impl<M> EventCtx<M> {
             animation,
             clear: false,
             external_editor: None,
+            clipboard: None,
+            notifications: Vec::new(),
             current_path: TreePath::new(),
         }
     }
@@ -318,6 +323,21 @@ impl<M> EventCtx<M> {
     }
 
     pub fn request_redraw(&mut self) {
+        self.redraw = true;
+    }
+
+    pub fn copy_to_clipboard(&mut self, value: impl Into<String>) {
+        let value = value.into();
+        self.notifications.push(Notification::info(
+            "Copied to clipboard",
+            format!("\"{value}\""),
+        ));
+        self.clipboard = Some(value);
+        self.redraw = true;
+    }
+
+    pub fn notify(&mut self, notification: Notification) {
+        self.notifications.push(notification);
         self.redraw = true;
     }
 
@@ -391,6 +411,14 @@ impl<M> EventCtx<M> {
         self.external_editor.as_ref()
     }
 
+    pub fn clipboard_request(&self) -> Option<&str> {
+        self.clipboard.as_deref()
+    }
+
+    pub fn notifications(&self) -> &[Notification] {
+        &self.notifications
+    }
+
     pub fn forward_non_message_effects_from<N>(&mut self, child: &mut EventCtx<N>) {
         if child.redraw_requested() {
             self.request_redraw();
@@ -417,6 +445,11 @@ impl<M> EventCtx<M> {
             self.external_editor = Some(request);
             self.request_redraw();
         }
+        if let Some(value) = child.take_clipboard_request() {
+            self.clipboard = Some(value);
+            self.request_redraw();
+        }
+        self.notifications.extend(child.drain_notifications());
     }
 
     pub fn layout_requested(&self) -> bool {
@@ -445,6 +478,14 @@ impl<M> EventCtx<M> {
 
     pub(crate) fn take_external_editor_request(&mut self) -> Option<ExternalEditorRequest> {
         self.external_editor.take()
+    }
+
+    pub(crate) fn take_clipboard_request(&mut self) -> Option<String> {
+        self.clipboard.take()
+    }
+
+    pub(crate) fn drain_notifications(&mut self) -> impl Iterator<Item = Notification> + '_ {
+        self.notifications.drain(..)
     }
 }
 
@@ -1499,6 +1540,10 @@ impl TreePath {
             Some(first) if first == key => Some(self.without_first()),
             _ => None,
         }
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        (!self.0.is_empty()).then(|| Self(self.0.iter().take(self.0.len() - 1).cloned().collect()))
     }
 
     pub fn child(&self, key: ChildKey) -> Self {

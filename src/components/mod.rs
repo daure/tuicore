@@ -41,8 +41,9 @@ pub use calendar::{
 };
 pub use chip::{Chip, ChipColorRole};
 pub use data_view::{
-    ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewOutcome,
-    DataViewPagination, DataViewSort, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
+    ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewFilter,
+    DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
+    DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
 pub use date_time::{

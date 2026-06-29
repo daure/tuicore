@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{
     AnimationSettings, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusRepair, FocusRequest,
-    FocusTarget, Propagation, TickResult, TuiEvent, TuiNode,
+    FocusTarget, Notification, Propagation, TickResult, TuiEvent, TuiNode,
 };
 
 use super::FocusTransition;
@@ -19,6 +19,8 @@ pub struct DispatchEffects<M> {
     pub propagation: Propagation,
     pub clear: bool,
     pub external_editor: Option<crate::ExternalEditorRequest>,
+    pub clipboard: Option<String>,
+    pub notifications: Vec<Notification>,
 }
 
 #[derive(Debug, Default)]
@@ -85,6 +87,8 @@ impl TreeDispatcher {
             propagation: Propagation::Continue,
             clear: false,
             external_editor: None,
+            clipboard: None,
+            notifications: Vec::new(),
         }
     }
 }
@@ -102,6 +106,8 @@ impl<M> DispatchEffects<M> {
             propagation: Propagation::Continue,
             clear: false,
             external_editor: None,
+            clipboard: None,
+            notifications: Vec::new(),
         }
     }
 
@@ -113,6 +119,8 @@ impl<M> DispatchEffects<M> {
         let focus_repair = ctx.focus_repair();
         let propagation = ctx.propagation();
         let external_editor = ctx.take_external_editor_request();
+        let clipboard = ctx.take_clipboard_request();
+        let notifications = ctx.drain_notifications().collect();
         let messages = ctx.drain_messages().collect();
         let clear = ctx.clear_requested();
 
@@ -127,6 +135,8 @@ impl<M> DispatchEffects<M> {
             propagation,
             clear,
             external_editor,
+            clipboard,
+            notifications,
         }
     }
 }

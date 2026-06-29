@@ -67,16 +67,16 @@ use tuicore::components::{AiDock, LlmEvent, StoreDebugView, ToolPolicy};
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, Calendar, CalendarEntryRole, CalendarSpan,
     CalendarTypedEvent, ChildKey, Chip, ChipColorRole, DataView, DataViewTypedEvent, DatePicker,
-    DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, DialogBackdrop,
-    DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DialogTitlePosition,
-    DispatchOutcome, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx,
-    FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue,
-    Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem, ModalCloseReason,
-    Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow,
-    PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar,
-    StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TextInput, TextareaInput,
-    TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent,
-    TuiNode,
+    DatePickerDropdown, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
+    DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
+    DialogTitlePosition, DispatchOutcome, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute,
+    Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField,
+    InspectValue, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem,
+    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
+    ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
+    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant,
+    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
+    TreeAdapter, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -281,6 +281,7 @@ impl Gallery {
             |component| *component,
             |component| component.title().to_string(),
         )
+        .action_bar(true)
         .tree(TreeAdapter::parent_id(|component: &ComponentKind| {
             component.parent()
         }))
@@ -391,7 +392,8 @@ impl Gallery {
                 DataViewTypedEvent::HighlightChanged { row_id: Some(id) }
                 | DataViewTypedEvent::Activated { row_id: id } => Some(id),
                 DataViewTypedEvent::HighlightChanged { row_id: None }
-                | DataViewTypedEvent::SelectionChanged { .. } => None,
+                | DataViewTypedEvent::SelectionChanged { .. }
+                | DataViewTypedEvent::TransformChanged { .. } => None,
             })
     }
 
@@ -579,6 +581,7 @@ struct PreviewState {
     date_picker: DatePicker<Msg>,
     time_picker: TimePicker<Msg>,
     date_time_picker: DateTimePicker<Msg>,
+    date_dropdown: DatePickerDropdown<Msg>,
     date_time_dropdown: DateTimePickerDropdown<Msg>,
     date_time_status: String,
     calendar: Calendar<DemoCalendarEntry, &'static str, Msg>,
@@ -696,14 +699,21 @@ impl PreviewState {
                 .value(demo_time())
                 .minute_step(15)
                 .precision(TimePrecision::HourMinute)
-                .hotkey("tp"),
+                .hotkey("tp")
+                .style(InputChrome::panel("Time").top_right("15m")),
             date_time_picker: DateTimePicker::new()
                 .value(Some(demo_datetime()))
                 .layout(DateTimePickerLayout::Vertical),
+            date_dropdown: DatePickerDropdown::new()
+                .today(demo_date())
+                .value(Some(demo_date()))
+                .hotkey("dd")
+                .panel("Date"),
             date_time_dropdown: DateTimePickerDropdown::new()
                 .today(demo_date())
                 .value(Some(demo_datetime()))
-                .hotkey("dt"),
+                .hotkey("dt")
+                .panel("Date & time"),
             date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
             calendar: demo_calendar(),
             calendar_status: String::from("No calendar event yet"),
@@ -943,6 +953,18 @@ impl PreviewState {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if !preview.is_data_view() {
+            return EventOutcome::Ignored;
+        }
+
+        let outcome = self
+            .active_data_view_mut(preview)
+            .dispatch_event(route, event, ctx);
+        self.record_data_events(preview);
+        if outcome == EventOutcome::Handled {
+            return outcome;
+        }
+
         if let TuiEvent::Key(key) = event {
             if matches!(preview, PreviewKind::DataTable | PreviewKind::DataTableTree)
                 && matches!(key.code, Key::Char('s'))
@@ -956,15 +978,7 @@ impl PreviewState {
             }
         }
 
-        if !preview.is_data_view() {
-            return EventOutcome::Ignored;
-        }
-
-        let outcome = self
-            .active_data_view_mut(preview)
-            .dispatch_event(route, event, ctx);
-        self.record_data_events(preview);
-        outcome
+        EventOutcome::Ignored
     }
 
     fn dispatch_event(
@@ -1205,10 +1219,19 @@ impl PreviewState {
                 ) {
                     return;
                 }
+                if dispatch_focus_child(
+                    &mut self.date_dropdown,
+                    target,
+                    date_dropdown_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
                 dispatch_focus_child(
                     &mut self.date_time_dropdown,
                     target,
-                    date_dropdown_child_key(),
+                    date_time_dropdown_child_key(),
                     focused,
                     ctx,
                 );
@@ -1359,6 +1382,11 @@ impl PreviewState {
             ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
+            .merge(<DatePickerDropdown<Msg> as TuiNode<Msg>>::tick(
+                &mut self.date_dropdown,
+                dt,
+                settings,
+            ))
             .merge(<DateTimePickerDropdown<Msg> as TuiNode<Msg>>::tick(
                 &mut self.date_time_dropdown,
                 dt,
@@ -2068,7 +2096,11 @@ impl PreviewState {
     fn layout_date_time(&mut self, area: Rect, ctx: &mut LayoutCtx) {
         let [_, date_area, _, combo_area, dropdown_area, _] = date_time_showcase_layout(area);
         let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
-        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 1);
+        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 3);
+        let [date_dropdown_area, date_time_dropdown_area] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(26), Constraint::Length(33)])
+            .areas(dropdown_area);
         ctx.push_slot(date_picker_child_key(), date_picker_area, |ctx| {
             self.date_picker.layout(date_picker_area, ctx);
         });
@@ -2082,9 +2114,16 @@ impl PreviewState {
                 ctx,
             );
         });
-        ctx.push_slot(date_dropdown_child_key(), dropdown_area, |ctx| {
-            self.date_time_dropdown.layout(dropdown_area, ctx);
+        ctx.push_slot(date_dropdown_child_key(), date_dropdown_area, |ctx| {
+            self.date_dropdown.layout(date_dropdown_area, ctx);
         });
+        ctx.push_slot(
+            date_time_dropdown_child_key(),
+            date_time_dropdown_area,
+            |ctx| {
+                self.date_time_dropdown.layout(date_time_dropdown_area, ctx);
+            },
+        );
     }
 
     fn render_date_time<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
@@ -2105,12 +2144,18 @@ impl PreviewState {
             instructions,
         );
         let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
-        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 1);
+        let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 3);
+        let [date_dropdown_area, date_time_dropdown_area] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(26), Constraint::Length(33)])
+            .areas(dropdown_area);
         self.date_picker.render(frame, date_picker_area);
         self.time_picker.render(frame, time_picker_area);
         frame.render_widget(Paragraph::new(self.date_time_status.clone()), status_area);
         self.date_time_picker.render(frame, combo_area);
-        self.date_time_dropdown.render(frame, dropdown_area, ctx);
+        self.date_dropdown.render(frame, date_dropdown_area, ctx);
+        self.date_time_dropdown
+            .render(frame, date_time_dropdown_area, ctx);
         frame.render_widget(
             Paragraph::new(
                 "Dropdown datetime field starts with date, then centers time in the same popup. Ctrl+O edits the full datetime.",
@@ -2146,6 +2191,12 @@ impl PreviewState {
         } else if let Some(route) = route
             .path
             .without_first_if(&date_dropdown_child_key())
+            .map(EventRoute::new)
+        {
+            self.date_dropdown.dispatch_event(&route, event, ctx)
+        } else if let Some(route) = route
+            .path
+            .without_first_if(&date_time_dropdown_child_key())
             .map(EventRoute::new)
         {
             self.date_time_dropdown.dispatch_event(&route, event, ctx)
@@ -2725,6 +2776,10 @@ fn date_time_picker_child_key() -> ChildKey {
 
 fn date_dropdown_child_key() -> ChildKey {
     ChildKey::new("date-dropdown")
+}
+
+fn date_time_dropdown_child_key() -> ChildKey {
+    ChildKey::new("date-time-dropdown")
 }
 
 fn calendar_child_key() -> ChildKey {

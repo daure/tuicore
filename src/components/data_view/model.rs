@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use ratatui::layout::Constraint;
 use ratatui::text::Line;
 
@@ -6,6 +8,7 @@ pub(super) type ParentIdFn<T, Id> = dyn Fn(&T) -> Option<Id>;
 pub(super) type LevelFn<T> = dyn Fn(&T) -> usize;
 type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Line<'static>;
 type SortFn<T> = dyn Fn(&T) -> String;
+type TransformKeyFn<T> = dyn Fn(&T) -> String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataViewOutcome {
@@ -75,6 +78,33 @@ pub enum DataViewTypedEvent<Id> {
         added: Vec<Id>,
         removed: Vec<Id>,
     },
+    TransformChanged {
+        state: DataViewTransformState,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataViewFilter {
+    pub column_id: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DataViewTransformState {
+    pub search: String,
+    pub filters: Vec<DataViewFilter>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataViewTransformMode {
+    Local,
+    External,
+}
+
+impl Default for DataViewTransformMode {
+    fn default() -> Self {
+        Self::Local
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +256,8 @@ pub struct Column<T, Id> {
     pub(super) width: Constraint,
     pub(super) renderer: Box<CellFn<T, Id>>,
     pub(super) sort_key: Option<Box<SortFn<T>>>,
+    pub(super) search_key: Option<Box<TransformKeyFn<T>>>,
+    pub(super) filter_key: Option<Box<TransformKeyFn<T>>>,
 }
 
 impl<T, Id> Column<T, Id> {
@@ -235,12 +267,17 @@ impl<T, Id> Column<T, Id> {
         width: Constraint,
         accessor: impl Fn(&T) -> String + 'static,
     ) -> Self {
+        let accessor = Rc::new(accessor);
+        let renderer_accessor = Rc::clone(&accessor);
+        let search_accessor = Rc::clone(&accessor);
         Self {
             id: id.into(),
             header: header.into(),
             width,
-            renderer: Box::new(move |row, _| Line::from(accessor(row))),
+            renderer: Box::new(move |row, _| Line::from(renderer_accessor(row))),
             sort_key: None,
+            search_key: Some(Box::new(move |row| search_accessor(row))),
+            filter_key: None,
         }
     }
 
@@ -256,11 +293,23 @@ impl<T, Id> Column<T, Id> {
             width,
             renderer: Box::new(renderer),
             sort_key: None,
+            search_key: None,
+            filter_key: None,
         }
     }
 
     pub fn sortable(mut self, sort_key: impl Fn(&T) -> String + 'static) -> Self {
         self.sort_key = Some(Box::new(sort_key));
+        self
+    }
+
+    pub fn search_key(mut self, search_key: impl Fn(&T) -> String + 'static) -> Self {
+        self.search_key = Some(Box::new(search_key));
+        self
+    }
+
+    pub fn filter_key(mut self, filter_key: impl Fn(&T) -> String + 'static) -> Self {
+        self.filter_key = Some(Box::new(filter_key));
         self
     }
 

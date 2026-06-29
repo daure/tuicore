@@ -28,12 +28,13 @@ pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
     ActivationMode, AiDockKeyBindings, Button, ButtonOutcome, Calendar, CalendarEntryRole,
     CalendarOutcome, CalendarSpan, CalendarTypedEvent, CalendarView, CellContext, CheckState, Chip,
-    ChipColorRole, Column, CrossAlign, CrossSize, DataView, DataViewEvent, DataViewOutcome,
-    DataViewPagination, DataViewSort, DataViewTypedEvent, DatePicker, DatePickerDropdown,
-    DateTimeIndicator, DateTimeIndicatorFormat, DateTimePicker, DateTimePickerDropdown,
-    DateTimePickerLayout, Dialog, DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings,
-    DialogLayer, DialogLayerPlacement, DialogTitlePosition, DockChrome, DockSide, DockSpec,
-    Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,
+    ChipColorRole, Column, CrossAlign, CrossSize, DataView, DataViewEvent, DataViewFilter,
+    DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
+    DataViewTransformState, DataViewTypedEvent, DatePicker, DatePickerDropdown, DateTimeIndicator,
+    DateTimeIndicatorFormat, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, Dialog,
+    DialogBackdrop, DialogCloseReason, DialogHost, DialogKeyBindings, DialogLayer,
+    DialogLayerPlacement, DialogTitlePosition, DockChrome, DockSide, DockSpec, Dropdown,
+    DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,
     DropdownPopupDirection, DropdownSearchMode, DropdownVariant, Flex, FlexItem, Grid, GridItem,
     GridTrack, Header, InputChrome, InputOutcome, InputPanelChrome, List, ListOutcome, MainAlign,
     Menu, MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode,
@@ -62,9 +63,9 @@ pub use hotkey::{
     hotkey_edge_spans, hotkey_label_spans, hotkey_sequence_to_event, hotkey_underline_style,
 };
 pub use keybindings::{
-    ButtonKeyBindings, DataViewKeyBindings, DateTimePickerKeyBindings, DropdownKeyBindings,
-    FocusKeyBindings, KeyBindings, KeyBindingsError, KeySpec, RuntimeKeyBindings, TabsKeyBindings,
-    ToggleKeyBindings,
+    ButtonKeyBindings, ClipboardKeyBindings, DataViewKeyBindings, DateTimePickerKeyBindings,
+    DropdownKeyBindings, FocusKeyBindings, KeyBindings, KeyBindingsError, KeySpec,
+    RuntimeKeyBindings, TabsKeyBindings, ToggleKeyBindings,
 };
 pub use node::{
     AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,

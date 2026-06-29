@@ -213,6 +213,19 @@ pub(super) fn format_picker_time(time: Time) -> String {
     format!("{:02}:{:02}", time.hour(), time.minute())
 }
 
+pub(super) fn format_iso_time(time: Time) -> String {
+    format!(
+        "{:02}:{:02}:{:02}",
+        time.hour(),
+        time.minute(),
+        time.second()
+    )
+}
+
+pub(super) fn format_iso_datetime(value: PrimitiveDateTime) -> String {
+    format!("{}T{}", value.date(), format_iso_time(value.time()))
+}
+
 fn date_limit(delta: i32) -> Date {
     if delta.is_negative() {
         Date::MIN

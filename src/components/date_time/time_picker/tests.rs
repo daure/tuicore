@@ -75,6 +75,33 @@ fn time_picker_registers_and_handles_hotkey() {
 }
 
 #[test]
+fn time_picker_uses_configured_today_key_for_now() {
+    let now = super::super::today_time();
+    let other = if now.hour() == 0 {
+        time::Time::from_hms(1, now.minute(), now.second()).unwrap()
+    } else {
+        time::Time::from_hms(0, now.minute(), now.second()).unwrap()
+    };
+    let mut picker = TimePicker::<()>::new().value(other);
+
+    let ignored = picker.on_key(Key::Char('n'));
+    assert_eq!(ignored, PickerOutcome::IGNORED);
+
+    let selected = picker.on_key(Key::Char('t'));
+    assert!(selected.selected);
+    assert_ne!(picker.current_value(), other);
+}
+
+#[test]
+fn time_picker_measures_visible_hotkey_text() {
+    let picker = TimePicker::<()>::new().hotkey("ctrl+t");
+    let expected = crate::line_width(&picker.time_line()).min(u16::MAX as usize) as u16;
+
+    assert_eq!(picker.measure_size(), (expected, 1));
+    assert!(expected > 8);
+}
+
+#[test]
 fn time_picker_applies_external_editor_time_with_whitespace() {
     let mut picker = TimePicker::<()>::new();
     let mut ctx = EventCtx::new(crate::animation_settings());

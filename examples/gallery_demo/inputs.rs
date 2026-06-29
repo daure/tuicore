@@ -72,10 +72,10 @@ pub(crate) fn date_time_showcase_layout(area: Rect) -> [Rect; 6] {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
-            Constraint::Length(11),
+            Constraint::Length(13),
             Constraint::Length(1),
             Constraint::Length(11),
-            Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Length(2),
         ])
         .areas(area)
