@@ -1265,8 +1265,7 @@ impl<M> TuiNode<M> for TextInput<M> {
                 ctx.request_redraw();
                 return EventOutcome::Ignored;
             }
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
+            return EventOutcome::Ignored;
         }
         if matches_any(&self.keys.cancel, *key) {
             self.insert_mode = false;
@@ -1419,8 +1418,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
                 ctx.request_redraw();
                 return EventOutcome::Ignored;
             }
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
+            return EventOutcome::Ignored;
         }
         if matches_any(&self.input.keys.cancel, *key) {
             self.input.insert_mode = false;

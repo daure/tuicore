@@ -1358,6 +1358,25 @@ mod tests {
     }
 
     #[test]
+    fn focused_text_input_bubbles_x_before_insert_mode_for_dialog_close_policy() {
+        let mut host = Dialog::new()
+            .on_close(|reason| reason)
+            .host(TextInput::<DialogCloseReason>::new());
+        let mut layout = LayoutCtx::new();
+        let area = Rect::new(0, 0, 24, 5);
+        host.layout(area, &mut layout);
+        let route = EventRoute::new(layout.focus_targets()[0].path.clone());
+        let mut ctx = EventCtx::new(animation_settings());
+
+        let outcome = host.dispatch_event(&route, &TuiEvent::Key(Key::Char('x').into()), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(host.child().current_value(), "");
+        assert_eq!(ctx.messages(), &[DialogCloseReason::CloseKey]);
+        assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
     fn escape_bubbles_from_child_and_closes_dialog() {
         let mut host = Dialog::new()
             .on_close(|reason| reason)

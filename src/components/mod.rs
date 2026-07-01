@@ -21,6 +21,7 @@ mod status_action;
 mod status_bar;
 mod store_debug;
 mod tabs;
+mod tag_input;
 mod text_input;
 mod textarea_input;
 mod toggle;
@@ -77,6 +78,7 @@ pub use status_bar::{
 };
 pub use store_debug::StoreDebugView;
 pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
+pub use tag_input::{SelectedTag, TagInput, TagInputEvent};
 pub use text_input::{
     InputChrome, InputOutcome, InputPanelChrome, PasswordInput, TextInput, TextInputKeyBindings,
 };

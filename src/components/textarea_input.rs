@@ -79,7 +79,7 @@ impl Default for TextareaInputKeyBindings {
         Self {
             submit: vec![
                 KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::CONTROL),
-                KeySpec::key(Key::Enter),
+                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
             ],
             cancel: vec![
                 KeySpec::key(Key::Esc),
@@ -138,7 +138,7 @@ impl Default for TextareaInputKeyBindings {
                 KeySpec::key_with_modifiers(Key::Char('i'), KeyModifiers::CONTROL),
             ],
             insert_newline: vec![
-                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
+                KeySpec::key(Key::Enter),
                 KeySpec::key_with_modifiers(Key::Char('j'), KeyModifiers::CONTROL),
             ],
         }
@@ -1440,8 +1440,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 ctx.request_redraw();
                 return EventOutcome::Ignored;
             }
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
+            return EventOutcome::Ignored;
         }
         if matches_any(&self.keys.cancel, *key) {
             self.insert_mode = false;

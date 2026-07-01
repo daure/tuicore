@@ -43,6 +43,10 @@ const DEFAULT_AI_HOTKEY: &str = "'";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StatusBarMenuItem {
+    Custom {
+        id: &'static str,
+        label: &'static str,
+    },
     Theme,
     WeatherForecast,
     StoreView,
@@ -51,6 +55,7 @@ pub enum StatusBarMenuItem {
 impl StatusBarMenuItem {
     fn label(self) -> &'static str {
         match self {
+            Self::Custom { label, .. } => label,
             Self::Theme => "Theme",
             Self::WeatherForecast => "Weather forecast",
             Self::StoreView => "Store view",
@@ -178,6 +183,7 @@ pub struct StatusBar<M = ()> {
     weather_provider: WeatherProviderConfig,
     weather_fetch: Option<WeatherFetchReceiver>,
     weather_last_fetch: Option<Instant>,
+    on_custom_menu_item: Option<Box<dyn Fn(&'static str) -> M>>,
     on_weather_open: Option<Box<dyn Fn() -> M>>,
     on_store_view_open: Option<Box<dyn Fn() -> M>>,
     time: DateTimeIndicator<M>,
@@ -216,6 +222,7 @@ where
             weather_provider: WeatherProviderConfig::new().enabled(true),
             weather_fetch: None,
             weather_last_fetch: None,
+            on_custom_menu_item: None,
             on_weather_open: None,
             on_store_view_open: None,
             time: DateTimeIndicator::new().format(DateTimeIndicatorFormat::DateTime),
@@ -276,6 +283,11 @@ where
     pub fn on_ai_open(mut self, handler: impl Fn() -> M + 'static) -> Self {
         self.ai = self.ai.on_press(handler);
         self.custom_ai_open = true;
+        self
+    }
+
+    pub fn on_custom_menu_item(mut self, handler: impl Fn(&'static str) -> M + 'static) -> Self {
+        self.on_custom_menu_item = Some(Box::new(handler));
         self
     }
 
@@ -404,6 +416,13 @@ where
 
     fn activate_menu_item(&mut self, item: StatusBarMenuItem, ctx: &mut EventCtx<M>) {
         match item {
+            StatusBarMenuItem::Custom { id, .. } => {
+                if let Some(on_custom_menu_item) = &self.on_custom_menu_item {
+                    ctx.emit(on_custom_menu_item(id));
+                }
+                ctx.request_redraw();
+                ctx.stop_propagation();
+            }
             StatusBarMenuItem::Theme => {
                 self.theme_dropdown.open_with_context(ctx);
                 ctx.stop_propagation();

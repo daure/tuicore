@@ -3,24 +3,30 @@ use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, 
 use ratatui::style::Modifier;
 
 #[test]
-fn handled_key_stops_propagation() {
+fn plain_character_bubbles_before_insert_mode() {
     let mut input = TextareaInput::<()>::new();
     let mut ctx = EventCtx::<()>::default();
 
     let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
 
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
 #[test]
-fn enter_submit_emits_message_blurs_and_stops_propagation() {
+fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
     let mut input = TextareaInput::new()
         .value("first\nsecond")
         .on_submit(|value| format!("submit:{value}"));
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
-    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    let outcome = input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode);
@@ -31,14 +37,11 @@ fn enter_submit_emits_message_blurs_and_stops_propagation() {
 }
 
 #[test]
-fn control_enter_inserts_newline() {
+fn enter_inserts_newline() {
     let mut input = TextareaInput::<()>::new().value("first");
     input.insert_mode = true;
 
-    let outcome = input.on_key(KeyEvent {
-        code: Key::Enter,
-        modifiers: KeyModifiers::CONTROL,
-    });
+    let outcome = input.on_key(KeyEvent::from(Key::Enter));
 
     assert_eq!(outcome, InputOutcome::CHANGED);
     assert_eq!(input.current_value(), "first\n");
@@ -323,15 +326,18 @@ fn disabled_wrap_preserves_horizontal_cursor_scrolling() {
 }
 
 #[test]
-fn custom_submit_key_replaces_default_enter() {
+fn custom_submit_key_replaces_default_control_enter() {
     let keys = TextareaInputKeyBindings {
         submit: vec![KeySpec::plain('s')],
         ..TextareaInputKeyBindings::default()
     };
     let mut input = TextareaInput::<()>::new().keybindings(keys);
-    let enter = KeyEvent::from(Key::Enter);
+    let control_enter = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
 
-    assert_eq!(input.on_key(enter), InputOutcome::IDLE);
+    assert_eq!(input.on_key(control_enter), InputOutcome::IDLE);
     assert!(input.on_key(KeyEvent::from(Key::Char('s'))).submitted);
 }
 
@@ -596,6 +602,41 @@ fn escape_bubbles_to_parent_policy() {
     assert!(parent_observed);
     assert_eq!(ctx.propagation(), Propagation::Continue);
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn escape_leaves_insert_mode_without_bubbling() {
+    let mut input = TextareaInput::<()>::new().value("abc").focused(true);
+    input.insert_mode = true;
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode);
+    assert_eq!(input.current_value(), "abc");
+    assert!(ctx.layout_requested());
+    assert!(ctx.redraw_requested());
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn control_left_bracket_leaves_insert_mode_without_bubbling() {
+    let mut input = TextareaInput::<()>::new().value("abc").focused(true);
+    input.insert_mode = true;
+    let mut ctx = EventCtx::<()>::default();
+    let key = KeyEvent {
+        code: Key::Char('['),
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode);
+    assert_eq!(input.current_value(), "abc");
+    assert!(ctx.layout_requested());
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]

@@ -74,7 +74,7 @@ use tuicore::{
     InspectValue, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem,
     ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
     ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
-    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant,
+    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput,
     TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
     TreeAdapter, TreePath, TuiEvent, TuiNode,
 };
@@ -590,6 +590,8 @@ struct PreviewState {
     button: Button<Msg>,
     button_presses: u32,
     chips: [Chip; 7],
+    tag_input: TagInput,
+    tag_input_panel: TagInput,
     toggle: Toggle<Msg>,
     checkbox_toggle: Toggle<Msg>,
     dialog_100: Button<Msg>,
@@ -742,6 +744,8 @@ impl PreviewState {
                     .prepend_icon("")
                     .color_role(ChipColorRole::Error),
             ],
+            tag_input: demo_tag_input(),
+            tag_input_panel: demo_tag_input_panel(),
             toggle: Toggle::new("Telemetry").hotkey("x"),
             checkbox_toggle: Toggle::new("Item").checkbox().checked(true).hotkey("i"),
             dialog_100: dialog_button(DialogExample::Full),
@@ -863,6 +867,7 @@ impl PreviewState {
             }
             PreviewKind::DateTimePicker => self.layout_date_time(area, ctx),
             PreviewKind::Calendar => self.layout_calendar(area, ctx),
+            PreviewKind::TagInput => self.layout_tag_input(area, ctx),
             PreviewKind::StatusBar => self.layout_status_bar(area, overlay_bounds, ctx),
             PreviewKind::DataList
             | PreviewKind::DataTable
@@ -927,6 +932,7 @@ impl PreviewState {
             PreviewKind::StatusBar => self.render_status_bar(frame, area, ctx),
             PreviewKind::Button => self.render_button(frame, area),
             PreviewKind::Chip => self.render_chips(frame, area),
+            PreviewKind::TagInput => self.render_tag_input(frame, area, ctx),
             PreviewKind::Toggle => self.render_toggle(frame, area),
             PreviewKind::DataList
             | PreviewKind::DataTable
@@ -1081,6 +1087,23 @@ impl PreviewState {
         }
         if preview == PreviewKind::Button {
             return self.button_dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::TagInput {
+            if let Some(route) = route
+                .path
+                .without_first_if(&tag_input_child_key())
+                .map(EventRoute::new)
+            {
+                return self.tag_input.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&tag_input_panel_child_key())
+                .map(EventRoute::new)
+            else {
+                return EventOutcome::Ignored;
+            };
+            return self.tag_input_panel.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::Menu {
             return self.menu_dispatch_event(route, event, ctx);
@@ -1300,6 +1323,24 @@ impl PreviewState {
                 );
             }
             PreviewKind::Button => self.button.dispatch_focus(target, focused, ctx),
+            PreviewKind::TagInput => {
+                if dispatch_focus_child(
+                    &mut self.tag_input,
+                    target,
+                    tag_input_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.tag_input_panel,
+                    target,
+                    tag_input_panel_child_key(),
+                    focused,
+                    ctx,
+                );
+            }
             PreviewKind::Menu => self.menu_dispatch_focus(target, focused, ctx),
             preview if preview.is_data_view() => self
                 .active_data_view_mut(preview)
@@ -2074,7 +2115,7 @@ impl PreviewState {
         let [instructions, input, panel] = textarea_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter submits. Ctrl+Enter/Ctrl+J inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
+                "Type text. Enter inserts newline. Ctrl+Enter submits. Ctrl+J also inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
                  Plain textarea uses min_rows(2)/max_rows(4); nested panel uses min_rows(2)/max_rows(4). Overflow shows a scrollbar. Hotkeys: |t| textarea, |p| panel.\n\
                  Shortcuts:\n\
                  • PgUp / PgDn / Ctrl+U / Ctrl+D          : Scroll overflowing text\n\
@@ -2348,6 +2389,66 @@ impl PreviewState {
         for (chip, area) in self.chips[4..].iter().zip(second_row_areas) {
             chip.render(frame, area);
         }
+    }
+
+    fn layout_tag_input(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let (_, input_area, panel_area, _) = self.tag_input_showcase_areas(area);
+        ctx.push_slot(tag_input_child_key(), input_area, |ctx| {
+            <TagInput as TuiNode<Msg>>::layout(&mut self.tag_input, input_area, ctx);
+        });
+        ctx.push_slot(tag_input_panel_child_key(), panel_area, |ctx| {
+            <TagInput as TuiNode<Msg>>::layout(&mut self.tag_input_panel, panel_area, ctx);
+        });
+    }
+
+    fn render_tag_input<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        let (help, input_area, panel_area, footer) = self.tag_input_showcase_areas(area);
+        frame.render_widget(
+            Paragraph::new(
+                "TagInput: plain and panel-outline variants. Type filters existing tags in an overlay popup. Enter adds highlighted existing tag; Ctrl+Enter requests/creates exact text. Ctrl+j/k moves popup, Ctrl+h/l moves through selected tags, Backspace/Delete removes focused tag.",
+            ),
+            help,
+        );
+        self.tag_input.render(frame, input_area, ctx);
+        self.tag_input_panel.render(frame, panel_area, ctx);
+        frame.render_widget(
+            Paragraph::new(Text::from(vec![
+                Line::from("Content directly below TagInput — open either dropdown and it should cover this text."),
+                Line::from("Filter to 'do' to see the popup shrink to the matching rows."),
+                Line::from("Add most existing tags, then open again to see the empty state row."),
+                Line::from("Hotkeys: |tag| jumps to plain input, |pt| jumps to panel outline."),
+            ])),
+            footer,
+        );
+    }
+
+    fn tag_input_showcase_areas(&self, area: Rect) -> (Rect, Rect, Rect, Rect) {
+        let help_height = 4;
+        let input_height = self.tag_input.height_for_width(area.width);
+        let panel_height = self.tag_input_panel.height_for_width(area.width);
+        let help = Rect::new(area.x, area.y, area.width, help_height.min(area.height));
+        let input_y = area.y.saturating_add(help.height);
+        let input = Rect::new(
+            area.x,
+            input_y,
+            area.width,
+            input_height.min(area.bottom().saturating_sub(input_y)),
+        );
+        let panel_y = input.y.saturating_add(input.height).saturating_add(1);
+        let panel = Rect::new(
+            area.x,
+            panel_y,
+            area.width,
+            panel_height.min(area.bottom().saturating_sub(panel_y)),
+        );
+        let footer_y = panel.y.saturating_add(panel.height).saturating_add(1);
+        let footer = Rect::new(
+            area.x,
+            footer_y,
+            area.width,
+            area.bottom().saturating_sub(footer_y),
+        );
+        (help, input, panel, footer)
     }
 
     fn button_dispatch_event(
@@ -2762,6 +2863,14 @@ fn textarea_panel_child_key() -> ChildKey {
     ChildKey::new("textarea-panel")
 }
 
+fn tag_input_child_key() -> ChildKey {
+    ChildKey::new("tag-input")
+}
+
+fn tag_input_panel_child_key() -> ChildKey {
+    ChildKey::new("tag-input-panel")
+}
+
 fn date_picker_child_key() -> ChildKey {
     ChildKey::new("date-picker")
 }
@@ -2883,6 +2992,38 @@ fn demo_calendar_entries() -> Vec<DemoCalendarEntry> {
     ]
 }
 
+fn demo_tag_input() -> TagInput {
+    TagInput::new(demo_labels())
+        .placeholder("add tags")
+        .hotkey("tag")
+        .selected(["bug", "frontend", "urgent", "docs", "design", "qa"])
+}
+
+fn demo_tag_input_panel() -> TagInput {
+    TagInput::new(demo_labels())
+        .placeholder("panel tags")
+        .hotkey("pt")
+        .selected(["api", "blocked", "performance", "accessibility"])
+        .style(InputChrome::panel("Tags").top_right("Panel style"))
+}
+
+fn demo_labels() -> [&'static str; 12] {
+    [
+        "bug",
+        "frontend",
+        "backend",
+        "api",
+        "urgent",
+        "docs",
+        "design",
+        "qa",
+        "blocked",
+        "good first issue",
+        "performance",
+        "accessibility",
+    ]
+}
+
 fn calendar_event_status(event: CalendarTypedEvent<&'static str>) -> String {
     match event {
         CalendarTypedEvent::ViewChanged { view } => format!("view {view:?}"),
@@ -2999,6 +3140,7 @@ enum ComponentKind {
     Inputs,
     Button,
     Chip,
+    TagInput,
     TextInput,
     PasswordInput,
     TextareaInput,
@@ -3020,7 +3162,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 37] = [
+    const ALL: [Self; 38] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3040,6 +3182,7 @@ impl ComponentKind {
         Self::Inputs,
         Self::Button,
         Self::Chip,
+        Self::TagInput,
         Self::TextInput,
         Self::PasswordInput,
         Self::TextareaInput,
@@ -3081,6 +3224,7 @@ impl ComponentKind {
             Self::Inputs => "Inputs",
             Self::Button => "Button",
             Self::Chip => "Chip",
+            Self::TagInput => "Tag Input",
             Self::TextInput => "Text",
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
@@ -3114,6 +3258,7 @@ impl ComponentKind {
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
             Self::Button
             | Self::Chip
+            | Self::TagInput
             | Self::TextInput
             | Self::PasswordInput
             | Self::TextareaInput
@@ -3152,6 +3297,7 @@ impl ComponentKind {
             Self::LayoutGrid => PreviewKind::LayoutGrid,
             Self::Inputs | Self::Button => PreviewKind::Button,
             Self::Chip => PreviewKind::Chip,
+            Self::TagInput => PreviewKind::TagInput,
             Self::TextInput => PreviewKind::TextInput,
             Self::PasswordInput => PreviewKind::PasswordInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
@@ -3197,6 +3343,7 @@ enum PreviewKind {
     StatusBar,
     Button,
     Chip,
+    TagInput,
     Toggle,
     Dropdown,
     Menu,
@@ -3235,6 +3382,7 @@ impl PreviewKind {
             Self::StatusBar => "Status Bar",
             Self::Button => "Button",
             Self::Chip => "Chip",
+            Self::TagInput => "Tag Input",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
             Self::Menu => "Menu",

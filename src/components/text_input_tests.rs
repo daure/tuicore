@@ -2,15 +2,27 @@ use super::*;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
 
 #[test]
-fn handled_key_stops_propagation() {
+fn plain_character_bubbles_before_insert_mode() {
     let mut input = TextInput::<()>::new();
     let mut ctx = EventCtx::<()>::default();
 
     let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
 
-    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(outcome, EventOutcome::Ignored);
     assert_eq!(input.current_value(), "");
-    assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
+}
+
+#[test]
+fn password_plain_character_bubbles_before_insert_mode() {
+    let mut input = PasswordInput::<()>::new();
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(input.current_value(), "");
+    assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
 #[test]
@@ -797,6 +809,41 @@ fn control_left_bracket_leaves_insert_mode_without_bubbling() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode);
+    assert_eq!(input.current_value(), "abc");
+    assert!(ctx.layout_requested());
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn escape_leaves_password_insert_mode_without_bubbling() {
+    let mut input = PasswordInput::<()>::new().value("abc").focused(true);
+    input.input.insert_mode = true;
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.input.insert_mode);
+    assert_eq!(input.current_value(), "abc");
+    assert!(ctx.layout_requested());
+    assert!(ctx.redraw_requested());
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn control_left_bracket_leaves_password_insert_mode_without_bubbling() {
+    let mut input = PasswordInput::<()>::new().value("abc").focused(true);
+    input.input.insert_mode = true;
+    let mut ctx = EventCtx::<()>::default();
+    let key = KeyEvent {
+        code: Key::Char('['),
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.input.insert_mode);
     assert_eq!(input.current_value(), "abc");
     assert!(ctx.layout_requested());
     assert_eq!(ctx.propagation(), Propagation::Stopped);
