@@ -490,6 +490,27 @@ where
         ctx.stop_propagation();
     }
 
+    fn handle_weather_dialog_event(
+        &mut self,
+        route: Option<&EventRoute>,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if weather_dialog_close_event(event) {
+            self.close_weather_dialog(ctx);
+            return EventOutcome::Handled;
+        }
+        let outcome = match route {
+            Some(route) => self.weather_dialog.dispatch_event(route, event, ctx),
+            None => self.weather_dialog.event(event, ctx),
+        };
+        if outcome.handled() {
+            return outcome;
+        }
+        ctx.stop_propagation();
+        EventOutcome::Handled
+    }
+
     fn start_weather_fetch_if_due(&mut self) -> TickResult {
         if !self.weather_provider.is_enabled() || self.weather_fetch.is_some() {
             return TickResult::IDLE;
@@ -672,6 +693,14 @@ where
             return self.event(event, ctx);
         }
 
+        if self.weather_dialog_open {
+            let dialog_route = route
+                .path
+                .without_first_if(&status_bar_weather_dialog_key())
+                .map(EventRoute::new);
+            return self.handle_weather_dialog_event(dialog_route.as_ref(), event, ctx);
+        }
+
         if let Some(route) = route
             .path
             .without_first_if(&status_bar_menu_trigger_key())
@@ -737,10 +766,6 @@ where
             .without_first_if(&status_bar_weather_dialog_key())
             .map(EventRoute::new)
         {
-            if weather_dialog_close_event(event) {
-                self.close_weather_dialog(ctx);
-                return EventOutcome::Handled;
-            }
             return self.weather_dialog.dispatch_event(&route, event, ctx);
         }
 
@@ -777,14 +802,7 @@ where
             }
         }
         if self.weather_dialog_open {
-            if weather_dialog_close_event(event) {
-                self.close_weather_dialog(ctx);
-                return EventOutcome::Handled;
-            }
-            let outcome = self.weather_dialog.event(event, ctx);
-            if outcome.handled() {
-                return outcome;
-            }
+            return self.handle_weather_dialog_event(None, event, ctx);
         }
         if status_menu_hotkey(event, &self.keybindings) {
             return self.toggle_menu(ctx);
@@ -1453,6 +1471,41 @@ mod tests {
         assert!(close_ctx.layout_requested());
         assert!(close_ctx.redraw_requested());
         assert_eq!(close_ctx.focus_request(), Some(&FocusRequest::Last));
+    }
+
+    #[test]
+    fn built_in_weather_dialog_consumes_unhandled_tab() {
+        let mut status = StatusBar::<()>::new();
+        let mut open_ctx = EventCtx::default();
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut open_ctx);
+        let mut tab_ctx = EventCtx::default();
+
+        let outcome = status.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut tab_ctx);
+
+        assert!(outcome.handled());
+        assert_eq!(tab_ctx.propagation(), Propagation::Stopped);
+        assert_eq!(tab_ctx.focus_request(), None);
+        assert!(status.weather_dialog_open);
+    }
+
+    #[test]
+    fn built_in_weather_dialog_consumes_routed_unhandled_backtab() {
+        let mut status = StatusBar::<()>::new();
+        let mut open_ctx = EventCtx::default();
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut open_ctx);
+        let mut backtab_ctx = EventCtx::default();
+        let route = EventRoute::new(TreePath::from_keys([status_bar_weather_dialog_key()]));
+
+        let outcome = status.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::BackTab)),
+            &mut backtab_ctx,
+        );
+
+        assert!(outcome.handled());
+        assert_eq!(backtab_ctx.propagation(), Propagation::Stopped);
+        assert_eq!(backtab_ctx.focus_request(), None);
+        assert!(status.weather_dialog_open);
     }
 
     #[test]

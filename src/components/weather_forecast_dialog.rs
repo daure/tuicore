@@ -22,6 +22,7 @@ const FORECAST_DAY_HEADER_LEFT: usize = 30;
 const FORECAST_DAY_HEADER_RIGHT: usize = 29;
 const WEATHER_ART_WIDTH: usize = 12;
 const DIALOG_HEIGHT_PERCENT: u16 = 80;
+const LUX_PER_SHORTWAVE_WATT: f64 = 120.0;
 
 pub struct WeatherForecastDialog<M = ()> {
     dialog: Dialog<M>,
@@ -39,6 +40,7 @@ pub struct WeatherForecastDay {
     condition: String,
     temperature_range: String,
     body: String,
+    walk_times: String,
 }
 
 impl<M> WeatherForecastDialog<M> {
@@ -156,6 +158,13 @@ impl WeatherReport {
         let hourly_precip = f64_array(hourly, "precipitation")?;
         let hourly_precip_probability = optional_f64_array(hourly, "precipitation_probability");
         let hourly_visibility = optional_f64_array(hourly, "visibility");
+        let minutely = root.get("minutely_15");
+        let radiation_times = minutely
+            .and_then(|value| string_array(value, "time").ok())
+            .unwrap_or_default();
+        let shortwave_radiation = minutely
+            .and_then(|value| f64_array(value, "shortwave_radiation").ok())
+            .unwrap_or_default();
 
         let utc_offset_seconds = open_meteo_utc_offset_seconds(&root);
         let start_index = current_forecast_start_index(&dates, provider_today(utc_offset_seconds));
@@ -229,6 +238,7 @@ impl WeatherReport {
                     range,
                     forecast_day_body(&periods),
                 )
+                .with_walk_times(walk_footer(date, &radiation_times, &shortwave_radiation))
                 .render_text(),
             );
         }
@@ -309,7 +319,13 @@ impl WeatherForecastDay {
             condition: condition.into(),
             temperature_range: temperature_range.into(),
             body: body.into(),
+            walk_times: "󰖨 Lux 30m --:-- · 20m --:--".to_string(),
         }
+    }
+
+    fn with_walk_times(mut self, walk_times: String) -> Self {
+        self.walk_times = walk_times;
+        self
     }
 
     pub fn render_text(&self) -> String {
@@ -319,9 +335,74 @@ impl WeatherForecastDay {
             forecast_day_title_line(&title),
             forecast_day_period_line(),
             self.body.clone(),
+            forecast_day_bottom_line(&self.walk_times),
         ]
         .join("\n")
     }
+}
+
+fn forecast_day_bottom_line(walk_times: &str) -> String {
+    let title = format!("└─ {walk_times} ┴");
+    let border = separator('└', '┴', '┘');
+    format!(
+        "{title}{}",
+        border
+            .chars()
+            .skip(display_width(&title))
+            .collect::<String>()
+    )
+}
+
+fn walk_footer(date: &str, times: &[String], radiation: &[f64]) -> String {
+    let walk_30 = earliest_walk_start(date, times, radiation, 30, 2_500.0);
+    let walk_20 = earliest_walk_start(date, times, radiation, 20, 10_000.0);
+    format!(
+        "󰖨 Lux 30m {} · 20m {}",
+        walk_30.as_deref().unwrap_or("--:--"),
+        walk_20.as_deref().unwrap_or("--:--")
+    )
+}
+
+fn earliest_walk_start(
+    date: &str,
+    times: &[String],
+    radiation: &[f64],
+    duration_minutes: usize,
+    minimum_lux: f64,
+) -> Option<String> {
+    let intervals = duration_minutes.div_ceil(15);
+    times.iter().enumerate().find_map(|(index, timestamp)| {
+        let time = timestamp.strip_prefix(&format!("{date}T"))?;
+        let first_interval_end = time_minutes(time)?;
+        if first_interval_end < 15 || first_interval_end % 15 != 0 {
+            return None;
+        }
+        let qualifies = (0..intervals).all(|offset| {
+            let sample_index = index + offset;
+            times
+                .get(sample_index)
+                .and_then(|sample| sample.strip_prefix(&format!("{date}T")))
+                .and_then(time_minutes)
+                .is_some_and(|minutes| {
+                    minutes % 15 == 0 && minutes == first_interval_end + offset * 15
+                })
+                && radiation
+                    .get(sample_index)
+                    .is_some_and(|watts| watts * LUX_PER_SHORTWAVE_WATT >= minimum_lux)
+        });
+        qualifies.then(|| format_minutes(first_interval_end - 15))
+    })
+}
+
+fn format_minutes(minutes: usize) -> String {
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+fn time_minutes(time: &str) -> Option<usize> {
+    let (hour, minute) = time.split_once(':')?;
+    let hour = hour.parse::<usize>().ok()?;
+    let minute = minute.parse::<usize>().ok()?;
+    (hour < 24 && minute < 60).then_some(hour * 60 + minute)
 }
 
 impl<M> Default for WeatherForecastDialog<M> {
@@ -394,7 +475,6 @@ fn forecast_day_body(periods: &[OpenMeteoPeriod; 4]) -> String {
         art_row(periods, 2, |period| &period.wind),
         art_row(periods, 3, |period| &period.visibility),
         art_row(periods, 4, |period| &period.precipitation),
-        separator('└', '┴', '┘'),
     ]
     .join("\n")
 }
@@ -1172,13 +1252,14 @@ mod tests {
 │ ― (   ) ―  13 km/h           │ ― (   ) ―  14 km/h           │ ― (   ) ―  18 km/h          │ ― (   ) ―  19 km/h          │
 │    `-’      10 km            │    `-’      10 km            │    `-’      10 km           │    `-’      10 km           │
 │   /   \     0.0 mm | 6%      │   /   \     0.0 mm | 3%      │   /   \     0.0 mm | 2%     │   /   \     0.0 mm | 5%     │
-└──────────────────────────────┴──────────────────────────────┴─────────────────────────────┴─────────────────────────────┘"#;
+└─ 󰖨 Lux 30m --:-- · 20m --:-- ┴──────────────────────────────┴─────────────────────────────┴─────────────────────────────┘"#;
         let lines = day.lines().collect::<Vec<_>>();
-        let body = lines[2..].join("\n");
+        let body = lines[2..lines.len() - 1].join("\n");
 
         assert!(
             lines
                 .iter()
+                .take(lines.len() - 1)
                 .all(|line| display_width(line) == display_width(lines[0]))
         );
         assert_eq!(
@@ -1186,5 +1267,42 @@ mod tests {
             day
         );
         println!("{day}");
+    }
+
+    #[test]
+    fn walk_forecast_uses_earliest_aligned_interval_meeting_each_threshold() {
+        let date = "2026-07-11";
+        let times =
+            ["06:45", "07:00", "07:15", "07:30", "07:45"].map(|time| format!("{date}T{time}"));
+        let radiation = [10.0, 21.0, 84.0, 84.0, 84.0];
+
+        assert_eq!(
+            walk_footer(date, &times, &radiation),
+            "󰖨 Lux 30m 06:45 · 20m 07:00"
+        );
+    }
+
+    #[test]
+    fn walk_forecast_requires_every_interval_covering_duration() {
+        let date = "2026-07-11";
+        let times = ["07:00", "07:15", "07:30"].map(|time| format!("{date}T{time}"));
+        let radiation = [100.0, 10.0, 100.0];
+
+        assert_eq!(
+            walk_footer(date, &times, &radiation),
+            "󰖨 Lux 30m --:-- · 20m --:--"
+        );
+    }
+
+    #[test]
+    fn walk_forecast_rejects_non_quarter_hour_samples() {
+        let date = "2026-07-11";
+        let times = ["07:01", "07:16"].map(|time| format!("{date}T{time}"));
+        let radiation = [100.0, 100.0];
+
+        assert_eq!(
+            walk_footer(date, &times, &radiation),
+            "󰖨 Lux 30m --:-- · 20m --:--"
+        );
     }
 }

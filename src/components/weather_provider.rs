@@ -143,7 +143,7 @@ fn json_weather_response(text: String) -> Result<String, WeatherFetchError> {
 
 fn open_meteo_url(config: &WeatherProviderConfig) -> String {
     format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation,precipitation_probability,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=7",
+        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&hourly=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation,precipitation_probability,visibility&minutely_15=shortwave_radiation&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=7",
         config.latitude, config.longitude
     )
 }
@@ -161,6 +161,7 @@ mod tests {
         assert!(url.starts_with("https://api.open-meteo.com/v1/forecast?"));
         assert!(url.contains("forecast_days=7"));
         assert!(url.contains("daily=weather_code,temperature_2m_max,temperature_2m_min"));
+        assert!(url.contains("minutely_15=shortwave_radiation"));
     }
 
     #[test]
