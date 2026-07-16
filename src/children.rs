@@ -24,6 +24,7 @@ pub struct ChildSlot<C, M = ()> {
     child: C,
     initialized: bool,
     mounted: bool,
+    focus_reassert_pending: bool,
     _message: PhantomData<fn() -> M>,
 }
 
@@ -43,6 +44,7 @@ where
             child,
             initialized: false,
             mounted: false,
+            focus_reassert_pending: false,
             _message: PhantomData,
         }
     }
@@ -94,7 +96,12 @@ where
     }
 
     pub fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        ctx.push_slot(self.key.clone(), area, |ctx| self.child.layout(area, ctx))
+        ctx.push_slot(self.key.clone(), area, |ctx| {
+            if std::mem::take(&mut self.focus_reassert_pending) {
+                ctx.mark_replaced_subtree();
+            }
+            self.child.layout(area, ctx)
+        })
     }
 
     pub fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
@@ -278,10 +285,11 @@ where
         let Some(index) = self.slots.iter().position(|slot| slot.key() == &key) else {
             return Err(MissingChildKey { key });
         };
-        let mut old =
-            std::mem::replace(&mut self.slots[index], ChildSlot::new(key, Box::new(child)));
-        let was_initialized = old.initialized;
-        let was_mounted = old.mounted;
+        let was_initialized = self.slots[index].initialized;
+        let was_mounted = self.slots[index].mounted;
+        let mut replacement = ChildSlot::new(key, Box::new(child) as Box<dyn TuiNode<M>>);
+        replacement.focus_reassert_pending = was_mounted;
+        let mut old = std::mem::replace(&mut self.slots[index], replacement);
         let mut lifecycle = LifecycleCtx::default();
         old.destroy(&mut lifecycle);
         if was_mounted {

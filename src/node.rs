@@ -145,6 +145,7 @@ pub enum Propagation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutCtx {
     focus_paths: Vec<FocusTarget>,
+    replaced_subtrees: Vec<TreePath>,
     hit_regions: Vec<HitRegion>,
     overflow_diagnostics: Vec<LayoutOverflowDiagnostic>,
     overlays: OverlayManager,
@@ -519,6 +520,7 @@ impl Default for LayoutCtx {
     fn default() -> Self {
         Self {
             focus_paths: Vec::new(),
+            replaced_subtrees: Vec::new(),
             hit_regions: Vec::new(),
             overflow_diagnostics: Vec::new(),
             overlays: OverlayManager::new(),
@@ -943,6 +945,14 @@ impl LayoutCtx {
 
     pub fn focus_targets(&self) -> &[FocusTarget] {
         &self.focus_paths
+    }
+
+    pub(crate) fn mark_replaced_subtree(&mut self) {
+        self.replaced_subtrees.push(self.current_path());
+    }
+
+    pub(crate) fn replaced_subtrees(&self) -> &[TreePath] {
+        &self.replaced_subtrees
     }
 
     pub fn hit_regions(&self) -> &[HitRegion] {

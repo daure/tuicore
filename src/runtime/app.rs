@@ -160,7 +160,7 @@ where
         clipboard_hotkeys: &mut HotkeySequenceMatcher,
         flags: &mut RuntimeFlags,
     ) -> Result<()> {
-        let mut global_hotkey_tick = Instant::now();
+        let mut hotkey_tick = Instant::now();
         while !flags.quit {
             if flags.clear {
                 terminal.terminal_mut().clear()?;
@@ -195,9 +195,12 @@ where
             }
 
             let hotkey_pending_before_poll = global_hotkeys.is_pending();
-            if let Some(event) =
-                event_source.poll(runtime_poll_timeout(scheduler, global_hotkeys))?
-            {
+            let clipboard_hotkey_pending_before_poll = clipboard_hotkeys.is_pending();
+            if let Some(event) = event_source.poll(runtime_poll_timeout(
+                scheduler,
+                global_hotkeys,
+                clipboard_hotkeys,
+            ))? {
                 self.dispatch_runtime_event(
                     Some(terminal),
                     flags,
@@ -211,16 +214,19 @@ where
             }
 
             let now = Instant::now();
-            let global_hotkey_dt = now.duration_since(global_hotkey_tick);
-            global_hotkey_tick = now;
+            let hotkey_dt = now.duration_since(hotkey_tick);
+            hotkey_tick = now;
             self.dispatch_global_hotkey_tick_after_poll(
                 flags,
                 dispatcher,
                 layout_engine.focus_targets(),
                 global_hotkeys,
                 hotkey_pending_before_poll,
-                global_hotkey_dt,
+                hotkey_dt,
             );
+            if clipboard_hotkey_pending_before_poll {
+                clipboard_hotkeys.tick(hotkey_dt);
+            }
 
             if flags.wake_animations {
                 scheduler.wake();
@@ -376,9 +382,21 @@ where
         } else {
             focus_manager.validate(layout_engine.focus_targets())
         };
+        let replacement_focus = if transition.is_none() && flags.focus_request.is_none() {
+            focus_manager.reassert_replaced_focus(
+                layout_engine.focus_targets(),
+                layout_engine.replaced_subtrees(),
+            )
+        } else {
+            None
+        };
         if let Some(transition) = transition {
             let effects =
                 dispatcher.dispatch_focus(&mut self.root, transition, self.animation_settings);
+            flags.merge(self.handle_effects(effects));
+        } else if let Some(target) = replacement_focus {
+            let effects =
+                dispatcher.dispatch_focus_gain(&mut self.root, target, self.animation_settings);
             flags.merge(self.handle_effects(effects));
         }
     }
@@ -400,6 +418,13 @@ where
         {
             let effects =
                 dispatcher.dispatch_focus(&mut self.root, transition, self.animation_settings);
+            flags.merge(self.handle_effects(effects));
+        } else if let Some(target) = focus_manager.reassert_replaced_focus(
+            layout_engine.focus_targets(),
+            layout_engine.replaced_subtrees(),
+        ) {
+            let effects =
+                dispatcher.dispatch_focus_gain(&mut self.root, target, self.animation_settings);
             flags.merge(self.handle_effects(effects));
         }
     }
@@ -472,6 +497,24 @@ where
         }
     }
 
+    fn cancel_global_hotkeys(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        dispatcher: &mut TreeDispatcher,
+        targets: &[FocusTarget],
+        global_hotkeys: &mut HotkeySequenceMatcher,
+    ) {
+        if global_hotkeys.cancel() == HotkeyMatch::Canceled {
+            self.dispatch_hotkey_event_to_targets(
+                flags,
+                dispatcher,
+                targets,
+                HotkeyEvent::Canceled,
+            );
+            flags.redraw = true;
+        }
+    }
+
     fn dispatch_runtime_event(
         &mut self,
         mut terminal: Option<&mut TerminalGuard>,
@@ -496,36 +539,13 @@ where
                 flags.quit = true;
                 return;
             }
-            clipboard_hotkeys.set_hotkeys(
-                keybindings()
-                    .clipboard()
-                    .yank_sequences()
-                    .iter()
-                    .map(String::as_str),
-            );
-            match clipboard_hotkeys.on_key(*key) {
-                HotkeyMatch::Matched(_) => {
-                    let route = EventRoute::new(focus_manager.current_path());
-                    let effects = dispatcher.dispatch_event(
-                        &mut self.root,
-                        &route,
-                        &TuiEvent::Yank,
-                        self.animation_settings,
-                    );
-                    let clipboard = effects.clipboard.clone();
-                    flags.merge(self.handle_effects(effects));
-                    if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
-                        let _ = write_clipboard_osc52(terminal, &value);
-                    }
-                    return;
-                }
-                HotkeyMatch::Pending | HotkeyMatch::Canceled => return,
-                HotkeyMatch::Ignored => {}
-            }
-            if focus_manager
+            let suppress_global_hotkeys = focus_manager
                 .current()
-                .is_some_and(|target| target.focused_events_before_global_hotkeys)
-            {
+                .is_some_and(|target| target.suppress_global_hotkeys);
+            let focused_event_dispatched = focus_manager
+                .current()
+                .is_some_and(|target| target.focused_events_before_global_hotkeys);
+            if focused_event_dispatched {
                 let route = EventRoute::new(focus_manager.current_path());
                 let effects = dispatcher.dispatch_event(
                     &mut self.root,
@@ -549,17 +569,30 @@ where
                     let _ = write_clipboard_osc52(terminal, &value);
                 }
                 if handled {
+                    clipboard_hotkeys.cancel();
+                    self.cancel_global_hotkeys(
+                        flags,
+                        dispatcher,
+                        layout_engine.focus_targets(),
+                        global_hotkeys,
+                    );
                     return;
                 }
             }
-            let suppress_global_hotkeys = focus_manager
-                .current()
-                .is_some_and(|target| target.suppress_global_hotkeys);
-            if !suppress_global_hotkeys {
+            if suppress_global_hotkeys {
+                self.cancel_global_hotkeys(
+                    flags,
+                    dispatcher,
+                    layout_engine.focus_targets(),
+                    global_hotkeys,
+                );
+                clipboard_hotkeys.cancel();
+            } else {
                 let sequence_targets = hotkey_sequence_targets(layout_engine.focus_targets());
                 global_hotkeys.set_hotkeys(sequence_targets.iter().map(|(hotkey, _)| hotkey));
                 match global_hotkeys.on_key(*key) {
                     HotkeyMatch::Matched(index) => {
+                        clipboard_hotkeys.cancel();
                         self.dispatch_hotkey_event_to_targets(
                             flags,
                             dispatcher,
@@ -597,6 +630,7 @@ where
                         return;
                     }
                     HotkeyMatch::Pending => {
+                        clipboard_hotkeys.cancel();
                         self.dispatch_hotkey_event_to_targets(
                             flags,
                             dispatcher,
@@ -615,6 +649,7 @@ where
                         return;
                     }
                     HotkeyMatch::Canceled => {
+                        clipboard_hotkeys.cancel();
                         self.dispatch_hotkey_event_to_targets(
                             flags,
                             dispatcher,
@@ -626,10 +661,41 @@ where
                     }
                     HotkeyMatch::Ignored => {
                         if global_hotkeys.is_pending() {
+                            clipboard_hotkeys.cancel();
                             return;
                         }
                     }
                 }
+                clipboard_hotkeys.set_hotkeys(
+                    keybindings()
+                        .clipboard()
+                        .yank_sequences()
+                        .iter()
+                        .map(String::as_str),
+                );
+                match clipboard_hotkeys.on_key(*key) {
+                    HotkeyMatch::Matched(_) => {
+                        let route = EventRoute::new(focus_manager.current_path());
+                        let effects = dispatcher.dispatch_event(
+                            &mut self.root,
+                            &route,
+                            &TuiEvent::Yank,
+                            self.animation_settings,
+                        );
+                        let clipboard = effects.clipboard.clone();
+                        flags.merge(self.handle_effects(effects));
+                        if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard)
+                        {
+                            let _ = write_clipboard_osc52(terminal, &value);
+                        }
+                        return;
+                    }
+                    HotkeyMatch::Pending | HotkeyMatch::Canceled => return,
+                    HotkeyMatch::Ignored => {}
+                }
+            }
+            if focused_event_dispatched {
+                return;
             }
         }
 
@@ -825,11 +891,18 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
         && row < area.y.saturating_add(area.height)
 }
 
-fn runtime_poll_timeout(scheduler: &Scheduler, global_hotkeys: &HotkeySequenceMatcher) -> Duration {
-    global_hotkeys
-        .remaining_timeout()
-        .map(|timeout| timeout.min(scheduler.timeout()))
-        .unwrap_or_else(|| scheduler.timeout())
+fn runtime_poll_timeout(
+    scheduler: &Scheduler,
+    global_hotkeys: &HotkeySequenceMatcher,
+    clipboard_hotkeys: &HotkeySequenceMatcher,
+) -> Duration {
+    [
+        global_hotkeys.remaining_timeout(),
+        clipboard_hotkeys.remaining_timeout(),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(scheduler.timeout(), Duration::min)
 }
 
 fn is_global_quit_key(key: crate::KeyEvent, runtime: &RuntimeKeyBindings) -> bool {
@@ -1198,6 +1271,25 @@ mod tests {
         focus_log: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     }
 
+    struct ReplacementFocusProbe {
+        id: &'static str,
+        instance: &'static str,
+        focusable: bool,
+        emit_on_gain: bool,
+        focus_log: std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>>,
+    }
+
+    struct ReplacementFocusNode {
+        flex: Flex<&'static str>,
+        focus_log: std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>>,
+        replace_key: &'static str,
+        replacement_id: &'static str,
+        replacement_focusable: bool,
+        emit_on_gain: bool,
+        replaced: bool,
+        messages: usize,
+    }
+
     struct MouseProbe {
         name: &'static str,
         event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
@@ -1238,15 +1330,15 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct SuppressedHotkeyNode {
+    struct HotkeyPrecedenceProbe {
+        hotkeys: Vec<&'static str>,
+        suppress_global_hotkeys: bool,
+        focused_first: bool,
+        consume_char: Option<char>,
         key_events: usize,
-        hotkey_events: usize,
-    }
-
-    #[derive(Default)]
-    struct FocusedFirstHotkeyNode {
-        focused_key_events: usize,
-        hotkey_events: usize,
+        key_chars: String,
+        hotkey_commits: usize,
+        yank_events: usize,
     }
 
     impl TuiNode<()> for QuitNode {
@@ -1402,6 +1494,136 @@ mod tests {
             self.focus_log
                 .borrow_mut()
                 .push((self.name.to_owned(), focused));
+        }
+    }
+
+    impl ReplacementFocusNode {
+        fn new(
+            replace_key: &'static str,
+            replacement_id: &'static str,
+            replacement_focusable: bool,
+            emit_on_gain: bool,
+        ) -> Self {
+            let focus_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let flex = Flex::row()
+                .child(
+                    "one",
+                    ReplacementFocusProbe {
+                        id: "target",
+                        instance: "old-one",
+                        focusable: true,
+                        emit_on_gain: false,
+                        focus_log: std::rc::Rc::clone(&focus_log),
+                    },
+                    FlexItem::fixed(1),
+                )
+                .child(
+                    "two",
+                    ReplacementFocusProbe {
+                        id: "other",
+                        instance: "old-two",
+                        focusable: true,
+                        emit_on_gain: false,
+                        focus_log: std::rc::Rc::clone(&focus_log),
+                    },
+                    FlexItem::fixed(1),
+                );
+            Self {
+                flex,
+                focus_log,
+                replace_key,
+                replacement_id,
+                replacement_focusable,
+                emit_on_gain,
+                replaced: false,
+                messages: 0,
+            }
+        }
+    }
+
+    impl TuiNode<&'static str> for ReplacementFocusNode {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            self.flex.layout(area, ctx)
+        }
+
+        fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+            self.flex.render(frame, area, ctx);
+        }
+
+        fn dispatch_event(
+            &mut self,
+            route: &EventRoute,
+            event: &TuiEvent,
+            ctx: &mut EventCtx<&'static str>,
+        ) -> EventOutcome {
+            if !self.replaced && matches!(event, TuiEvent::Key(key) if key.code == Key::Enter) {
+                self.replaced = true;
+                self.flex
+                    .replace(
+                        self.replace_key,
+                        ReplacementFocusProbe {
+                            id: self.replacement_id,
+                            instance: "replacement",
+                            focusable: self.replacement_focusable,
+                            emit_on_gain: self.emit_on_gain,
+                            focus_log: std::rc::Rc::clone(&self.focus_log),
+                        },
+                        FlexItem::fixed(1),
+                        ctx,
+                    )
+                    .unwrap();
+                EventOutcome::Handled
+            } else {
+                self.flex.dispatch_event(route, event, ctx)
+            }
+        }
+
+        fn dispatch_focus(
+            &mut self,
+            target: &FocusTarget,
+            focused: bool,
+            ctx: &mut FocusCtx<&'static str>,
+        ) {
+            self.flex.dispatch_focus(target, focused, ctx);
+        }
+
+        fn init(&mut self, ctx: &mut LifecycleCtx<&'static str>) {
+            self.flex.init(ctx);
+        }
+
+        fn mount(&mut self, ctx: &mut LifecycleCtx<&'static str>) {
+            self.flex.mount(ctx);
+        }
+
+        fn unmount(&mut self, ctx: &mut LifecycleCtx<&'static str>) {
+            self.flex.unmount(ctx);
+        }
+
+        fn destroy(&mut self, ctx: &mut LifecycleCtx<&'static str>) {
+            self.flex.destroy(ctx);
+        }
+    }
+
+    impl TuiNode<&'static str> for ReplacementFocusProbe {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            if self.focusable {
+                ctx.register_focusable(FocusId::new(self.id), area, true);
+            }
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+
+        fn focus(
+            &mut self,
+            _target: Option<&FocusId>,
+            focused: bool,
+            ctx: &mut FocusCtx<&'static str>,
+        ) {
+            self.focus_log.borrow_mut().push((self.instance, focused));
+            if focused && self.emit_on_gain {
+                ctx.emit("replacement focused");
+            }
         }
     }
 
@@ -1684,16 +1906,20 @@ mod tests {
         }
     }
 
-    impl TuiNode<()> for SuppressedHotkeyNode {
+    impl TuiNode<()> for HotkeyPrecedenceProbe {
         fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-            ctx.register_focusable(FocusId::new("text"), area, true);
-            ctx.set_focus_suppresses_global_hotkeys(FocusId::new("text"), true);
-            ctx.register_focusable_with_hotkey_sequences(
-                FocusId::new("action"),
-                area,
-                true,
-                vec!["sa".to_string()],
-            );
+            let focus = FocusId::new("probe");
+            ctx.register_focusable(focus.clone(), area, true);
+            ctx.set_focus_suppresses_global_hotkeys(focus.clone(), self.suppress_global_hotkeys);
+            ctx.set_focus_receives_events_before_global_hotkeys(focus, self.focused_first);
+            if !self.hotkeys.is_empty() {
+                ctx.register_focusable_with_hotkey_sequences(
+                    FocusId::new("action"),
+                    area,
+                    true,
+                    self.hotkeys.iter().map(|key| (*key).to_string()).collect(),
+                );
+            }
             LayoutResult::new(area)
         }
 
@@ -1701,41 +1927,26 @@ mod tests {
 
         fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
             match event {
-                TuiEvent::Key(_) => self.key_events += 1,
-                TuiEvent::Hotkey(_) => self.hotkey_events += 1,
+                TuiEvent::Key(key) => {
+                    self.key_events += 1;
+                    if let Key::Char(ch) = key.code {
+                        self.key_chars.push(ch);
+                        if self.consume_char == Some(ch) {
+                            return EventOutcome::Handled;
+                        }
+                    }
+                }
+                TuiEvent::Hotkey(HotkeyEvent::Commit(_)) => {
+                    self.hotkey_commits += 1;
+                    return EventOutcome::Handled;
+                }
+                TuiEvent::Yank => {
+                    self.yank_events += 1;
+                    return EventOutcome::Handled;
+                }
                 _ => {}
             }
             EventOutcome::Ignored
-        }
-    }
-
-    impl TuiNode<()> for FocusedFirstHotkeyNode {
-        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-            ctx.register_focusable(FocusId::new("picker"), area, true);
-            ctx.set_focus_receives_events_before_global_hotkeys(FocusId::new("picker"), true);
-            ctx.register_focusable_with_hotkey_sequences(
-                FocusId::new("action"),
-                area,
-                true,
-                vec!["t".to_string(), "x".to_string()],
-            );
-            LayoutResult::new(area)
-        }
-
-        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
-
-        fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
-            match event {
-                TuiEvent::Key(key) if key.code == Key::Char('t') => {
-                    self.focused_key_events += 1;
-                    EventOutcome::Handled
-                }
-                TuiEvent::Hotkey(HotkeyEvent::Commit(_)) => {
-                    self.hotkey_events += 1;
-                    EventOutcome::Ignored
-                }
-                _ => EventOutcome::Ignored,
-            }
         }
     }
 
@@ -1963,6 +2174,75 @@ mod tests {
                 .borrow()
                 .contains(&("three".to_owned(), true))
         );
+    }
+
+    #[test]
+    fn replacing_focused_same_identity_reasserts_gain_without_blur_once() {
+        let app = TreeApp::new(ReplacementFocusNode::new("one", "target", true, false));
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 2, 1));
+
+        assert_eq!(
+            app.root.focus_log.borrow().as_slice(),
+            &[("old-one", true), ("replacement", true)]
+        );
+    }
+
+    #[test]
+    fn replacing_unfocused_subtree_does_not_dispatch_focus() {
+        let app = TreeApp::new(ReplacementFocusNode::new("two", "other", true, false));
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 2, 1));
+
+        assert_eq!(app.root.focus_log.borrow().as_slice(), &[("old-one", true)]);
+    }
+
+    #[test]
+    fn replacement_removing_focused_target_uses_normal_focus_repair() {
+        let app = TreeApp::new(ReplacementFocusNode::new("one", "target", false, false));
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 2, 1));
+
+        assert_eq!(
+            app.root.focus_log.borrow().as_slice(),
+            &[("old-one", true), ("replacement", false), ("old-two", true)]
+        );
+    }
+
+    #[test]
+    fn replacement_focus_gain_messages_are_merged() {
+        let app = TreeApp::new(ReplacementFocusNode::new("one", "target", true, true)).on_message(
+            |root, message, _ctx| {
+                if message == "replacement focused" {
+                    root.messages += 1;
+                }
+            },
+        );
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 2, 1));
+
+        assert_eq!(
+            app.root.focus_log.borrow().as_slice(),
+            &[("old-one", true), ("replacement", true)]
+        );
+        assert_eq!(app.root.messages, 1);
     }
 
     #[test]
@@ -2419,7 +2699,11 @@ mod tests {
 
     #[test]
     fn focused_text_target_suppresses_global_hotkey_sequences() {
-        let app = TreeApp::new(SuppressedHotkeyNode::default());
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["sa"],
+            suppress_global_hotkeys: true,
+            ..HotkeyPrecedenceProbe::default()
+        });
         let events = [
             TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
             TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
@@ -2428,12 +2712,108 @@ mod tests {
         let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
 
         assert_eq!(app.root.key_events, 2);
-        assert_eq!(app.root.hotkey_events, 0);
+        assert_eq!(app.root.key_chars, "sa");
+        assert_eq!(app.root.hotkey_commits, 0);
+    }
+
+    #[test]
+    fn active_text_entry_receives_literal_yy_without_yank() {
+        let app = TreeApp::new(TextInput::<()>::new());
+        let y = TuiEvent::Key(KeyEvent::from(Key::Char('y')));
+
+        let app = app.run_test_events(
+            [TuiEvent::Key(KeyEvent::from(Key::Enter)), y.clone(), y],
+            Rect::new(0, 0, 10, 1),
+        );
+
+        assert_eq!(app.root.current_value(), "yy");
+    }
+
+    #[test]
+    fn exact_global_y_hotkey_outranks_clipboard_yy() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["y"],
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let y = TuiEvent::Key(KeyEvent::from(Key::Char('y')));
+
+        let app = app.run_test_events([y.clone(), y], Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.hotkey_commits, 2);
+        assert_eq!(app.root.yank_events, 0);
+    }
+
+    #[test]
+    fn clipboard_yy_yanks_without_conflicting_global_hotkey() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe::default());
+        let y = TuiEvent::Key(KeyEvent::from(Key::Char('y')));
+
+        let app = app.run_test_events([y.clone(), y], Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.yank_events, 1);
+    }
+
+    #[test]
+    fn focused_first_consumption_cancels_stale_clipboard_prefix() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            focused_first: true,
+            consume_char: Some('x'),
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('y'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('y'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.key_chars, "yxy");
+        assert_eq!(app.root.yank_events, 0);
+    }
+
+    #[test]
+    fn focused_first_ignored_key_is_delivered_once() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            focused_first: true,
+            ..HotkeyPrecedenceProbe::default()
+        });
+
+        let app = app.run_test_events(
+            [TuiEvent::Key(KeyEvent::from(Key::Char('z')))],
+            Rect::new(0, 0, 10, 1),
+        );
+
+        assert_eq!(app.root.key_events, 1);
+    }
+
+    #[test]
+    fn clipboard_pending_timeout_participates_in_runtime_poll_and_tick() {
+        let animation = AnimationSettings {
+            enabled: false,
+            ..AnimationSettings::default()
+        };
+        let scheduler = Scheduler::new(animation);
+        let global_hotkeys = HotkeySequenceMatcher::default();
+        let mut clipboard_hotkeys = HotkeySequenceMatcher::new(["yy"]);
+        clipboard_hotkeys.on_key(KeyEvent::from(Key::Char('y')));
+
+        assert!(
+            runtime_poll_timeout(&scheduler, &global_hotkeys, &clipboard_hotkeys)
+                <= crate::hotkey::HOTKEY_TIMEOUT
+        );
+        clipboard_hotkeys.tick(crate::hotkey::HOTKEY_TIMEOUT);
+        assert!(!clipboard_hotkeys.is_pending());
     }
 
     #[test]
     fn focused_first_target_consumes_handled_keys_before_global_hotkeys() {
-        let app = TreeApp::new(FocusedFirstHotkeyNode::default());
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["t", "x"],
+            focused_first: true,
+            consume_char: Some('t'),
+            ..HotkeyPrecedenceProbe::default()
+        });
         let events = [
             TuiEvent::Key(KeyEvent::from(Key::Char('t'))),
             TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
@@ -2441,8 +2821,8 @@ mod tests {
 
         let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
 
-        assert_eq!(app.root.focused_key_events, 1);
-        assert_eq!(app.root.hotkey_events, 1);
+        assert_eq!(app.root.key_chars, "tx");
+        assert_eq!(app.root.hotkey_commits, 1);
     }
 
     #[test]
@@ -2485,7 +2865,10 @@ mod tests {
             TuiEvent::Key(KeyEvent::from(Key::Char('s'))),
         );
 
-        assert!(runtime_poll_timeout(&scheduler, &global_hotkeys) <= crate::hotkey::HOTKEY_TIMEOUT);
+        assert!(
+            runtime_poll_timeout(&scheduler, &global_hotkeys, &clipboard_hotkeys)
+                <= crate::hotkey::HOTKEY_TIMEOUT
+        );
         app.dispatch_global_hotkey_tick(
             &mut flags,
             &mut dispatcher,

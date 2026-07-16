@@ -91,6 +91,25 @@ impl TreeDispatcher {
             notifications: Vec::new(),
         }
     }
+
+    pub(crate) fn dispatch_focus_gain<N, M>(
+        &mut self,
+        root: &mut N,
+        target: FocusTarget,
+        settings: AnimationSettings,
+    ) -> DispatchEffects<M>
+    where
+        N: TuiNode<M>,
+    {
+        self.dispatch_focus(
+            root,
+            FocusTransition {
+                previous: None,
+                current: Some(target),
+            },
+            settings,
+        )
+    }
 }
 
 impl<M> DispatchEffects<M> {

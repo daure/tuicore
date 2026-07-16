@@ -1,6 +1,8 @@
 use ratatui::layout::Rect;
 
-use crate::{FocusTarget, HitRegion, LayoutCtx, LayoutResult, OverlayLayoutEntry, TuiNode};
+use crate::{
+    FocusTarget, HitRegion, LayoutCtx, LayoutResult, OverlayLayoutEntry, TreePath, TuiNode,
+};
 
 #[derive(Debug, Clone)]
 pub struct LayoutEngine {
@@ -51,6 +53,10 @@ impl LayoutEngine {
 
     pub fn focus_targets(&self) -> &[FocusTarget] {
         self.ctx.focus_targets()
+    }
+
+    pub(crate) fn replaced_subtrees(&self) -> &[TreePath] {
+        self.ctx.replaced_subtrees()
     }
 
     pub fn hit_regions(&self) -> &[HitRegion] {

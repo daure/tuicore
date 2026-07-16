@@ -54,6 +54,26 @@ impl FocusManager {
         )
     }
 
+    pub(crate) fn reassert_replaced_focus(
+        &mut self,
+        targets: &[FocusTarget],
+        replaced_subtrees: &[TreePath],
+    ) -> Option<FocusTarget> {
+        let current = self.current.as_ref()?;
+        if !replaced_subtrees
+            .iter()
+            .any(|path| current.path.keys().starts_with(path.keys()))
+        {
+            return None;
+        }
+        let updated = targets
+            .iter()
+            .find(|target| target.enabled && same_focus(target, current))
+            .cloned()?;
+        self.current = Some(updated.clone());
+        Some(updated)
+    }
+
     pub fn repair(
         &mut self,
         repair: &FocusRepair,
