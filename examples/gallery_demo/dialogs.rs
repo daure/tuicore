@@ -4,9 +4,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Borders, Paragraph};
 use tuicore::{
-    Animated, AnimationSettings, Button, ChildKey, DataView, Dialog, DialogHost, Dropdown,
-    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget, LayoutCtx, LayoutResult, RenderCtx,
-    Tab, Tabs, TextInput, TickResult, Toggle, TuiEvent, TuiNode,
+    Animated, AnimationSettings, Button, ChildKey, ConfirmationDialog, DataView, Dialog,
+    DialogHost, Dropdown, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget, KeySpec,
+    LayoutCtx, LayoutResult, RenderCtx, Tab, Tabs, TextInput, TickResult, Toggle, TuiEvent,
+    TuiNode,
 };
 
 use super::data::{DataViewMode, DemoRow};
@@ -494,6 +495,24 @@ pub(crate) fn dock_overlay_button(example: DockOverlayExample) -> Button<Msg> {
         .on_press(move || Msg::DockOverlayOpened(example))
 }
 
+pub(crate) fn confirmation_button() -> Button<Msg> {
+    Button::new("Open confirmation")
+        .hotkey("oc")
+        .on_press(|| Msg::ConfirmationOpened)
+}
+
+pub(crate) fn gallery_confirmation_dialog() -> ConfirmationDialog<Msg> {
+    ConfirmationDialog::new(
+        "Delete saved filter?",
+        "This removes the filter from the gallery. This action cannot be undone.",
+    )
+    .yes_text("Delete")
+    .no_text("Keep")
+    .yes_hotkey(KeySpec::plain('d'))
+    .no_hotkey(KeySpec::plain('k'))
+    .on_outcome(Msg::ConfirmationFinished)
+}
+
 fn dialog_tabs() -> Tabs<Msg> {
     Tabs::new(vec![
         Tab::new("Controls", DialogControlsTab::new()).hotkey("1"),
@@ -514,7 +533,6 @@ pub(crate) fn gallery_dialog() -> DialogHost<GalleryDialogContent, Msg> {
     let mut dialog = Dialog::new()
         .top_left(DialogExample::Large.title())
         .bottom_left("Esc closes")
-        .bottom_right("80% viewport")
         .on_close(Msg::DialogClosed);
     dialog.clear_title(tuicore::DialogTitlePosition::TopRight);
     dialog.host(GalleryDialogContent::new())
@@ -524,7 +542,6 @@ pub(crate) fn gallery_dock_overlay() -> DialogHost<GalleryDockOverlayContent, Ms
     Dialog::new()
         .top_left(DockOverlayExample::BottomTabs.title())
         .bottom_left("Esc closes")
-        .bottom_right("docked")
         .on_close(Msg::DockOverlayClosed)
         .host(GalleryDockOverlayContent::new())
 }
@@ -556,7 +573,7 @@ pub(crate) fn dialog_body_area(area: Rect) -> Rect {
     )
 }
 
-pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 11] {
+pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 12] {
     let [_, body, _] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -568,6 +585,7 @@ pub(crate) fn dialog_button_areas(area: Rect) -> [Rect; 11] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),

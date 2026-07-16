@@ -5,9 +5,9 @@ mod gallery_demo;
 use gallery_demo::data::{DataViewMode, DemoRow, data_event_status, data_view_layout};
 use gallery_demo::dialogs::{
     DialogExample, DockOverlayExample, GalleryDialogContent, GalleryDockOverlayContent,
-    dialog_body_area, dialog_button, dialog_button_areas, dialog_demo_child_key,
-    dialog_demo_child_route, dialog_demo_index, dock_overlay_button, gallery_dialog,
-    gallery_dock_overlay,
+    confirmation_button, dialog_body_area, dialog_button, dialog_button_areas,
+    dialog_demo_child_key, dialog_demo_child_route, dialog_demo_index, dock_overlay_button,
+    gallery_confirmation_dialog, gallery_dialog, gallery_dock_overlay,
 };
 use gallery_demo::dropdowns::{
     DropdownDemoItem, dropdown_area, dropdown_child_key, dropdown_child_route,
@@ -66,17 +66,18 @@ use time::{Date, Month, PrimitiveDateTime, Time};
 use tuicore::components::{AiDock, LlmEvent, StoreDebugView, ToolPolicy};
 use tuicore::{
     ActivationMode, Animated, AnimationSettings, Button, Calendar, CalendarEntryRole, CalendarSpan,
-    CalendarTypedEvent, ChildKey, Chip, ChipColorRole, DataView, DataViewTypedEvent, DatePicker,
-    DatePickerDropdown, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
-    DialogBackdrop, DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement,
-    DialogTitlePosition, DispatchOutcome, DockSpec, Dropdown, EventCtx, EventOutcome, EventRoute,
-    Flex, FocusCtx, FocusId, FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField,
-    InspectValue, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, Menu, MenuItem,
-    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
-    ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
-    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput,
-    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
-    TreeAdapter, TreePath, TuiEvent, TuiNode,
+    CalendarTypedEvent, ChildKey, Chip, ChipColorRole, ConfirmationDialog,
+    ConfirmationDialogOutcome, DataView, DataViewTypedEvent, DatePicker, DatePickerDropdown,
+    DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, DialogBackdrop,
+    DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
+    Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusTarget, Grid,
+    Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent, KeyModifiers,
+    LayoutCtx, LayoutResult, Menu, MenuItem, ModalCloseReason, Overlay, Panel, PanelHost,
+    PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, RenderCtx,
+    SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem,
+    StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput,
+    TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent,
+    TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -90,6 +91,8 @@ enum Msg {
     NotificationTriggered(usize),
     StoreViewOpened,
     StoreViewClosed(ModalCloseReason),
+    ConfirmationOpened,
+    ConfirmationFinished(ConfirmationDialogOutcome),
     OpenAiDock,
     CloseAiDock,
 }
@@ -98,11 +101,16 @@ type DialogDemoLayer = DialogLayer<Gallery, DialogHost<GalleryDialogContent, Msg
 type ModalTabsLayer = DialogLayer<DialogDemoLayer, Tabs<Msg>>;
 type RootLayer = DialogLayer<ModalTabsLayer, DialogHost<GalleryDockOverlayContent, Msg>>;
 type StoreViewLayer = DialogLayer<RootLayer, StoreDebugView<Msg>>;
+type ConfirmationLayer = DialogLayer<StoreViewLayer, ConfirmationDialog<Msg>>;
 
-type AppRoot = DialogLayer<StoreViewLayer, tuicore::components::AiDock<Msg>>;
+type AppRoot = DialogLayer<ConfirmationLayer, tuicore::components::AiDock<Msg>>;
+
+fn confirmation_layer(root: &mut AppRoot) -> &mut ConfirmationLayer {
+    root.base_mut()
+}
 
 fn store_view_layer(root: &mut AppRoot) -> &mut StoreViewLayer {
-    root.base_mut()
+    confirmation_layer(root).base_mut()
 }
 
 fn get_root_layer(root: &mut AppRoot) -> &mut RootLayer {
@@ -132,8 +140,14 @@ fn main() -> tuicore::Result<()> {
         .layer_cross_percent(88)
         .placement(DialogLayerPlacement::Center)
         .backdrop(DialogBackdrop::dim().amount(0.45));
+    let confirmation = DialogLayer::new(store_view, gallery_confirmation_dialog())
+        .active(false)
+        .layer_percent(32)
+        .layer_cross_percent(60)
+        .placement(DialogLayerPlacement::Center)
+        .backdrop(DialogBackdrop::dim().amount(0.55));
 
-    let final_root = DialogLayer::new(store_view, ai_dock_dialog()).active(false);
+    let final_root = DialogLayer::new(confirmation, ai_dock_dialog()).active(false);
 
     tuicore::TreeApp::new(final_root)
         .on_message(|root, msg, ctx| match msg {
@@ -148,10 +162,6 @@ fn main() -> tuicore::Result<()> {
                     .layer_mut()
                     .dialog_mut()
                     .set_bottom_left("Esc closes");
-                dialog_layer
-                    .layer_mut()
-                    .dialog_mut()
-                    .set_bottom_right(format!("{}% viewport", example.percent()));
                 if example == DialogExample::Full {
                     dialog_layer.layer_mut().dialog_mut().set_content([
                         "100% dialog: full-screen modal content.",
@@ -172,9 +182,6 @@ fn main() -> tuicore::Result<()> {
                 let r = get_root_layer(root);
                 r.layer_mut().child_mut().set_example(example);
                 r.layer_mut().dialog_mut().set_top_left(example.title());
-                r.layer_mut()
-                    .dialog_mut()
-                    .clear_title(DialogTitlePosition::BottomRight);
                 let dock = match example {
                     DockOverlayExample::Top => DockSpec::top(30),
                     DockOverlayExample::Bottom => DockSpec::bottom(30),
@@ -242,6 +249,22 @@ fn main() -> tuicore::Result<()> {
             }
             Msg::StoreViewClosed(_reason) => {
                 store_view_layer(root).set_active_with_context(false, ctx);
+            }
+            Msg::ConfirmationOpened => {
+                let layer = confirmation_layer(root);
+                layer.replace_layer(gallery_confirmation_dialog(), ctx);
+                layer.set_active_with_context(true, ctx);
+            }
+            Msg::ConfirmationFinished(outcome) => {
+                confirmation_layer(root).set_active_with_context(false, ctx);
+                gallery(root).previews.confirmation_status = match outcome {
+                    ConfirmationDialogOutcome::Confirmed => "Confirmed: filter deleted".to_string(),
+                    ConfirmationDialogOutcome::Cancelled => "Cancelled: filter kept".to_string(),
+                    ConfirmationDialogOutcome::Closed(reason) => {
+                        format!("Closed without a choice: {reason:?}")
+                    }
+                };
+                ctx.request_redraw();
             }
             Msg::OpenAiDock => {
                 root.set_docked(DockSpec::bottom(80).cross_percent(80));
@@ -600,6 +623,8 @@ struct PreviewState {
     dialog_40: Button<Msg>,
     dialog_20: Button<Msg>,
     dialog_top: Button<Msg>,
+    confirmation: Button<Msg>,
+    confirmation_status: String,
     dock_top: Button<Msg>,
     dock_bottom: Button<Msg>,
     dock_left: Button<Msg>,
@@ -754,6 +779,8 @@ impl PreviewState {
             dialog_40: dialog_button(DialogExample::Small),
             dialog_20: dialog_button(DialogExample::Tiny),
             dialog_top: dialog_button(DialogExample::Top),
+            confirmation: confirmation_button(),
+            confirmation_status: String::from("No confirmation result yet"),
             dock_top: dock_overlay_button(DockOverlayExample::Top),
             dock_bottom: dock_overlay_button(DockOverlayExample::Bottom),
             dock_left: dock_overlay_button(DockOverlayExample::Left),
@@ -1444,6 +1471,7 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.dialog_40, dt, settings))
             .merge(Animated::tick(&mut self.dialog_20, dt, settings))
             .merge(Animated::tick(&mut self.dialog_top, dt, settings))
+            .merge(Animated::tick(&mut self.confirmation, dt, settings))
             .merge(Animated::tick(&mut self.dock_top, dt, settings))
             .merge(Animated::tick(&mut self.dock_bottom, dt, settings))
             .merge(Animated::tick(&mut self.dock_left, dt, settings))
@@ -1772,6 +1800,10 @@ impl PreviewState {
         for (index, button_area) in dialog_button_areas(body).into_iter().enumerate() {
             self.dialog_button(index).render(frame, button_area);
         }
+        frame.render_widget(
+            Paragraph::new(self.confirmation_status.as_str()),
+            Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
+        );
     }
 
     fn dialog_button(&self, index: usize) -> &Button<Msg> {
@@ -1786,6 +1818,7 @@ impl PreviewState {
             8 => &self.dock_left,
             9 => &self.dock_right,
             10 => &self.dock_snackbar,
+            11 => &self.confirmation,
             _ => &self.dialog_100,
         }
     }
@@ -1802,6 +1835,7 @@ impl PreviewState {
             8 => &mut self.dock_left,
             9 => &mut self.dock_right,
             10 => &mut self.dock_snackbar,
+            11 => &mut self.confirmation,
             _ => &mut self.dialog_100,
         }
     }

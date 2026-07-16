@@ -39,6 +39,8 @@ pub struct DialogLayer<Base, Layer> {
     backdrop_tween: Tween,
     restore_focus_on_close: bool,
     layer_focus_origin: Option<(TreePath, FocusId)>,
+    initialized: bool,
+    mounted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +195,8 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             backdrop_tween: Tween::idle(0.0),
             restore_focus_on_close: true,
             layer_focus_origin: None,
+            initialized: false,
+            mounted: false,
         }
     }
 
@@ -348,6 +352,29 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
 
     pub fn layer_mut(&mut self) -> &mut Layer {
         &mut self.layer
+    }
+
+    pub fn replace_layer<M>(&mut self, mut layer: Layer, ctx: &mut EventCtx<M>) -> Layer
+    where
+        Base: TuiNode<M>,
+        Layer: TuiNode<M>,
+    {
+        let mut lifecycle = LifecycleCtx::default();
+        if self.mounted {
+            self.layer.unmount(&mut lifecycle);
+        }
+        if self.initialized {
+            self.layer.destroy(&mut lifecycle);
+            layer.init(&mut lifecycle);
+        }
+        if self.mounted {
+            layer.mount(&mut lifecycle);
+        }
+        let old = std::mem::replace(&mut self.layer, layer);
+        merge_lifecycle_effects(ctx, lifecycle);
+        ctx.request_layout();
+        ctx.request_redraw();
+        old
     }
 
     fn backdrop_target(&self) -> f64 {
@@ -506,7 +533,7 @@ where
             return;
         }
         let second = ChildKey::second();
-        if self.active {
+        if self.active || !focused {
             if let Some(target) = target.for_child(&second) {
                 self.record_layer_focus(&target, focused);
                 self.layer.dispatch_focus(&target, focused, ctx);
@@ -515,23 +542,55 @@ where
     }
 
     fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        if self.initialized {
+            return;
+        }
         self.base.init(ctx);
         self.layer.init(ctx);
+        self.initialized = true;
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        if !self.initialized {
+            self.init(ctx);
+        }
+        if self.mounted {
+            return;
+        }
         self.base.mount(ctx);
         self.layer.mount(ctx);
+        self.mounted = true;
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        if !self.mounted {
+            return;
+        }
         self.layer.unmount(ctx);
         self.base.unmount(ctx);
+        self.mounted = false;
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.unmount(ctx);
+        if !self.initialized {
+            return;
+        }
         self.layer.destroy(ctx);
         self.base.destroy(ctx);
+        self.initialized = false;
+    }
+}
+
+fn merge_lifecycle_effects<M>(ctx: &mut EventCtx<M>, mut lifecycle: LifecycleCtx<M>) {
+    if lifecycle.layout_requested() {
+        ctx.request_layout();
+    }
+    if lifecycle.redraw_requested() || lifecycle.tick_requested() {
+        ctx.request_redraw();
+    }
+    for message in lifecycle.drain_messages() {
+        ctx.emit(message);
     }
 }
 
@@ -756,6 +815,11 @@ mod tests {
         order: Rc<RefCell<Vec<&'static str>>>,
     }
 
+    struct LifecycleProbe {
+        label: &'static str,
+        events: Rc<RefCell<Vec<String>>>,
+    }
+
     impl TuiNode<()> for StaticBody {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
@@ -767,6 +831,44 @@ mod tests {
             _area: Rect,
             _ctx: &mut crate::RenderCtx<'_>,
         ) {
+        }
+    }
+
+    impl TuiNode<()> for LifecycleProbe {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
+
+        fn init(&mut self, _ctx: &mut LifecycleCtx<()>) {
+            self.events
+                .borrow_mut()
+                .push(format!("{}:init", self.label));
+        }
+
+        fn mount(&mut self, _ctx: &mut LifecycleCtx<()>) {
+            self.events
+                .borrow_mut()
+                .push(format!("{}:mount", self.label));
+        }
+
+        fn unmount(&mut self, _ctx: &mut LifecycleCtx<()>) {
+            self.events
+                .borrow_mut()
+                .push(format!("{}:unmount", self.label));
+        }
+
+        fn destroy(&mut self, _ctx: &mut LifecycleCtx<()>) {
+            self.events
+                .borrow_mut()
+                .push(format!("{}:destroy", self.label));
         }
     }
 
@@ -970,6 +1072,47 @@ mod tests {
             Some(&FocusRequest::Path(TreePath::from_keys([
                 ChildKey::second()
             ])))
+        );
+    }
+
+    #[test]
+    fn deactivated_layer_still_dispatches_focus_loss_to_previous_target() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, Button::<()>::new("Keep"));
+        let mut layout = LayoutCtx::new();
+        dialog_layer.layout(Rect::new(0, 0, 20, 5), &mut layout);
+        let target = layout.focus_targets()[0].clone();
+        let mut focus_ctx = FocusCtx::<()>::default();
+        dialog_layer.dispatch_focus(&target, true, &mut focus_ctx);
+        assert!(dialog_layer.layer().is_focused());
+
+        dialog_layer.set_active_with_context(false, &mut EventCtx::<()>::default());
+        dialog_layer.dispatch_focus(&target, false, &mut focus_ctx);
+
+        assert!(!dialog_layer.layer().is_focused());
+    }
+
+    #[test]
+    fn replacing_mounted_layer_destroys_old_instance_and_mounts_new_instance() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let old = LifecycleProbe {
+            label: "old",
+            events: Rc::clone(&events),
+        };
+        let mut dialog_layer = DialogLayer::new(StaticBody, old).active(false);
+        let mut lifecycle = LifecycleCtx::default();
+        dialog_layer.init(&mut lifecycle);
+        dialog_layer.mount(&mut lifecycle);
+        events.borrow_mut().clear();
+        let new = LifecycleProbe {
+            label: "new",
+            events: Rc::clone(&events),
+        };
+
+        dialog_layer.replace_layer(new, &mut EventCtx::<()>::default());
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["old:unmount", "old:destroy", "new:init", "new:mount"]
         );
     }
 

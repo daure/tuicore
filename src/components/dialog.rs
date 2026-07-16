@@ -24,7 +24,6 @@ pub enum DialogTitlePosition {
     TopLeft,
     TopRight,
     BottomLeft,
-    BottomRight,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,11 +60,17 @@ struct DialogTitle {
     text: String,
 }
 
+pub struct DialogAction<M = ()> {
+    label: String,
+    hotkey: Option<KeySpec>,
+    on_trigger: Option<Box<dyn Fn() -> M>>,
+}
+
 pub struct Dialog<M = ()> {
     top_left: Option<DialogTitle>,
     top_right: Option<DialogTitle>,
     bottom_left: Option<DialogTitle>,
-    bottom_right: Option<DialogTitle>,
+    actions: Vec<DialogAction<M>>,
     border: Option<BorderKind>,
     edge_borders: Option<Borders>,
     content: Vec<Line<'static>>,
@@ -97,7 +102,7 @@ impl<M> Dialog<M> {
             top_left: None,
             top_right: None,
             bottom_left: None,
-            bottom_right: None,
+            actions: Vec::new(),
             border: None,
             edge_borders: None,
             content: Vec::new(),
@@ -138,15 +143,6 @@ impl<M> Dialog<M> {
         self.bottom_left = Some(DialogTitle::standard(title));
     }
 
-    pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
-        self.set_bottom_right(title);
-        self
-    }
-
-    pub fn set_bottom_right(&mut self, title: impl Into<String>) {
-        self.bottom_right = Some(DialogTitle::standard(title));
-    }
-
     pub fn title(mut self, position: DialogTitlePosition, title: impl Into<String>) -> Self {
         self.set_title(position, title);
         self
@@ -158,6 +154,19 @@ impl<M> Dialog<M> {
 
     pub fn clear_title(&mut self, position: DialogTitlePosition) {
         *self.title_slot_mut(position) = None;
+    }
+
+    pub fn actions(mut self, actions: impl IntoIterator<Item = DialogAction<M>>) -> Self {
+        self.set_actions(actions);
+        self
+    }
+
+    pub fn set_actions(&mut self, actions: impl IntoIterator<Item = DialogAction<M>>) {
+        self.actions = actions.into_iter().collect();
+    }
+
+    pub fn clear_actions(&mut self) {
+        self.actions.clear();
     }
 
     pub fn border(mut self, border: BorderKind) -> Self {
@@ -456,10 +465,9 @@ impl<M> Dialog<M> {
         }
         if edge_borders.contains(Borders::BOTTOM) {
             self.render_bottom_title(frame, area, DialogTitlePosition::BottomLeft, 0);
-            self.render_bottom_title(
+            self.render_bottom_actions(
                 frame,
                 area,
-                DialogTitlePosition::BottomRight,
                 if close_on_bottom {
                     self.close_label_width() + 1
                 } else {
@@ -526,7 +534,6 @@ impl<M> Dialog<M> {
         };
         let alignment = match position {
             DialogTitlePosition::BottomLeft => Alignment::Left,
-            DialogTitlePosition::BottomRight => Alignment::Right,
             DialogTitlePosition::TopLeft | DialogTitlePosition::TopRight => return,
         };
         self.render_plain_title(
@@ -534,6 +541,28 @@ impl<M> Dialog<M> {
             area,
             title,
             alignment,
+            area.y + area.height.saturating_sub(1),
+            reserved_right,
+        );
+    }
+
+    fn render_bottom_actions(&self, frame: &mut Frame, area: Rect, reserved_right: u16) {
+        if self.actions.is_empty() {
+            return;
+        }
+        let title = DialogTitle {
+            text: self
+                .actions
+                .iter()
+                .map(DialogAction::display_label)
+                .collect::<Vec<_>>()
+                .join(" · "),
+        };
+        self.render_plain_title(
+            frame,
+            area,
+            &title,
+            Alignment::Right,
             area.y + area.height.saturating_sub(1),
             reserved_right,
         );
@@ -702,7 +731,6 @@ impl<M> Dialog<M> {
             DialogTitlePosition::TopLeft => self.top_left.as_ref(),
             DialogTitlePosition::TopRight => self.top_right.as_ref(),
             DialogTitlePosition::BottomLeft => self.bottom_left.as_ref(),
-            DialogTitlePosition::BottomRight => self.bottom_right.as_ref(),
         }
     }
 
@@ -711,7 +739,6 @@ impl<M> Dialog<M> {
             DialogTitlePosition::TopLeft => &mut self.top_left,
             DialogTitlePosition::TopRight => &mut self.top_right,
             DialogTitlePosition::BottomLeft => &mut self.bottom_left,
-            DialogTitlePosition::BottomRight => &mut self.bottom_right,
         }
     }
 
@@ -741,6 +768,37 @@ impl<M> Dialog<M> {
 impl DialogTitle {
     fn standard(title: impl Into<String>) -> Self {
         Self { text: title.into() }
+    }
+}
+
+impl<M> DialogAction<M> {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hotkey: None,
+            on_trigger: None,
+        }
+    }
+
+    pub fn hotkey(mut self, hotkey: KeySpec) -> Self {
+        self.hotkey = Some(hotkey);
+        self
+    }
+
+    pub fn on_trigger(mut self, handler: impl Fn() -> M + 'static) -> Self {
+        self.on_trigger = Some(Box::new(handler));
+        self
+    }
+
+    fn display_label(&self) -> String {
+        match self.hotkey {
+            Some(hotkey) => format!("{} ({})", self.label, hotkey.label()),
+            None => self.label.clone(),
+        }
+    }
+
+    fn matches(&self, key: KeyEvent) -> bool {
+        self.hotkey.is_some_and(|hotkey| hotkey.matches(key))
     }
 }
 
@@ -777,6 +835,14 @@ impl<M> TuiNode<M> for Dialog<M> {
             ctx.stop_propagation();
             return EventOutcome::Handled;
         };
+        if let Some(action) = self.actions.iter().find(|action| action.matches(*key)) {
+            if let Some(on_trigger) = &action.on_trigger {
+                ctx.emit(on_trigger());
+            }
+            ctx.stop_propagation();
+            ctx.request_redraw();
+            return EventOutcome::Handled;
+        }
         if let Some(reason) = self.close_reason(*key) {
             self.close(reason, ctx);
             return EventOutcome::Handled;
@@ -1103,12 +1169,15 @@ mod tests {
     }
 
     #[test]
-    fn dialog_renders_all_title_slots_and_fixed_close_label() {
+    fn dialog_renders_titles_actions_and_fixed_close_label() {
         let dialog = Dialog::<()>::new()
             .top_left("Title")
             .top_right("State")
             .bottom_left("Help")
-            .bottom_right("Enter OK")
+            .actions([
+                DialogAction::new("Delete").hotkey(KeySpec::plain('d')),
+                DialogAction::new("Keep").hotkey(KeySpec::plain('k')),
+            ])
             .content(["Body"]);
         let mut terminal = Terminal::new(TestBackend::new(40, 5)).expect("terminal should build");
 
@@ -1123,8 +1192,25 @@ mod tests {
         assert!(rendered.contains("Title"));
         assert!(rendered.contains("State"));
         assert!(rendered.contains("Help"));
-        assert!(rendered.contains("Enter OK"));
+        assert!(rendered.contains("Delete (d) · Keep (k)"));
         assert!(rendered.contains("┤x│"));
+    }
+
+    #[test]
+    fn dialog_action_hotkey_is_optional() {
+        let dialog = Dialog::<()>::new().actions([DialogAction::new("Dismiss")]);
+        let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let bottom = (0..24)
+            .map(|x| buffer.cell((x, 3)).unwrap().symbol())
+            .collect::<String>();
+        assert!(bottom.contains("Dismiss"), "{bottom}");
+        assert!(!bottom.contains("Dismiss ("), "{bottom}");
     }
 
     #[test]
@@ -1301,6 +1387,23 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.messages(), &[DialogCloseReason::CloseKey]);
+        assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
+    fn action_hotkey_emits_action_message_and_stops_propagation() {
+        let mut dialog = Dialog::new().actions([
+            DialogAction::new("Delete")
+                .hotkey(KeySpec::plain('d'))
+                .on_trigger(|| "delete"),
+            DialogAction::new("Keep").on_trigger(|| "keep"),
+        ]);
+        let mut ctx = EventCtx::new(animation_settings());
+
+        let outcome = dialog.event(&TuiEvent::Key(Key::Char('d').into()), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &["delete"]);
         assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
     }
 

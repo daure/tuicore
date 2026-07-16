@@ -1,6 +1,7 @@
 mod button;
 mod calendar;
 mod chip;
+mod confirmation_dialog;
 mod data_view;
 mod date_time;
 mod date_time_indicator;
@@ -41,6 +42,9 @@ pub use calendar::{
     CalendarTypedEvent, CalendarView,
 };
 pub use chip::{Chip, ChipColorRole};
+pub use confirmation_dialog::{
+    ConfirmationDialog, ConfirmationDialogKeyBindings, ConfirmationDialogOutcome,
+};
 pub use data_view::{
     ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewFilter,
     DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
@@ -51,7 +55,9 @@ pub use date_time::{
     DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
     PickerOutcome, TimeField, TimePicker, TimePrecision,
 };
-pub use dialog::{Dialog, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition};
+pub use dialog::{
+    Dialog, DialogAction, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition,
+};
 pub use dialog_layer::{
     DialogBackdrop, DialogLayer, DialogLayerPlacement, DockChrome, DockSide, DockSpec,
 };
