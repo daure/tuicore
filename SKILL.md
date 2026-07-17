@@ -35,6 +35,10 @@ Use `fill(1)` for main content regions that should consume remaining space.
 
 Popup components (`Dropdown`, `Menu`, date/time dropdowns, status menus) register overlay geometry during normal `layout()` via `OverlayManager`, then enqueue portal draws during normal `render(frame, area, ctx)` via `RenderCtx`. Consumers do not host or forward overlays manually. Custom containers only call child `layout()` and `render(..., ctx)`; `ctx.flush(frame)` at root draws queued portals.
 
+Focus-mode plain Enter emits a control submit request and enters/opens input mode. Enter while input mode is active remains control-local and emits no submit request.
+
+`Dropdown` owns its border and label. In validated forms, wrap it with embedded `FormField` mode and synchronize `Dropdown::set_error` with field feedback instead of adding a second panel border.
+
 ## Core Trait (`TuiNode`)
 
 All UI elements implement `TuiNode<M>` which drives lifecycle and layout:
@@ -81,6 +85,16 @@ Containers with child elements use the `Children<M>` structure (wrapping list of
 - **Layout**: In `layout()`, position each child by calling `slot.layout(child_area, ctx)` (this registers hierarchy and hit-testing regions).
 - **Event Routing**: Containers must implement `dispatch_event` and `dispatch_focus` explicitly (the default implementations do not descend). Forward events using `slot.dispatch_event(&route, event, ctx)` and `slot.dispatch_focus(&target, focused, ctx)`.
 - **Ticking & Render**: Loop and forward to `slot.tick(dt, settings)` and `slot.render(frame, area, ctx)`.
+
+## Reactive forms
+
+- Build typed state with `FormBuilder`, `FormControl`, `FormGroup`, and `FormArray`; implement `FormModel` for typed control structs.
+- Keep cross-field errors on `FormGroup`. Present a group error beside the relevant field without copying it into that control.
+- Route deliberate edits through `begin_edit()` and `input(value)`, then call `end_edit()` when input/open mode closes. Default `ErrorDisplay::OnInputExit` reveals errors after edit completion; `OnInput` reveals them on first input.
+- Read current validity from `errors()`/`status()` and rendered feedback from `presented_errors()` or `visible_errors(submitted)`. Presented control errors latch through editing and refresh automatically at the configured `OnInputExit` or `OnInput` trigger, on `set_value`/`reset`, and on submission.
+- Keep group-owned cross-field feedback latched with `FormGroup::refresh_presented_errors()` at its relevant control trigger; submission refreshes it automatically. Wrap controls in `FormField` and pass the first visible error through `set_error` for semantic error chrome and feedback text.
+- Use `on_submit` as focus-mode callback when Enter requests editing. Use `on_edit_end` for active-to-inactive transitions, including configured finish keys, cancel, and focus loss. Active text/password Enter and textarea Ctrl+Enter finish editing without invoking `on_submit`; textarea Enter inserts newline. Focus and Tab without edit activation leave controls pristine.
+- Gallery validated form uses Ctrl+Enter for whole-form submission except when routed to textarea; there Ctrl+Enter exits textarea input mode without submitting the form.
 
 ## Semantic Theming & Colors
 

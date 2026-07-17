@@ -4,7 +4,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key, KeyEvent, KeyModifiers,
@@ -360,6 +360,54 @@ fn search_hotkey_is_ignored_without_action_bar() {
 
     assert_eq!(outcome, DataViewOutcome::IDLE);
     assert_eq!(view.interaction, DataViewInteraction::Grid);
+}
+
+#[test]
+fn unfocus_keys_clear_search_from_grid() {
+    let area = Rect::new(0, 0, 40, 6);
+    let keys = [
+        KeyEvent::from(Key::Esc),
+        KeyEvent {
+            code: Key::Char('['),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ];
+
+    for key in keys {
+        let mut view = transform_view();
+        view.set_search_query("api");
+
+        let outcome = view.on_key(key, area);
+
+        assert!(outcome.handled);
+        assert!(outcome.changed);
+        assert!(view.transform_state().search.is_empty());
+    }
+}
+
+#[test]
+fn unfocus_keys_clear_search_when_leaving_search_input() {
+    let area = Rect::new(0, 0, 40, 6);
+    let keys = [
+        KeyEvent::from(Key::Esc),
+        KeyEvent {
+            code: Key::Char('['),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ];
+
+    for key in keys {
+        let mut view = transform_view().action_bar(true);
+        view.on_key(KeyEvent::from(Key::Char('/')), area);
+        view.set_search_query("api");
+
+        let outcome = view.on_key(key, area);
+
+        assert!(outcome.handled);
+        assert!(outcome.changed);
+        assert!(view.transform_state().search.is_empty());
+        assert_eq!(view.interaction, DataViewInteraction::Grid);
+    }
 }
 
 #[test]
@@ -759,6 +807,30 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     assert_eq!(cell.fg, theme.highlight_fg());
     assert_eq!(cell.bg, theme.highlight_bg());
+}
+
+#[test]
+fn highlighted_row_preserves_explicit_rich_cell_foreground() {
+    let semantic_color = crate::theme().error_fg();
+    let view = DataView::new([Row::new(1, "BIG")], |row| row.id)
+        .column(Column::rich(
+            "size",
+            "Size",
+            Constraint::Length(5),
+            move |row: &Row, _| {
+                Line::from(Span::styled(row.name, Style::default().fg(semantic_color)))
+            },
+        ))
+        .focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 5, 1)))
+        .expect("data view should render");
+
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.fg, semantic_color);
+    assert_eq!(cell.bg, crate::theme().highlight_bg());
 }
 
 #[test]

@@ -646,7 +646,10 @@ where
         }
         let page = self.visible_page_step(area);
         let data_keys = keys.data_view();
-        if self.action_bar && data_keys.clear_search_matches(key) {
+        if !self.transform_state.search.is_empty() && keys.focus().unfocus_matches(key) {
+            self.pending_g = false;
+            self.clear_search_to_top(area, settings)
+        } else if self.action_bar && data_keys.clear_search_matches(key) {
             self.pending_g = false;
             self.clear_search_to_top(area, settings)
         } else if self.table_transform_controls_enabled() && data_keys.clear_filters_matches(key) {
@@ -759,10 +762,18 @@ where
         area: Rect,
         settings: AnimationSettings,
     ) -> DataViewOutcome {
-        if matches!(key.code, Key::Enter) || keybindings().focus().unfocus_matches(key) {
+        if matches!(key.code, Key::Enter) {
             self.interaction = DataViewInteraction::Grid;
             self.search_input.set_focused(false);
             return DataViewOutcome::CHANGED;
+        }
+
+        if keybindings().focus().unfocus_matches(key) {
+            self.interaction = DataViewInteraction::Grid;
+            self.search_input.set_focused(false);
+            let mut outcome = self.clear_search_to_top(area, settings);
+            outcome.changed = true;
+            return outcome;
         }
 
         if keybindings().data_view().clear_search_matches(key) {

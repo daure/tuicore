@@ -15,6 +15,7 @@ use gallery_demo::dropdowns::{
     dropdown_filled_no_search_immediate, dropdown_fuzzy_single, dropdown_grid_areas,
     dropdown_index, dropdown_multi_contains, dropdown_no_search_immediate, dropdown_preview_layout,
 };
+use gallery_demo::forms::{FormControlId, ValidatedForm};
 use gallery_demo::inputs::{
     button_layout, chip_layout, date_time_showcase_layout, password_input_showcase_layout,
     text_input_showcase_layout, textarea_showcase_layout, toggle_layout,
@@ -72,12 +73,12 @@ use tuicore::{
     DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
     Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusTarget, Grid,
     Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent, KeyModifiers,
-    LayoutCtx, LayoutResult, Menu, MenuItem, ModalCloseReason, Overlay, Panel, PanelHost,
-    PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput, RenderCtx,
-    SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem,
-    StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput,
-    TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent,
-    TuiNode,
+    LayoutCtx, LayoutResult, LifecycleCtx, Menu, MenuItem, ModalCloseReason, Overlay, Panel,
+    PanelHost, PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput,
+    RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar,
+    StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput,
+    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
+    TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -95,6 +96,14 @@ enum Msg {
     ConfirmationFinished(ConfirmationDialogOutcome),
     OpenAiDock,
     CloseAiDock,
+    FormNameChanged(String),
+    FormDescriptionChanged(String),
+    FormPasswordChanged(String),
+    FormStartSelected(Date),
+    FormEndSelected(Date),
+    FormSubmitAttempt,
+    FormSubmitRequested(FormControlId),
+    FormControlEditEnded(FormControlId),
 }
 
 type DialogDemoLayer = DialogLayer<Gallery, DialogHost<GalleryDialogContent, Msg>>;
@@ -150,129 +159,150 @@ fn main() -> tuicore::Result<()> {
     let final_root = DialogLayer::new(confirmation, ai_dock_dialog()).active(false);
 
     tuicore::TreeApp::new(final_root)
-        .on_message(|root, msg, ctx| match msg {
-            Msg::DialogOpened(example) => {
-                let dialog_layer = dialog_demo_layer(root);
-                dialog_layer.layer_mut().child_mut().set_example(example);
-                dialog_layer
-                    .layer_mut()
-                    .dialog_mut()
-                    .set_top_left(example.title());
-                dialog_layer
-                    .layer_mut()
-                    .dialog_mut()
-                    .set_bottom_left("Esc closes");
-                if example == DialogExample::Full {
-                    dialog_layer.layer_mut().dialog_mut().set_content([
-                        "100% dialog: full-screen modal content.",
-                        "This uses the Dialog chrome only, with text content inside.",
-                        "Press x or Esc to close and restore focus.",
-                    ]);
-                } else {
-                    dialog_layer.layer_mut().dialog_mut().clear_content();
-                }
-                dialog_layer.set_layer_percent(example.percent());
-                dialog_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                dialog_layer.set_active_with_context(true, ctx);
-            }
-            Msg::DialogClosed(_reason) => {
-                dialog_demo_layer(root).set_active_with_context(false, ctx);
-            }
-            Msg::DockOverlayOpened(example) => {
-                let r = get_root_layer(root);
-                r.layer_mut().child_mut().set_example(example);
-                r.layer_mut().dialog_mut().set_top_left(example.title());
-                let dock = match example {
-                    DockOverlayExample::Top => DockSpec::top(30),
-                    DockOverlayExample::Bottom => DockSpec::bottom(30),
-                    DockOverlayExample::Left => DockSpec::left(32),
-                    DockOverlayExample::Right => DockSpec::right(32),
-                    DockOverlayExample::BottomSnackbar => DockSpec::bottom(16).cross_percent(80),
-                    DockOverlayExample::BottomTabs => DockSpec::bottom(36),
-                };
-                r.set_docked(dock);
-                r.layer_mut()
-                    .child_mut()
-                    .set_tabs_edge_borders(dock.edge_borders());
-                r.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                r.set_active_with_context(true, ctx);
-            }
-            Msg::DockOverlayClosed(_reason) => {
-                get_root_layer(root).set_active_with_context(false, ctx);
-            }
-            Msg::ModalTabsOpened(variant) => {
-                let tabs_layer = modal_tabs_layer(root);
-                tabs_layer.layer_mut().set_variant(variant.variant());
-                tabs_layer.layer_mut().clear_edge_borders();
-                tabs_layer.layer_mut().prepare_modal_open(ctx.animation());
-                let dock = match variant {
-                    ModalTabsExample::CenterMinimal
-                    | ModalTabsExample::CenterUnderline
-                    | ModalTabsExample::CenterBoxed => None,
-                    ModalTabsExample::Top => Some(DockSpec::top(30)),
-                    ModalTabsExample::Bottom => Some(DockSpec::bottom(30)),
-                    ModalTabsExample::Left => Some(DockSpec::left(32)),
-                    ModalTabsExample::Right => Some(DockSpec::right(32)),
-                    ModalTabsExample::BottomSnackbar => {
-                        Some(DockSpec::bottom(16).cross_percent(80))
-                    }
-                };
-                if let Some(dock) = dock {
-                    tabs_layer.set_docked(dock);
-                } else {
-                    tabs_layer.set_placement(DialogLayerPlacement::Center);
-                    tabs_layer.set_layer_percent(72);
-                    tabs_layer.set_layer_cross_percent(100);
-                    tabs_layer.layer_mut().set_edge_borders(Borders::ALL);
-                }
-                tabs_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                tabs_layer.set_active_with_context(true, ctx);
-            }
-            Msg::ModalTabsClosed(_reason) => {
-                let tabs_layer = modal_tabs_layer(root);
-                tabs_layer.layer_mut().prepare_modal_close();
-                tabs_layer.set_active_with_context(false, ctx);
-            }
-            Msg::NotificationTriggered(index) => {
-                gallery(root)
-                    .previews
-                    .notification_triggers
-                    .push(notification_for_index(index).ttl(Duration::from_secs(4)));
+        .on_message(|root, msg, ctx| {
+            if gallery(root).previews.validated_form.apply_message(&msg) {
+                ctx.request_layout();
                 ctx.request_redraw();
+                return;
             }
-            Msg::StoreViewOpened => {
-                let state = gallery(root).store_debug_state();
-                let events = gallery(root).store_debug_events();
-                let layer = store_view_layer(root);
-                layer.layer_mut().set_snapshot(state, events);
-                layer.set_active_with_context(true, ctx);
-            }
-            Msg::StoreViewClosed(_reason) => {
-                store_view_layer(root).set_active_with_context(false, ctx);
-            }
-            Msg::ConfirmationOpened => {
-                let layer = confirmation_layer(root);
-                layer.replace_layer(gallery_confirmation_dialog(), ctx);
-                layer.set_active_with_context(true, ctx);
-            }
-            Msg::ConfirmationFinished(outcome) => {
-                confirmation_layer(root).set_active_with_context(false, ctx);
-                gallery(root).previews.confirmation_status = match outcome {
-                    ConfirmationDialogOutcome::Confirmed => "Confirmed: filter deleted".to_string(),
-                    ConfirmationDialogOutcome::Cancelled => "Cancelled: filter kept".to_string(),
-                    ConfirmationDialogOutcome::Closed(reason) => {
-                        format!("Closed without a choice: {reason:?}")
+            match msg {
+                Msg::DialogOpened(example) => {
+                    let dialog_layer = dialog_demo_layer(root);
+                    dialog_layer.layer_mut().child_mut().set_example(example);
+                    dialog_layer
+                        .layer_mut()
+                        .dialog_mut()
+                        .set_top_left(example.title());
+                    dialog_layer
+                        .layer_mut()
+                        .dialog_mut()
+                        .set_bottom_left("Esc closes");
+                    if example == DialogExample::Full {
+                        dialog_layer.layer_mut().dialog_mut().set_content([
+                            "100% dialog: full-screen modal content.",
+                            "This uses the Dialog chrome only, with text content inside.",
+                            "Press x or Esc to close and restore focus.",
+                        ]);
+                    } else {
+                        dialog_layer.layer_mut().dialog_mut().clear_content();
                     }
-                };
-                ctx.request_redraw();
-            }
-            Msg::OpenAiDock => {
-                root.set_docked(DockSpec::bottom(80).cross_percent(80));
-                root.set_backdrop(DialogBackdrop::dim().amount(0.55));
-                root.set_active_with_context(true, ctx);
-            }
-            Msg::CloseAiDock => {
-                root.set_active_with_context(false, ctx);
+                    dialog_layer.set_layer_percent(example.percent());
+                    dialog_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                    dialog_layer.set_active_with_context(true, ctx);
+                }
+                Msg::DialogClosed(_reason) => {
+                    dialog_demo_layer(root).set_active_with_context(false, ctx);
+                }
+                Msg::DockOverlayOpened(example) => {
+                    let r = get_root_layer(root);
+                    r.layer_mut().child_mut().set_example(example);
+                    r.layer_mut().dialog_mut().set_top_left(example.title());
+                    let dock = match example {
+                        DockOverlayExample::Top => DockSpec::top(30),
+                        DockOverlayExample::Bottom => DockSpec::bottom(30),
+                        DockOverlayExample::Left => DockSpec::left(32),
+                        DockOverlayExample::Right => DockSpec::right(32),
+                        DockOverlayExample::BottomSnackbar => {
+                            DockSpec::bottom(16).cross_percent(80)
+                        }
+                        DockOverlayExample::BottomTabs => DockSpec::bottom(36),
+                    };
+                    r.set_docked(dock);
+                    r.layer_mut()
+                        .child_mut()
+                        .set_tabs_edge_borders(dock.edge_borders());
+                    r.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                    r.set_active_with_context(true, ctx);
+                }
+                Msg::DockOverlayClosed(_reason) => {
+                    get_root_layer(root).set_active_with_context(false, ctx);
+                }
+                Msg::ModalTabsOpened(variant) => {
+                    let tabs_layer = modal_tabs_layer(root);
+                    tabs_layer.layer_mut().set_variant(variant.variant());
+                    tabs_layer.layer_mut().clear_edge_borders();
+                    tabs_layer.layer_mut().prepare_modal_open(ctx.animation());
+                    let dock = match variant {
+                        ModalTabsExample::CenterMinimal
+                        | ModalTabsExample::CenterUnderline
+                        | ModalTabsExample::CenterBoxed => None,
+                        ModalTabsExample::Top => Some(DockSpec::top(30)),
+                        ModalTabsExample::Bottom => Some(DockSpec::bottom(30)),
+                        ModalTabsExample::Left => Some(DockSpec::left(32)),
+                        ModalTabsExample::Right => Some(DockSpec::right(32)),
+                        ModalTabsExample::BottomSnackbar => {
+                            Some(DockSpec::bottom(16).cross_percent(80))
+                        }
+                    };
+                    if let Some(dock) = dock {
+                        tabs_layer.set_docked(dock);
+                    } else {
+                        tabs_layer.set_placement(DialogLayerPlacement::Center);
+                        tabs_layer.set_layer_percent(72);
+                        tabs_layer.set_layer_cross_percent(100);
+                        tabs_layer.layer_mut().set_edge_borders(Borders::ALL);
+                    }
+                    tabs_layer.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                    tabs_layer.set_active_with_context(true, ctx);
+                }
+                Msg::ModalTabsClosed(_reason) => {
+                    let tabs_layer = modal_tabs_layer(root);
+                    tabs_layer.layer_mut().prepare_modal_close();
+                    tabs_layer.set_active_with_context(false, ctx);
+                }
+                Msg::NotificationTriggered(index) => {
+                    gallery(root)
+                        .previews
+                        .notification_triggers
+                        .push(notification_for_index(index).ttl(Duration::from_secs(4)));
+                    ctx.request_redraw();
+                }
+                Msg::StoreViewOpened => {
+                    let state = gallery(root).store_debug_state();
+                    let events = gallery(root).store_debug_events();
+                    let layer = store_view_layer(root);
+                    layer.layer_mut().set_snapshot(state, events);
+                    layer.set_active_with_context(true, ctx);
+                }
+                Msg::StoreViewClosed(_reason) => {
+                    store_view_layer(root).set_active_with_context(false, ctx);
+                }
+                Msg::ConfirmationOpened => {
+                    let layer = confirmation_layer(root);
+                    layer.replace_layer(gallery_confirmation_dialog(), ctx);
+                    layer.set_active_with_context(true, ctx);
+                }
+                Msg::ConfirmationFinished(outcome) => {
+                    confirmation_layer(root).set_active_with_context(false, ctx);
+                    gallery(root).previews.confirmation_status = match outcome {
+                        ConfirmationDialogOutcome::Confirmed => {
+                            "Confirmed: filter deleted".to_string()
+                        }
+                        ConfirmationDialogOutcome::Cancelled => {
+                            "Cancelled: filter kept".to_string()
+                        }
+                        ConfirmationDialogOutcome::Closed(reason) => {
+                            format!("Closed without a choice: {reason:?}")
+                        }
+                    };
+                    ctx.request_redraw();
+                }
+                Msg::OpenAiDock => {
+                    root.set_docked(DockSpec::bottom(80).cross_percent(80));
+                    root.set_backdrop(DialogBackdrop::dim().amount(0.55));
+                    root.set_active_with_context(true, ctx);
+                }
+                Msg::CloseAiDock => {
+                    root.set_active_with_context(false, ctx);
+                }
+                Msg::FormNameChanged(_)
+                | Msg::FormDescriptionChanged(_)
+                | Msg::FormPasswordChanged(_)
+                | Msg::FormStartSelected(_)
+                | Msg::FormEndSelected(_)
+                | Msg::FormSubmitAttempt
+                | Msg::FormSubmitRequested(_)
+                | Msg::FormControlEditEnded(_) => unreachable!("form messages handled above"),
             }
         })
         .run()
@@ -589,6 +619,22 @@ impl TuiNode<Msg> for Gallery {
         self.preview_panel.set_focused(focused, ctx.animation());
         ctx.request_redraw();
     }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.previews.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.previews.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.previews.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.previews.destroy(ctx);
+    }
 }
 
 struct PreviewState {
@@ -667,6 +713,7 @@ struct PreviewState {
     layout_stack: Stack<Msg>,
     layout_layered: Overlay<DemoBox, DemoBox>,
     layout_grid: Grid<Msg>,
+    validated_form: ValidatedForm,
 }
 
 #[derive(Clone)]
@@ -834,6 +881,7 @@ impl PreviewState {
             layout_stack: layout_stack_demo(),
             layout_layered: layout_layered_demo(),
             layout_grid: layout_grid_demo(),
+            validated_form: ValidatedForm::new(),
         }
     }
 
@@ -893,6 +941,9 @@ impl PreviewState {
                 });
             }
             PreviewKind::DateTimePicker => self.layout_date_time(area, ctx),
+            PreviewKind::ValidatedForm => {
+                self.validated_form.layout(area, ctx);
+            }
             PreviewKind::Calendar => self.layout_calendar(area, ctx),
             PreviewKind::TagInput => self.layout_tag_input(area, ctx),
             PreviewKind::StatusBar => self.layout_status_bar(area, overlay_bounds, ctx),
@@ -955,6 +1006,7 @@ impl PreviewState {
             PreviewKind::Colors => self.render_colors(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
             PreviewKind::DateTimePicker => self.render_date_time(frame, area, ctx),
+            PreviewKind::ValidatedForm => self.validated_form.render(frame, area, ctx),
             PreviewKind::Calendar => self.render_calendar(frame, area, ctx),
             PreviewKind::StatusBar => self.render_status_bar(frame, area, ctx),
             PreviewKind::Button => self.render_button(frame, area),
@@ -1074,6 +1126,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::DateTimePicker {
             return self.date_time_dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::ValidatedForm {
+            return self.validated_form.dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::Calendar {
             return self.calendar_dispatch_event(route, event, ctx);
@@ -1285,6 +1340,9 @@ impl PreviewState {
                     focused,
                     ctx,
                 );
+            }
+            PreviewKind::ValidatedForm => {
+                self.validated_form.dispatch_focus(target, focused, ctx);
             }
             PreviewKind::Calendar => {
                 dispatch_focus_child(
@@ -1589,6 +1647,23 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.password_panel, dt, settings))
             .merge(Animated::tick(&mut self.textarea_input, dt, settings))
             .merge(Animated::tick(&mut self.textarea_panel, dt, settings))
+            .merge(self.validated_form.tick(dt, settings))
+    }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.validated_form.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.validated_form.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.validated_form.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.validated_form.destroy(ctx);
     }
 
     fn panel_title_dropdown_mut(
@@ -2149,7 +2224,7 @@ impl PreviewState {
         let [instructions, input, panel] = textarea_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter inserts newline. Ctrl+Enter submits. Ctrl+J also inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
+                "Type text. Enter inserts newline. Ctrl+Enter finishes editing. Ctrl+J also inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
                  Plain textarea uses min_rows(2)/max_rows(4); nested panel uses min_rows(2)/max_rows(4). Overflow shows a scrollbar. Hotkeys: |t| textarea, |p| panel.\n\
                  Shortcuts:\n\
                  • PgUp / PgDn / Ctrl+U / Ctrl+D          : Scroll overflowing text\n\
@@ -3179,6 +3254,7 @@ enum ComponentKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    ValidatedForm,
     Calendar,
     Toggle,
     Dropdown,
@@ -3196,7 +3272,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 38] = [
+    const ALL: [Self; 39] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3221,6 +3297,7 @@ impl ComponentKind {
         Self::PasswordInput,
         Self::TextareaInput,
         Self::DateTimePicker,
+        Self::ValidatedForm,
         Self::Calendar,
         Self::Toggle,
         Self::Dropdown,
@@ -3263,6 +3340,7 @@ impl ComponentKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::ValidatedForm => "Validated Form",
             Self::Calendar => "Calendar",
             Self::Toggle => "Toggle",
             Self::Dropdown => "Dropdown",
@@ -3297,6 +3375,7 @@ impl ComponentKind {
             | Self::PasswordInput
             | Self::TextareaInput
             | Self::DateTimePicker
+            | Self::ValidatedForm
             | Self::Calendar
             | Self::Toggle
             | Self::Dropdown
@@ -3336,6 +3415,7 @@ impl ComponentKind {
             Self::PasswordInput => PreviewKind::PasswordInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
             Self::DateTimePicker => PreviewKind::DateTimePicker,
+            Self::ValidatedForm => PreviewKind::ValidatedForm,
             Self::Calendar => PreviewKind::Calendar,
             Self::Toggle => PreviewKind::Toggle,
             Self::Dropdown => PreviewKind::Dropdown,
@@ -3373,6 +3453,7 @@ enum PreviewKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    ValidatedForm,
     Calendar,
     StatusBar,
     Button,
@@ -3412,6 +3493,7 @@ impl PreviewKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::ValidatedForm => "Validated Form",
             Self::Calendar => "Calendar",
             Self::StatusBar => "Status Bar",
             Self::Button => "Button",
@@ -3479,6 +3561,20 @@ mod tests {
         assert_eq!(ComponentKind::Layouts.preview(), PreviewKind::LayoutFlex);
         assert_eq!(ComponentKind::Inputs.preview(), PreviewKind::Button);
         assert_eq!(ComponentKind::DataView.preview(), PreviewKind::DataList);
+    }
+
+    #[test]
+    fn validated_form_is_registered_under_inputs() {
+        assert!(ComponentKind::ALL.contains(&ComponentKind::ValidatedForm));
+        assert_eq!(
+            ComponentKind::ValidatedForm.parent(),
+            Some(ComponentKind::Inputs)
+        );
+        assert_eq!(
+            ComponentKind::ValidatedForm.preview(),
+            PreviewKind::ValidatedForm
+        );
+        assert_eq!(PreviewKind::ValidatedForm.title(), "Validated Form");
     }
 
     #[test]

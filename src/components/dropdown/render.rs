@@ -83,7 +83,9 @@ where
             if !text.is_empty() && !label_area.is_empty() {
                 let theme = theme();
                 let style = Style::default()
-                    .fg(if self.chrome_is_active() {
+                    .fg(if self.error {
+                        theme.error_fg()
+                    } else if self.chrome_is_active() {
                         theme.accent_fg()
                     } else {
                         theme.muted_fg()
@@ -130,7 +132,9 @@ where
         let block = Block::default()
             .borders(Borders::ALL)
             .border_set(border_set(border))
-            .border_style(Style::default().fg(if self.chrome_is_active() {
+            .border_style(Style::default().fg(if self.error {
+                theme.error_fg()
+            } else if self.chrome_is_active() {
                 theme.accent_fg()
             } else {
                 theme.border_fg()
@@ -418,7 +422,9 @@ where
         };
         let theme = theme();
         let style = Style::default()
-            .fg(if self.chrome_is_active() {
+            .fg(if self.error {
+                theme.error_fg()
+            } else if self.chrome_is_active() {
                 theme.accent_fg()
             } else {
                 theme.muted_fg()
@@ -444,12 +450,16 @@ where
         }
 
         let theme = theme();
-        let border_style = Style::default().fg(if self.chrome_is_active() {
+        let border_style = Style::default().fg(if self.error {
+            theme.error_fg()
+        } else if self.chrome_is_active() {
             theme.accent_fg()
         } else {
             theme.border_fg()
         });
-        let title_style = Style::default().fg(if self.chrome_is_active() {
+        let title_style = Style::default().fg(if self.error {
+            theme.error_fg()
+        } else if self.chrome_is_active() {
             theme.accent_fg()
         } else {
             theme.muted_fg()

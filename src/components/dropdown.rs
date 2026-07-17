@@ -130,6 +130,7 @@ pub struct Dropdown<T, Id> {
     hotkey_matcher: HotkeySequenceMatcher,
     tab_stop: bool,
     alt_style: bool,
+    error: bool,
     label_position: DropdownLabelPosition,
     no_selection_text: Option<String>,
     no_selection_highlighted: bool,
@@ -232,6 +233,7 @@ where
             hotkey_matcher: HotkeySequenceMatcher::default(),
             tab_stop: true,
             alt_style: false,
+            error: false,
             label_position: DropdownLabelPosition::Top,
             no_selection_text: None,
             no_selection_highlighted: false,
@@ -254,6 +256,15 @@ where
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn error(mut self, error: bool) -> Self {
+        self.error = error;
+        self
+    }
+
+    pub fn set_error(&mut self, error: bool) {
+        self.error = error;
     }
 
     pub fn no_selection_text(mut self, text: impl Into<String>) -> Self {

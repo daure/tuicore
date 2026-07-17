@@ -534,6 +534,8 @@ where
                 path: path.clone(),
                 id: id.clone(),
             });
+        } else {
+            ctx.focus(FocusRequest::Last);
         }
     }
 
@@ -929,5 +931,17 @@ mod tests {
 
         let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
         assert!(cell.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn close_restores_focus_held_before_menu_opened() {
+        let mut menu = Menu::new([MenuItem::new(1, "Alpha")]);
+        let mut open_ctx = EventCtx::<()>::default();
+        menu.open_with_context(&mut open_ctx);
+        let mut close_ctx = EventCtx::<()>::default();
+
+        menu.close_with_context(&mut close_ctx);
+
+        assert_eq!(close_ctx.focus_request(), Some(&FocusRequest::Last));
     }
 }

@@ -31,6 +31,7 @@ pub struct DatePickerDropdown<M = ()> {
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
     on_select: Option<Box<dyn Fn(Date) -> M>>,
+    on_submit: Option<Box<dyn Fn() -> M>>,
     chrome: InputChrome,
     panel: Panel,
 }
@@ -48,6 +49,7 @@ impl<M> DatePickerDropdown<M> {
             hotkey_matcher: HotkeySequenceMatcher::default(),
             pending_hotkey_prefix: None,
             on_select: None,
+            on_submit: None,
             chrome: InputChrome::Plain,
             panel: Panel::new(),
         }
@@ -97,6 +99,11 @@ impl<M> DatePickerDropdown<M> {
 
     pub fn on_select(mut self, handler: impl Fn(Date) -> M + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_submit(mut self, handler: impl Fn() -> M + 'static) -> Self {
+        self.on_submit = Some(Box::new(handler));
         self
     }
 
@@ -378,6 +385,14 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
         let bindings = keybindings();
         let focus_keys = bindings.focus();
         if bindings.date_time_picker().external_editor_matches(*key) {
+            if !self.open {
+                if let Some(on_submit) = &self.on_submit {
+                    ctx.emit(on_submit());
+                }
+                self.set_open(true);
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
             let value = self.picker.cursor().to_string();
             ctx.request_external_editor(value.clone(), 1, value.len() + 1);
             ctx.stop_propagation();
@@ -393,6 +408,12 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
                 HotkeyMatch::Ignored => {}
             }
             if keybindings().button().press_matches(*key) {
+                if self.focused
+                    && crate::KeySpec::key(crate::Key::Enter).matches(*key)
+                    && let Some(on_submit) = &self.on_submit
+                {
+                    ctx.emit(on_submit());
+                }
                 self.set_open(true);
                 ctx.request_layout();
                 ctx.request_redraw();

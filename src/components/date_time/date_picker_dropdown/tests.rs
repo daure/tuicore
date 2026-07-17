@@ -37,3 +37,69 @@ fn date_picker_dropdown_places_popup_inside_overlay_bounds() {
 
     assert_eq!(dropdown.popup_area(bounds), Rect::new(5, 10, 24, 10));
 }
+
+#[test]
+fn focused_closed_enter_requests_submit_once_and_opens() {
+    let mut dropdown = DatePickerDropdown::new().on_submit(|| "submit");
+    dropdown.focused = true;
+    let mut ctx = EventCtx::default();
+
+    let outcome = dropdown.event(
+        &TuiEvent::Key(crate::KeyEvent::from(crate::Key::Enter)),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(dropdown.is_open());
+    assert_eq!(ctx.messages(), &["submit"]);
+}
+
+#[test]
+fn open_enter_selects_without_submit_request() {
+    let mut dropdown = DatePickerDropdown::new()
+        .today(Date::from_calendar_date(2026, time::Month::July, 16).unwrap())
+        .on_submit(|| "submit");
+    dropdown.focused = true;
+    dropdown.set_open(true);
+    let mut ctx = EventCtx::default();
+
+    dropdown.event(
+        &TuiEvent::Key(crate::KeyEvent::from(crate::Key::Enter)),
+        &mut ctx,
+    );
+
+    assert!(ctx.messages().is_empty());
+}
+
+#[test]
+fn inactive_external_editor_session_requests_submit_once_and_closes_on_response() {
+    let mut dropdown = DatePickerDropdown::new()
+        .today(Date::from_calendar_date(2026, time::Month::July, 16).unwrap())
+        .on_submit(|| "start")
+        .on_select(|_| "select");
+    let mut launch = EventCtx::default();
+
+    dropdown.event(
+        &TuiEvent::Key(crate::KeyEvent {
+            code: crate::Key::Char('o'),
+            modifiers: crate::KeyModifiers::CONTROL,
+        }),
+        &mut launch,
+    );
+
+    assert!(dropdown.is_open());
+    assert_eq!(launch.messages(), &["start"]);
+    assert!(launch.external_editor_request().is_some());
+
+    let mut response = EventCtx::default();
+    dropdown.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "2026-07-20".to_string(),
+            line: 1,
+            col: 1,
+        }),
+        &mut response,
+    );
+    assert!(!dropdown.is_open());
+    assert_eq!(response.messages(), &["select"]);
+}

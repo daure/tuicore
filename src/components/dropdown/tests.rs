@@ -148,6 +148,22 @@ fn custom_action_keys_open_and_commit_dropdown() {
 }
 
 #[test]
+fn error_tone_overrides_focus_for_own_border_and_title() {
+    let mut dropdown = single_dropdown().label("Environment").error(true);
+    dropdown.focus_region = Some(DropdownFocusRegion::Field);
+    let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().error_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().symbol(), "E");
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().error_fg());
+}
+
+#[test]
 fn open_popup_dims_backdrop_but_not_trigger() {
     let mut dropdown = single_dropdown()
         .selected_one("Beta")

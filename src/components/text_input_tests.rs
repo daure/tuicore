@@ -153,10 +153,11 @@ fn control_enter_does_not_submit_text_input() {
 }
 
 #[test]
-fn enter_submit_emits_message_blurs_and_stops_propagation() {
+fn insert_mode_enter_finishes_text_edit_without_submit_message() {
     let mut input = TextInput::new()
         .value("ship")
-        .on_submit(|value| format!("submit:{value}"));
+        .on_submit(|value| format!("submit:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
@@ -164,10 +165,57 @@ fn enter_submit_emits_message_blurs_and_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode);
-    assert_eq!(ctx.messages(), &["submit:ship".to_string()]);
+    assert_eq!(ctx.messages(), &["end:ship".to_string()]);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn text_input_emits_one_change_only_for_each_actual_mutation() {
+    let mut input = TextInput::new()
+        .value("a")
+        .focused(true)
+        .on_change(|value| format!("change:{value}"));
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('b'))), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Left)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+    input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
+    input.event(&TuiEvent::Paste("z".into()), &mut ctx);
+
+    assert_eq!(
+        ctx.messages(),
+        &[
+            "change:ab".to_string(),
+            "change:a".to_string(),
+            "change:".to_string(),
+            "change:z".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn focused_text_input_submit_emits_once_and_enters_insert_mode() {
+    let mut input = TextInput::new()
+        .value("ship")
+        .focused(true)
+        .on_submit(|value| format!("submit:{value}"));
+    let mut ctx = EventCtx::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert!(input.insert_mode);
+    assert_eq!(ctx.messages(), &["submit:ship".to_string()]);
 }
 
 #[test]
@@ -188,10 +236,11 @@ fn control_enter_does_not_submit_password_input() {
 }
 
 #[test]
-fn enter_password_submit_emits_message_blurs_and_stops_propagation() {
+fn insert_mode_enter_finishes_password_edit_without_submit_message() {
     let mut input = PasswordInput::new()
         .value("secret")
-        .on_submit(|value| format!("submit:{value}"));
+        .on_submit(|value| format!("submit:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
     input.input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
@@ -199,10 +248,42 @@ fn enter_password_submit_emits_message_blurs_and_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.input.insert_mode);
-    assert_eq!(ctx.messages(), &["submit:secret".to_string()]);
+    assert_eq!(ctx.messages(), &["end:secret".to_string()]);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn password_input_change_callback_receives_actual_value_once_per_mutation() {
+    let mut input = PasswordInput::new()
+        .value("secret")
+        .focused(true)
+        .on_change(|value| format!("change:{value}"));
+    input.input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('!'))), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Left)), &mut ctx);
+    input.event(&TuiEvent::Paste("?".into()), &mut ctx);
+
+    assert_eq!(
+        ctx.messages(),
+        &["change:secret!".to_string(), "change:secret?!".to_string(),]
+    );
+    assert_eq!(line_text(&input.line(20)), "••••••••");
+}
+
+#[test]
+fn password_enter_without_submit_callback_preserves_enter_to_edit() {
+    let mut input = PasswordInput::<()>::new().value("secret").focused(true);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(input.input.insert_mode);
+    assert!(ctx.messages().is_empty());
 }
 
 #[test]
@@ -613,6 +694,46 @@ fn ctrl_o_requests_external_editor() {
 }
 
 #[test]
+fn inactive_external_editor_session_emits_one_start_and_one_end() {
+    let mut input = TextInput::new()
+        .value("initial")
+        .on_submit(|value| format!("start:{value}"))
+        .on_change(|value| format!("change:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
+    let mut launch = EventCtx::default();
+
+    input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut launch,
+    );
+
+    assert!(input.insert_mode());
+    assert_eq!(launch.messages(), &["start:initial".to_string()]);
+
+    let mut response = EventCtx::default();
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "edited".to_string(),
+            line: 1,
+            col: 1,
+        }),
+        &mut response,
+    );
+    assert!(!input.insert_mode());
+    assert_eq!(
+        response.messages(),
+        &["change:edited".to_string(), "end:edited".to_string()]
+    );
+
+    let mut focus = FocusCtx::default();
+    input.focus(None, false, &mut focus);
+    assert_eq!(focus.drain_messages().count(), 0);
+}
+
+#[test]
 fn external_editor_response_updates_value_and_clamps_cursor() {
     let mut input = TextInput::<()>::new().value("initial");
     input.insert_mode = true;
@@ -637,6 +758,33 @@ fn external_editor_response_updates_value_and_clamps_cursor() {
 }
 
 #[test]
+fn external_editor_emits_change_only_when_accepted_value_differs() {
+    let mut input = TextInput::new()
+        .value("initial")
+        .on_change(|value| format!("change:{value}"));
+    let mut ctx = EventCtx::default();
+
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "initial".to_string(),
+            line: 1,
+            col: 1,
+        }),
+        &mut ctx,
+    );
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "edited".to_string(),
+            line: 1,
+            col: 1,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(ctx.messages(), &["change:edited".to_string()]);
+}
+
+#[test]
 fn paste_inserts_text_and_collapses_newlines() {
     let mut input = TextInput::<()>::new().value("hello");
     input.insert_mode = true;
@@ -651,18 +799,30 @@ fn paste_inserts_text_and_collapses_newlines() {
 }
 
 #[test]
-fn on_blur_emits_message_when_focus_lost() {
+fn edit_end_emits_once_when_active_input_loses_focus() {
     let mut input = TextInput::new()
         .value("hello")
-        .on_blur(|value| format!("blur:{value}"));
+        .on_edit_end(|value| format!("end:{value}"));
+    input.insert_mode = true;
     let mut ctx = FocusCtx::new(AnimationSettings::default());
 
+    input.focus(None, false, &mut ctx);
     input.focus(None, false, &mut ctx);
 
     assert_eq!(
         ctx.drain_messages().collect::<Vec<_>>(),
-        vec!["blur:hello".to_string()]
+        vec!["end:hello".to_string()]
     );
+}
+
+#[test]
+fn focus_loss_without_active_edit_emits_nothing() {
+    let mut input = TextInput::new().on_edit_end(|value| format!("end:{value}"));
+    let mut ctx = FocusCtx::new(AnimationSettings::default());
+
+    input.focus(None, false, &mut ctx);
+
+    assert!(ctx.drain_messages().next().is_none());
 }
 
 #[test]

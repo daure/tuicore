@@ -26,6 +26,7 @@ const POPUP_MIN_WIDTH: u16 = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagInputEvent<Id = String> {
+    SubmitRequested,
     AddedExisting { id: Id, label: String },
     CreateRequested { label: String },
     RemovedExisting { id: Id, label: String },
@@ -66,6 +67,7 @@ pub struct TagInput<Id = String> {
     panel: Panel,
     focused: bool,
     popup_open: bool,
+    active: bool,
     area: Rect,
     outer_area: Rect,
     overlay_bounds: Rect,
@@ -117,6 +119,7 @@ where
             panel: Panel::new(),
             focused: false,
             popup_open: false,
+            active: false,
             area: Rect::default(),
             outer_area: Rect::default(),
             overlay_bounds: Rect::default(),
@@ -181,6 +184,10 @@ where
         &self.query
     }
 
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
     pub fn take_events(&mut self) -> Vec<TagInputEvent<Id>> {
         std::mem::take(&mut self.events)
     }
@@ -211,6 +218,7 @@ where
         if !focused {
             self.highlighted_tag = None;
             self.popup_open = false;
+            self.active = false;
         }
         self.cursor_fade.reset();
     }
@@ -356,7 +364,8 @@ where
             return true;
         }
         if dropdown_keys.select_matches(key) || matches!(key.code, Key::Enter) {
-            return self.add_highlighted_existing();
+            let added = self.add_highlighted_existing();
+            return added || matches!(key.code, Key::Enter);
         }
 
         match key.code {
@@ -788,6 +797,7 @@ where
                 self.pending_hotkey_prefix = None;
                 self.sync_panel();
                 self.focus_search();
+                self.active = true;
                 ctx.focus(FocusRequest::TargetAt {
                     path: ctx.current_path(),
                     id: FocusId::new(TAG_INPUT_FOCUS),
@@ -911,16 +921,16 @@ where
             ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(TAG_INPUT_FOCUS),
                 focus_area,
-                true,
+                self.active,
                 vec![hotkey],
-                true,
+                self.active,
             );
         } else {
             ctx.register_text_entry_focusable(
                 FocusId::new(TAG_INPUT_FOCUS),
                 focus_area,
                 true,
-                true,
+                self.active,
             );
         }
         LayoutResult::new(area)
@@ -940,12 +950,26 @@ where
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if !self.active {
+            if self.focused && key.modifiers.is_empty() && key.code == Key::Enter {
+                self.active = true;
+                self.popup_open = true;
+                self.highlighted_option = 0;
+                self.events.push(TagInputEvent::SubmitRequested);
+                ctx.request_layout();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            return EventOutcome::Ignored;
+        }
         if cancel_key(*key)
             && self.query.is_empty()
             && !self.popup_open
             && self.highlighted_tag.is_none()
         {
-            ctx.focus(FocusRequest::Unfocus);
+            self.active = false;
+            ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
@@ -1057,6 +1081,101 @@ mod tests {
 
         assert_eq!(plain.height_for_width(8), 1);
         assert_eq!(panel.height_for_width(10), 3);
+    }
+
+    #[test]
+    fn focused_inactive_enter_requests_submit_once_and_activates() {
+        let mut input = TagInput::new(["alpha", "beta"]);
+        input.set_focused(true);
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(input.active);
+        assert!(input.popup_open);
+        assert_eq!(input.take_events(), vec![TagInputEvent::SubmitRequested]);
+    }
+
+    #[test]
+    fn no_hotkey_focus_registration_tracks_input_mode() {
+        let mut input = TagInput::new(["alpha", "beta"]);
+        input.set_focused(true);
+
+        let mut layout = LayoutCtx::new();
+        <TagInput as TuiNode<()>>::layout(&mut input, Rect::new(0, 0, 12, 1), &mut layout);
+        let target = layout.focus_targets().first().unwrap();
+        assert!(target.enabled);
+        assert!(!target.suppress_global_hotkeys);
+        assert!(!target.focused_events_before_global_hotkeys);
+
+        input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::<()>::default(),
+        );
+        let mut layout = LayoutCtx::new();
+        <TagInput as TuiNode<()>>::layout(&mut input, Rect::new(0, 0, 12, 1), &mut layout);
+        let target = layout.focus_targets().first().unwrap();
+        assert!(target.suppress_global_hotkeys);
+        assert!(target.focused_events_before_global_hotkeys);
+
+        input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut EventCtx::<()>::default(),
+        );
+        input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut EventCtx::<()>::default(),
+        );
+        assert!(!input.active);
+
+        let mut layout = LayoutCtx::new();
+        <TagInput as TuiNode<()>>::layout(&mut input, Rect::new(0, 0, 12, 1), &mut layout);
+        let target = layout.focus_targets().first().unwrap();
+        assert!(!target.suppress_global_hotkeys);
+        assert!(!target.focused_events_before_global_hotkeys);
+    }
+
+    #[test]
+    fn active_enter_adds_tag_without_submit_request() {
+        let mut input = TagInput::new(["alpha", "beta"]);
+        input.set_focused(true);
+        input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::<()>::default(),
+        );
+        input.take_events();
+
+        input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::<()>::default(),
+        );
+
+        assert_eq!(
+            input.take_events(),
+            vec![TagInputEvent::AddedExisting {
+                id: "alpha".to_string(),
+                label: "alpha".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn active_enter_without_selectable_options_is_consumed_without_submit_request() {
+        let mut input = TagInput::new(Vec::<String>::new());
+        input.set_focused(true);
+        input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::<()>::default(),
+        );
+        input.take_events();
+        let mut ctx = EventCtx::<()>::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(input.take_events().is_empty());
     }
 
     #[test]

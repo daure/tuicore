@@ -9,6 +9,7 @@ mod dialog;
 mod dialog_layer;
 mod dropdown;
 mod flex;
+mod form_field;
 mod grid;
 mod list;
 mod menu;
@@ -66,6 +67,7 @@ pub use dropdown::{
     DropdownPopupDirection, DropdownSearchMode, DropdownVariant,
 };
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
+pub use form_field::FormField;
 pub use grid::{Grid, GridItem, GridTrack};
 pub use list::{List, ListOutcome};
 pub use menu::{Menu, MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode};
@@ -73,7 +75,7 @@ pub use notifications::{
     Notification, NotificationCenter, NotificationId, NotificationKind, ToastIcons, ToastRack,
 };
 pub use overlay::{Overlay, OverlayAnchor, OverlaySize};
-pub use panel::{Panel, PanelHost, PanelTitlePosition};
+pub use panel::{Panel, PanelHost, PanelTitlePosition, PanelTone};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};

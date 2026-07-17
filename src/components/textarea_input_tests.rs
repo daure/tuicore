@@ -14,10 +14,11 @@ fn plain_character_bubbles_before_insert_mode() {
 }
 
 #[test]
-fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
+fn control_enter_finishes_edit_without_submit_message() {
     let mut input = TextareaInput::new()
         .value("first\nsecond")
-        .on_submit(|value| format!("submit:{value}"));
+        .on_submit(|value| format!("submit:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
     let outcome = input.event(
@@ -30,10 +31,49 @@ fn control_enter_submit_emits_message_blurs_and_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode);
-    assert_eq!(ctx.messages(), &["submit:first\nsecond".to_string()]);
+    assert_eq!(ctx.messages(), &["end:first\nsecond".to_string()]);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
+}
+
+#[test]
+fn textarea_emits_one_change_only_for_each_actual_mutation() {
+    let mut input = TextareaInput::new()
+        .value("a")
+        .focused(true)
+        .on_change(|value| format!("change:{value}"));
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Left)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Delete)), &mut ctx);
+    input.event(&TuiEvent::Paste("b\nc".into()), &mut ctx);
+
+    assert_eq!(
+        ctx.messages(),
+        &[
+            "change:a\n".to_string(),
+            "change:a".to_string(),
+            "change:ab\nc".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn focused_textarea_submit_emits_once_and_enters_insert_mode() {
+    let mut input = TextareaInput::new()
+        .value("draft")
+        .focused(true)
+        .on_submit(|value| format!("submit:{value}"));
+    let mut ctx = EventCtx::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert!(input.insert_mode);
+    assert_eq!(ctx.messages(), &["submit:draft".to_string()]);
 }
 
 #[test]
@@ -146,7 +186,7 @@ fn delete_removes_next_character_before_insert_mode_in_textarea() {
 }
 
 #[test]
-fn control_d_submit_emits_message_and_stops_propagation() {
+fn control_d_does_not_finish_or_submit() {
     let mut input = TextareaInput::new()
         .value("draft")
         .on_submit(|value| format!("submit:{value}"));
@@ -159,10 +199,10 @@ fn control_d_submit_emits_message_and_stops_propagation() {
 
     let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert_eq!(ctx.messages(), &["submit:draft".to_string()]);
-    assert_eq!(ctx.propagation(), Propagation::Stopped);
-    assert!(ctx.redraw_requested());
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert!(input.insert_mode);
+    assert!(ctx.messages().is_empty());
+    assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
 #[test]
@@ -722,6 +762,49 @@ fn ctrl_o_requests_external_editor() {
 }
 
 #[test]
+fn inactive_external_editor_session_emits_one_start_and_one_end() {
+    let mut input = TextareaInput::new()
+        .value("initial")
+        .on_submit(|value| format!("start:{value}"))
+        .on_change(|value| format!("change:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
+    let mut launch = EventCtx::default();
+
+    input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut launch,
+    );
+
+    assert!(input.insert_mode());
+    assert_eq!(launch.messages(), &["start:initial".to_string()]);
+
+    let mut response = EventCtx::default();
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "edited\nvalue".to_string(),
+            line: 2,
+            col: 1,
+        }),
+        &mut response,
+    );
+    assert!(!input.insert_mode());
+    assert_eq!(
+        response.messages(),
+        &[
+            "change:edited\nvalue".to_string(),
+            "end:edited\nvalue".to_string(),
+        ]
+    );
+
+    let mut focus = FocusCtx::default();
+    input.focus(None, false, &mut focus);
+    assert_eq!(focus.drain_messages().count(), 0);
+}
+
+#[test]
 fn external_editor_response_clamps_column_to_selected_line() {
     let mut input = TextareaInput::<()>::new().value("initial");
     input.insert_mode = true;
@@ -743,6 +826,33 @@ fn external_editor_response_clamps_column_to_selected_line() {
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
     assert!(ctx.clear_requested());
+}
+
+#[test]
+fn textarea_external_editor_emits_change_only_when_value_differs() {
+    let mut input = TextareaInput::new()
+        .value("initial")
+        .on_change(|value| format!("change:{value}"));
+    let mut ctx = EventCtx::default();
+
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "initial".to_string(),
+            line: 1,
+            col: 1,
+        }),
+        &mut ctx,
+    );
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "edited\nvalue".to_string(),
+            line: 2,
+            col: 1,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(ctx.messages(), &["change:edited\nvalue".to_string()]);
 }
 
 #[test]
@@ -795,18 +905,30 @@ fn entering_insert_mode_scrolls_to_cursor() {
 }
 
 #[test]
-fn on_blur_emits_message_when_focus_lost() {
+fn edit_end_emits_once_when_active_textarea_loses_focus() {
     let mut input = TextareaInput::new()
         .value("hello")
-        .on_blur(|value| format!("blur:{value}"));
+        .on_edit_end(|value| format!("end:{value}"));
+    input.insert_mode = true;
     let mut ctx = FocusCtx::new(AnimationSettings::default());
 
+    input.focus(None, false, &mut ctx);
     input.focus(None, false, &mut ctx);
 
     assert_eq!(
         ctx.drain_messages().collect::<Vec<_>>(),
-        vec!["blur:hello".to_string()]
+        vec!["end:hello".to_string()]
     );
+}
+
+#[test]
+fn focus_loss_without_active_edit_emits_nothing() {
+    let mut input = TextareaInput::new().on_edit_end(|value| format!("end:{value}"));
+    let mut ctx = FocusCtx::new(AnimationSettings::default());
+
+    input.focus(None, false, &mut ctx);
+
+    assert!(ctx.drain_messages().next().is_none());
 }
 
 fn line_text(line: &Line<'_>) -> String {

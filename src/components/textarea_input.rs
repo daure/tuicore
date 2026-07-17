@@ -43,8 +43,9 @@ pub struct TextareaInput<M = ()> {
     outer_area: Rect,
     chrome: InputChrome,
     panel: Panel,
+    on_change: Option<Box<dyn Fn(String) -> M>>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
-    on_blur: Option<Box<dyn Fn(String) -> M>>,
+    on_edit_end: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
     keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
@@ -77,10 +78,10 @@ pub struct TextareaInputKeyBindings {
 impl Default for TextareaInputKeyBindings {
     fn default() -> Self {
         Self {
-            submit: vec![
-                KeySpec::key_with_modifiers(Key::Char('d'), KeyModifiers::CONTROL),
-                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
-            ],
+            submit: vec![KeySpec::key_with_modifiers(
+                Key::Enter,
+                KeyModifiers::CONTROL,
+            )],
             cancel: vec![
                 KeySpec::key(Key::Esc),
                 KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
@@ -175,8 +176,9 @@ impl<M> TextareaInput<M> {
             outer_area: Rect::default(),
             chrome: InputChrome::Plain,
             panel: Panel::new(),
+            on_change: None,
             on_submit: None,
-            on_blur: None,
+            on_edit_end: None,
             external_editor_key: Some(ctrl_key('o')),
             keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
@@ -324,8 +326,13 @@ impl<M> TextareaInput<M> {
         self
     }
 
-    pub fn on_blur(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
-        self.on_blur = Some(Box::new(handler));
+    pub fn on_change(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_change = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_edit_end(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_edit_end = Some(Box::new(handler));
         self
     }
 
@@ -1285,6 +1292,20 @@ impl<M> TextareaInput<M> {
         let col = response.col.saturating_sub(1).min(range.len());
         self.cursor = (range.start + col).min(self.len_chars());
     }
+
+    fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
+        if self.value != previous_value
+            && let Some(on_change) = &self.on_change
+        {
+            ctx.emit(on_change(self.value.clone()));
+        }
+    }
+
+    fn emit_edit_end(&self, ctx: &mut EventCtx<M>) {
+        if let Some(on_edit_end) = &self.on_edit_end {
+            ctx.emit(on_edit_end(self.value.clone()));
+        }
+    }
 }
 
 impl<M> TuiNode<M> for TextareaInput<M> {
@@ -1358,8 +1379,14 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Ignored;
         }
         if let TuiEvent::ExternalEditor(response) = event {
+            let was_editing = self.insert_mode;
+            let previous_value = self.value.clone();
             self.apply_external_editor_response(response);
+            self.emit_change_if_needed(&previous_value, ctx);
             self.insert_mode = false;
+            if was_editing {
+                self.emit_edit_end(ctx);
+            }
             self.scroll_cursor_into_view(disabled_animation_settings());
             self.cursor_fade.reset();
             ctx.request_clear();
@@ -1373,7 +1400,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
+            let previous_value = self.value.clone();
             let outcome = self.on_paste(value);
+            self.emit_change_if_needed(&previous_value, ctx);
             let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
             if outcome.changed {
                 ctx.request_layout();
@@ -1402,6 +1431,14 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         if self.external_editor_key_matches(*key) {
+            if !self.insert_mode {
+                if let Some(on_submit) = &self.on_submit {
+                    ctx.emit(on_submit(self.value.clone()));
+                }
+                self.insert_mode = true;
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
             let (line, col) = self.external_editor_request_position();
             ctx.request_external_editor(self.value.clone(), line, col);
             ctx.stop_propagation();
@@ -1409,7 +1446,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         }
         if delete_forward_key(*key) {
             self.insert_mode = true;
+            let previous_value = self.value.clone();
             let outcome = self.on_key(*key);
+            self.emit_change_if_needed(&previous_value, ctx);
             let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
             ctx.request_layout();
             if outcome.needs_redraw() || scrolled {
@@ -1427,6 +1466,12 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             if KeySpec::key(Key::Enter).matches(*key)
                 || matches_any(&self.keys.insert_newline, *key)
             {
+                if self.focused
+                    && KeySpec::key(Key::Enter).matches(*key)
+                    && let Some(on_submit) = &self.on_submit
+                {
+                    ctx.emit(on_submit(self.value.clone()));
+                }
                 self.insert_mode = true;
                 self.scroll_cursor_into_view(disabled_animation_settings());
                 self.cursor_fade.reset();
@@ -1444,20 +1489,21 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         }
         if matches_any(&self.keys.cancel, *key) {
             self.insert_mode = false;
+            self.emit_edit_end(ctx);
             self.cursor_fade.reset();
             ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        let previous_value = self.value.clone();
         let outcome = self.on_key(*key);
+        self.emit_change_if_needed(&previous_value, ctx);
         let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
         if outcome.submitted {
             self.insert_mode = false;
+            self.emit_edit_end(ctx);
             ctx.request_layout();
-            if let Some(on_submit) = &self.on_submit {
-                ctx.emit(on_submit(self.value.clone()));
-            }
         }
         if outcome.clear {
             ctx.request_clear();
@@ -1480,12 +1526,13 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        let was_editing = self.insert_mode;
         self.set_focused(focused);
         self.panel.set_focused(focused, ctx.animation());
         if focused {
             self.cursor_fade.reset();
-        } else if let Some(on_blur) = &self.on_blur {
-            ctx.emit(on_blur(self.value.clone()));
+        } else if was_editing && let Some(on_edit_end) = &self.on_edit_end {
+            ctx.emit(on_edit_end(self.value.clone()));
         }
         ctx.request_redraw();
     }

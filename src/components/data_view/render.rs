@@ -233,9 +233,6 @@ where
                 line = self.with_row_prefix(line, row, selection_descendants);
             }
             line = underline_search_matches(line, self.transform_state.search.trim());
-            if let Some(style) = row_style {
-                line = apply_line_style(line, style);
-            }
             let mut paragraph = Paragraph::new(line).scroll((0, cell_area.scroll_x));
             if let Some(style) = row_style {
                 paragraph = paragraph.style(style);
@@ -363,25 +360,6 @@ where
             })
             .map(|cell| clip_cell(cell, viewport, offset_x))
             .collect()
-    }
-}
-
-fn apply_line_style(line: Line<'static>, style: Style) -> Line<'static> {
-    let Line {
-        spans,
-        style: line_style,
-        alignment,
-    } = line;
-    Line {
-        spans: spans
-            .into_iter()
-            .map(|span| Span {
-                style: span.style.patch(style),
-                ..span
-            })
-            .collect(),
-        style: line_style.patch(style),
-        alignment,
     }
 }
 

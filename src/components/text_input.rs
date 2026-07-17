@@ -89,8 +89,9 @@ pub struct TextInput<M = ()> {
     focused: bool,
     insert_mode: bool,
     max_len: Option<usize>,
+    on_change: Option<Box<dyn Fn(String) -> M>>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
-    on_blur: Option<Box<dyn Fn(String) -> M>>,
+    on_edit_end: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
     keys: TextInputKeyBindings,
     cursor_fade: CursorFade,
@@ -312,8 +313,9 @@ impl<M> TextInput<M> {
             focused: false,
             insert_mode: false,
             max_len: None,
+            on_change: None,
             on_submit: None,
-            on_blur: None,
+            on_edit_end: None,
             external_editor_key: Some(ctrl_key('o')),
             keys: TextInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
@@ -477,8 +479,13 @@ impl<M> TextInput<M> {
         self
     }
 
-    pub fn on_blur(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
-        self.on_blur = Some(Box::new(handler));
+    pub fn on_change(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_change = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_edit_end(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.on_edit_end = Some(Box::new(handler));
         self
     }
 
@@ -933,6 +940,20 @@ impl<M> TextInput<M> {
         self.clamp_value();
         self.cursor = collapsed_cursor.min(self.len_chars());
     }
+
+    fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
+        if self.value != previous_value
+            && let Some(on_change) = &self.on_change
+        {
+            ctx.emit(on_change(self.value.clone()));
+        }
+    }
+
+    fn emit_edit_end(&self, ctx: &mut EventCtx<M>) {
+        if let Some(on_edit_end) = &self.on_edit_end {
+            ctx.emit(on_edit_end(self.value.clone()));
+        }
+    }
 }
 
 impl<M> Default for PasswordInput<M> {
@@ -998,8 +1019,13 @@ impl<M> PasswordInput<M> {
         self
     }
 
-    pub fn on_blur(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
-        self.input = self.input.on_blur(handler);
+    pub fn on_change(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.input = self.input.on_change(handler);
+        self
+    }
+
+    pub fn on_edit_end(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
+        self.input = self.input.on_edit_end(handler);
         self
     }
 
@@ -1024,6 +1050,10 @@ impl<M> PasswordInput<M> {
 
     pub fn current_value(&self) -> &str {
         self.input.current_value()
+    }
+
+    pub fn insert_mode(&self) -> bool {
+        self.input.insert_mode()
     }
 
     pub fn set_value(&mut self, value: impl Into<String>) {
@@ -1199,8 +1229,14 @@ impl<M> TuiNode<M> for TextInput<M> {
             return EventOutcome::Ignored;
         }
         if let TuiEvent::ExternalEditor(response) = event {
+            let was_editing = self.insert_mode;
+            let previous_value = self.value.clone();
             self.apply_external_editor_response(response);
+            self.emit_change_if_needed(&previous_value, ctx);
             self.insert_mode = false;
+            if was_editing {
+                self.emit_edit_end(ctx);
+            }
             self.cursor_fade.reset();
             ctx.request_clear();
             ctx.request_layout();
@@ -1213,7 +1249,9 @@ impl<M> TuiNode<M> for TextInput<M> {
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
+            let previous_value = self.value.clone();
             let outcome = self.on_paste(value);
+            self.emit_change_if_needed(&previous_value, ctx);
             if outcome.needs_redraw() {
                 ctx.request_redraw();
             }
@@ -1232,13 +1270,23 @@ impl<M> TuiNode<M> for TextInput<M> {
             return EventOutcome::Ignored;
         };
         if self.external_editor_key_matches(*key) {
+            if !self.insert_mode {
+                if let Some(on_submit) = &self.on_submit {
+                    ctx.emit(on_submit(self.value.clone()));
+                }
+                self.insert_mode = true;
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
             ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
         if delete_forward_key(*key) {
             self.insert_mode = true;
+            let previous_value = self.value.clone();
             let outcome = self.on_key(*key);
+            self.emit_change_if_needed(&previous_value, ctx);
             ctx.request_layout();
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -1253,6 +1301,11 @@ impl<M> TuiNode<M> for TextInput<M> {
                 return EventOutcome::Ignored;
             }
             if KeySpec::key(Key::Enter).matches(*key) {
+                if self.focused
+                    && let Some(on_submit) = &self.on_submit
+                {
+                    ctx.emit(on_submit(self.value.clone()));
+                }
                 self.insert_mode = true;
                 self.cursor_fade.reset();
                 ctx.request_layout();
@@ -1269,19 +1322,20 @@ impl<M> TuiNode<M> for TextInput<M> {
         }
         if matches_any(&self.keys.cancel, *key) {
             self.insert_mode = false;
+            self.emit_edit_end(ctx);
             self.cursor_fade.reset();
             ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        let previous_value = self.value.clone();
         let outcome = self.on_key(*key);
+        self.emit_change_if_needed(&previous_value, ctx);
         if outcome.submitted {
             self.insert_mode = false;
+            self.emit_edit_end(ctx);
             ctx.request_layout();
-            if let Some(on_submit) = &self.on_submit {
-                ctx.emit(on_submit(self.value.clone()));
-            }
         }
         if outcome.clear {
             ctx.request_clear();
@@ -1298,12 +1352,13 @@ impl<M> TuiNode<M> for TextInput<M> {
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        let was_editing = self.insert_mode;
         self.set_focused(focused);
         self.panel.set_focused(focused, ctx.animation());
         if focused {
             self.cursor_fade.reset();
-        } else if let Some(on_blur) = &self.on_blur {
-            ctx.emit(on_blur(self.value.clone()));
+        } else if was_editing && let Some(on_edit_end) = &self.on_edit_end {
+            ctx.emit(on_edit_end(self.value.clone()));
         }
         ctx.request_redraw();
     }
@@ -1376,7 +1431,9 @@ impl<M> TuiNode<M> for PasswordInput<M> {
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
+            let previous_value = self.input.value.clone();
             let outcome = self.on_paste(value);
+            self.input.emit_change_if_needed(&previous_value, ctx);
             if outcome.needs_redraw() {
                 ctx.request_redraw();
             }
@@ -1391,7 +1448,9 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         };
         if delete_forward_key(*key) {
             self.input.insert_mode = true;
+            let previous_value = self.input.value.clone();
             let outcome = self.on_key(*key);
+            self.input.emit_change_if_needed(&previous_value, ctx);
             ctx.request_layout();
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -1406,6 +1465,11 @@ impl<M> TuiNode<M> for PasswordInput<M> {
                 return EventOutcome::Ignored;
             }
             if KeySpec::key(Key::Enter).matches(*key) {
+                if self.input.focused
+                    && let Some(on_submit) = &self.input.on_submit
+                {
+                    ctx.emit(on_submit(self.input.value.clone()));
+                }
                 self.input.insert_mode = true;
                 self.input.cursor_fade.reset();
                 ctx.request_layout();
@@ -1422,19 +1486,20 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         }
         if matches_any(&self.input.keys.cancel, *key) {
             self.input.insert_mode = false;
+            self.input.emit_edit_end(ctx);
             self.input.cursor_fade.reset();
             ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        let previous_value = self.input.value.clone();
         let outcome = self.on_key(*key);
+        self.input.emit_change_if_needed(&previous_value, ctx);
         if outcome.submitted {
             self.input.insert_mode = false;
+            self.input.emit_edit_end(ctx);
             ctx.request_layout();
-            if let Some(on_submit) = &self.input.on_submit {
-                ctx.emit(on_submit(self.input.value.clone()));
-            }
         }
         if outcome.clear {
             ctx.request_clear();
@@ -1451,12 +1516,13 @@ impl<M> TuiNode<M> for PasswordInput<M> {
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        let was_editing = self.input.insert_mode;
         self.input.set_focused(focused);
         self.input.panel.set_focused(focused, ctx.animation());
         if focused {
             self.input.cursor_fade.reset();
-        } else if let Some(on_blur) = &self.input.on_blur {
-            ctx.emit(on_blur(self.input.value.clone()));
+        } else if was_editing && let Some(on_edit_end) = &self.input.on_edit_end {
+            ctx.emit(on_edit_end(self.input.value.clone()));
         }
         ctx.request_redraw();
     }

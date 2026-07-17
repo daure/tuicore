@@ -29,6 +29,13 @@ pub enum PanelTitlePosition {
     BottomRight,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PanelTone {
+    #[default]
+    Normal,
+    Error,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PanelTitle {
     text: String,
@@ -43,6 +50,7 @@ pub struct Panel {
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     border: Option<BorderKind>,
+    tone: PanelTone,
     content: Vec<String>,
     scroll: Option<ScrollState>,
     focused: bool,
@@ -75,6 +83,7 @@ impl Panel {
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             border: None,
+            tone: PanelTone::Normal,
             content: Vec::new(),
             scroll: None,
             focused: false,
@@ -157,6 +166,19 @@ impl Panel {
     pub fn border(mut self, border: BorderKind) -> Self {
         self.border = Some(border);
         self
+    }
+
+    pub fn tone(mut self, tone: PanelTone) -> Self {
+        self.set_tone(tone);
+        self
+    }
+
+    pub fn set_tone(&mut self, tone: PanelTone) {
+        self.tone = tone;
+    }
+
+    pub fn current_tone(&self) -> PanelTone {
+        self.tone
     }
 
     pub fn content(mut self, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -493,6 +515,9 @@ impl PanelTitle {
 
 impl Panel {
     fn visible_border_color(&self) -> ratatui::style::Color {
+        if self.tone == PanelTone::Error {
+            return theme().error_fg();
+        }
         if self.border_color.is_active() {
             return self.border_color.value();
         }
@@ -506,6 +531,9 @@ impl Panel {
     }
 
     fn visible_title_color(&self) -> ratatui::style::Color {
+        if self.tone == PanelTone::Error {
+            return theme().error_fg();
+        }
         if self.title_color.is_active() {
             return self.title_color.value();
         }
@@ -1084,6 +1112,39 @@ mod tests {
         crate::set_theme(original);
     }
 
+    #[test]
+    fn error_tone_colors_border_and_title_semantically() {
+        let panel = Panel::new().top_left("Email").tone(PanelTone::Error);
+        let mut terminal = Terminal::new(TestBackend::new(16, 3)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+
+        let buffer = terminal.backend().buffer();
+        let error = theme().error_fg();
+        assert_eq!(buffer.cell((0, 0)).unwrap().fg, error);
+        assert_eq!(buffer.cell((2, 0)).unwrap().fg, error);
+    }
+
+    #[test]
+    fn error_tone_overrides_active_focus_animation() {
+        let mut panel = Panel::new().top_left("Email").focused(true);
+        panel.set_focused(false, animation_settings());
+        assert!(panel.border_color.is_active());
+        panel.set_tone(PanelTone::Error);
+        let mut terminal = Terminal::new(TestBackend::new(16, 3)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+
+        let buffer = terminal.backend().buffer();
+        let error = theme().error_fg();
+        assert_eq!(buffer.cell((0, 0)).unwrap().fg, error);
+        assert_eq!(buffer.cell((2, 0)).unwrap().fg, error);
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     enum Msg {
         Submit(String),
@@ -1215,7 +1276,10 @@ mod tests {
         );
 
         assert!(enter_outcome.handled());
-        assert!(enter_insert.drain_messages().next().is_none());
+        assert_eq!(
+            enter_insert.drain_messages().collect::<Vec<_>>(),
+            vec![Msg::Submit(String::new())]
+        );
         assert!(enter_insert.redraw_requested());
         assert!(key_outcome.handled());
         assert_eq!(key.propagation(), crate::Propagation::Stopped);
@@ -1229,10 +1293,7 @@ mod tests {
             &mut submit,
         );
 
-        assert_eq!(
-            submit.drain_messages().collect::<Vec<_>>(),
-            vec![Msg::Submit("x".into())]
-        );
+        assert!(submit.drain_messages().next().is_none());
         assert!(submit.redraw_requested());
         assert!(
             TuiNode::tick(
