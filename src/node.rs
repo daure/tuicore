@@ -1323,6 +1323,29 @@ mod tests {
     }
 
     #[test]
+    fn tree_path_strip_suffix_matches_whole_structural_suffix() {
+        let path = TreePath::from_keys([
+            ChildKey::new("preview"),
+            ChildKey::new("gallery"),
+            ChildKey::new("preview"),
+            ChildKey::new("preview"),
+        ]);
+        let suffix = TreePath::from_keys([ChildKey::new("preview"), ChildKey::new("preview")]);
+
+        assert_eq!(
+            path.strip_suffix(&suffix),
+            Some(TreePath::from_keys([
+                ChildKey::new("preview"),
+                ChildKey::new("gallery"),
+            ]))
+        );
+        assert_eq!(
+            path.strip_suffix(&TreePath::from_keys([ChildKey::new("gallery")])),
+            None
+        );
+    }
+
+    #[test]
     fn measurement_constructors_normalize_hints() {
         let fixed = LayoutSizeHint::fixed(5, 3).normalized(LayoutProposal::exact(7, 2));
 
@@ -1624,6 +1647,12 @@ impl TreePath {
             Some(first) if first == key => Some(self.without_first()),
             _ => None,
         }
+    }
+
+    pub fn strip_suffix(&self, suffix: &Self) -> Option<Self> {
+        self.0
+            .strip_suffix(suffix.0.as_slice())
+            .map(|keys| Self(keys.to_vec()))
     }
 
     pub fn parent(&self) -> Option<Self> {

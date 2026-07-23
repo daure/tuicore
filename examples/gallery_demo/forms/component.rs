@@ -363,14 +363,6 @@ impl ValidatedForm {
         }
     }
 
-    pub(crate) fn route_has_active_control(&self, route: &EventRoute) -> bool {
-        route
-            .path
-            .first()
-            .and_then(FormControlId::from_key)
-            .is_some_and(|control| self.control_is_active(control))
-    }
-
     fn handle_form_navigation(
         &self,
         control: FormControlId,

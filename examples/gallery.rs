@@ -51,6 +51,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+#[cfg(test)]
+use tuicore::CalendarView;
 
 use futures::StreamExt;
 use ratatui::widgets::{Borders, Paragraph};
@@ -481,21 +483,16 @@ impl Gallery {
             || (key.code == Key::Char('[') && key.modifiers.contains(KeyModifiers::CONTROL))
     }
 
-    fn focus_component_overview(ctx: &mut EventCtx<Msg>) -> EventOutcome {
+    fn focus_component_overview(route: &EventRoute, ctx: &mut EventCtx<Msg>) -> EventOutcome {
         let current_path = ctx.current_path();
-        let gallery_prefix_len = current_path
-            .keys()
-            .iter()
-            .rposition(|key| key == &gallery_preview_child_key())
-            .unwrap_or(0);
-        let overview_path = TreePath::from_keys(
+        let gallery_path = if current_path.is_empty() {
+            TreePath::new()
+        } else {
             current_path
-                .keys()
-                .iter()
-                .take(gallery_prefix_len)
-                .cloned()
-                .chain([gallery_list_child_key()]),
-        );
+                .strip_suffix(&route.path)
+                .expect("absolute event path must end with the Gallery-relative route")
+        };
+        let overview_path = gallery_path.child(gallery_list_child_key());
         ctx.focus(FocusRequest::TargetAt {
             path: overview_path,
             id: FocusId::new("data-view"),
@@ -599,15 +596,13 @@ impl TuiNode<Msg> for Gallery {
         if route.path.first() == Some(&gallery_preview_child_key()) && Self::overview_key(event) {
             let preview = self.selected.preview();
             let preview_route = EventRoute::new(route.path.without_first());
-            if self.previews.route_has_active_mode(preview, &preview_route) {
-                let child = self
-                    .previews
-                    .dispatch_event(preview, &preview_route, event, ctx);
-                if child.handled() {
-                    return child;
-                }
+            let child = self
+                .previews
+                .dispatch_event(preview, &preview_route, event, ctx);
+            if child.handled() {
+                return child;
             }
-            return Self::focus_component_overview(ctx);
+            return Self::focus_component_overview(route, ctx);
         }
         if route.path.is_empty() {
             return self.event(event, ctx);
@@ -1187,14 +1182,6 @@ impl PreviewState {
             count,
             mode_active,
         })
-    }
-
-    fn route_has_active_mode(&self, preview: PreviewKind, route: &EventRoute) -> bool {
-        self.form_navigation_position(preview, route)
-            .is_some_and(|position| position.mode_active)
-            || (preview == PreviewKind::ValidatedForm
-                && self.validated_form.route_has_active_control(route))
-            || (preview == PreviewKind::Menu && self.menu.is_open())
     }
 
     fn render<'a>(
@@ -4037,9 +4024,10 @@ mod tests {
         assert!(first.focus_request.is_none());
         assert!(!gallery(&mut root).previews.text_input.insert_mode());
 
+        let collision_route = EventRoute::new(route.path.child(gallery_preview_child_key()));
         let second = tuicore::TreeDispatcher::new().dispatch_event(
             &mut root,
-            &route,
+            &collision_route,
             &TuiEvent::Key(KeyEvent::from(Key::Esc)),
             AnimationSettings::default(),
         );
@@ -4209,13 +4197,10 @@ mod tests {
             &TuiEvent::Key(KeyEvent::from(Key::Esc)),
             &mut second,
         );
-        assert_eq!(
+        assert!(matches!(
             second.focus_request(),
-            Some(&FocusRequest::TargetAt {
-                path: TreePath::from_keys([gallery_list_child_key()]),
-                id: FocusId::new("data-view"),
-            })
-        );
+            Some(FocusRequest::TargetAt { id, .. }) if id.as_str() == "data-view"
+        ));
     }
 
     #[test]
@@ -4243,6 +4228,94 @@ mod tests {
             second.focus_request(),
             Some(FocusRequest::TargetAt { id, .. }) if id.as_str() == "data-view"
         ));
+    }
+
+    #[test]
+    fn preview_escape_cancels_data_view_search_before_returning_to_overview() {
+        let mut gallery = Gallery::new();
+        gallery.select(ComponentKind::DataViewList);
+        gallery
+            .previews
+            .active_data_view_mut(PreviewKind::DataList)
+            .set_focused(true);
+        let preview_route = EventRoute::new(TreePath::from_keys([gallery_preview_child_key()]));
+        gallery.dispatch_event(
+            &preview_route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('/'))),
+            &mut EventCtx::default(),
+        );
+        let search_route = EventRoute::new(TreePath::from_keys([
+            gallery_preview_child_key(),
+            ChildKey::new("search"),
+        ]));
+
+        let mut first = EventCtx::default();
+        let outcome = gallery.dispatch_event(
+            &search_route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut first,
+        );
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(matches!(
+            first.focus_request(),
+            Some(FocusRequest::TargetAt { path, id })
+                if path.is_empty() && id.as_str() == "data-view"
+        ));
+
+        let mut second = EventCtx::default();
+        gallery.dispatch_event(
+            &search_route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut second,
+        );
+        assert_eq!(
+            second.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::from_keys([gallery_list_child_key()]),
+                id: FocusId::new("data-view"),
+            })
+        );
+    }
+
+    #[test]
+    fn preview_escape_backs_out_of_calendar_before_returning_to_overview() {
+        let mut gallery = Gallery::new();
+        gallery.select(ComponentKind::Calendar);
+        gallery.previews.calendar.set_focused(true);
+        let route = EventRoute::new(TreePath::from_keys([
+            gallery_preview_child_key(),
+            calendar_child_key(),
+        ]));
+        gallery.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::default(),
+        );
+        assert_eq!(gallery.previews.calendar.current_view(), CalendarView::Week);
+
+        let mut first = EventCtx::default();
+        let outcome =
+            gallery.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut first);
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(
+            gallery.previews.calendar.current_view(),
+            CalendarView::Month
+        );
+        assert!(first.focus_request().is_none());
+
+        let mut second = EventCtx::default();
+        gallery.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut second,
+        );
+        assert_eq!(
+            second.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::from_keys([gallery_list_child_key()]),
+                id: FocusId::new("data-view"),
+            })
+        );
     }
 
     #[test]
