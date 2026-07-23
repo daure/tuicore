@@ -21,8 +21,6 @@ use crate::{
     preset, theme,
 };
 
-use super::text_input::CursorFade;
-
 mod render;
 mod types;
 mod util;
@@ -134,7 +132,6 @@ pub struct Dropdown<T, Id> {
     label_position: DropdownLabelPosition,
     no_selection_text: Option<String>,
     no_selection_highlighted: bool,
-    field_cursor_fade: CursorFade,
     backdrop_tween: Tween,
     pending_hotkey_prefix: Option<String>,
     scroll_highlight_on_next_layout: bool,
@@ -237,7 +234,6 @@ where
             label_position: DropdownLabelPosition::Top,
             no_selection_text: None,
             no_selection_highlighted: false,
-            field_cursor_fade: CursorFade::default(),
             backdrop_tween: Tween::idle(0.0),
             pending_hotkey_prefix: None,
             scroll_highlight_on_next_layout: false,
@@ -628,7 +624,7 @@ where
     pub fn on_key(&mut self, key: impl Into<KeyEvent>, area: Rect) -> DropdownOutcome {
         let key = key.into();
         if !self.open {
-            return self.on_closed_key(key, area);
+            return self.on_closed_key(key);
         }
 
         if self.is_cancel_key(key) {
@@ -709,6 +705,7 @@ where
                 ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
                 ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
             }
+            ctx.set_focus_control(FocusId::new(FIELD_FOCUS), true);
             return LayoutResult::new(self.field_area);
         }
 
@@ -743,31 +740,17 @@ where
                 );
             } else {
                 ctx.register_focusable(FocusId::new(FIELD_FOCUS), self.field_area, true);
+                ctx.set_focus_suppresses_global_hotkeys(FocusId::new(FIELD_FOCUS), true);
             }
             ctx.set_focus_tab_stop(FocusId::new(FIELD_FOCUS), self.tab_stop);
+            ctx.set_focus_control(FocusId::new(FIELD_FOCUS), true);
         }
         let mut child_ctx = LayoutCtx::new();
         <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, rows_area, &mut child_ctx);
         LayoutResult::new(self.field_area)
     }
 
-    fn on_closed_key(&mut self, key: KeyEvent, area: Rect) -> DropdownOutcome {
-        let keys = keybindings();
-        if keys.dropdown().next_matches(key) {
-            let mut outcome = self.open();
-            let nav = self.navigate(Key::Down, area);
-            outcome.handled |= nav.handled;
-            outcome.changed |= nav.changed;
-            return outcome;
-        }
-        if keys.dropdown().previous_matches(key) {
-            let mut outcome = self.open();
-            let nav = self.navigate(Key::Up, area);
-            outcome.handled |= nav.handled;
-            outcome.changed |= nav.changed;
-            return outcome;
-        }
-
+    fn on_closed_key(&mut self, key: KeyEvent) -> DropdownOutcome {
         match self.hotkey_matcher.on_key(key) {
             HotkeyMatch::Matched(_) => return self.open(),
             HotkeyMatch::Pending | HotkeyMatch::Canceled => return DropdownOutcome::HANDLED,
@@ -926,9 +909,6 @@ where
     }
 
     fn set_focus_region(&mut self, region: Option<DropdownFocusRegion>) {
-        if self.focus_region != region {
-            self.field_cursor_fade.reset();
-        }
         self.focus_region = region;
         self.sync_child_focus();
     }
@@ -1446,11 +1426,6 @@ where
         };
         Animated::tick(&mut self.data_view, dt, settings)
             .merge(Animated::tick(&mut self.search_input, dt, settings))
-            .merge(self.field_cursor_fade.tick(
-                self.focus_region == Some(DropdownFocusRegion::Field),
-                dt,
-                settings,
-            ))
             .merge(self.backdrop_tween.tick(dt, settings))
             .merge(hotkey_tick)
     }

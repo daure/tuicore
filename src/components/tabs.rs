@@ -1495,8 +1495,16 @@ where
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.focus_path = ctx.current_path();
         self.body_area = self.calculate_body_area(area);
+        let first_body_focus_target = ctx.focus_targets().len();
         if let Some(key) = self.selected_key().cloned() {
             self.bodies.layout_child(&key, self.body_area, ctx);
+        }
+        if self.body_focus_transfer_pending
+            && !ctx.focus_targets()[first_body_focus_target..]
+                .iter()
+                .any(|target| target.enabled)
+        {
+            self.body_focus_transfer_pending = false;
         }
         let hotkey_sequences = self.hotkey_sequences();
         if hotkey_sequences.is_empty() {
@@ -1877,6 +1885,33 @@ mod tests {
 
         assert_eq!(tabs.selected_index(), 0);
         assert!(tabs.transition.is_active());
+    }
+
+    #[test]
+    fn tabs_without_focusable_body_blur_after_selection_change() {
+        let mut tabs =
+            Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).focused(true);
+        let area = Rect::new(0, 0, 20, 5);
+        let mut initial_layout = LayoutCtx::new();
+        tabs.layout(area, &mut initial_layout);
+
+        tabs.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
+            &mut EventCtx::default(),
+        );
+        let mut updated_layout = LayoutCtx::new();
+        tabs.layout(area, &mut updated_layout);
+        let shell = updated_layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id == FocusId::new(TABS_FOCUS))
+            .expect("tabs shell should be focusable")
+            .clone();
+
+        tabs.dispatch_focus(&shell, false, &mut FocusCtx::default());
+
+        assert!(!tabs.focused);
+        assert!(!tabs.transition.is_active());
     }
 
     #[test]

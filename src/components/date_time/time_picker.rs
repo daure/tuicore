@@ -468,6 +468,7 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
         } else {
             ctx.register_focusable(FocusId::new(TIME_PICKER_FOCUS), focus_area, true);
         }
+        ctx.set_focus_control(FocusId::new(TIME_PICKER_FOCUS), true);
         ctx.set_focus_receives_events_before_global_hotkeys(FocusId::new(TIME_PICKER_FOCUS), true);
         LayoutResult::new(area)
     }

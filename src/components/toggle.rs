@@ -383,6 +383,7 @@ where
         } else {
             ctx.register_focusable(FocusId::new(TOGGLE_FOCUS), area, true);
         }
+        ctx.set_focus_control(FocusId::new(TOGGLE_FOCUS), true);
         LayoutResult::new(area)
     }
 

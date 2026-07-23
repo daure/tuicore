@@ -4,18 +4,20 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::event::{KeyEvent, TuiEvent};
 use crate::{
-    Animated, AnimationSettings, AnimationSpec, BorderKind, ChildKey, ColorTween, EventCtx,
-    EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, KeySpec, LayoutCtx,
-    LayoutResult, LifecycleCtx, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry,
-    ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode,
-    border_set, keybindings, line_width, paragraph_scroll, preset, theme,
+    Animated, AnimationSettings, AnimationSpec, AxisProposal, BorderKind, ChildKey, ColorTween,
+    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, KeySpec,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, Padding, ScrollAxes,
+    ScrollBehavior, ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome,
+    ScrollSize, ScrollState, TickResult, TuiNode, border_set, keybindings, line_width,
+    paragraph_scroll, preset, theme,
 };
 
 use super::dialog_layer::DockChrome;
+use super::typography::wrapped_text_line_count;
 
 pub(crate) const DIALOG_FOCUS: &str = "dialog";
 
@@ -73,6 +75,7 @@ pub struct Dialog<M = ()> {
     actions: Vec<DialogAction<M>>,
     border: Option<BorderKind>,
     edge_borders: Option<Borders>,
+    content_padding: Padding,
     content: Vec<Line<'static>>,
     scroll: Option<ScrollState>,
     on_close: Option<Box<dyn Fn(DialogCloseReason) -> M>>,
@@ -105,6 +108,7 @@ impl<M> Dialog<M> {
             actions: Vec::new(),
             border: None,
             edge_borders: None,
+            content_padding: Padding::default(),
             content: Vec::new(),
             scroll: None,
             on_close: None,
@@ -185,6 +189,15 @@ impl<M> Dialog<M> {
 
     pub fn clear_edge_borders(&mut self) {
         self.edge_borders = None;
+    }
+
+    pub fn content_padding(mut self, padding: Padding) -> Self {
+        self.set_content_padding(padding);
+        self
+    }
+
+    pub fn set_content_padding(&mut self, padding: Padding) {
+        self.content_padding = padding;
     }
 
     pub fn content(mut self, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -285,9 +298,58 @@ impl<M> Dialog<M> {
         ScrollSize::new(width, self.content.len())
     }
 
+    fn wrapped_content_size(&self, width: u16) -> ScrollSize {
+        if width == 0 {
+            return ScrollSize::new(0, 0);
+        }
+        let height = self
+            .content
+            .iter()
+            .map(|line| wrapped_text_line_count(&line_text(line), width, usize::MAX))
+            .sum();
+        ScrollSize::new(width as usize, height)
+    }
+
+    fn natural_width(&self) -> u16 {
+        let borders = self.resolved_edge_borders();
+        let full = Rect::new(0, 0, u16::MAX, 1);
+        let inner = Self::inner_area_for(full, borders);
+        let border_width = full.width.saturating_sub(inner.width);
+        let content_width = self.content_size().width.min(u16::MAX as usize) as u16;
+        let padding_width = self
+            .content_padding
+            .left
+            .saturating_add(self.content_padding.right);
+        let mut width = content_width
+            .saturating_add(padding_width)
+            .saturating_add(border_width);
+        let close_width = self.close_label_width();
+
+        if borders.contains(Borders::TOP) {
+            width = width.max(chrome_row_width(
+                self.top_left.as_ref().map(title_width),
+                self.top_right.as_ref().map(title_width),
+                close_width.saturating_add(1),
+            ));
+        }
+        if borders.contains(Borders::BOTTOM) {
+            let close_on_bottom = !borders.contains(Borders::TOP);
+            width = width.max(chrome_row_width(
+                self.bottom_left.as_ref().map(title_width),
+                actions_width(&self.actions),
+                if close_on_bottom {
+                    close_width.saturating_add(1)
+                } else {
+                    0
+                },
+            ));
+        }
+        width
+    }
+
     pub fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
-        let inner = Self::inner_area(area);
-        let content = self.content_size();
+        let inner = self.content_area_for(area, self.resolved_edge_borders());
+        let content = self.wrapped_content_size(inner.width);
         if let Some(scroll) = &self.scroll {
             scroll.geometry(inner, content)
         } else {
@@ -381,6 +443,24 @@ impl<M> Dialog<M> {
         )
     }
 
+    fn content_area_for(&self, area: Rect, borders: Borders) -> Rect {
+        let inner = Self::inner_area_for(area, borders);
+        Rect::new(
+            inner.x.saturating_add(self.content_padding.left),
+            inner.y.saturating_add(self.content_padding.top),
+            inner.width.saturating_sub(
+                self.content_padding
+                    .left
+                    .saturating_add(self.content_padding.right),
+            ),
+            inner.height.saturating_sub(
+                self.content_padding
+                    .top
+                    .saturating_add(self.content_padding.bottom),
+            ),
+        )
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         self.render_with_lines(frame, area, self.content.clone());
     }
@@ -407,22 +487,28 @@ impl<M> Dialog<M> {
             .borders(edge_borders)
             .border_set(border_set(border))
             .border_style(border_style);
-        let inner = Self::inner_area_for(area, edge_borders);
+        let inner = self.content_area_for(area, edge_borders);
         frame.render_widget(block, area);
 
         self.render_titles(frame, area, border);
 
         if !inner.is_empty() {
             if let Some(scroll) = &self.scroll {
-                let geometry = scroll.geometry(inner, self.content_size());
+                let geometry = scroll.geometry(inner, self.wrapped_content_size(inner.width));
                 let offset = scroll.offset();
                 let paragraph = Paragraph::new(lines)
                     .alignment(Alignment::Left)
+                    .wrap(Wrap { trim: true })
                     .scroll(paragraph_scroll(offset));
                 frame.render_widget(paragraph, geometry.layout.viewport);
                 scroll.render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
             } else {
-                frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
+                frame.render_widget(
+                    Paragraph::new(lines)
+                        .alignment(Alignment::Left)
+                        .wrap(Wrap { trim: true }),
+                    inner,
+                );
             }
         }
     }
@@ -816,6 +902,27 @@ impl<M> Animated for Dialog<M> {
 }
 
 impl<M> TuiNode<M> for Dialog<M> {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let natural_width = self.natural_width();
+        let measured_width = match proposal.width {
+            AxisProposal::Unbounded => natural_width,
+            AxisProposal::AtMost(max) => natural_width.min(max),
+            AxisProposal::Exact(exact) => exact,
+        };
+        let borders = self.resolved_edge_borders();
+        let inner = self.content_area_for(Rect::new(0, 0, measured_width, u16::MAX), borders);
+        let content_height = self.wrapped_content_size(inner.width).height;
+        let border_height =
+            borders.contains(Borders::TOP) as usize + borders.contains(Borders::BOTTOM) as usize;
+        let measured_height = content_height
+            .saturating_add(border_height)
+            .saturating_add(self.content_padding.top as usize)
+            .saturating_add(self.content_padding.bottom as usize)
+            .min(u16::MAX as usize) as u16;
+
+        LayoutSizeHint::content(measured_width, measured_height).normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
@@ -903,13 +1010,35 @@ impl<C, M> TuiNode<M> for DialogHost<C, M>
 where
     C: TuiNode<M>,
 {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        let borders = self.dialog.resolved_edge_borders();
+        let full = Rect::new(0, 0, u16::MAX, u16::MAX);
+        let content = self.dialog.content_area_for(full, borders);
+        let horizontal_inset = full.width.saturating_sub(content.width);
+        let vertical_inset = full.height.saturating_sub(content.height);
+        let child = self.child.measure(LayoutProposal {
+            width: inset_axis_proposal(proposal.width, horizontal_inset),
+            height: inset_axis_proposal(proposal.height, vertical_inset),
+        });
+        let width = child
+            .preferred
+            .width
+            .saturating_add(horizontal_inset)
+            .max(self.dialog.natural_width());
+        let height = child.preferred.height.saturating_add(vertical_inset);
+
+        LayoutSizeHint::content(width, height).normalized(proposal)
+    }
+
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let width_changed = self.dialog.area.width != 0 && self.dialog.area.width != area.width;
         self.dialog.area = area;
         if width_changed && let Some(scroll) = &mut self.dialog.scroll {
             scroll.snap_horizontal_to_start();
         }
-        let inner = Dialog::<M>::inner_area_for(area, self.dialog.resolved_edge_borders());
+        let inner = self
+            .dialog
+            .content_area_for(area, self.dialog.resolved_edge_borders());
         self.child_area = inner;
         let fallback_inserted = ctx
             .with_focus_fallback_status(FocusId::new(DIALOG_FOCUS), area, |ctx| {
@@ -1006,6 +1135,50 @@ fn focus_color_animation() -> AnimationSpec {
 
 fn close_label_width(label: &str) -> u16 {
     line_width(&Line::from(format!("┤{label}├"))).min(u16::MAX as usize) as u16
+}
+
+fn inset_axis_proposal(proposal: AxisProposal, inset: u16) -> AxisProposal {
+    match proposal {
+        AxisProposal::Unbounded => AxisProposal::Unbounded,
+        AxisProposal::AtMost(value) => AxisProposal::AtMost(value.saturating_sub(inset)),
+        AxisProposal::Exact(value) => AxisProposal::Exact(value.saturating_sub(inset)),
+    }
+}
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn title_width(title: &DialogTitle) -> u16 {
+    line_width(&Line::from(format!(" {} ", title.text))).min(u16::MAX as usize) as u16
+}
+
+fn actions_width<M>(actions: &[DialogAction<M>]) -> Option<u16> {
+    (!actions.is_empty()).then(|| {
+        let labels = actions
+            .iter()
+            .map(DialogAction::display_label)
+            .collect::<Vec<_>>()
+            .join(" · ");
+        line_width(&Line::from(format!(" {labels} "))).min(u16::MAX as usize) as u16
+    })
+}
+
+fn chrome_row_width(left: Option<u16>, right: Option<u16>, reserved_right: u16) -> u16 {
+    match (left, right) {
+        (Some(left), Some(right)) => left
+            .saturating_add(right)
+            .saturating_add(reserved_right)
+            .saturating_add(5),
+        (Some(width), None) | (None, Some(width)) => {
+            width.saturating_add(reserved_right).saturating_add(4)
+        }
+        (None, None) if reserved_right > 0 => reserved_right.saturating_add(3),
+        (None, None) => 0,
+    }
 }
 
 fn is_focus_unfocus_event(event: &TuiEvent) -> bool {
@@ -1194,6 +1367,93 @@ mod tests {
         assert!(rendered.contains("Help"));
         assert!(rendered.contains("Delete (d) · Keep (k)"));
         assert!(rendered.contains("┤x│"));
+    }
+
+    #[test]
+    fn long_dialog_content_wraps_at_word_boundaries() {
+        let dialog = Dialog::<()>::new().content(["one two three four five six"]);
+        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..20)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect()
+        };
+        assert!(row(1).contains("one two three four"), "{}", row(1));
+        assert!(row(2).contains("five six"), "{}", row(2));
+    }
+
+    #[test]
+    fn content_padding_affects_measurement_and_rendered_body_area() {
+        let dialog = Dialog::<()>::new()
+            .content(["Body"])
+            .content_padding(Padding::all(1));
+        let size = dialog.measure(LayoutProposal::unbounded()).preferred;
+        assert_eq!(size, crate::LayoutSize::new(8, 5));
+        let mut terminal = Terminal::new(TestBackend::new(size.width, size.height))
+            .expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((1, 1)).unwrap().symbol(), " ");
+        assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), " ");
+        assert_eq!(buffer.cell((2, 2)).unwrap().symbol(), "B");
+        assert_eq!(buffer.cell((1, 3)).unwrap().symbol(), " ");
+    }
+
+    #[test]
+    fn narrower_dialog_proposals_increase_wrapped_height() {
+        let dialog = Dialog::<()>::new().content(["one two three four five six"]);
+        let wide = dialog.measure(LayoutProposal {
+            width: AxisProposal::AtMost(30),
+            height: AxisProposal::Unbounded,
+        });
+        let narrow = dialog.measure(LayoutProposal {
+            width: AxisProposal::AtMost(14),
+            height: AxisProposal::Unbounded,
+        });
+
+        assert_eq!(wide.preferred.height, 3);
+        assert_eq!(narrow.preferred.height, 5);
+    }
+
+    #[test]
+    fn dialog_measure_includes_content_titles_actions_and_borders() {
+        let body = Dialog::<()>::new()
+            .keybindings(DialogKeyBindings { close: Vec::new() })
+            .content(["Body"]);
+        let decorated = Dialog::<()>::new()
+            .keybindings(DialogKeyBindings { close: Vec::new() })
+            .top_left("Title")
+            .actions([DialogAction::new("Confirm").hotkey(KeySpec::plain('c'))])
+            .content(["Body"]);
+
+        let body_hint = body.measure(LayoutProposal::unbounded());
+        let decorated_hint = decorated.measure(LayoutProposal::unbounded());
+
+        assert_eq!(body_hint.preferred, crate::LayoutSize::new(6, 3));
+        assert_eq!(decorated_hint.preferred, crate::LayoutSize::new(17, 3));
+    }
+
+    #[test]
+    fn dialog_measure_clamps_both_dimensions_to_proposal() {
+        let dialog = Dialog::<()>::new().content([
+            "This description is deliberately long enough to wrap over several narrow lines",
+        ]);
+        let hint = dialog.measure(LayoutProposal {
+            width: AxisProposal::AtMost(12),
+            height: AxisProposal::AtMost(4),
+        });
+
+        assert_eq!(hint.preferred, crate::LayoutSize::new(12, 4));
     }
 
     #[test]

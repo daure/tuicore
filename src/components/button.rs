@@ -62,7 +62,7 @@ impl<M> Button<M> {
             tab_stop: true,
             focused: false,
             on_press: None,
-            background_color: ColorTween::idle(theme.border_fg()),
+            background_color: ColorTween::idle(theme.surface_bg()),
             text_color: ColorTween::idle(theme.text_fg()),
             press_feedback: Tween::idle(0.0),
         }
@@ -236,7 +236,7 @@ impl<M> Button<M> {
         self.background_color.snap_to(if self.focused {
             theme.highlight_bg()
         } else {
-            theme.border_fg()
+            theme.surface_bg()
         });
         self.text_color.snap_to(if self.focused {
             theme.highlight_fg()
@@ -257,7 +257,7 @@ impl<M> Button<M> {
         } else if self.focused {
             theme().highlight_bg()
         } else {
-            theme().border_fg()
+            theme().surface_bg()
         }
     }
 
@@ -308,6 +308,7 @@ where
             ctx.register_focusable(FocusId::new(BUTTON_FOCUS), area, true);
         }
         ctx.set_focus_tab_stop(FocusId::new(BUTTON_FOCUS), self.tab_stop);
+        ctx.set_focus_control(FocusId::new(BUTTON_FOCUS), true);
         LayoutResult::new(area)
     }
 
@@ -425,6 +426,16 @@ mod tests {
     }
 
     #[test]
+    fn button_registers_as_control_focus_target() {
+        let mut button = Button::<()>::new("Run");
+        let mut layout = LayoutCtx::new();
+
+        button.layout(Rect::new(0, 0, 20, 1), &mut layout);
+
+        assert!(layout.focus_targets()[0].control);
+    }
+
+    #[test]
     fn hotkey_registers_and_presses() {
         let mut button = Button::<()>::new("Run").hotkey("b");
         let mut layout = LayoutCtx::new();
@@ -462,7 +473,7 @@ mod tests {
         button.set_focused(false, AnimationSettings::default());
         assert!(!button.background_color.is_active());
         assert!(!button.text_color.is_active());
-        assert_eq!(button.visible_background_color(), theme().border_fg());
+        assert_eq!(button.visible_background_color(), theme().surface_bg());
         assert_eq!(button.visible_text_color(), theme().text_fg());
     }
 

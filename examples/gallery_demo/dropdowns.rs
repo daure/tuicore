@@ -38,7 +38,6 @@ fn dropdown_items() -> Vec<DropdownDemoItem> {
 pub(crate) fn dropdown_fuzzy_single() -> Dropdown<DropdownDemoItem, &'static str> {
     Dropdown::single(dropdown_items(), |row| row.id, |row| row.label.to_string())
         .placeholder("Pick release lane...")
-        .selected_one("gamma")
         .label("Lane")
         .hotkey("1")
 }
@@ -65,6 +64,7 @@ pub(crate) fn dropdown_no_search_immediate() -> Dropdown<DropdownDemoItem, &'sta
 
 pub(crate) fn dropdown_filled_fuzzy_single() -> Dropdown<DropdownDemoItem, &'static str> {
     dropdown_fuzzy_single()
+        .selected_one("gamma")
         .variant(DropdownVariant::Filled)
         .label("Lane")
         .hotkey("4")

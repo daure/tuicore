@@ -333,6 +333,7 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
                 true,
             );
         }
+        ctx.set_focus_control(FocusId::new(DATE_PICKER_DROPDOWN_FOCUS), true);
         ctx.set_focus_receives_events_before_global_hotkeys(
             FocusId::new(DATE_PICKER_DROPDOWN_FOCUS),
             true,

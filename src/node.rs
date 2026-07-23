@@ -252,6 +252,7 @@ pub struct FocusTarget {
     pub area: Rect,
     pub enabled: bool,
     pub tab_stop: bool,
+    pub control: bool,
     pub hotkey: Option<KeyEvent>,
     pub hotkeys: Vec<KeyEvent>,
     pub hotkey_sequences: Vec<String>,
@@ -263,6 +264,8 @@ pub struct FocusTarget {
 pub enum FocusRequest {
     Next,
     Previous,
+    NextControl,
+    PreviousControl,
     Unfocus,
     FirstChild,
     FirstChildOf { path: TreePath, id: FocusId },
@@ -378,6 +381,14 @@ impl<M> EventCtx<M> {
 
     pub fn focus_previous(&mut self) {
         self.focus(FocusRequest::Previous);
+    }
+
+    pub fn focus_next_control(&mut self) {
+        self.focus(FocusRequest::NextControl);
+    }
+
+    pub fn focus_previous_control(&mut self) {
+        self.focus(FocusRequest::PreviousControl);
     }
 
     pub fn unfocus(&mut self) {
@@ -694,6 +705,7 @@ impl LayoutCtx {
             area,
             enabled,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
@@ -710,6 +722,7 @@ impl LayoutCtx {
         active: bool,
     ) {
         self.register_focusable(id.clone(), area, enabled);
+        self.set_focus_control(id.clone(), true);
         self.set_focus_text_entry_active(id, active);
     }
 
@@ -729,6 +742,7 @@ impl LayoutCtx {
             area,
             enabled,
             tab_stop: true,
+            control: false,
             hotkey: Some(hotkey),
             hotkeys: Vec::new(),
             hotkey_sequences: hotkey_sequence_from_event(hotkey).into_iter().collect(),
@@ -753,6 +767,7 @@ impl LayoutCtx {
             area,
             enabled,
             tab_stop: true,
+            control: false,
             hotkey: hotkeys.first().copied(),
             hotkey_sequences: hotkeys
                 .iter()
@@ -785,6 +800,7 @@ impl LayoutCtx {
             area,
             enabled,
             tab_stop: true,
+            control: false,
             hotkey: hotkeys.first().copied(),
             hotkeys,
             hotkey_sequences,
@@ -802,6 +818,7 @@ impl LayoutCtx {
         active: bool,
     ) {
         self.register_focusable_with_hotkey_sequences(id.clone(), area, enabled, hotkey_sequences);
+        self.set_focus_control(id.clone(), true);
         self.set_focus_text_entry_active(id, active);
     }
 
@@ -874,6 +891,19 @@ impl LayoutCtx {
             return false;
         };
         target.tab_stop = tab_stop;
+        true
+    }
+
+    pub fn set_focus_control(&mut self, id: FocusId, control: bool) -> bool {
+        let Some(target) = self
+            .focus_paths
+            .iter_mut()
+            .rev()
+            .find(|target| target.path == self.path && target.id == id)
+        else {
+            return false;
+        };
+        target.control = control;
         true
     }
 
@@ -1211,6 +1241,7 @@ impl FocusTarget {
             area: self.area,
             enabled: self.enabled,
             tab_stop: self.tab_stop,
+            control: self.control,
             hotkey: self.hotkey.clone(),
             hotkeys: self.hotkeys.clone(),
             hotkey_sequences: self.hotkey_sequences.clone(),
@@ -1368,6 +1399,21 @@ mod tests {
     }
 
     #[test]
+    fn text_entry_registration_marks_control_without_marking_plain_focus_targets() {
+        let mut ctx = LayoutCtx::new();
+        ctx.register_focusable(FocusId::new("content"), Rect::new(0, 0, 10, 1), true);
+        ctx.register_text_entry_focusable(
+            FocusId::new("input"),
+            Rect::new(0, 1, 10, 1),
+            true,
+            false,
+        );
+
+        assert!(!ctx.focus_targets()[0].control);
+        assert!(ctx.focus_targets()[1].control);
+    }
+
+    #[test]
     fn scoped_focus_events_first_marks_only_new_targets() {
         let mut ctx = LayoutCtx::new();
         ctx.register_focusable(FocusId::new("before"), Rect::new(0, 0, 1, 1), true);
@@ -1507,6 +1553,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),

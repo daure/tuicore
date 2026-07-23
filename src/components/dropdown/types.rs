@@ -1,5 +1,5 @@
 use crate::KeySpec;
-use crate::event::Key;
+use crate::event::{Key, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DropdownFocusRegion {
@@ -52,7 +52,10 @@ impl Default for DropdownActionKeys {
     fn default() -> Self {
         Self {
             open: vec![KeySpec::key(Key::Enter), KeySpec::plain(' ')],
-            commit: vec![KeySpec::key(Key::Enter)],
+            commit: vec![
+                KeySpec::key(Key::Enter),
+                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
+            ],
             toggle: vec![KeySpec::plain(' ')],
         }
     }

@@ -4,7 +4,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph as RatatuiParagraph, Wrap};
 
-use crate::{LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, line_width, theme};
+use crate::{
+    AxisProposal, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, line_width,
+    theme,
+};
 
 pub struct Header {
     text: String,
@@ -309,19 +312,26 @@ fn text_width(text: &str) -> usize {
 
 impl<M> TuiNode<M> for Paragraph {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        let width = self
+        let natural_width = self
             .text
             .lines()
             .map(|line| line_width(&Line::from(line)))
             .max()
             .unwrap_or(1)
             .min(u16::MAX as usize) as u16;
-        let mut height = self.text.split('\n').count();
-        if let Some(max_lines) = self.max_lines {
-            height = height.min(max_lines);
-        }
+        let width = match proposal.width {
+            AxisProposal::Unbounded => natural_width,
+            AxisProposal::AtMost(max) => natural_width.min(max),
+            AxisProposal::Exact(exact) => exact,
+        };
+        let max_lines = self.max_lines.unwrap_or(usize::MAX);
+        let height = if self.wrap && width > 0 {
+            wrapped_text_line_count(&self.text, width, max_lines).min(max_lines)
+        } else {
+            self.text.split('\n').count().min(max_lines)
+        };
         let height = height.min(u16::MAX as usize) as u16;
-        LayoutSizeHint::content(width.max(1), height).normalized(proposal)
+        LayoutSizeHint::content(width, height).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
@@ -415,5 +425,52 @@ mod tests {
         let hint = <Paragraph as TuiNode<()>>::measure(&paragraph, LayoutProposal::unbounded());
 
         assert_eq!(hint.preferred.height, 2);
+    }
+
+    #[test]
+    fn paragraph_measure_counts_wrapped_rows_at_bounded_width() {
+        let paragraph = Paragraph::new("alpha beta gamma");
+
+        let hint = <Paragraph as TuiNode<()>>::measure(
+            &paragraph,
+            LayoutProposal {
+                width: AxisProposal::AtMost(10),
+                height: AxisProposal::Unbounded,
+            },
+        );
+
+        assert_eq!(hint.preferred.width, 10);
+        assert_eq!(hint.preferred.height, 2);
+    }
+
+    #[test]
+    fn paragraph_measure_caps_wrapped_rows_to_max_lines() {
+        let paragraph = Paragraph::new("alpha beta gamma").max_lines(1);
+
+        let hint = <Paragraph as TuiNode<()>>::measure(
+            &paragraph,
+            LayoutProposal {
+                width: AxisProposal::AtMost(10),
+                height: AxisProposal::Unbounded,
+            },
+        );
+
+        assert_eq!(hint.preferred.height, 1);
+    }
+
+    #[test]
+    fn paragraph_measure_keeps_source_rows_when_wrapping_is_disabled() {
+        let paragraph = Paragraph::new("alpha beta gamma").wrap(false);
+
+        let hint = <Paragraph as TuiNode<()>>::measure(
+            &paragraph,
+            LayoutProposal {
+                width: AxisProposal::AtMost(10),
+                height: AxisProposal::Unbounded,
+            },
+        );
+
+        assert_eq!(hint.preferred.width, 10);
+        assert_eq!(hint.preferred.height, 1);
     }
 }

@@ -32,7 +32,7 @@ use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
     FocusRequest, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
     LifecycleCtx, Theme, ThemeName, TickResult, TreePath, TuiEvent, TuiNode,
-    hotkey_underline_style, keybindings, line_width, set_theme, theme,
+    hotkey_underline_style, keybindings, line_width, set_theme_and_persist, theme,
 };
 use crate::{KeyEvent, KeySpec};
 
@@ -647,7 +647,7 @@ where
     }
 
     fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
-        let action_bg = theme().border_fg();
+        let action_bg = theme().surface_bg();
         self.menu_trigger
             .render_with_inactive_background(frame, self.areas.menu, action_bg);
         self.ai
@@ -1155,7 +1155,7 @@ fn theme_dropdown() -> Dropdown<ThemeChoice, ThemeName> {
     .max_popup_height(12)
     .on_select(|ids| {
         if let Some(name) = ids.first() {
-            set_theme(Theme::named(*name));
+            let _ = set_theme_and_persist(Theme::named(*name));
         }
     })
 }
@@ -1174,7 +1174,7 @@ fn status_segment_width(label: &str) -> u16 {
 const STATUS_ACTION_TAIL_WIDTH: u16 = 1;
 
 fn status_action_tail() -> Line<'static> {
-    Line::from(Span::styled("", Style::default().fg(theme().border_fg())))
+    Line::from(Span::styled("", Style::default().fg(theme().surface_bg())))
 }
 
 fn status_segment_line(
@@ -1271,6 +1271,40 @@ mod tests {
     use super::*;
     use crate::components::weather_provider::WeatherFetchError;
     use crate::{FocusId, FocusRequest, Key, Propagation, TreePath, TuiEvent};
+
+    #[test]
+    fn action_segments_use_surface_background_role() {
+        let mut status = StatusBar::<()>::new();
+        let area = Rect::new(0, 0, 80, 1);
+        status.layout(area, &mut LayoutCtx::new());
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                <StatusBar<()> as TuiNode<()>>::render(
+                    &status,
+                    frame,
+                    area,
+                    &mut crate::RenderCtx::new(),
+                );
+            })
+            .expect("status bar should render");
+
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((status.areas.menu.x, status.areas.menu.y))
+                .expect("menu cell should exist")
+                .bg,
+            theme().surface_bg()
+        );
+        assert_eq!(
+            status_action_tail().spans[0].style.fg,
+            Some(theme().surface_bg())
+        );
+    }
 
     #[test]
     fn footer_hotkeys_are_focus_targets_but_default_weather_is_not_dead_focus() {

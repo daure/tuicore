@@ -164,6 +164,8 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
         let [date_area, time_area] = self.areas(area);
         ctx.register_focusable(FocusId::new("date-time-picker-date"), date_area, true);
         ctx.register_focusable(FocusId::new("date-time-picker-time"), time_area, true);
+        ctx.set_focus_control(FocusId::new("date-time-picker-date"), true);
+        ctx.set_focus_control(FocusId::new("date-time-picker-time"), true);
         ctx.set_focus_receives_events_before_global_hotkeys(
             FocusId::new("date-time-picker-date"),
             true,

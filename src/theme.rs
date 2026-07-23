@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, fmt, fs, path::PathBuf, str::FromStr};
+use std::{
+    collections::BTreeMap,
+    fmt, fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use ratatui::style::Color;
 
@@ -1126,13 +1132,59 @@ fn parse_hex_pair(pair: &str, original: &str) -> Result<u8, ThemeError> {
         .map_err(|_| ThemeError(format!("Theme color `{original}` contains invalid hex")))
 }
 
-fn theme_path() -> Option<PathBuf> {
+pub(crate) fn theme_path() -> Option<PathBuf> {
     config_dir().map(|path| path.join("tui.toml"))
+}
+
+pub(crate) fn persist_theme_name_to_path(
+    name: ThemeName,
+    path: impl AsRef<Path>,
+) -> Result<(), ThemeError> {
+    let path = path.as_ref();
+    let mut config = match fs::read_to_string(path) {
+        Ok(text) => text
+            .parse::<toml::Table>()
+            .map_err(|error| ThemeError(format!("Theme config could not be read: {error}")))?,
+        Err(error) if error.kind() == ErrorKind::NotFound => toml::Table::new(),
+        Err(error) => {
+            return Err(ThemeError(format!(
+                "Theme config could not be opened: {error}"
+            )));
+        }
+    };
+    config.insert(
+        "theme".to_string(),
+        toml::Value::String(name.id().to_string()),
+    );
+    let text = toml::to_string_pretty(&config)
+        .map_err(|error| ThemeError(format!("Theme config could not be written: {error}")))?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            ThemeError(format!(
+                "Theme config directory could not be created: {error}"
+            ))
+        })?;
+    }
+    fs::write(path, text)
+        .map_err(|error| ThemeError(format!("Theme config could not be written: {error}")))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    fn temp_theme_path() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("tuicore-theme-{nonce}/tui.toml"))
+    }
 
     #[test]
     fn set_role_updates_public_theme_color() {
@@ -1143,6 +1195,36 @@ mod tests {
             .expect("role should update");
 
         assert_eq!(theme.accent_fg(), Color::Rgb(0x11, 0x22, 0x33));
+    }
+
+    #[test]
+    fn persisted_theme_name_survives_reload_without_discarding_other_config() {
+        let path = temp_theme_path();
+        fs::create_dir_all(path.parent().unwrap()).expect("temp config directory should build");
+        fs::write(
+            &path,
+            "theme = \"vercel\"\n\n[colors]\naccent_fg = \"#112233\"\n\n[tabs]\nvariant = \"boxed\"\n",
+        )
+        .expect("initial config should write");
+
+        persist_theme_name_to_path(ThemeName::Dracula, &path)
+            .expect("theme selection should persist");
+
+        let saved = fs::read_to_string(&path).expect("saved config should read");
+        let table = saved
+            .parse::<toml::Table>()
+            .expect("saved config should parse");
+        assert_eq!(table["theme"].as_str(), Some("dracula"));
+        assert_eq!(table["colors"]["accent_fg"].as_str(), Some("#112233"));
+        assert_eq!(table["tabs"]["variant"].as_str(), Some("boxed"));
+        assert_eq!(
+            Theme::load_from_path(&path)
+                .expect("saved theme should reload")
+                .name(),
+            ThemeName::Dracula
+        );
+
+        fs::remove_dir_all(path.parent().unwrap()).expect("temp config should clean up");
     }
 
     #[test]

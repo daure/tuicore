@@ -331,8 +331,8 @@ where
     fn highlighted_row_style(&self) -> Style {
         let theme = theme();
         Style::default()
-            .fg(theme.highlight_fg())
-            .bg(theme.highlight_bg())
+            .fg(theme.text_fg())
+            .bg(theme.surface_bg())
             .add_modifier(Modifier::BOLD)
     }
 
@@ -351,12 +351,19 @@ where
     ) -> Vec<Option<ViewCellArea>> {
         column_widths
             .iter()
+            .enumerate()
             .scan(0usize, |x, width| {
+                let (index, width) = width;
                 let width = (*width).min(u16::MAX as usize);
+                let padding = if index + 1 == column_widths.len() {
+                    0
+                } else {
+                    CELL_RIGHT_PADDING
+                };
                 let cell = Rect::new(
                     (*x).min(u16::MAX as usize) as u16,
                     viewport.y,
-                    width.saturating_sub(CELL_RIGHT_PADDING) as u16,
+                    width.saturating_sub(padding) as u16,
                     viewport.height,
                 );
                 *x = x.saturating_add(width);

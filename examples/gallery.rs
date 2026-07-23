@@ -18,8 +18,7 @@ use gallery_demo::dropdowns::{
 use gallery_demo::forms::{FormControlId, ValidatedForm};
 use gallery_demo::inputs::{
     button_layout, chip_layout, date_time_showcase_layout, password_input_showcase_layout,
-    text_input_showcase_layout, textarea_showcase_layout, toggle_layout,
-    typography_showcase_layout,
+    text_input_showcase_layout, textarea_showcase_layout, toggle_layout, typography_showcase,
 };
 use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
@@ -75,13 +74,12 @@ use tuicore::{
     DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, DialogBackdrop,
     DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
     Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusRequest,
-    FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key,
-    KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, Menu, MenuItem,
-    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
-    ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
-    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput,
-    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
-    TreeAdapter, TreePath, TuiEvent, TuiNode,
+    FocusTarget, Grid, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent,
+    KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, Menu, MenuItem, ModalCloseReason, Overlay,
+    Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx, SelectionMode,
+    SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem, StoreLogEntry,
+    StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput, TickResult, TimePicker,
+    TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -158,8 +156,7 @@ fn main() -> tuicore::Result<()> {
         .backdrop(DialogBackdrop::dim().amount(0.45));
     let confirmation = DialogLayer::new(store_view, gallery_confirmation_dialog())
         .active(false)
-        .layer_percent(32)
-        .layer_cross_percent(60)
+        .fit_content()
         .placement(DialogLayerPlacement::Center)
         .backdrop(DialogBackdrop::dim().amount(0.55));
 
@@ -712,9 +709,7 @@ struct PreviewState {
     text_input_disabled: TextInput<Msg>,
     password_input: PasswordInput<Msg>,
     password_panel: PasswordInput<Msg>,
-    header_plain: Header,
-    header_icon: Header,
-    paragraph: TuiParagraph,
+    typography: Flex<Msg>,
     textarea_input: TextareaInput<Msg>,
     textarea_panel: TextareaInput<Msg>,
     textarea_disabled: TextareaInput<Msg>,
@@ -835,13 +830,7 @@ impl PreviewState {
                 .placeholder("Nested secret")
                 .hotkey("pp")
                 .style(InputChrome::panel("Secret")),
-            header_plain: Header::new("Release Notes"),
-            header_icon: Header::new("Settings").icon(""),
-            paragraph: TuiParagraph::new(
-                "Paragraphs render wrapped body copy for explanatory text, help panels, and quiet content blocks. This one is intentionally longer than its preview box so the ellipsis overflow behavior is visible without needing a separate gallery entry.",
-            )
-            .overflow(ParagraphOverflow::Ellipsis)
-            .max_lines(1),
+            typography: typography_showcase(),
             textarea_input: TextareaInput::new()
                 .placeholder("Write 2-4 rows...")
                 .value("First line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line scrolls")
@@ -1021,16 +1010,7 @@ impl PreviewState {
                 });
             }
             PreviewKind::Typography => {
-                let [_, plain, icon, _, paragraph] = typography_showcase_layout(area);
-                ctx.push_slot(header_plain_child_key(), plain, |ctx| {
-                    <Header as TuiNode<Msg>>::layout(&mut self.header_plain, plain, ctx);
-                });
-                ctx.push_slot(header_icon_child_key(), icon, |ctx| {
-                    <Header as TuiNode<Msg>>::layout(&mut self.header_icon, icon, ctx);
-                });
-                ctx.push_slot(paragraph_child_key(), paragraph, |ctx| {
-                    <TuiParagraph as TuiNode<Msg>>::layout(&mut self.paragraph, paragraph, ctx);
-                });
+                self.typography.layout(area, ctx);
             }
             PreviewKind::TextareaInput => {
                 let [_, input, panel, disabled] = textarea_showcase_layout(area);
@@ -1236,7 +1216,7 @@ impl PreviewState {
             PreviewKind::NotificationTriggers => self.render_notification_triggers(frame, area),
             PreviewKind::TextInput => self.render_text_input(frame, area),
             PreviewKind::PasswordInput => self.render_password_input(frame, area),
-            PreviewKind::Typography => self.render_typography(frame, area),
+            PreviewKind::Typography => self.render_typography(frame, area, ctx),
             PreviewKind::Colors => self.render_colors(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
             PreviewKind::DateTimePicker => self.render_date_time(frame, area, ctx),
@@ -2432,21 +2412,8 @@ impl PreviewState {
         );
     }
 
-    fn render_typography(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, plain, icon, paragraph_label, paragraph] =
-            typography_showcase_layout(area);
-        frame.render_widget(
-            Paragraph::new(
-                "Typography renders semantic text primitives.\n\
-                 Headers support plain labels and Nerd Font icons.\n\
-                 Paragraphs can wrap, clip, or ellipsize overflowing copy.",
-            ),
-            instructions,
-        );
-        self.header_plain.render(frame, plain);
-        self.header_icon.render(frame, icon);
-        frame.render_widget(Paragraph::new("Paragraph with ellipsis:"), paragraph_label);
-        self.paragraph.render(frame, paragraph);
+    fn render_typography<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.typography.render(frame, area, ctx);
     }
 
     fn render_colors(&self, frame: &mut Frame, area: Rect) {
@@ -3239,18 +3206,6 @@ fn password_input_child_key() -> ChildKey {
 
 fn password_panel_child_key() -> ChildKey {
     ChildKey::new("password-panel")
-}
-
-fn header_plain_child_key() -> ChildKey {
-    ChildKey::new("header-plain")
-}
-
-fn header_icon_child_key() -> ChildKey {
-    ChildKey::new("header-icon")
-}
-
-fn paragraph_child_key() -> ChildKey {
-    ChildKey::new("paragraph")
 }
 
 fn textarea_input_child_key() -> ChildKey {

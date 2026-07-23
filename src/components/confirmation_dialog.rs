@@ -317,6 +317,31 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_dialog_inherits_wrapping_and_width_aware_measurement() {
+        let dialog = ConfirmationDialog::<()>::new("Continue?", "one two three four five six");
+        let wide = dialog.measure(LayoutProposal {
+            width: crate::AxisProposal::AtMost(30),
+            height: crate::AxisProposal::Unbounded,
+        });
+        let narrow = dialog.measure(LayoutProposal {
+            width: crate::AxisProposal::AtMost(14),
+            height: crate::AxisProposal::Unbounded,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("confirmation dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let second_body_row = (0..20)
+            .map(|x| buffer.cell((x, 2)).unwrap().symbol())
+            .collect::<String>();
+        assert!(narrow.preferred.height > wide.preferred.height);
+        assert!(second_body_row.contains("five six"), "{second_body_row}");
+    }
+
+    #[test]
     fn close_key_emits_closed_outcome() {
         let mut dialog =
             ConfirmationDialog::new("Continue?", "Choose an action").on_outcome(|outcome| outcome);

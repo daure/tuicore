@@ -9,8 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use super::super::text_input::placeholder_line;
 use super::util::{bounded_title, connected_popup_border_set};
 use super::{
-    DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownFocusRegion, DropdownLabelPosition,
-    DropdownVariant,
+    DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownLabelPosition, DropdownVariant,
 };
 use crate::{
     BorderKind, HotkeyLabelMode, OverlayLayer, border_set, hotkey_badge_width, hotkey_edge_spans,
@@ -153,9 +152,9 @@ where
                 &self.empty_summary(),
                 None,
                 text_area.width as usize,
-                self.focus_region == Some(DropdownFocusRegion::Field),
+                false,
                 None,
-                self.field_cursor_fade.style(placeholder_style),
+                placeholder_style,
                 placeholder_style,
             )
         } else {
@@ -232,9 +231,9 @@ where
                     &self.empty_summary(),
                     None,
                     text_area.width as usize,
-                    self.focus_region == Some(DropdownFocusRegion::Field),
+                    false,
                     None,
-                    self.field_cursor_fade.style(text_style),
+                    text_style,
                     text_style,
                 )
             } else {
@@ -393,7 +392,7 @@ where
     }
 
     pub(super) fn popup_content_style(&self) -> Option<Style> {
-        (self.variant == DropdownVariant::Filled).then(|| Style::default().bg(theme().border_fg()))
+        (self.variant == DropdownVariant::Filled).then(|| Style::default().bg(theme().surface_bg()))
     }
 
     fn render_title(

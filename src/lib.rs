@@ -105,7 +105,7 @@ pub use store::{
 pub use theme::{Theme, ThemeName};
 pub use ui::{
     UiInitError, animation_settings, init, init_from_dir, keybindings, preset, set_keybindings,
-    set_preset, set_theme, theme, try_init, try_init_from_dir,
+    set_preset, set_theme, set_theme_and_persist, theme, try_init, try_init_from_dir,
 };
 
 #[cfg(test)]

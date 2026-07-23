@@ -111,8 +111,14 @@ where
         configured
             .into_iter()
             .zip(rendered)
-            .map(|(configured, rendered)| {
-                configured.max(rendered.saturating_add(CELL_RIGHT_PADDING))
+            .enumerate()
+            .map(|(index, (configured, rendered))| {
+                let padding = if index + 1 == self.columns.len() {
+                    0
+                } else {
+                    CELL_RIGHT_PADDING
+                };
+                configured.max(rendered.saturating_add(padding))
             })
             .collect()
     }

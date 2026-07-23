@@ -327,6 +327,42 @@ fn enter_commits_single_draft() {
 }
 
 #[test]
+fn ctrl_enter_commits_single_draft() {
+    let mut dropdown = single_dropdown();
+
+    dropdown.open();
+    dropdown.on_key(ctrl('j'), AREA);
+    dropdown.on_key(
+        KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        },
+        AREA,
+    );
+
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+    assert!(!dropdown.is_open());
+}
+
+#[test]
+fn focused_empty_dropdown_does_not_render_field_cursor() {
+    let mut dropdown = single_dropdown().placeholder("Pick...");
+    dropdown.focus_region = Some(DropdownFocusRegion::Field);
+    let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    let first = buffer.cell((1, 1)).unwrap();
+    let second = buffer.cell((2, 1)).unwrap();
+    assert_eq!(first.fg, second.fg);
+    assert_eq!(first.bg, second.bg);
+    assert_eq!(first.modifier, second.modifier);
+}
+
+#[test]
 fn ctrl_d_and_ctrl_u_page_navigate_defaults() {
     let mut dropdown = single_dropdown();
 
@@ -339,18 +375,28 @@ fn ctrl_d_and_ctrl_u_page_navigate_defaults() {
 }
 
 #[test]
-fn closed_ctrl_j_and_ctrl_k_open_with_navigating() {
-    let mut dropdown = single_dropdown();
-    let outcome = dropdown.on_key(ctrl('j'), AREA);
-    assert!(outcome.opened);
-    assert!(dropdown.is_open());
-    assert_eq!(dropdown.data_view.highlighted_id(), Some("Beta"));
+fn closed_ctrl_j_and_ctrl_k_do_not_open_or_navigate() {
+    for key in [ctrl('j'), ctrl('k')] {
+        let mut dropdown = single_dropdown();
 
+        let outcome = dropdown.on_key(key, AREA);
+
+        assert_eq!(outcome, DropdownOutcome::IDLE);
+        assert!(!dropdown.is_open());
+        assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
+    }
+}
+
+#[test]
+fn open_ctrl_j_and_ctrl_k_navigate_items() {
     let mut dropdown = single_dropdown();
-    let outcome = dropdown.on_key(ctrl('k'), AREA);
-    assert!(outcome.opened);
-    assert!(dropdown.is_open());
+    dropdown.open();
+
+    assert!(dropdown.on_key(ctrl('j'), AREA).handled);
+    assert_eq!(dropdown.data_view.highlighted_id(), Some("Beta"));
+    assert!(dropdown.on_key(ctrl('k'), AREA).handled);
     assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
+    assert!(dropdown.is_open());
 }
 
 #[test]
@@ -1366,6 +1412,22 @@ fn open_search_dropdown_suppresses_global_hotkeys_on_field_focus() {
 }
 
 #[test]
+fn open_non_search_dropdown_suppresses_global_control_traversal() {
+    let mut dropdown = single_dropdown().search_mode(DropdownSearchMode::None);
+    dropdown.open();
+    let mut ctx = LayoutCtx::new();
+
+    <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut ctx);
+
+    let target = ctx
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == FIELD_FOCUS)
+        .expect("field focus target");
+    assert!(target.suppress_global_hotkeys);
+}
+
+#[test]
 fn open_layout_focus_targets_use_overlay_popup_areas() {
     let mut dropdown = single_dropdown();
     dropdown.open();
@@ -1650,10 +1712,10 @@ fn filled_popup_applies_background_to_content_rows() {
     let buffer = terminal.backend().buffer();
     assert_eq!(
         dropdown.popup_content_style().unwrap().bg,
-        Some(theme().border_fg())
+        Some(theme().surface_bg())
     );
     assert_eq!(buffer.cell((0, 3)).unwrap().symbol(), "B");
-    assert_eq!(buffer.cell((0, 3)).unwrap().bg, theme().border_fg());
+    assert_eq!(buffer.cell((0, 3)).unwrap().bg, theme().surface_bg());
 }
 
 #[test]

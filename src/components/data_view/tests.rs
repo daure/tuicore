@@ -585,7 +585,7 @@ fn horizontal_scroll_offsets_rendered_cells() {
 }
 
 #[test]
-fn cells_have_one_character_of_right_padding() {
+fn cells_have_right_padding_except_for_the_last_column() {
     let view = DataView::new([Row::new(1, "A")], |row| row.id)
         .columns([
             Column::text("first", "X", Constraint::Length(1), |row: &Row| {
@@ -594,20 +594,20 @@ fn cells_have_one_character_of_right_padding() {
             Column::text("second", "Y", Constraint::Length(1), |_| String::from("B")),
         ])
         .headers(true);
-    let mut terminal = Terminal::new(TestBackend::new(4, 2)).expect("terminal should build");
+    let mut terminal = Terminal::new(TestBackend::new(3, 2)).expect("terminal should build");
 
     terminal
-        .draw(|frame| view.render(frame, Rect::new(0, 0, 4, 2)))
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 3, 2)))
         .expect("data view should render");
 
     let buffer = terminal.backend().buffer();
     let line = |y| {
-        (0..4)
+        (0..3)
             .map(|x| buffer.cell((x, y)).unwrap().symbol())
             .collect::<String>()
     };
-    assert_eq!(line(0), "X Y ");
-    assert_eq!(line(1), "A B ");
+    assert_eq!(line(0), "X Y");
+    assert_eq!(line(1), "A B");
 }
 
 #[test]
@@ -1008,7 +1008,7 @@ fn horizontal_scroll_extent_uses_rendered_content_width() {
         );
     }
 
-    assert_eq!(view.scroll.offset().x, 6);
+    assert_eq!(view.scroll.offset().x, 5);
 }
 
 #[test]
@@ -1049,8 +1049,8 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
 
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, theme.highlight_fg());
-    assert_eq!(cell.bg, theme.highlight_bg());
+    assert_eq!(cell.fg, theme.text_fg());
+    assert_eq!(cell.bg, theme.surface_bg());
 }
 
 #[test]
@@ -1074,7 +1074,7 @@ fn highlighted_row_preserves_explicit_rich_cell_foreground() {
 
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     assert_eq!(cell.fg, semantic_color);
-    assert_eq!(cell.bg, crate::theme().highlight_bg());
+    assert_eq!(cell.bg, crate::theme().surface_bg());
 }
 
 #[test]
@@ -1098,8 +1098,8 @@ fn previous_highlight_background_is_cleared_after_navigation() {
     let theme = crate::theme();
     let old_highlight_cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     let current_highlight_cell = terminal.backend().buffer().cell((0, 1)).unwrap();
-    assert_ne!(old_highlight_cell.bg, theme.highlight_bg());
-    assert_eq!(current_highlight_cell.bg, theme.highlight_bg());
+    assert_ne!(old_highlight_cell.bg, theme.surface_bg());
+    assert_eq!(current_highlight_cell.bg, theme.surface_bg());
 }
 
 #[test]
@@ -1117,9 +1117,9 @@ fn inactive_highlight_does_not_style_row() {
 
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_ne!(cell.fg, theme.highlight_fg());
-    assert_ne!(cell.fg, theme.highlight_bg());
-    assert_ne!(cell.bg, theme.highlight_bg());
+    assert_ne!(cell.fg, theme.text_fg());
+    assert_ne!(cell.fg, theme.surface_bg());
+    assert_ne!(cell.bg, theme.surface_bg());
 }
 
 #[test]
@@ -1954,7 +1954,7 @@ fn selection_prefix_contributes_render_width_and_shows_indeterminate_glyph() {
         .selected([4])
         .expanded([1]);
 
-    assert_eq!(view.column_widths(1), vec![18]);
+    assert_eq!(view.column_widths(1), vec![17]);
 
     let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
     terminal

@@ -7,15 +7,17 @@ use ratatui::widgets::Borders;
 
 use crate::event::TuiEvent;
 use crate::{
-    AnimationSettings, AnimationSpec, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
-    FocusId, FocusRequest, FocusTarget, HitRegion, LayoutCtx, LayoutResult, LifecycleCtx,
-    OverlayLayer, OverlaySpec, TickResult, TreePath, TuiNode, Tween, lerp_color, theme,
+    AnimationSettings, AnimationSpec, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute,
+    FocusCtx, FocusId, FocusRequest, FocusTarget, HintSource, HitRegion, LayoutCtx, LayoutProposal,
+    LayoutResult, LifecycleCtx, OverlayLayer, OverlaySpec, TickResult, TreePath, TuiNode, Tween,
+    lerp_color, theme,
 };
 
 use super::dialog::DIALOG_FOCUS;
 
 const BACKDROP_BACKGROUND_DIM_FACTOR: f64 = 0.35;
 const MODAL_OVERLAY_ID: u64 = 0;
+const DEFAULT_FIT_CONTENT_MAX_WIDTH: u16 = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DialogBackdrop {
@@ -31,6 +33,9 @@ pub struct DialogLayer<Base, Layer> {
     layer_percent: u16,
     layer_cross_percent: u16,
     layer_edge_offset: u16,
+    fit_content: bool,
+    fit_content_max_width: u16,
+    fit_content_max_height: u16,
     placement: DialogLayerPlacement,
     base_rect: Rect,
     layer_rect: Rect,
@@ -187,6 +192,9 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             layer_percent: 100,
             layer_cross_percent: 100,
             layer_edge_offset: 0,
+            fit_content: false,
+            fit_content_max_width: DEFAULT_FIT_CONTENT_MAX_WIDTH,
+            fit_content_max_height: u16::MAX,
             placement: DialogLayerPlacement::Center,
             base_rect: Rect::default(),
             layer_rect: Rect::default(),
@@ -283,21 +291,42 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
     }
 
     pub fn layer_percent(mut self, percent: u16) -> Self {
-        self.layer_percent = percent.clamp(1, 100);
+        self.set_layer_percent(percent);
         self
     }
 
     pub fn set_layer_percent(&mut self, percent: u16) {
         self.layer_percent = percent.clamp(1, 100);
+        self.fit_content = false;
     }
 
     pub fn layer_cross_percent(mut self, percent: u16) -> Self {
-        self.layer_cross_percent = percent.clamp(1, 100);
+        self.set_layer_cross_percent(percent);
         self
     }
 
     pub fn set_layer_cross_percent(&mut self, percent: u16) {
         self.layer_cross_percent = percent.clamp(1, 100);
+        self.fit_content = false;
+    }
+
+    pub fn fit_content(mut self) -> Self {
+        self.set_fit_content(true);
+        self
+    }
+
+    pub fn set_fit_content(&mut self, fit_content: bool) {
+        self.fit_content = fit_content;
+    }
+
+    pub fn fit_content_max(mut self, width: u16, height: u16) -> Self {
+        self.set_fit_content_max(width, height);
+        self
+    }
+
+    pub fn set_fit_content_max(&mut self, width: u16, height: u16) {
+        self.fit_content_max_width = width.max(1);
+        self.fit_content_max_height = height.max(1);
     }
 
     pub fn placement(mut self, placement: DialogLayerPlacement) -> Self {
@@ -320,6 +349,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
         self.layer_percent = spec.main_percent();
         self.layer_cross_percent = spec.cross_percent_value();
         self.layer_edge_offset = spec.edge_offset_value();
+        self.fit_content = false;
     }
 
     pub fn backdrop(mut self, backdrop: DialogBackdrop) -> Self {
@@ -430,13 +460,23 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.base_rect = area;
-        self.layer_rect = layer_rect(
-            area,
-            self.layer_percent,
-            self.layer_cross_percent,
-            self.placement,
-            self.layer_edge_offset,
-        );
+        self.layer_rect = if self.fit_content {
+            let (width, height) = fit_content_size::<Layer, M>(
+                &self.layer,
+                area,
+                self.fit_content_max_width,
+                self.fit_content_max_height,
+            );
+            place_sized_rect(area, width, height, self.placement, self.layer_edge_offset)
+        } else {
+            layer_rect(
+                area,
+                self.layer_percent,
+                self.layer_cross_percent,
+                self.placement,
+                self.layer_edge_offset,
+            )
+        };
         self.layer_path = ctx.current_path().child(ChildKey::second());
 
         if self.active {
@@ -677,6 +717,62 @@ fn blend_cell_color(color: Color, fallback: Color, backdrop: Color, amount: f64)
     }
 }
 
+fn fit_content_size<Layer, M>(
+    layer: &Layer,
+    area: Rect,
+    max_width: u16,
+    max_height: u16,
+) -> (u16, u16)
+where
+    Layer: TuiNode<M>,
+{
+    let available_width = area.width.min(max_width);
+    let available_height = area.height.min(max_height);
+    let hint = layer.measure(LayoutProposal {
+        width: AxisProposal::AtMost(available_width),
+        height: AxisProposal::AtMost(available_height),
+    });
+    if hint.source == HintSource::LegacyUnmeasured {
+        ((available_width > 0) as u16, (available_height > 0) as u16)
+    } else {
+        (
+            hint.preferred.width.min(available_width),
+            hint.preferred.height.min(available_height),
+        )
+    }
+}
+
+fn place_sized_rect(
+    area: Rect,
+    width: u16,
+    height: u16,
+    placement: DialogLayerPlacement,
+    edge_offset: u16,
+) -> Rect {
+    let centered_x = area.x + area.width.saturating_sub(width) / 2;
+    let centered_y = area.y + area.height.saturating_sub(height) / 2;
+    let (x, y) = match placement {
+        DialogLayerPlacement::Center => (centered_x, centered_y),
+        DialogLayerPlacement::Top => (centered_x, area.y.saturating_add(edge_offset)),
+        DialogLayerPlacement::Bottom => (
+            centered_x,
+            area.bottom()
+                .saturating_sub(height)
+                .saturating_sub(edge_offset)
+                .max(area.y),
+        ),
+        DialogLayerPlacement::Left => (area.x.saturating_add(edge_offset), centered_y),
+        DialogLayerPlacement::Right => (
+            area.right()
+                .saturating_sub(width)
+                .saturating_sub(edge_offset)
+                .max(area.x),
+            centered_y,
+        ),
+    };
+    Rect::new(x, y, width, height)
+}
+
 fn centered_percent_rect(area: Rect, percent: u16) -> Rect {
     let percent = percent.clamp(1, 100);
     let width = scaled_dimension(area.width, percent).max((area.width > 0) as u16);
@@ -803,6 +899,11 @@ mod tests {
 
     struct StaticBody;
 
+    struct MeasuredBody {
+        width: u16,
+        height: u16,
+    }
+
     #[derive(Default)]
     struct ChromeBody {
         borders: Option<Borders>,
@@ -828,6 +929,24 @@ mod tests {
     }
 
     impl TuiNode<()> for StaticBody {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame,
+            _area: Rect,
+            _ctx: &mut crate::RenderCtx<'_>,
+        ) {
+        }
+    }
+
+    impl TuiNode<()> for MeasuredBody {
+        fn measure(&self, proposal: LayoutProposal) -> crate::LayoutSizeHint {
+            crate::LayoutSizeHint::content(self.width, self.height).normalized(proposal)
+        }
+
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
         }
@@ -1191,6 +1310,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
@@ -1203,6 +1323,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
@@ -1243,6 +1364,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
@@ -1255,6 +1377,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
@@ -1280,6 +1403,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),
@@ -1315,6 +1439,112 @@ mod tests {
             layer_rect(area, 30, 80, DialogLayerPlacement::Right, 0),
             Rect::new(80, 25, 30, 40)
         );
+    }
+
+    #[test]
+    fn fit_content_layer_matches_child_measurement_and_stays_centered() {
+        let mut dialog_layer = DialogLayer::new(
+            StaticBody,
+            MeasuredBody {
+                width: 12,
+                height: 5,
+            },
+        )
+        .fit_content();
+
+        dialog_layer.layout(Rect::new(10, 20, 40, 15), &mut LayoutCtx::new());
+
+        assert_eq!(dialog_layer.layer_rect, Rect::new(24, 25, 12, 5));
+    }
+
+    #[test]
+    fn fit_content_layer_honors_edge_placements_with_parent_origin() {
+        let area = Rect::new(10, 20, 40, 15);
+        let expected = [
+            (DialogLayerPlacement::Top, Rect::new(24, 20, 12, 5)),
+            (DialogLayerPlacement::Bottom, Rect::new(24, 30, 12, 5)),
+            (DialogLayerPlacement::Left, Rect::new(10, 25, 12, 5)),
+            (DialogLayerPlacement::Right, Rect::new(38, 25, 12, 5)),
+        ];
+
+        for (placement, expected_rect) in expected {
+            let mut dialog_layer = DialogLayer::new(
+                StaticBody,
+                MeasuredBody {
+                    width: 12,
+                    height: 5,
+                },
+            )
+            .fit_content()
+            .placement(placement);
+
+            dialog_layer.layout(area, &mut LayoutCtx::new());
+
+            assert_eq!(dialog_layer.layer_rect, expected_rect);
+        }
+    }
+
+    #[test]
+    fn fit_content_layer_measures_hosted_dialog_chrome_and_child() {
+        let hosted = Dialog::<()>::new()
+            .keybindings(crate::DialogKeyBindings { close: Vec::new() })
+            .top_left("Title")
+            .actions([crate::DialogAction::new("Confirm").hotkey(crate::KeySpec::plain('c'))])
+            .content_padding(crate::Padding::all(1))
+            .host(MeasuredBody {
+                width: 2,
+                height: 5,
+            });
+        let mut dialog_layer = DialogLayer::new(StaticBody, hosted).fit_content();
+
+        dialog_layer.layout(Rect::new(0, 0, 40, 15), &mut LayoutCtx::new());
+
+        assert_eq!(dialog_layer.layer_rect, Rect::new(11, 3, 17, 9));
+    }
+
+    #[test]
+    fn fit_content_layer_respects_maximums_and_small_terminal_bounds() {
+        let mut capped = DialogLayer::new(
+            StaticBody,
+            MeasuredBody {
+                width: 100,
+                height: 50,
+            },
+        )
+        .fit_content()
+        .fit_content_max(30, 8);
+        capped.layout(Rect::new(0, 0, 80, 24), &mut LayoutCtx::new());
+        assert_eq!(capped.layer_rect, Rect::new(25, 8, 30, 8));
+
+        capped.layout(Rect::new(3, 4, 10, 3), &mut LayoutCtx::new());
+        assert_eq!(capped.layer_rect, Rect::new(3, 4, 10, 3));
+    }
+
+    #[test]
+    fn percentage_and_docked_configuration_disable_fit_content_sizing() {
+        let mut percentage = DialogLayer::new(
+            StaticBody,
+            MeasuredBody {
+                width: 3,
+                height: 2,
+            },
+        )
+        .fit_content()
+        .layer_percent(50);
+        percentage.layout(Rect::new(0, 0, 20, 10), &mut LayoutCtx::new());
+        assert_eq!(percentage.layer_rect, Rect::new(5, 2, 10, 5));
+
+        let mut docked = DialogLayer::new(
+            StaticBody,
+            MeasuredBody {
+                width: 3,
+                height: 2,
+            },
+        )
+        .fit_content()
+        .dock(DockSpec::bottom(40).cross_percent(80));
+        docked.layout(Rect::new(10, 20, 100, 50), &mut LayoutCtx::new());
+        assert_eq!(docked.layer_rect, Rect::new(20, 50, 80, 20));
     }
 
     #[test]

@@ -904,6 +904,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: Vec::new(),

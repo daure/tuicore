@@ -557,7 +557,8 @@ where
                 );
                 let external_editor = effects.external_editor.clone();
                 let clipboard = effects.clipboard.clone();
-                let focus_request = focus_request_from_event(&event, &effects);
+                let focus_request =
+                    focus_request_from_event(&event, &effects, suppress_global_hotkeys);
                 let handled = effects.outcome.handled();
                 flags.merge(self.handle_effects(effects));
                 if flags.focus_request.is_none() {
@@ -714,7 +715,10 @@ where
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
         let external_editor = effects.external_editor.clone();
         let clipboard = effects.clipboard.clone();
-        let focus_request = focus_request_from_event(&event, &effects);
+        let suppress_global_hotkeys = focus_manager
+            .current()
+            .is_some_and(|target| target.suppress_global_hotkeys);
+        let focus_request = focus_request_from_event(&event, &effects, suppress_global_hotkeys);
         flags.merge(self.handle_effects(effects));
         if flags.focus_request.is_none() {
             flags.focus_request = focus_request;
@@ -1150,17 +1154,27 @@ fn editor_exit_position(
 fn focus_request_from_event<M>(
     event: &TuiEvent,
     effects: &DispatchEffects<M>,
+    suppress_global_hotkeys: bool,
 ) -> Option<FocusRequest> {
     let bindings = keybindings();
-    focus_request_from_event_with_bindings(event, effects, bindings.focus())
+    focus_request_from_event_with_bindings(
+        event,
+        effects,
+        bindings.focus(),
+        suppress_global_hotkeys,
+    )
 }
 
 fn focus_request_from_event_with_bindings<M>(
     event: &TuiEvent,
     effects: &DispatchEffects<M>,
     focus: &FocusKeyBindings,
+    suppress_global_hotkeys: bool,
 ) -> Option<FocusRequest> {
-    if effects.propagation == Propagation::Stopped || effects.focus_request.is_some() {
+    if effects.outcome.handled()
+        || effects.propagation == Propagation::Stopped
+        || effects.focus_request.is_some()
+    {
         return None;
     }
 
@@ -1173,6 +1187,10 @@ fn focus_request_from_event_with_bindings<M>(
         Some(FocusRequest::Previous)
     } else if focus.unfocus_matches(*key) {
         Some(FocusRequest::Unfocus)
+    } else if !suppress_global_hotkeys && focus.next_control_matches(*key) {
+        Some(FocusRequest::NextControl)
+    } else if !suppress_global_hotkeys && focus.previous_control_matches(*key) {
+        Some(FocusRequest::PreviousControl)
     } else {
         None
     }
@@ -2334,7 +2352,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &next,
                 &effects(Propagation::Continue),
-                &bindings
+                &bindings,
+                false,
             ),
             Some(FocusRequest::Next)
         );
@@ -2342,7 +2361,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &previous,
                 &effects(Propagation::Continue),
-                &bindings
+                &bindings,
+                false,
             ),
             Some(FocusRequest::Previous)
         );
@@ -2350,7 +2370,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &esc_unfocus,
                 &effects(Propagation::Continue),
-                &bindings
+                &bindings,
+                false,
             ),
             Some(FocusRequest::Unfocus)
         );
@@ -2358,7 +2379,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &ctrl_left_bracket_unfocus,
                 &effects(Propagation::Continue),
-                &bindings
+                &bindings,
+                false,
             ),
             Some(FocusRequest::Unfocus)
         );
@@ -2382,7 +2404,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &next,
                 &effects(Propagation::Continue),
-                &bindings
+                &bindings,
+                false,
             ),
             Some(FocusRequest::Next)
         );
@@ -2390,7 +2413,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &previous,
                 &effects(Propagation::Continue),
-                &bindings
+                &bindings,
+                false,
             ),
             Some(FocusRequest::Previous)
         );
@@ -2405,7 +2429,8 @@ mod tests {
             focus_request_from_event_with_bindings(
                 &event,
                 &effects(Propagation::Stopped),
-                &bindings
+                &bindings,
+                false,
             ),
             None
         );
@@ -2447,7 +2472,70 @@ mod tests {
         effects.propagation = Propagation::Stopped;
 
         assert_eq!(
-            focus_request_from_event_with_bindings(&event, &effects, &bindings),
+            focus_request_from_event_with_bindings(&event, &effects, &bindings, false),
+            None
+        );
+    }
+
+    #[test]
+    fn unhandled_control_chords_enqueue_bounded_control_requests() {
+        let bindings = FocusKeyBindings::default();
+        let ctrl = |value| {
+            TuiEvent::Key(KeyEvent {
+                code: Key::Char(value),
+                modifiers: KeyModifiers::CONTROL,
+            })
+        };
+
+        for (key, request) in [
+            ('h', FocusRequest::PreviousControl),
+            ('j', FocusRequest::NextControl),
+            ('k', FocusRequest::PreviousControl),
+            ('l', FocusRequest::NextControl),
+        ] {
+            assert_eq!(
+                focus_request_from_event_with_bindings(
+                    &ctrl(key),
+                    &effects(Propagation::Continue),
+                    &bindings,
+                    false,
+                ),
+                Some(request)
+            );
+        }
+    }
+
+    #[test]
+    fn suppressed_focus_target_blocks_control_chord_fallback() {
+        let bindings = FocusKeyBindings::default();
+        let event = TuiEvent::Key(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        });
+
+        assert_eq!(
+            focus_request_from_event_with_bindings(
+                &event,
+                &effects(Propagation::Continue),
+                &bindings,
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_focus_request_wins_over_control_chord_fallback() {
+        let bindings = FocusKeyBindings::default();
+        let event = TuiEvent::Key(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        });
+        let mut effects = effects(Propagation::Continue);
+        effects.focus_request = Some(FocusRequest::Unfocus);
+
+        assert_eq!(
+            focus_request_from_event_with_bindings(&event, &effects, &bindings, false),
             None
         );
     }
@@ -2699,6 +2787,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["s".to_string()],
@@ -2711,6 +2800,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["sa".to_string()],
@@ -2733,6 +2823,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["t".to_string()],
@@ -2745,6 +2836,7 @@ mod tests {
             area: Rect::default(),
             enabled: true,
             tab_stop: true,
+            control: false,
             hotkey: None,
             hotkeys: Vec::new(),
             hotkey_sequences: vec!["ta".to_string()],

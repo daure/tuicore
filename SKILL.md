@@ -24,7 +24,9 @@ Use `fill(1)` for main content regions that should consume remaining space.
 - `Stack` — layered or active-child composition. Use for overlays/alternate bodies.
 - `Overlay` — base + positioned layer. Use when a component must sit above another.
 - `DialogLayer` + `DockSpec` — modal/overlay host. Use `docked(DockSpec::bottom(80))` for top/bottom/left/right docked overlays so placement and chrome borders stay in sync.
+- `DialogLayer::fit_content().fit_content_max(width, height)` — intrinsic modal sizing from child measurement, capped within terminal bounds.
 - `Panel` — chrome wrapper with title/border/help. Remember inner area is smaller.
+- `Header` / `Paragraph` — measured semantic typography for headings and body copy; both provide intrinsic layout hints.
 - `Tabs` — tab header + selected body. Body should own its own layout.
 - `Menu` — trigger-driven popup actions. Use for compact command lists.
 - `StatusBar` — app chrome for menu/theme/AI/weather/time indicators.
@@ -122,6 +124,7 @@ Components query global default configurations from the active preset unless ove
 
 Components participate in focus navigation by registering focus targets and reacting to focus state changes:
 - **Registration**: During `layout(area, ctx)`, components register focusable regions by calling `ctx.register_focusable(FocusId, area, is_active)` or `ctx.register_focusable_with_hotkey_sequences(...)`. Text-entry wrappers should use `ctx.register_text_entry_focusable(...)` while typing so global hotkeys do not steal input characters.
+- **Control Targets**: Form controls mark their registered target with `ctx.set_focus_control(id, true)`. `NextControl` / `PreviousControl` move only to an immediately adjacent control and never skip or wrap across content/container targets.
 - **Focus Lifecycle**: The runtime alerts components to focus changes by calling `focus(target_id, focused, ctx)`:
   - `focused: bool`: indicates if the component gained (`true`) or lost (`false`) focus.
   - `target_id: Option<&FocusId>`: indicates which sub-element within the component gained focus.

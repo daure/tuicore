@@ -41,6 +41,8 @@ pub struct NavKeyBindings {
 pub struct FocusKeyBindings {
     next: Vec<KeySpec>,
     previous: Vec<KeySpec>,
+    next_control: Vec<KeySpec>,
+    previous_control: Vec<KeySpec>,
     unfocus: Vec<KeySpec>,
 }
 
@@ -155,6 +157,14 @@ impl Default for FocusKeyBindings {
         Self {
             next: vec![KeySpec::key(Key::Tab)],
             previous: vec![KeySpec::key(Key::BackTab)],
+            next_control: vec![
+                KeySpec::key_with_modifiers(Key::Char('j'), KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Char('l'), KeyModifiers::CONTROL),
+            ],
+            previous_control: vec![
+                KeySpec::key_with_modifiers(Key::Char('h'), KeyModifiers::CONTROL),
+                KeySpec::key_with_modifiers(Key::Char('k'), KeyModifiers::CONTROL),
+            ],
             unfocus: vec![
                 KeySpec::key(Key::Esc),
                 KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
@@ -336,6 +346,18 @@ impl KeyBindings {
         set_keys(&value, "nav", "bottom", &mut bindings.nav.bottom)?;
         set_keys(&value, "focus", "next", &mut bindings.focus.next)?;
         set_keys(&value, "focus", "previous", &mut bindings.focus.previous)?;
+        set_keys(
+            &value,
+            "focus",
+            "next_control",
+            &mut bindings.focus.next_control,
+        )?;
+        set_keys(
+            &value,
+            "focus",
+            "previous_control",
+            &mut bindings.focus.previous_control,
+        )?;
         set_keys(&value, "focus", "unfocus", &mut bindings.focus.unfocus)?;
         set_string_keys(&value, "clipboard", "yank", &mut bindings.clipboard.yank)?;
         set_keys(&value, "button", "press", &mut bindings.button.press)?;
@@ -592,6 +614,24 @@ impl KeyBindings {
 
     pub fn with_focus_previous(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_focus_previous(keys);
+        self
+    }
+
+    pub fn set_focus_next_control(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.focus.next_control = keys.into_iter().collect();
+    }
+
+    pub fn with_focus_next_control(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_focus_next_control(keys);
+        self
+    }
+
+    pub fn set_focus_previous_control(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.focus.previous_control = keys.into_iter().collect();
+    }
+
+    pub fn with_focus_previous_control(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.set_focus_previous_control(keys);
         self
     }
 
@@ -1136,6 +1176,14 @@ impl FocusKeyBindings {
 
     pub fn previous_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.previous, key.into())
+    }
+
+    pub fn next_control_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.next_control, key.into())
+    }
+
+    pub fn previous_control_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.previous_control, key.into())
     }
 
     pub fn unfocus_matches(&self, key: impl Into<KeyEvent>) -> bool {
@@ -2338,6 +2386,41 @@ mod tests {
             code: Key::BackTab,
             modifiers: KeyModifiers::ALT,
         }));
+    }
+
+    #[test]
+    fn control_traversal_belongs_to_focus_bindings_and_is_configurable() {
+        let bindings = KeyBindings::try_from_toml_str(
+            r#"
+            [focus]
+            next_control = "ctrl+n"
+            previous_control = "ctrl+p"
+            "#,
+        )
+        .expect("valid focus keybindings");
+        let ctrl = |value| KeyEvent {
+            code: Key::Char(value),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        assert!(bindings.focus().previous_control_matches(ctrl('p')));
+        assert!(bindings.focus().next_control_matches(ctrl('n')));
+        assert!(!bindings.focus().previous_control_matches(ctrl('h')));
+        assert!(!bindings.focus().next_control_matches(ctrl('j')));
+    }
+
+    #[test]
+    fn default_focus_bindings_match_ctrl_direction_keys() {
+        let bindings = FocusKeyBindings::default();
+        let ctrl = |value| KeyEvent {
+            code: Key::Char(value),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        assert!(bindings.previous_control_matches(ctrl('h')));
+        assert!(bindings.next_control_matches(ctrl('j')));
+        assert!(bindings.previous_control_matches(ctrl('k')));
+        assert!(bindings.next_control_matches(ctrl('l')));
     }
 
     #[test]

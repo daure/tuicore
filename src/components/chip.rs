@@ -124,7 +124,7 @@ impl Chip {
             ChipColorRole::Error => (theme.error_fg(), theme.highlight_fg()),
             ChipColorRole::Selected => (theme.selected_bg(), theme.selected_fg()),
             ChipColorRole::Highlight => (theme.highlight_bg(), theme.highlight_fg()),
-            ChipColorRole::Muted => (theme.border_fg(), theme.text_fg()),
+            ChipColorRole::Muted => (theme.surface_bg(), theme.text_fg()),
         }
     }
 }
@@ -141,5 +141,17 @@ impl<M> TuiNode<M> for Chip {
 
     fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
         Self::render(self, frame, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn muted_chip_uses_surface_background_role() {
+        let chip = Chip::new("Muted").color_role(ChipColorRole::Muted);
+
+        assert_eq!(chip.colors(&theme()).0, theme().surface_bg());
     }
 }

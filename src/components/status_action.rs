@@ -33,7 +33,7 @@ impl<M> StatusAction<M> {
             pending_hotkey_prefix: None,
             focused: false,
             on_press: None,
-            background_color: ColorTween::idle(theme.border_fg()),
+            background_color: ColorTween::idle(theme.surface_bg()),
             text_color: ColorTween::idle(theme.text_fg()),
         }
     }
@@ -72,7 +72,7 @@ impl<M> StatusAction<M> {
             if focused {
                 theme.highlight_bg()
             } else {
-                theme.border_fg()
+                theme.surface_bg()
             },
             settings,
             Default::default(),
@@ -221,7 +221,7 @@ impl<M> StatusAction<M> {
         self.background_color.snap_to(if self.focused {
             theme.highlight_bg()
         } else {
-            theme.border_fg()
+            theme.surface_bg()
         });
         self.text_color.snap_to(if self.focused {
             theme.highlight_fg()
@@ -236,7 +236,7 @@ impl<M> StatusAction<M> {
         } else if self.focused {
             theme().highlight_bg()
         } else {
-            theme().border_fg()
+            theme().surface_bg()
         }
     }
 
@@ -290,6 +290,7 @@ pub(super) fn register_status_focus(
     } else {
         ctx.register_focusable(FocusId::new(id), area, true);
     }
+    ctx.set_focus_control(FocusId::new(id), true);
 }
 
 fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
@@ -299,5 +300,17 @@ fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
     match (hotkey.code, key.code) {
         (Key::Char(a), Key::Char(b)) => a.eq_ignore_ascii_case(&b),
         (a, b) => a == b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_background_uses_surface_role() {
+        let action = StatusAction::<()>::new();
+
+        assert_eq!(action.visible_background_color(), theme().surface_bg());
     }
 }
