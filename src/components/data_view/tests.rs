@@ -1034,6 +1034,87 @@ fn horizontal_scroll_extent_includes_percentage_column_expansion() {
 }
 
 #[test]
+fn constrained_columns_fit_viewport_and_preserve_content_widths() {
+    let view = DataView::new([Row::new(1, "A very long task title")], |row| row.id).columns([
+        Column::text("state", "", Constraint::Length(1), |_| String::from("S")).constrained(),
+        Column::text("priority", "", Constraint::Length(1), |_| String::from("P")).constrained(),
+        Column::text("title", "Task", Constraint::Fill(1), |row: &Row| {
+            row.name.to_string()
+        })
+        .constrained(),
+        Column::text("size", "Size", Constraint::Length(4), |_| {
+            String::from("MEDIUM")
+        })
+        .constrained(),
+    ]);
+
+    let widths = view.column_widths(20);
+
+    assert_eq!(widths, vec![2, 2, 12, 4]);
+    assert_eq!(widths.into_iter().sum::<usize>(), 20);
+    assert_eq!(
+        view.scroll_geometry(Rect::new(0, 0, 20, 2)).content.width,
+        20
+    );
+}
+
+#[test]
+fn constrained_column_clips_oversized_content_without_displacing_next_column() {
+    let view = DataView::new([Row::new(1, "ABCDEFG")], |row| row.id).columns([
+        Column::text("first", "", Constraint::Length(4), |row: &Row| {
+            row.name.to_string()
+        })
+        .constrained(),
+        Column::text("second", "", Constraint::Length(3), |_| String::from("XYZ")).constrained(),
+    ]);
+    let mut terminal = Terminal::new(TestBackend::new(8, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 8, 1)))
+        .expect("data view should render");
+
+    let rendered = (0..8)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert_eq!(rendered, "ABCD XYZ");
+}
+
+#[test]
+fn constrained_fixed_columns_scroll_only_when_minimums_exceed_viewport() {
+    let view = DataView::new([Row::new(1, "A")], |row| row.id).columns([
+        Column::text("first", "First", Constraint::Length(8), |row: &Row| {
+            row.name.to_string()
+        })
+        .constrained(),
+        Column::text("second", "Second", Constraint::Length(8), |_| {
+            String::from("B")
+        })
+        .constrained(),
+    ]);
+
+    assert_eq!(view.column_widths(10), vec![9, 8]);
+    assert_eq!(
+        view.scroll_geometry(Rect::new(0, 0, 10, 2)).content.width,
+        17
+    );
+}
+
+#[test]
+fn mixed_columns_expand_only_intrinsic_content() {
+    let view = DataView::new([Row::new(1, "ABCDEFGHI")], |row| row.id).columns([
+        Column::text("fixed", "Fixed", Constraint::Length(4), |row: &Row| {
+            row.name.to_string()
+        })
+        .constrained(),
+        Column::text("intrinsic", "Value", Constraint::Length(1), |row: &Row| {
+            row.name.to_string()
+        }),
+    ]);
+
+    assert_eq!(view.column_widths(10), vec![5, 9]);
+}
+
+#[test]
 fn highlighted_row_style_is_applied_to_rendered_cell_content() {
     let view = DataView::list(
         [Row::new(1, "selected")],

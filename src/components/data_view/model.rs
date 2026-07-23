@@ -250,10 +250,18 @@ pub struct CellContext<Id> {
     pub focused: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColumnSizing {
+    #[default]
+    Intrinsic,
+    Constrained,
+}
+
 pub struct Column<T, Id> {
     pub(super) id: String,
     pub(super) header: String,
     pub(super) width: Constraint,
+    pub(super) sizing: ColumnSizing,
     pub(super) renderer: Box<CellFn<T, Id>>,
     pub(super) sort_key: Option<Box<SortFn<T>>>,
     pub(super) search_key: Option<Box<TransformKeyFn<T>>>,
@@ -274,6 +282,7 @@ impl<T, Id> Column<T, Id> {
             id: id.into(),
             header: header.into(),
             width,
+            sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(move |row, _| Line::from(renderer_accessor(row))),
             sort_key: None,
             search_key: Some(Box::new(move |row| search_accessor(row))),
@@ -291,6 +300,7 @@ impl<T, Id> Column<T, Id> {
             id: id.into(),
             header: header.into(),
             width,
+            sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(renderer),
             sort_key: None,
             search_key: None,
@@ -311,6 +321,15 @@ impl<T, Id> Column<T, Id> {
     pub fn filter_key(mut self, filter_key: impl Fn(&T) -> String + 'static) -> Self {
         self.filter_key = Some(Box::new(filter_key));
         self
+    }
+
+    pub fn sizing(mut self, sizing: ColumnSizing) -> Self {
+        self.sizing = sizing;
+        self
+    }
+
+    pub fn constrained(self) -> Self {
+        self.sizing(ColumnSizing::Constrained)
     }
 
     pub fn id(&self) -> &str {

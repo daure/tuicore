@@ -29,7 +29,7 @@ pub use children::{ChildSlot, Children, DuplicateChildKey, MissingChildKey};
 pub use components::{
     ActivationMode, AiDockKeyBindings, Button, ButtonOutcome, Calendar, CalendarEntryRole,
     CalendarOutcome, CalendarSpan, CalendarTypedEvent, CalendarView, CellContext, CheckState, Chip,
-    ChipColorRole, Column, ConfirmationDialog, ConfirmationDialogKeyBindings,
+    ChipColorRole, Column, ColumnSizing, ConfirmationDialog, ConfirmationDialogKeyBindings,
     ConfirmationDialogOutcome, CrossAlign, CrossSize, DataView, DataViewEvent, DataViewFilter,
     DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
     DataViewTransformState, DataViewTypedEvent, DatePicker, DatePickerDropdown, DateTimeIndicator,

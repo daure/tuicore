@@ -30,7 +30,7 @@ use super::{
 };
 
 pub use model::{
-    ActivationMode, CellContext, CheckState, Column, DataViewEvent, DataViewFilter,
+    ActivationMode, CellContext, CheckState, Column, ColumnSizing, DataViewEvent, DataViewFilter,
     DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
     DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,

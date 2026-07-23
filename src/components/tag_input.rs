@@ -802,6 +802,7 @@ where
                     path: ctx.current_path(),
                     id: FocusId::new(TAG_INPUT_FOCUS),
                 });
+                ctx.request_layout();
                 ctx.request_redraw();
                 ctx.stop_propagation();
                 EventOutcome::Handled
@@ -921,7 +922,7 @@ where
             ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(TAG_INPUT_FOCUS),
                 focus_area,
-                self.active,
+                true,
                 vec![hotkey],
                 self.active,
             );
@@ -1187,6 +1188,7 @@ mod tests {
 
         let target = ctx.focus_targets().first().unwrap();
         assert_eq!(target.area, Rect::new(2, 3, 12, 4));
+        assert!(target.enabled);
         assert_eq!(target.hotkey_sequences, vec!["t"]);
     }
 
@@ -1199,6 +1201,7 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(ctx.layout_requested());
         assert_eq!(
             ctx.focus_request(),
             Some(&FocusRequest::TargetAt {

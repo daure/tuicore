@@ -118,7 +118,11 @@ where
                 } else {
                     CELL_RIGHT_PADDING
                 };
-                configured.max(rendered.saturating_add(padding))
+                if self.columns[index].sizing == super::ColumnSizing::Constrained {
+                    configured
+                } else {
+                    configured.max(rendered.saturating_add(padding))
+                }
             })
             .collect()
     }
@@ -131,7 +135,8 @@ where
         let content_width = self
             .configured_content_width(viewport_width)
             .min(u16::MAX as usize);
-        let area = Rect::new(0, 0, content_width as u16, 1);
+        let column_padding = self.column_padding_width();
+        let area = Rect::new(0, 0, content_width.saturating_sub(column_padding) as u16, 1);
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints(
@@ -142,13 +147,32 @@ where
             )
             .split(area)
             .iter()
-            .map(|cell| cell.width as usize)
+            .enumerate()
+            .map(|(index, cell)| {
+                let padding = if index + 1 == self.columns.len() {
+                    0
+                } else {
+                    CELL_RIGHT_PADDING
+                };
+                cell.width as usize + padding
+            })
             .collect()
     }
 
     fn configured_content_width(&self, viewport_width: usize) -> usize {
-        let minimum_width = self.configured_minimum_column_widths().into_iter().sum();
+        let minimum_width = self
+            .configured_minimum_column_widths()
+            .into_iter()
+            .sum::<usize>()
+            .saturating_add(self.column_padding_width());
         viewport_width.max(minimum_width)
+    }
+
+    fn column_padding_width(&self) -> usize {
+        self.columns
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(CELL_RIGHT_PADDING)
     }
 
     fn configured_minimum_column_widths(&self) -> Vec<usize> {

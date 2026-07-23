@@ -47,8 +47,8 @@ pub use confirmation_dialog::{
     ConfirmationDialog, ConfirmationDialogKeyBindings, ConfirmationDialogOutcome,
 };
 pub use data_view::{
-    ActivationMode, CellContext, CheckState, Column, DataView, DataViewEvent, DataViewFilter,
-    DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
+    ActivationMode, CellContext, CheckState, Column, ColumnSizing, DataView, DataViewEvent,
+    DataViewFilter, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
     DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
