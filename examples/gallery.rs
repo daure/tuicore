@@ -805,11 +805,13 @@ impl PreviewState {
         Self {
             text_input: TextInput::new()
                 .placeholder("Type one line...")
-                .hotkey("i")
+                .hotkey("ia")
+                .editor_hotkey("ib")
                 .max_len(80),
             text_input_panel: TextInput::new()
                 .placeholder("Nested input")
-                .hotkey("p")
+                .hotkey("pa")
+                .editor_hotkey("pb")
                 .style(InputChrome::panel("Description").top_right("Panel style")),
             text_input_disabled: TextInput::new()
                 .value("Disabled panel input")
@@ -829,13 +831,15 @@ impl PreviewState {
             textarea_input: TextareaInput::new()
                 .placeholder("Write 2-4 rows...")
                 .value("First line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line scrolls")
-                .hotkey("t")
+                .hotkey("ta")
+                .editor_hotkey("tb")
                 .min_rows(2)
                 .max_rows(4),
             textarea_panel: TextareaInput::new()
                 .placeholder("Nested textarea")
                 .value("Draft note\nMore detail\nThird row\nFourth row\nFifth row scrolls")
-                .hotkey("p")
+                .hotkey("pa")
+                .editor_hotkey("pb")
                 .min_rows(2)
                 .max_rows(4)
                 .style(InputChrome::panel("Description").top_right("2-4 rows")),
@@ -2355,7 +2359,7 @@ impl PreviewState {
         frame.render_widget(
             Paragraph::new(
                 "Type text. Enter/Ctrl+Enter submits. Tab inserts spaces. Esc/Ctrl+[ exits input mode, then returns to the list.\n\
-                 Hotkeys: |i| plain, |p| panel, |d| disabled. Enter opens disabled browse mode; h/k and j/l move between idle fields.\n\
+                 Hotkeys: |ia| plain action, |ib| plain $EDITOR, |pa| panel action, |pb| panel $EDITOR, |d| disabled. Enter opens disabled browse mode; h/k and j/l move between idle fields.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -2463,7 +2467,7 @@ impl PreviewState {
         frame.render_widget(
             Paragraph::new(
                 "Type text. Enter inserts newline. Ctrl+Enter finishes editing. Ctrl+J also inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Plain and nested textareas remain editable. Disabled panel |d| blocks editing. When idle, h/k moves back and j/l forward.\n\
+                 Plain textarea uses |ta| action and |tb| $EDITOR. Panel uses |pa| action and |pb| $EDITOR. Disabled panel |d| blocks editing. When idle, h/k moves back and j/l forward.\n\
                  Shortcuts:\n\
                  • PgUp / PgDn / Ctrl+U / Ctrl+D          : Scroll overflowing text\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
@@ -2670,7 +2674,7 @@ impl PreviewState {
     fn render_status_bar<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let [help, bar, note] = status_bar_preview_layout(area);
         frame.render_widget(
-            Paragraph::new("Reusable status bar: ` opens the menu, Theme opens a centered dropdown, ' opens AI dock. Weather and time sit on the right."),
+            Paragraph::new("Reusable status bar: ; opens the menu, Theme opens a centered dropdown, ' opens AI dock. Weather and time sit on the right."),
             help,
         );
         self.status_bar.render(frame, bar, ctx);

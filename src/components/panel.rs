@@ -159,6 +159,11 @@ impl Panel {
         self.hotkey_matcher = HotkeySequenceMatcher::default();
     }
 
+    pub(crate) fn set_hotkey_badge(&mut self, hotkey: Option<String>) {
+        self.hotkey = hotkey;
+        self.hotkey_matcher = HotkeySequenceMatcher::default();
+    }
+
     pub(crate) fn set_pending_hotkey_prefix(&mut self, prefix: Option<String>) {
         self.pending_hotkey_prefix = prefix;
     }

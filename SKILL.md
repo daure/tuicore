@@ -142,6 +142,7 @@ Tuicore matches sequence-based hotkeys and triggers events globally or locally:
   - `HotkeyEvent::Canceled`: Sequence canceled or timed out.
   - `HotkeyEvent::Commit(seq)`: Sequence fully typed. Perform action.
 - **Rendering**: Format mnemonic text via `hotkey_label_spans` to underline active letters.
+- **Text editors**: `TextInput` and `TextareaInput` can pair `.hotkey("pa")` for normal input mode with `.editor_hotkey("pb")` for direct `$EDITOR` launch; chrome renders both as `pa·pb`. `PasswordInput` intentionally has no external-editor hotkey because editor temp files expose plaintext to another process.
 - **App Configuration**: Built-in library actions map to a static schema in `KeyBindings` (`keybindings.toml`). Consuming apps configure their own custom hotkeys by parsing custom config settings and assigning hotkeys/sequences to components programmatically at runtime.
 
 ## Scrolling & Animations

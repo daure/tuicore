@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use base64::Engine;
 use ratatui::layout::Rect;
 
@@ -440,7 +443,7 @@ where
                 continue;
             }
             seen.push(key);
-            self.dispatch_hotkey_event_to_target(flags, dispatcher, target, hotkey.clone());
+            let _ = self.dispatch_hotkey_event_to_target(flags, dispatcher, target, hotkey.clone());
         }
     }
 
@@ -450,7 +453,7 @@ where
         dispatcher: &mut TreeDispatcher,
         target: &FocusTarget,
         hotkey: HotkeyEvent,
-    ) {
+    ) -> Option<(EventRoute, crate::ExternalEditorRequest)> {
         let route = EventRoute::new(target.path.clone());
         let effects = dispatcher.dispatch_event(
             &mut self.root,
@@ -458,7 +461,9 @@ where
             &TuiEvent::Hotkey(hotkey),
             self.animation_settings,
         );
+        let external_editor = effects.external_editor.clone();
         flags.merge(self.handle_effects(effects));
+        external_editor.map(|request| (route, request))
     }
 
     fn dispatch_global_hotkey_tick(
@@ -603,12 +608,19 @@ where
                             HotkeyEvent::Canceled,
                         );
                         if let Some((sequence, target)) = sequence_targets.get(index) {
-                            self.dispatch_hotkey_event_to_target(
+                            let external_editor = self.dispatch_hotkey_event_to_target(
                                 flags,
                                 dispatcher,
                                 target,
                                 HotkeyEvent::Commit(sequence.clone()),
                             );
+                            if let (Some(terminal), Some((route, request))) =
+                                (terminal.as_deref_mut(), external_editor)
+                            {
+                                self.handle_external_editor(
+                                    flags, dispatcher, terminal, route, request,
+                                );
+                            }
                             if flags.focus_request == Some(FocusRequest::FirstChild) {
                                 flags.focus_request = Some(FocusRequest::FirstChildOf {
                                     path: target.path.clone(),
@@ -740,12 +752,17 @@ where
         request: crate::ExternalEditorRequest,
     ) {
         flags.clear = true;
-        if let Ok(Some(response)) = edit_in_external_editor(terminal, request) {
-            let event = TuiEvent::ExternalEditor(response);
-            let effects =
-                dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
-            flags.merge(self.handle_effects(effects));
-        }
+        let fallback = crate::ExternalEditorResponse {
+            value: request.value.clone(),
+            line: request.line,
+            col: request.col,
+        };
+        let response =
+            complete_external_editor_response(fallback, edit_in_external_editor(terminal, request));
+        let event = TuiEvent::ExternalEditor(response);
+        let effects =
+            dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
+        flags.merge(self.handle_effects(effects));
     }
 
     #[cfg(test)]
@@ -937,15 +954,16 @@ fn edit_in_external_editor(
     let status = terminal.suspend(|| {
         run_editor(
             &temp_files.text_path,
-            &temp_files.pos_path,
+            temp_files.pos_path(),
             request.line,
             request.col,
         )
     });
-    let result = match status {
+    Ok(match status {
         Ok(status) if status.success() => {
             let content = std::fs::read_to_string(&temp_files.text_path)?;
-            let (line, col) = editor_exit_position(&temp_files.pos_path, request.line, request.col);
+            let (line, col) =
+                editor_exit_position(temp_files.pos_path(), request.line, request.col);
             Some(crate::ExternalEditorResponse {
                 value: content,
                 line,
@@ -953,10 +971,14 @@ fn edit_in_external_editor(
             })
         }
         _ => None,
-    };
+    })
+}
 
-    temp_files.cleanup();
-    Ok(result)
+fn complete_external_editor_response(
+    fallback: crate::ExternalEditorResponse,
+    result: std::io::Result<Option<crate::ExternalEditorResponse>>,
+) -> crate::ExternalEditorResponse {
+    result.ok().flatten().unwrap_or(fallback)
 }
 
 fn write_clipboard_osc52(terminal: &mut TerminalGuard, value: &str) -> std::io::Result<()> {
@@ -969,37 +991,40 @@ fn write_clipboard_osc52(terminal: &mut TerminalGuard, value: &str) -> std::io::
 
 struct EditorTempFiles {
     text_path: PathBuf,
-    pos_path: PathBuf,
+    pos_path: Option<PathBuf>,
 }
 
 impl EditorTempFiles {
-    fn cleanup(self) {
-        let _ = std::fs::remove_file(self.text_path);
-        let _ = std::fs::remove_file(self.pos_path);
+    fn pos_path(&self) -> &Path {
+        self.pos_path
+            .as_deref()
+            .expect("editor position temp file should exist")
+    }
+}
+
+impl Drop for EditorTempFiles {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.text_path);
+        if let Some(pos_path) = &self.pos_path {
+            let _ = std::fs::remove_file(pos_path);
+        }
     }
 }
 
 fn create_editor_temp_files(value: &str) -> std::io::Result<EditorTempFiles> {
     let (text_path, mut file) = create_unique_temp_file("edit", "txt")?;
-    if let Err(error) = file.write_all(value.as_bytes()) {
-        let _ = std::fs::remove_file(&text_path);
-        return Err(error);
-    }
+    let mut temp_files = EditorTempFiles {
+        text_path,
+        pos_path: None,
+    };
+    file.write_all(value.as_bytes())?;
     drop(file);
 
-    let (pos_path, pos_file) = match create_unique_temp_file("edit-pos", "txt") {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = std::fs::remove_file(&text_path);
-            return Err(error);
-        }
-    };
+    let (pos_path, pos_file) = create_unique_temp_file("edit-pos", "txt")?;
     drop(pos_file);
+    temp_files.pos_path = Some(pos_path);
 
-    Ok(EditorTempFiles {
-        text_path,
-        pos_path,
-    })
+    Ok(temp_files)
 }
 
 fn create_unique_temp_file(prefix: &str, extension: &str) -> std::io::Result<(PathBuf, File)> {
@@ -1014,7 +1039,11 @@ fn create_unique_temp_file(prefix: &str, extension: &str) -> std::io::Result<(Pa
         let path = temp_dir.join(format!(
             "tuicore-{prefix}-{process}-{seed}-{attempt}.{extension}"
         ));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -1239,10 +1268,11 @@ fn hotkey_sequence_targets(targets: &[FocusTarget]) -> Vec<(String, FocusTarget)
 }
 
 fn targets_for_prefix(targets: &[(String, FocusTarget)], prefix: &str) -> Vec<FocusTarget> {
+    let prefix = crate::hotkey::normalize_hotkey(prefix);
     let mut found = Vec::new();
     for (_, target) in targets
         .iter()
-        .filter(|(hotkey, _)| hotkey.starts_with(prefix))
+        .filter(|(hotkey, _)| crate::hotkey::normalize_hotkey(hotkey).starts_with(&prefix))
     {
         if !found.iter().any(|other| same_focus_target(other, target)) {
             found.push(target.clone());
@@ -2453,14 +2483,63 @@ mod tests {
     fn editor_temp_files_are_unique_and_created_with_contents() {
         let first = create_editor_temp_files("one").expect("first temp files should be created");
         let second = create_editor_temp_files("two").expect("second temp files should be created");
+        let first_text_path = first.text_path.clone();
+        let first_pos_path = first.pos_path().to_owned();
+        let second_text_path = second.text_path.clone();
+        let second_pos_path = second.pos_path().to_owned();
 
-        assert_ne!(first.text_path, second.text_path);
-        assert_ne!(first.pos_path, second.pos_path);
+        assert_ne!(first_text_path, second_text_path);
+        assert_ne!(first_pos_path, second_pos_path);
         assert_eq!(std::fs::read_to_string(&first.text_path).unwrap(), "one");
         assert_eq!(std::fs::read_to_string(&second.text_path).unwrap(), "two");
 
-        first.cleanup();
-        second.cleanup();
+        drop(first);
+        drop(second);
+        assert!(!first_text_path.exists());
+        assert!(!first_pos_path.exists());
+        assert!(!second_text_path.exists());
+        assert!(!second_pos_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn editor_temp_files_are_owner_readable_and_writable_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_files = create_editor_temp_files("secret").expect("temp files should be created");
+
+        assert_eq!(
+            std::fs::metadata(&temp_files.text_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(temp_files.pos_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn failed_or_canceled_external_editor_returns_original_request_as_response() {
+        let fallback = crate::ExternalEditorResponse {
+            value: "draft".into(),
+            line: 2,
+            col: 3,
+        };
+        let error = std::io::Error::other("editor failed");
+
+        let failed = complete_external_editor_response(fallback.clone(), Err(error));
+        let canceled = complete_external_editor_response(fallback.clone(), Ok(None));
+
+        assert_eq!(failed, fallback);
+        assert_eq!(canceled, fallback);
     }
 
     #[test]
@@ -2790,7 +2869,7 @@ mod tests {
             control: false,
             hotkey: None,
             hotkeys: Vec::new(),
-            hotkey_sequences: vec!["s".to_string()],
+            hotkey_sequences: vec![" S ".to_string()],
             suppress_global_hotkeys: false,
             focused_events_before_global_hotkeys: false,
         };
@@ -2803,13 +2882,13 @@ mod tests {
             control: false,
             hotkey: None,
             hotkeys: Vec::new(),
-            hotkey_sequences: vec!["sa".to_string()],
+            hotkey_sequences: vec![" S A ".to_string()],
             suppress_global_hotkeys: false,
             focused_events_before_global_hotkeys: false,
         };
         let targets = hotkey_sequence_targets(&[current.clone(), other]);
 
-        let targets = targets_for_prefix(&targets, "s");
+        let targets = targets_for_prefix(&targets, " S ");
 
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].path, current.path);

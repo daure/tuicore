@@ -79,6 +79,108 @@ fn text_input_panel_style_moves_hotkey_to_panel() {
 }
 
 #[test]
+fn text_input_registers_action_and_editor_hotkeys_separately() {
+    let mut input = TextInput::<()>::new().hotkey("pa").editor_hotkey("pb");
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 20, 1), &mut ctx);
+
+    assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["pa", "pb"]);
+    assert_eq!(line_text(&input.line(20)), " |pa·pb|");
+}
+
+#[test]
+fn text_input_action_and_editor_hotkeys_have_distinct_behavior() {
+    let mut input = TextInput::<()>::new()
+        .value("draft")
+        .hotkey("pa")
+        .editor_hotkey("pb");
+
+    let mut action = EventCtx::default();
+    assert_eq!(
+        input.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("pa".into())),
+            &mut action,
+        ),
+        EventOutcome::Handled
+    );
+    assert!(input.insert_mode());
+    assert!(action.external_editor_request().is_none());
+
+    input.set_insert_mode(false);
+    let mut editor = EventCtx::default();
+    assert_eq!(
+        input.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("pb".into())),
+            &mut editor,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(
+        editor.external_editor_request(),
+        Some(&crate::ExternalEditorRequest {
+            value: "draft".into(),
+            line: 1,
+            col: 6,
+        })
+    );
+}
+
+#[test]
+fn text_input_dual_panel_badge_highlights_shared_pending_prefix() {
+    let mut input = TextInput::<()>::new()
+        .hotkey("pa")
+        .editor_hotkey("pb")
+        .panel("Label");
+    input.event(
+        &TuiEvent::Hotkey(HotkeyEvent::Pending("p".into())),
+        &mut EventCtx::default(),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("input should render");
+
+    let buffer = terminal.backend().buffer();
+    let bottom = (0..20)
+        .map(|x| buffer.cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert!(bottom.contains("┤pa·pb│"));
+    assert_eq!(
+        (0..20)
+            .filter(|x| {
+                let cell = buffer.cell((*x, 2)).unwrap();
+                cell.symbol() == "p" && cell.modifier.contains(Modifier::UNDERLINED)
+            })
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn disabled_text_input_suppresses_editor_hotkey() {
+    let mut input = TextInput::<()>::new()
+        .value("locked")
+        .hotkey("pa")
+        .editor_hotkey("pb")
+        .disabled(true);
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 1), &mut layout);
+    let mut event = EventCtx::default();
+
+    input.event(
+        &TuiEvent::Hotkey(HotkeyEvent::Commit("pb".into())),
+        &mut event,
+    );
+
+    assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["pa"]);
+    assert_eq!(line_text(&input.line(20)), "locked |pa|");
+    assert!(event.external_editor_request().is_none());
+    assert!(!input.insert_mode());
+}
+
+#[test]
 fn text_input_panel_click_requests_input_focus() {
     let mut input = TextInput::<()>::new().panel("Label");
     let mut layout = LayoutCtx::new();

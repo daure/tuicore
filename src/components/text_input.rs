@@ -10,6 +10,7 @@ use crate::animation::{Animated, AnimationSettings, Easing, TickResult, lerp_col
 use crate::event::{
     HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEventKind, TuiEvent,
 };
+use crate::hotkey::normalize_hotkey;
 use crate::theme;
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, HotkeyLabelMode, KeySpec, LayoutCtx,
@@ -85,6 +86,7 @@ pub struct TextInput<M = ()> {
     placeholder: String,
     disabled: bool,
     hotkey: Option<String>,
+    editor_hotkey: Option<String>,
     hotkey_focus_enabled: bool,
     cursor: usize,
     focused: bool,
@@ -189,6 +191,10 @@ impl InputPanelChrome {
     }
 
     pub(crate) fn panel(&self, focused: bool, hotkey: Option<&str>) -> Panel {
+        self.panel_badge(focused, hotkey.map(str::to_owned))
+    }
+
+    pub(crate) fn panel_badge(&self, focused: bool, hotkey: Option<String>) -> Panel {
         let mut panel = Panel::new().focused(focused);
         if let Some(title) = &self.top_left {
             panel = panel.top_left(title.clone());
@@ -202,9 +208,7 @@ impl InputPanelChrome {
         if let Some(title) = &self.bottom_right {
             panel = panel.bottom_right(title.clone());
         }
-        if let Some(hotkey) = hotkey {
-            panel = panel.hotkey(hotkey.to_owned());
-        }
+        panel.set_hotkey_badge(hotkey);
         panel
     }
 }
@@ -313,6 +317,7 @@ impl<M> TextInput<M> {
             placeholder: String::new(),
             disabled: false,
             hotkey: None,
+            editor_hotkey: None,
             hotkey_focus_enabled: true,
             cursor: 0,
             focused: false,
@@ -354,6 +359,7 @@ impl<M> TextInput<M> {
             self.insert_mode = false;
         }
         self.cursor_fade.reset();
+        self.sync_panel();
     }
 
     pub fn is_disabled(&self) -> bool {
@@ -382,15 +388,25 @@ impl<M> TextInput<M> {
     fn sync_panel(&mut self) {
         let mut panel = match &self.chrome {
             InputChrome::Plain => Panel::new(),
-            InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
+            InputChrome::Panel(panel) => panel.panel_badge(self.focused, self.display_hotkey()),
         };
         panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
         self.panel = panel;
     }
 
-    fn inline_hotkey(&self) -> Option<&str> {
+    fn display_hotkey(&self) -> Option<String> {
+        let editor_hotkey = self.editor_hotkey.as_ref().filter(|_| !self.disabled);
+        match (&self.hotkey, editor_hotkey) {
+            (Some(action), Some(editor)) => Some(format!("{action}·{editor}")),
+            (Some(action), None) => Some(action.clone()),
+            (None, Some(editor)) => Some(editor.clone()),
+            (None, None) => None,
+        }
+    }
+
+    fn inline_hotkey(&self) -> Option<String> {
         match self.chrome {
-            InputChrome::Plain => self.hotkey.as_deref(),
+            InputChrome::Plain => self.display_hotkey(),
             InputChrome::Panel(_) => None,
         }
     }
@@ -440,7 +456,27 @@ impl<M> TextInput<M> {
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
-        self.pending_hotkey_prefix = None;
+        if self.editor_hotkey.is_none() {
+            self.pending_hotkey_prefix = None;
+        }
+        self.sync_panel();
+    }
+
+    pub fn editor_hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.set_editor_hotkey(hotkey);
+        self
+    }
+
+    pub fn set_editor_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.editor_hotkey = Some(hotkey.into());
+        self.sync_panel();
+    }
+
+    pub fn clear_editor_hotkey(&mut self) {
+        self.editor_hotkey = None;
+        if self.hotkey.is_none() {
+            self.pending_hotkey_prefix = None;
+        }
         self.sync_panel();
     }
 
@@ -461,9 +497,29 @@ impl<M> TextInput<M> {
     }
 
     fn handle_focus_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> bool {
-        let HotkeyEvent::Commit(_) = hotkey else {
+        let HotkeyEvent::Commit(sequence) = hotkey else {
             return false;
         };
+
+        if self
+            .editor_hotkey
+            .as_deref()
+            .is_some_and(|hotkey| normalize_hotkey(hotkey) == normalize_hotkey(sequence))
+        {
+            if !self.disabled {
+                if !self.insert_mode {
+                    if let Some(on_submit) = &self.on_submit {
+                        ctx.emit(on_submit(self.value.clone()));
+                    }
+                    self.insert_mode = true;
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                }
+                ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
+            }
+            ctx.stop_propagation();
+            return true;
+        }
 
         self.insert_mode = true;
         self.cursor_fade.reset();
@@ -749,7 +805,7 @@ impl<M> TextInput<M> {
         if self.value.is_empty() {
             return placeholder_line(
                 &self.placeholder,
-                self.inline_hotkey(),
+                self.inline_hotkey().as_deref(),
                 width,
                 self.cursor_visible(),
                 self.pending_hotkey_prefix.as_deref(),
@@ -792,7 +848,7 @@ impl<M> TextInput<M> {
             &mut spans,
             &mut drawn,
             width,
-            self.inline_hotkey(),
+            self.inline_hotkey().as_deref(),
             self.focused && self.insert_mode,
             self.pending_hotkey_prefix.as_deref(),
             hotkey_style,
@@ -1209,7 +1265,7 @@ impl<M> PasswordInput<M> {
         if self.input.value.is_empty() {
             return placeholder_line(
                 &self.input.placeholder,
-                self.input.inline_hotkey(),
+                self.input.inline_hotkey().as_deref(),
                 width,
                 self.input.focused && self.input.insert_mode,
                 self.input.pending_hotkey_prefix.as_deref(),
@@ -1254,7 +1310,7 @@ impl<M> PasswordInput<M> {
             &mut spans,
             &mut drawn,
             width,
-            self.input.inline_hotkey(),
+            self.input.inline_hotkey().as_deref(),
             self.input.focused && self.input.insert_mode,
             self.input.pending_hotkey_prefix.as_deref(),
             hotkey_style,
@@ -1267,11 +1323,11 @@ impl<M> PasswordInput<M> {
 impl<M> TuiNode<M> for TextInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let text = if self.value.is_empty() {
-            placeholder_label(&self.placeholder, self.inline_hotkey())
+            placeholder_label(&self.placeholder, self.inline_hotkey().as_deref())
         } else {
             label_with_visible_hotkey(
                 &self.value,
-                self.inline_hotkey(),
+                self.inline_hotkey().as_deref(),
                 !(self.focused && self.insert_mode),
             )
         };
@@ -1282,12 +1338,21 @@ impl<M> TuiNode<M> for TextInput<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
         let focus_area = self.content_area(area);
+        let mut hotkeys = Vec::new();
         if let Some(hotkey) = self.hotkey.clone().filter(|_| self.hotkey_focus_enabled) {
+            hotkeys.push(hotkey);
+        }
+        if !self.disabled
+            && let Some(hotkey) = self.editor_hotkey.clone()
+        {
+            hotkeys.push(hotkey);
+        }
+        if !hotkeys.is_empty() {
             ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(INPUT_FOCUS),
                 focus_area,
                 true,
-                vec![hotkey],
+                hotkeys,
                 self.insert_mode,
             );
         } else {
@@ -1496,14 +1561,17 @@ impl<M> TuiNode<M> for TextInput<M> {
 impl<M> TuiNode<M> for PasswordInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let text = if self.input.value.is_empty() {
-            placeholder_label(&self.input.placeholder, self.input.inline_hotkey())
+            placeholder_label(
+                &self.input.placeholder,
+                self.input.inline_hotkey().as_deref(),
+            )
         } else {
             let value = std::iter::repeat(self.mask_char)
                 .take(self.input.len_chars())
                 .collect::<String>();
             label_with_visible_hotkey(
                 &value,
-                self.input.inline_hotkey(),
+                self.input.inline_hotkey().as_deref(),
                 !(self.input.focused && self.input.insert_mode),
             )
         };

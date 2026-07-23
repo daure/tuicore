@@ -38,7 +38,7 @@ use crate::{KeyEvent, KeySpec};
 
 const MENU_ICON: &str = "󰍜";
 const AI_ICON: &str = "";
-const DEFAULT_MENU_HOTKEY: &str = "`";
+const DEFAULT_MENU_HOTKEY: &str = ";";
 const DEFAULT_AI_HOTKEY: &str = "'";
 const WEATHER_DIALOG_BACKDROP_AMOUNT: f64 = 0.5;
 
@@ -90,7 +90,7 @@ pub struct StatusBarKeyBindings {
 impl Default for StatusBarKeyBindings {
     fn default() -> Self {
         Self {
-            menu_toggle: vec![KeySpec::plain('`')],
+            menu_toggle: vec![KeySpec::plain(';')],
             ai_open: vec![KeySpec::plain('\'')],
             menu_hotkey: DEFAULT_MENU_HOTKEY.to_string(),
             ai_hotkey: DEFAULT_AI_HOTKEY.to_string(),

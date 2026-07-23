@@ -803,6 +803,65 @@ fn ctrl_o_requests_external_editor() {
 }
 
 #[test]
+fn textarea_registers_action_and_editor_hotkeys_separately() {
+    let mut input = TextareaInput::<()>::new().hotkey("pa").editor_hotkey("pb");
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 20, 2), &mut ctx);
+
+    assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["pa", "pb"]);
+}
+
+#[test]
+fn textarea_editor_hotkey_requests_editor_directly() {
+    let mut input = TextareaInput::<()>::new()
+        .value("first\nsecond")
+        .hotkey("pa")
+        .editor_hotkey("pb");
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(
+        &TuiEvent::Hotkey(HotkeyEvent::Commit("pb".into())),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.external_editor_request(),
+        Some(&crate::ExternalEditorRequest {
+            value: "first\nsecond".into(),
+            line: 2,
+            col: 7,
+        })
+    );
+}
+
+#[test]
+fn disabled_textarea_suppresses_editor_hotkey() {
+    let mut input = TextareaInput::<()>::new()
+        .value("locked")
+        .hotkey("pa")
+        .editor_hotkey("pb")
+        .disabled(true);
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    let mut event = EventCtx::default();
+
+    input.event(
+        &TuiEvent::Hotkey(HotkeyEvent::Commit("pb".into())),
+        &mut event,
+    );
+
+    assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["pa"]);
+    assert_eq!(
+        line_text(&input.visible_lines(20, 1).lines[0]),
+        "locked |pa|"
+    );
+    assert!(event.external_editor_request().is_none());
+    assert!(!input.insert_mode());
+}
+
+#[test]
 fn inactive_external_editor_session_emits_one_start_and_one_end() {
     let mut input = TextareaInput::new()
         .value("initial")

@@ -199,7 +199,7 @@ pub fn hotkey_label_spans(
 
     let active_prefix = active_prefix
         .map(normalize_hotkey)
-        .filter(|prefix| !prefix.is_empty() && hotkey.starts_with(prefix));
+        .filter(|prefix| !prefix.is_empty() && badge_contains_prefix(&hotkey, prefix));
 
     let active_prefix_is_partial = active_prefix
         .as_deref()
@@ -217,7 +217,12 @@ pub fn hotkey_label_spans(
     spans.push(Span::styled(" ", base_style));
     spans.push(Span::styled("|", base_style));
     if let Some(highlight) = active_prefix.as_deref() {
-        spans.extend(split_hotkey(&hotkey, highlight, base_style, hotkey_style));
+        spans.extend(split_hotkey_badge(
+            &hotkey,
+            highlight,
+            base_style,
+            hotkey_style,
+        ));
     } else {
         spans.push(Span::styled(hotkey, base_style));
     }
@@ -241,11 +246,11 @@ pub fn hotkey_badge_spans(
     let hotkey = normalize_hotkey(hotkey);
     let active_prefix = active_prefix
         .map(normalize_hotkey)
-        .filter(|prefix| !prefix.is_empty() && hotkey.starts_with(prefix));
+        .filter(|prefix| !prefix.is_empty() && badge_contains_prefix(&hotkey, prefix));
 
     let mut spans = vec![Span::styled(chars.right_join, border_style)];
     if let Some(highlight) = active_prefix.as_deref() {
-        spans.extend(split_hotkey(
+        spans.extend(split_hotkey_badge(
             &hotkey,
             highlight,
             hotkey_style,
@@ -270,11 +275,11 @@ pub fn hotkey_edge_spans(
     let hotkey = normalize_hotkey(hotkey);
     let active_prefix = active_prefix
         .map(normalize_hotkey)
-        .filter(|prefix| !prefix.is_empty() && hotkey.starts_with(prefix));
+        .filter(|prefix| !prefix.is_empty() && badge_contains_prefix(&hotkey, prefix));
 
     let mut spans = vec![Span::styled(chars.right_join, border_style)];
     if let Some(highlight) = active_prefix.as_deref() {
-        spans.extend(split_hotkey(
+        spans.extend(split_hotkey_badge(
             &hotkey,
             highlight,
             hotkey_style,
@@ -354,6 +359,32 @@ fn split_hotkey(
         spans.push(Span::styled(hotkey[highlight_len..].to_owned(), base_style));
     }
     spans
+}
+
+fn split_hotkey_badge(
+    hotkey: &str,
+    highlight: &str,
+    base_style: Style,
+    hotkey_style: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (index, sequence) in hotkey.split('·').enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("·", base_style));
+        }
+        if sequence.starts_with(highlight) {
+            spans.extend(split_hotkey(sequence, highlight, base_style, hotkey_style));
+        } else {
+            spans.push(Span::styled(sequence.to_owned(), base_style));
+        }
+    }
+    spans
+}
+
+fn badge_contains_prefix(hotkey: &str, prefix: &str) -> bool {
+    hotkey
+        .split('·')
+        .any(|sequence| sequence.starts_with(prefix))
 }
 
 fn find_case_insensitive(value: &str, needle: &str) -> Option<(usize, usize)> {

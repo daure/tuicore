@@ -11,6 +11,7 @@ use crate::animation::{Animated, AnimationSettings, TickResult};
 use crate::event::{
     HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEventKind, TuiEvent,
 };
+use crate::hotkey::normalize_hotkey;
 use crate::{
     AxisProposal, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec, LayoutCtx,
     LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, line_width,
@@ -33,6 +34,7 @@ pub struct TextareaInput<M = ()> {
     placeholder: String,
     disabled: bool,
     hotkey: Option<String>,
+    editor_hotkey: Option<String>,
     cursor: usize,
     focused: bool,
     insert_mode: bool,
@@ -167,6 +169,7 @@ impl<M> TextareaInput<M> {
             placeholder: String::new(),
             disabled: false,
             hotkey: None,
+            editor_hotkey: None,
             cursor: 0,
             focused: false,
             insert_mode: false,
@@ -212,6 +215,7 @@ impl<M> TextareaInput<M> {
             self.insert_mode = false;
         }
         self.cursor_fade.reset();
+        self.sync_panel();
     }
 
     pub fn is_disabled(&self) -> bool {
@@ -240,15 +244,25 @@ impl<M> TextareaInput<M> {
     fn sync_panel(&mut self) {
         let mut panel = match &self.chrome {
             InputChrome::Plain => Panel::new(),
-            InputChrome::Panel(panel) => panel.panel(self.focused, self.hotkey.as_deref()),
+            InputChrome::Panel(panel) => panel.panel_badge(self.focused, self.display_hotkey()),
         };
         panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
         self.panel = panel;
     }
 
-    fn inline_hotkey(&self) -> Option<&str> {
+    fn display_hotkey(&self) -> Option<String> {
+        let editor_hotkey = self.editor_hotkey.as_ref().filter(|_| !self.disabled);
+        match (&self.hotkey, editor_hotkey) {
+            (Some(action), Some(editor)) => Some(format!("{action}·{editor}")),
+            (Some(action), None) => Some(action.clone()),
+            (None, Some(editor)) => Some(editor.clone()),
+            (None, None) => None,
+        }
+    }
+
+    fn inline_hotkey(&self) -> Option<String> {
         match self.chrome {
-            InputChrome::Plain => self.hotkey.as_deref(),
+            InputChrome::Plain => self.display_hotkey(),
             InputChrome::Panel(_) => None,
         }
     }
@@ -288,7 +302,27 @@ impl<M> TextareaInput<M> {
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
-        self.pending_hotkey_prefix = None;
+        if self.editor_hotkey.is_none() {
+            self.pending_hotkey_prefix = None;
+        }
+        self.sync_panel();
+    }
+
+    pub fn editor_hotkey(mut self, hotkey: impl Into<String>) -> Self {
+        self.set_editor_hotkey(hotkey);
+        self
+    }
+
+    pub fn set_editor_hotkey(&mut self, hotkey: impl Into<String>) {
+        self.editor_hotkey = Some(hotkey.into());
+        self.sync_panel();
+    }
+
+    pub fn clear_editor_hotkey(&mut self) {
+        self.editor_hotkey = None;
+        if self.hotkey.is_none() {
+            self.pending_hotkey_prefix = None;
+        }
         self.sync_panel();
     }
 
@@ -309,9 +343,30 @@ impl<M> TextareaInput<M> {
     }
 
     fn handle_focus_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> bool {
-        let HotkeyEvent::Commit(_) = hotkey else {
+        let HotkeyEvent::Commit(sequence) = hotkey else {
             return false;
         };
+
+        if self
+            .editor_hotkey
+            .as_deref()
+            .is_some_and(|hotkey| normalize_hotkey(hotkey) == normalize_hotkey(sequence))
+        {
+            if !self.disabled {
+                if !self.insert_mode {
+                    if let Some(on_submit) = &self.on_submit {
+                        ctx.emit(on_submit(self.value.clone()));
+                    }
+                    self.insert_mode = true;
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                }
+                let (line, col) = self.external_editor_request_position();
+                ctx.request_external_editor(self.value.clone(), line, col);
+            }
+            ctx.stop_propagation();
+            return true;
+        }
 
         self.insert_mode = true;
         self.scroll_cursor_into_view(disabled_animation_settings());
@@ -652,7 +707,7 @@ impl<M> TextareaInput<M> {
         if self.value.is_empty() {
             let mut lines = vec![placeholder_line(
                 &self.placeholder,
-                self.inline_hotkey(),
+                self.inline_hotkey().as_deref(),
                 width,
                 self.cursor_visible(),
                 self.pending_hotkey_prefix.as_deref(),
@@ -852,7 +907,7 @@ impl<M> TextareaInput<M> {
                 &mut spans,
                 &mut drawn,
                 width,
-                self.inline_hotkey(),
+                self.inline_hotkey().as_deref(),
                 self.focused && self.insert_mode,
                 self.pending_hotkey_prefix.as_deref(),
                 hotkey_style,
@@ -1409,7 +1464,10 @@ impl<M> TextareaInput<M> {
 impl<M> TuiNode<M> for TextareaInput<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let lines = if self.value.is_empty() {
-            vec![placeholder_label(&self.placeholder, self.inline_hotkey())]
+            vec![placeholder_label(
+                &self.placeholder,
+                self.inline_hotkey().as_deref(),
+            )]
         } else {
             let show_hotkey = !(self.focused && self.insert_mode);
             let mut lines = self
@@ -1418,7 +1476,8 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             if let Some(line) = lines.last_mut() {
-                *line = label_with_visible_hotkey(line, self.inline_hotkey(), show_hotkey);
+                *line =
+                    label_with_visible_hotkey(line, self.inline_hotkey().as_deref(), show_hotkey);
             }
             lines
         };
@@ -1442,12 +1501,18 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         self.outer_area = area;
         self.area = self.content_area(area);
         self.scroll_cursor_into_view(disabled_animation_settings());
-        if let Some(hotkey) = self.hotkey.clone() {
+        let mut hotkeys = self.hotkey.clone().into_iter().collect::<Vec<_>>();
+        if !self.disabled
+            && let Some(hotkey) = self.editor_hotkey.clone()
+        {
+            hotkeys.push(hotkey);
+        }
+        if !hotkeys.is_empty() {
             ctx.register_text_entry_focusable_with_hotkey_sequences(
                 FocusId::new(TEXTAREA_FOCUS),
                 self.area,
                 true,
-                vec![hotkey],
+                hotkeys,
                 self.insert_mode,
             );
         } else {
