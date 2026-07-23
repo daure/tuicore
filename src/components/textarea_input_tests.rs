@@ -738,6 +738,46 @@ fn word_navigation_and_deletion() {
 }
 
 #[test]
+fn deleting_previous_word_only_preserves_separator_when_text_follows_textarea_cursor() {
+    let mut input = TextareaInput::<()>::new().value("hello world");
+    input.cursor = 9;
+    let key = KeyEvent {
+        code: Key::Backspace,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let outcome = input.on_key(key);
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "hello ld");
+    assert_eq!(input.cursor, 6);
+
+    input.set_value("hello world\n\n");
+    input.cursor = 13;
+    let outcome = input.on_key(key);
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "hello");
+    assert_eq!(input.cursor, 5);
+
+    input.set_value("ab cd ef");
+    input.cursor = 6;
+    let outcome = input.on_key(key);
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "ab ef");
+    assert_eq!(input.cursor, 3);
+
+    input.set_value("ab cd ef");
+    input.cursor = 5;
+    let outcome = input.on_key(key);
+
+    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "ab ef");
+    assert_eq!(input.cursor, 2);
+}
+
+#[test]
 fn ctrl_o_requests_external_editor() {
     let mut input = TextareaInput::<()>::new().value("initial");
     let mut ctx = EventCtx::default();

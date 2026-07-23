@@ -675,6 +675,62 @@ fn word_navigation_and_deletion() {
 }
 
 #[test]
+fn deleting_previous_word_only_preserves_separator_when_text_follows_cursor() {
+    let key = KeyEvent {
+        code: Key::Backspace,
+        modifiers: KeyModifiers::CONTROL,
+    };
+    let mut text = TextInput::<()>::new().value("hello world");
+    let mut password = PasswordInput::<()>::new().value("hello world");
+    text.cursor = 9;
+    password.input.cursor = 9;
+
+    assert_eq!(text.on_key(key), InputOutcome::CHANGED);
+    assert_eq!(password.on_key(key), InputOutcome::CHANGED);
+
+    assert_eq!(text.current_value(), "hello ld");
+    assert_eq!(text.cursor, 6);
+    assert_eq!(password.current_value(), "hello ld");
+    assert_eq!(password.input.cursor, 6);
+
+    text.set_value("hello world");
+    password.set_value("hello world");
+    text.cursor = 11;
+    password.input.cursor = 11;
+    assert_eq!(text.on_key(key), InputOutcome::CHANGED);
+    assert_eq!(password.on_key(key), InputOutcome::CHANGED);
+
+    assert_eq!(text.current_value(), "hello");
+    assert_eq!(text.cursor, 5);
+    assert_eq!(password.current_value(), "hello");
+    assert_eq!(password.input.cursor, 5);
+
+    text.set_value("ab cd ef");
+    password.set_value("ab cd ef");
+    text.cursor = 6;
+    password.input.cursor = 6;
+    assert_eq!(text.on_key(key), InputOutcome::CHANGED);
+    assert_eq!(password.on_key(key), InputOutcome::CHANGED);
+
+    assert_eq!(text.current_value(), "ab ef");
+    assert_eq!(text.cursor, 3);
+    assert_eq!(password.current_value(), "ab ef");
+    assert_eq!(password.input.cursor, 3);
+
+    text.set_value("ab cd ef");
+    password.set_value("ab cd ef");
+    text.cursor = 5;
+    password.input.cursor = 5;
+    assert_eq!(text.on_key(key), InputOutcome::CHANGED);
+    assert_eq!(password.on_key(key), InputOutcome::CHANGED);
+
+    assert_eq!(text.current_value(), "ab ef");
+    assert_eq!(text.cursor, 2);
+    assert_eq!(password.current_value(), "ab ef");
+    assert_eq!(password.input.cursor, 2);
+}
+
+#[test]
 fn ctrl_o_requests_external_editor() {
     let mut input = TextInput::<()>::new().value("initial");
     let mut ctx = EventCtx::default();

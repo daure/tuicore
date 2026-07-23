@@ -969,12 +969,20 @@ impl<M> TextareaInput<M> {
         }
 
         let chars = self.value.chars().collect::<Vec<_>>();
+        let text_immediately_follows_cursor = chars
+            .get(self.cursor)
+            .is_some_and(|value| !value.is_whitespace());
         let mut start = self.cursor;
         while start > 0 && chars[start - 1].is_whitespace() {
             start -= 1;
         }
         while start > 0 && !chars[start - 1].is_whitespace() {
             start -= 1;
+        }
+        if !text_immediately_follows_cursor {
+            while start > 0 && chars[start - 1].is_whitespace() {
+                start -= 1;
+            }
         }
 
         self.remove_range(start, self.cursor);
