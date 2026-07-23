@@ -71,6 +71,10 @@ impl HotkeySequenceMatcher {
         !self.prefix.is_empty()
     }
 
+    pub(crate) fn can_commit_pending(&self) -> bool {
+        self.pending_match.is_some()
+    }
+
     pub fn remaining_timeout(&self) -> Option<Duration> {
         self.is_pending()
             .then(|| self.timeout.saturating_sub(self.elapsed))
@@ -82,6 +86,10 @@ impl HotkeySequenceMatcher {
         }
         if key.code == Key::Enter && key.modifiers == KeyModifiers::NONE {
             let Some(index) = self.pending_match else {
+                if self.is_pending() {
+                    self.clear();
+                    return HotkeyMatch::Canceled;
+                }
                 return HotkeyMatch::Ignored;
             };
             self.clear();
@@ -523,6 +531,7 @@ mod tests {
             matcher.on_key(KeyEvent::from(Key::Char('s'))),
             HotkeyMatch::Pending
         );
+        assert!(matcher.can_commit_pending());
         assert_eq!(
             matcher.on_key(KeyEvent::from(Key::Enter)),
             HotkeyMatch::Matched(0)
@@ -530,17 +539,19 @@ mod tests {
     }
 
     #[test]
-    fn matcher_does_not_commit_unique_completion_on_enter() {
+    fn matcher_cancels_incomplete_prefix_on_enter() {
         let mut matcher = HotkeySequenceMatcher::new(["v", "sa", "ta"]);
 
         assert_eq!(
             matcher.on_key(KeyEvent::from(Key::Char('t'))),
             HotkeyMatch::Pending
         );
+        assert!(!matcher.can_commit_pending());
         assert_eq!(
             matcher.on_key(KeyEvent::from(Key::Enter)),
-            HotkeyMatch::Ignored
+            HotkeyMatch::Canceled
         );
+        assert!(!matcher.is_pending());
     }
 
     #[test]

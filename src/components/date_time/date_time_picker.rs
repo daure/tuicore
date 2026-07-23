@@ -2,7 +2,7 @@ use std::time::Duration as StdDuration;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use time::PrimitiveDateTime;
+use time::{PrimitiveDateTime, Weekday};
 
 use crate::event::{KeyEvent, TuiEvent};
 use crate::{
@@ -59,6 +59,15 @@ impl<M> DateTimePicker<M> {
     pub fn layout(mut self, layout: DateTimePickerLayout) -> Self {
         self.layout = layout;
         self
+    }
+
+    pub fn first_day_of_week(mut self, weekday: Weekday) -> Self {
+        self.set_first_day_of_week(weekday);
+        self
+    }
+
+    pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
+        self.date.set_first_day_of_week(weekday);
     }
 
     pub fn on_select(mut self, handler: impl Fn(PrimitiveDateTime) -> M + 'static) -> Self {

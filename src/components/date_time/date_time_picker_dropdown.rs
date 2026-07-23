@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use time::{Date, PrimitiveDateTime};
+use time::{Date, PrimitiveDateTime, Weekday};
 
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher,
@@ -75,6 +75,15 @@ impl<M> DateTimePickerDropdown<M> {
     pub fn today(mut self, today: Date) -> Self {
         self.date = self.date.today(today);
         self
+    }
+
+    pub fn first_day_of_week(mut self, weekday: Weekday) -> Self {
+        self.set_first_day_of_week(weekday);
+        self
+    }
+
+    pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
+        self.date.set_first_day_of_week(weekday);
     }
 
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {

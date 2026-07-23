@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn date_picker_dropdown_normalizes_committed_hotkey() {
@@ -9,6 +10,31 @@ fn date_picker_dropdown_normalizes_committed_hotkey() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(dropdown.is_open());
+}
+
+#[test]
+fn date_picker_dropdown_forwards_first_day_of_week_builder_and_setter() {
+    let date = Date::from_calendar_date(2026, time::Month::June, 15).unwrap();
+    let mut dropdown = DatePickerDropdown::<()>::new()
+        .today(date)
+        .first_day_of_week(time::Weekday::Sunday);
+    let mut terminal = Terminal::new(TestBackend::new(23, 10)).expect("terminal should build");
+    terminal
+        .draw(|frame| dropdown.picker.render(frame, frame.area()))
+        .expect("picker should render");
+    assert_eq!(
+        terminal.backend().buffer().cell((1, 2)).unwrap().symbol(),
+        "S"
+    );
+
+    dropdown.set_first_day_of_week(time::Weekday::Monday);
+    terminal
+        .draw(|frame| dropdown.picker.render(frame, frame.area()))
+        .expect("picker should render");
+    assert_eq!(
+        terminal.backend().buffer().cell((1, 2)).unwrap().symbol(),
+        "M"
+    );
 }
 
 #[test]

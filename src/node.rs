@@ -852,6 +852,18 @@ impl LayoutCtx {
         true
     }
 
+    pub fn with_focus_events_before_global_hotkeys<R>(
+        &mut self,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let first_target = self.focus_paths.len();
+        let result = layout(self);
+        for target in &mut self.focus_paths[first_target..] {
+            target.focused_events_before_global_hotkeys = true;
+        }
+        result
+    }
+
     pub fn set_focus_tab_stop(&mut self, id: FocusId, tab_stop: bool) -> bool {
         let Some(target) = self
             .focus_paths
@@ -1353,6 +1365,21 @@ mod tests {
 
         assert_eq!(ctx.focus_targets().len(), 1);
         assert_eq!(ctx.focus_targets()[0].id.as_str(), "child");
+    }
+
+    #[test]
+    fn scoped_focus_events_first_marks_only_new_targets() {
+        let mut ctx = LayoutCtx::new();
+        ctx.register_focusable(FocusId::new("before"), Rect::new(0, 0, 1, 1), true);
+
+        ctx.with_focus_events_before_global_hotkeys(|ctx| {
+            ctx.register_focusable(FocusId::new("inside"), Rect::new(1, 0, 1, 1), true);
+        });
+        ctx.register_focusable(FocusId::new("after"), Rect::new(2, 0, 1, 1), true);
+
+        assert!(!ctx.focus_targets()[0].focused_events_before_global_hotkeys);
+        assert!(ctx.focus_targets()[1].focused_events_before_global_hotkeys);
+        assert!(!ctx.focus_targets()[2].focused_events_before_global_hotkeys);
     }
 
     #[test]

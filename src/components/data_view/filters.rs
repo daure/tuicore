@@ -176,7 +176,7 @@ where
         values
     }
 
-    pub(super) fn table_transform_controls_enabled(&self) -> bool {
-        self.headers && self.columns.len() > 1
+    pub(super) fn filter_controls_enabled(&self) -> bool {
+        self.filter_controls && self.headers && self.columns.len() > 1
     }
 }

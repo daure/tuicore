@@ -60,6 +60,8 @@ pub struct Tabs<M = ()> {
     selected_color: ColorTween,
     body_area: Rect,
     focus_path: TreePath,
+    last_focused_targets: Vec<Option<(TreePath, FocusId)>>,
+    body_focus_transfer_pending: bool,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
@@ -115,6 +117,7 @@ where
         let hotkey_entries = tab_hotkey_entries(&tab_hotkeys);
         let hotkey_matcher =
             HotkeySequenceMatcher::new(hotkey_entries.iter().map(|(_, hotkey)| hotkey.as_str()));
+        let last_focused_targets = vec![None; body_keys.len()];
 
         Self {
             titles,
@@ -136,6 +139,8 @@ where
             selected_color: ColorTween::idle(theme.muted_fg()),
             body_area: Rect::default(),
             focus_path: TreePath::default(),
+            last_focused_targets,
+            body_focus_transfer_pending: false,
             hotkey: None,
             hotkey_matcher,
             pending_hotkey_prefix: None,
@@ -1385,10 +1390,24 @@ where
         ctx.request_redraw();
         ctx.request_layout();
         if self.selected_index() != previous {
-            ctx.focus(FocusRequest::FirstChildOf {
-                path: self.focus_path.clone(),
-                id: FocusId::new(TABS_FOCUS),
-            });
+            self.body_focus_transfer_pending = true;
+            if let Some((path, id)) = self
+                .last_focused_targets
+                .get(self.selected_index())
+                .and_then(Clone::clone)
+            {
+                let path = path
+                    .keys()
+                    .iter()
+                    .cloned()
+                    .fold(self.focus_path.clone(), |path, key| path.child(key));
+                ctx.focus(FocusRequest::TargetAt { path, id });
+            } else {
+                ctx.focus(FocusRequest::FirstChildOf {
+                    path: self.focus_path.clone(),
+                    id: FocusId::new(TABS_FOCUS),
+                });
+            }
         }
     }
 
@@ -1613,8 +1632,23 @@ where
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
         if target.path.is_empty() {
+            if !focused && self.body_focus_transfer_pending {
+                return;
+            }
+            if focused {
+                self.body_focus_transfer_pending = false;
+            }
             self.focus(Some(&target.id), focused, ctx);
         } else {
+            if focused
+                && let Some(index) = self
+                    .body_keys
+                    .iter()
+                    .position(|key| target.path.first() == Some(key))
+            {
+                self.last_focused_targets[index] = Some((target.path.clone(), target.id.clone()));
+                self.body_focus_transfer_pending = false;
+            }
             if focused || self.target_is_in_selected_body(target) {
                 self.set_focused(focused, ctx.animation());
             }
@@ -1818,6 +1852,34 @@ mod tests {
     }
 
     #[test]
+    fn blurring_tabs_shell_during_switch_to_body_keeps_transition_active() {
+        let ticks = Rc::new(RefCell::new(0));
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::new("One", TickProbe { ticks }),
+            Tab::text("Two", ""),
+        ])
+        .selected(1)
+        .focused(true);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(Rect::new(0, 0, 20, 5), &mut layout);
+        let shell = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id == FocusId::new(TABS_FOCUS))
+            .expect("tabs shell should be focusable")
+            .clone();
+
+        tabs.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
+            &mut EventCtx::default(),
+        );
+        tabs.dispatch_focus(&shell, false, &mut FocusCtx::default());
+
+        assert_eq!(tabs.selected_index(), 0);
+        assert!(tabs.transition.is_active());
+    }
+
+    #[test]
     fn tabs_layout_registers_selected_body_before_shell_focus() {
         let ticks = Rc::new(RefCell::new(0));
         let mut tabs = Tabs::<()>::new(vec![
@@ -1856,6 +1918,62 @@ mod tests {
             Some(&FocusRequest::FirstChildOf {
                 path: TreePath::default(),
                 id: FocusId::new(TABS_FOCUS),
+            })
+        );
+    }
+
+    #[test]
+    fn returning_to_tab_restores_its_last_focused_child() {
+        let ticks = Rc::new(RefCell::new(0));
+        let mut tabs = Tabs::<()>::new(vec![
+            Tab::new(
+                "One",
+                TickProbe {
+                    ticks: Rc::clone(&ticks),
+                },
+            ),
+            Tab::new("Two", TickProbe { ticks }),
+        ]);
+        let area = Rect::new(0, 0, 20, 5);
+        let tabs_key = ChildKey::new("tabs-root");
+
+        let mut first_layout = LayoutCtx::new();
+        first_layout.push_slot(tabs_key.clone(), area, |ctx| {
+            tabs.layout(area, ctx);
+        });
+        let first_body = first_layout.focus_targets()[0].clone();
+        tabs.dispatch_focus(
+            &first_body.for_child(&tabs_key).unwrap(),
+            true,
+            &mut FocusCtx::default(),
+        );
+
+        tabs.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
+            &mut EventCtx::default(),
+        );
+        let mut second_layout = LayoutCtx::new();
+        second_layout.push_slot(tabs_key.clone(), area, |ctx| {
+            tabs.layout(area, ctx);
+        });
+        let second_body = second_layout.focus_targets()[0].clone();
+        tabs.dispatch_focus(
+            &second_body.for_child(&tabs_key).unwrap(),
+            true,
+            &mut FocusCtx::default(),
+        );
+
+        let mut return_ctx = EventCtx::default();
+        tabs.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
+            &mut return_ctx,
+        );
+
+        assert_eq!(
+            return_ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: first_body.path,
+                id: first_body.id,
             })
         );
     }

@@ -78,6 +78,7 @@ impl Animated for Spinner {
 
         TickResult {
             changed,
+            layout: false,
             active: true,
             next_tick: None,
         }

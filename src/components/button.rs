@@ -9,10 +9,10 @@ use ratatui::widgets::Paragraph;
 use crate::animation::{Easing, Tween};
 use crate::event::{Key, KeyEvent, TuiEvent};
 use crate::{
-    Animated, AnimationSettings, AnimationSpec, ColorTween, EventCtx, EventOutcome, FocusCtx,
-    FocusId, HintSource, HotkeyEvent, HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher,
-    LayoutCtx, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TuiNode,
-    hotkey_label_spans, hotkey_sequence_to_event, keybindings, line_width, theme,
+    Animated, AnimationSettings, ColorTween, EventCtx, EventOutcome, FocusCtx, FocusId, HintSource,
+    HotkeyEvent, HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutProposal,
+    LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TuiNode, hotkey_label_spans,
+    hotkey_sequence_to_event, keybindings, line_width, theme,
 };
 
 const BUTTON_FOCUS: &str = "button";
@@ -122,12 +122,12 @@ impl<M> Button<M> {
         self.focused
     }
 
-    pub fn set_focused(&mut self, focused: bool, settings: AnimationSettings) {
+    pub fn set_focused(&mut self, focused: bool, _settings: AnimationSettings) {
         if self.focused == focused {
             return;
         }
         self.focused = focused;
-        self.start_color_transition(settings);
+        self.sync_idle_colors();
     }
 
     pub fn press(&mut self, settings: AnimationSettings) -> ButtonOutcome {
@@ -243,28 +243,6 @@ impl<M> Button<M> {
         } else {
             theme.text_fg()
         });
-    }
-
-    fn start_color_transition(&mut self, settings: AnimationSettings) {
-        let theme = theme();
-        self.background_color.start(
-            if self.focused {
-                theme.highlight_bg()
-            } else {
-                theme.border_fg()
-            },
-            settings,
-            focus_color_animation(),
-        );
-        self.text_color.start(
-            if self.focused {
-                theme.highlight_fg()
-            } else {
-                theme.text_fg()
-            },
-            settings,
-            focus_color_animation(),
-        );
     }
 
     fn is_showing_press_feedback(&self) -> bool {
@@ -413,10 +391,6 @@ impl<M> Animated for Button<M> {
     }
 }
 
-fn focus_color_animation() -> AnimationSpec {
-    AnimationSpec::default()
-}
-
 fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
     if hotkey.modifiers != key.modifiers {
         return false;
@@ -473,6 +447,23 @@ mod tests {
         let target = &layout.focus_targets()[0];
         assert!(!target.tab_stop);
         assert_eq!(target.hotkey_sequences, vec!["b"]);
+    }
+
+    #[test]
+    fn focus_colors_change_instantly() {
+        let mut button = Button::<()>::new("Run");
+
+        button.set_focused(true, AnimationSettings::default());
+        assert!(!button.background_color.is_active());
+        assert!(!button.text_color.is_active());
+        assert_eq!(button.visible_background_color(), theme().highlight_bg());
+        assert_eq!(button.visible_text_color(), theme().highlight_fg());
+
+        button.set_focused(false, AnimationSettings::default());
+        assert!(!button.background_color.is_active());
+        assert!(!button.text_color.is_active());
+        assert_eq!(button.visible_background_color(), theme().border_fg());
+        assert_eq!(button.visible_text_color(), theme().text_fg());
     }
 
     #[test]

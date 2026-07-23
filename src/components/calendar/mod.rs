@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use time::{Date, Duration, Weekday};
 
-mod date_math;
+pub(crate) mod date_math;
 mod model;
 
 pub use model::{
@@ -50,7 +50,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     stack: Vec<CalendarView>,
     cursor: Date,
     today: Date,
-    first_weekday: Weekday,
+    first_day_of_week: Weekday,
     highlighted_entry: Option<usize>,
     focused: bool,
     hotkey: Option<String>,
@@ -137,7 +137,7 @@ where
             stack: Vec::new(),
             cursor: today,
             today,
-            first_weekday: Weekday::Monday,
+            first_day_of_week: Weekday::Monday,
             highlighted_entry: None,
             focused: false,
             hotkey: None,
@@ -160,9 +160,17 @@ where
         self
     }
 
-    pub fn first_weekday(mut self, weekday: Weekday) -> Self {
-        self.first_weekday = weekday;
+    pub fn first_day_of_week(mut self, weekday: Weekday) -> Self {
+        self.set_first_day_of_week(weekday);
         self
+    }
+
+    pub fn first_weekday(self, weekday: Weekday) -> Self {
+        self.first_day_of_week(weekday)
+    }
+
+    pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
+        self.first_day_of_week = weekday;
     }
 
     pub fn view(mut self, view: CalendarView) -> Self {
@@ -231,7 +239,7 @@ where
     pub fn current_range(&self) -> (Date, Date) {
         match self.view {
             CalendarView::Month => (first_of_month(self.cursor), last_of_month(self.cursor)),
-            CalendarView::Week => week_range(self.cursor, self.first_weekday),
+            CalendarView::Week => week_range(self.cursor, self.first_day_of_week),
             CalendarView::Day | CalendarView::EventDetail => (self.cursor, self.cursor),
         }
     }
@@ -487,7 +495,9 @@ where
     fn home(&mut self) -> CalendarOutcome {
         match self.view {
             CalendarView::Month => self.set_cursor(first_of_month(self.cursor)),
-            CalendarView::Week => self.set_cursor(week_range(self.cursor, self.first_weekday).0),
+            CalendarView::Week => {
+                self.set_cursor(week_range(self.cursor, self.first_day_of_week).0)
+            }
             CalendarView::Day => self.highlight_entry_boundary(false),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
@@ -496,7 +506,9 @@ where
     fn end(&mut self) -> CalendarOutcome {
         match self.view {
             CalendarView::Month => self.set_cursor(last_of_month(self.cursor)),
-            CalendarView::Week => self.set_cursor(week_range(self.cursor, self.first_weekday).1),
+            CalendarView::Week => {
+                self.set_cursor(week_range(self.cursor, self.first_day_of_week).1)
+            }
             CalendarView::Day => self.highlight_entry_boundary(true),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
@@ -732,7 +744,7 @@ where
             .split(inner);
         self.render_weekday_header(frame, rows[0]);
         self.render_month_grid_lines(frame, &rows[1..]);
-        let start = week_range(first_of_month(self.cursor), self.first_weekday).0;
+        let start = week_range(first_of_month(self.cursor), self.first_day_of_week).0;
         for week in 0..6 {
             let cols = week_columns(rows[week + 1]);
             for day in 0..7 {
@@ -777,7 +789,7 @@ where
     }
 
     fn render_week(&self, frame: &mut Frame, area: Rect) {
-        let (start, end) = week_range(self.cursor, self.first_weekday);
+        let (start, end) = week_range(self.cursor, self.first_day_of_week);
         self.render_panel(frame, area, format!(" Week • {start} — {end} "));
         let inner = Panel::inner_area(area);
         if inner.height == 0 {
@@ -938,7 +950,10 @@ where
 
     fn render_weekday_header(&self, frame: &mut Frame, area: Rect) {
         let cols = week_columns(area);
-        for (index, label) in weekday_labels(self.first_weekday).into_iter().enumerate() {
+        for (index, label) in weekday_labels(self.first_day_of_week)
+            .into_iter()
+            .enumerate()
+        {
             frame.render_widget(
                 Paragraph::new(label).style(Style::default().fg(theme().muted_fg())),
                 cols[index],

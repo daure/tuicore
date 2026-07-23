@@ -12,6 +12,32 @@ fn time_picker_arrow_keys_move_minutes_by_one() {
 }
 
 #[test]
+fn time_picker_uses_plain_hjkl_instead_of_control_hjkl() {
+    let mut picker = TimePicker::<()>::new();
+
+    let control = |code| KeyEvent {
+        code,
+        modifiers: crate::KeyModifiers::CONTROL,
+    };
+    assert_eq!(
+        picker.on_key(control(Key::Char('l'))),
+        PickerOutcome::IGNORED
+    );
+    assert_eq!(picker.active_field(), TimeField::Hour);
+
+    assert!(picker.on_key(Key::Char('l')).changed);
+    assert_eq!(picker.active_field(), TimeField::Minute);
+    assert!(picker.on_key(Key::Char('h')).changed);
+    assert_eq!(picker.active_field(), TimeField::Hour);
+
+    let hour = picker.draft_value().hour();
+    assert!(picker.on_key(Key::Char('k')).changed);
+    assert_eq!(picker.draft_value().hour(), (hour + 1) % 24);
+    assert!(picker.on_key(Key::Char('j')).changed);
+    assert_eq!(picker.draft_value().hour(), hour);
+}
+
+#[test]
 fn time_picker_accepts_typed_hour_and_clips_to_bounds() {
     let mut picker = TimePicker::<()>::new();
 

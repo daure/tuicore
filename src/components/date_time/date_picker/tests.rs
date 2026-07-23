@@ -1,5 +1,77 @@
 use super::*;
-use crate::Key;
+use crate::{Key, KeyBindings, KeyModifiers, KeySpec, keybindings};
+use ratatui::{Terminal, backend::TestBackend};
+
+struct KeyBindingsGuard {
+    previous: KeyBindings,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl KeyBindingsGuard {
+    fn replace(next: KeyBindings) -> Self {
+        let lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
+        let previous = keybindings();
+        crate::set_keybindings(next);
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for KeyBindingsGuard {
+    fn drop(&mut self) {
+        crate::set_keybindings(self.previous.clone());
+    }
+}
+
+fn rendered_rows(picker: &DatePicker<()>) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(23, 10)).expect("terminal should build");
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+    let buffer = terminal.backend().buffer();
+    (0..10)
+        .map(|y| {
+            (1..22)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn date_picker_defaults_to_monday_first_with_dates_in_matching_columns() {
+    let date = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let rows = rendered_rows(&DatePicker::new().today(date));
+
+    assert_eq!(rows[2], "Mo Tu We Th Fr Sa Su ");
+    assert_eq!(rows[3], " 1  2  3  4  5  6  7 ");
+}
+
+#[test]
+fn date_picker_sunday_override_rotates_header_and_dates() {
+    let date = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let rows = rendered_rows(
+        &DatePicker::new()
+            .today(date)
+            .first_day_of_week(Weekday::Sunday),
+    );
+
+    assert_eq!(rows[2], "Su Mo Tu We Th Fr Sa ");
+    assert_eq!(rows[3], "31  1  2  3  4  5  6 ");
+}
+
+#[test]
+fn date_picker_setter_changes_existing_instance_rendering() {
+    let date = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::new().today(date);
+    assert!(rendered_rows(&picker)[2].starts_with("Mo "));
+
+    picker.set_first_day_of_week(Weekday::Sunday);
+
+    assert!(rendered_rows(&picker)[2].starts_with("Su "));
+}
 
 #[test]
 fn month_navigation_clamps_invalid_days() {
@@ -30,6 +102,75 @@ fn date_picker_switches_month_and_year_views() {
     assert_eq!(picker.view, DatePickerView::Month);
     picker.on_key(Key::Enter);
     assert_eq!(picker.view, DatePickerView::Day);
+}
+
+#[test]
+fn date_picker_uses_arrows_and_plain_hjkl_in_every_view() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let cases = [
+        (Key::Left, 'h'),
+        (Key::Down, 'j'),
+        (Key::Up, 'k'),
+        (Key::Right, 'l'),
+    ];
+
+    for view in [
+        DatePickerView::Day,
+        DatePickerView::Month,
+        DatePickerView::Year,
+    ] {
+        for (arrow, character) in cases {
+            let mut arrow_picker = DatePicker::<()>::new().today(date);
+            arrow_picker.view = view;
+            assert!(arrow_picker.on_key(arrow).changed);
+
+            let mut plain_picker = DatePicker::<()>::new().today(date);
+            plain_picker.view = view;
+            assert!(plain_picker.on_key(Key::Char(character)).changed);
+            assert_eq!(plain_picker.cursor(), arrow_picker.cursor());
+
+            let mut controlled_picker = DatePicker::<()>::new().today(date);
+            controlled_picker.view = view;
+            assert_eq!(
+                controlled_picker.on_key(KeyEvent {
+                    code: Key::Char(character),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
+                PickerOutcome::IGNORED
+            );
+            assert_eq!(controlled_picker.cursor(), date);
+        }
+    }
+}
+
+#[test]
+fn date_picker_directional_bindings_can_be_overridden_with_builder() {
+    let _guard = KeyBindingsGuard::replace(
+        KeyBindings::new().with_date_time_picker_line_right([KeySpec::plain('d')]),
+    );
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DatePicker::<()>::new().today(date);
+
+    assert!(picker.on_key(Key::Char('d')).changed);
+    assert_eq!(picker.cursor(), date + Duration::days(1));
+    assert_eq!(picker.on_key(Key::Right), PickerOutcome::IGNORED);
+}
+
+#[test]
+fn date_picker_directional_bindings_can_be_overridden_with_toml() {
+    let bindings = KeyBindings::from_toml_str(
+        r#"
+        [date_time_picker]
+        line_up = "w"
+        "#,
+    );
+    let _guard = KeyBindingsGuard::replace(bindings);
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DatePicker::<()>::new().today(date);
+
+    assert!(picker.on_key(Key::Char('w')).changed);
+    assert_eq!(picker.cursor(), date - Duration::days(7));
+    assert_eq!(picker.on_key(Key::Up), PickerOutcome::IGNORED);
 }
 
 #[test]

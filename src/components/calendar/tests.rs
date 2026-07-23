@@ -1,5 +1,6 @@
 use super::*;
 use crate::event::{Key, KeyModifiers};
+use ratatui::{Terminal, backend::TestBackend};
 use time::{Duration, Month, PrimitiveDateTime, Time};
 
 #[derive(Clone)]
@@ -7,6 +8,26 @@ struct DemoEntry {
     id: &'static str,
     title: &'static str,
     span: CalendarSpan,
+}
+
+fn rendered_month_header(calendar: &Calendar<DemoEntry, &'static str>) -> Vec<String> {
+    let area = Rect::new(0, 0, 70, 12);
+    let inner = Panel::inner_area(area);
+    let columns = week_columns(Rect::new(inner.x, inner.y, inner.width, 1));
+    let mut terminal =
+        Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal should build");
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .expect("calendar should render");
+    let buffer = terminal.backend().buffer();
+    columns
+        .into_iter()
+        .map(|column| {
+            (column.x..column.x + 3)
+                .map(|x| buffer.cell((x, inner.y)).unwrap().symbol())
+                .collect()
+        })
+        .collect()
 }
 
 #[test]
@@ -143,6 +164,50 @@ fn week_range_respects_first_weekday() {
     assert_eq!(
         calendar.current_range(),
         (date(2026, Month::June, 21), date(2026, Month::June, 27))
+    );
+}
+
+#[test]
+fn week_range_defaults_to_monday() {
+    let calendar = demo_calendar().view(CalendarView::Week);
+
+    assert_eq!(
+        calendar.current_range(),
+        (date(2026, Month::June, 22), date(2026, Month::June, 28))
+    );
+}
+
+#[test]
+fn first_day_of_week_builder_and_setter_change_week_range() {
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Week)
+        .first_day_of_week(Weekday::Sunday);
+    assert_eq!(
+        calendar.current_range(),
+        (date(2026, Month::June, 21), date(2026, Month::June, 27))
+    );
+
+    calendar.set_first_day_of_week(Weekday::Tuesday);
+
+    assert_eq!(
+        calendar.current_range(),
+        (date(2026, Month::June, 16), date(2026, Month::June, 22))
+    );
+}
+
+#[test]
+fn first_day_of_week_builder_and_setter_change_month_header() {
+    let mut calendar = demo_calendar().first_day_of_week(Weekday::Sunday);
+    assert_eq!(
+        rendered_month_header(&calendar),
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    );
+
+    calendar.set_first_day_of_week(Weekday::Monday);
+
+    assert_eq!(
+        rendered_month_header(&calendar),
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     );
 }
 

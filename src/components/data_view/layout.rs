@@ -5,8 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 
 use super::{
-    CellContext, Column, DataView, DataViewInteraction, FILTER_DROPDOWN_SLOT, SEARCH_SLOT,
-    SelectionMode, SortDirection, VisibleRow, column_key,
+    CELL_RIGHT_PADDING, CellContext, Column, DataView, DataViewInteraction, FILTER_DROPDOWN_SLOT,
+    SEARCH_SLOT, SelectionMode, SortDirection, VisibleRow, column_key,
 };
 use crate::{
     ChildKey, LayoutCtx, ScrollGeometry, ScrollOffset, ScrollSize, TuiNode, line_width, preset,
@@ -111,7 +111,9 @@ where
         configured
             .into_iter()
             .zip(rendered)
-            .map(|(configured, rendered)| configured.max(rendered))
+            .map(|(configured, rendered)| {
+                configured.max(rendered.saturating_add(CELL_RIGHT_PADDING))
+            })
             .collect()
     }
 

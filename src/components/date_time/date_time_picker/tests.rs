@@ -53,3 +53,19 @@ fn date_time_picker_value_none_clears_date_selection() {
     assert_eq!(picker.current_value(), None);
     assert_eq!(picker.time.current_value(), time);
 }
+
+#[test]
+fn date_time_picker_forwards_first_day_of_week_builder_and_setter() {
+    let mut picker = DateTimePicker::<()>::new().first_day_of_week(time::Weekday::Sunday);
+    assert_eq!(
+        picker.date.configured_first_day_of_week(),
+        time::Weekday::Sunday
+    );
+
+    picker.set_first_day_of_week(time::Weekday::Monday);
+
+    assert_eq!(
+        picker.date.configured_first_day_of_week(),
+        time::Weekday::Monday
+    );
+}

@@ -722,6 +722,7 @@ impl AxisScroll {
             let changed = self.snap_to(self.target);
             return TickResult {
                 changed,
+                layout: false,
                 active: false,
                 next_tick: None,
             };
@@ -730,6 +731,7 @@ impl AxisScroll {
         let _tick = self.animator.tick(dt, settings);
         TickResult {
             changed: before_offset != self.offset(),
+            layout: false,
             active: self.is_active(),
             next_tick: None,
         }

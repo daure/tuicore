@@ -150,6 +150,7 @@ impl Easing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TickResult {
     pub changed: bool,
+    pub layout: bool,
     pub active: bool,
     pub next_tick: Option<Duration>,
 }
@@ -157,18 +158,21 @@ pub struct TickResult {
 impl TickResult {
     pub const IDLE: Self = Self {
         changed: false,
+        layout: false,
         active: false,
         next_tick: None,
     };
 
     pub const CHANGED: Self = Self {
         changed: true,
+        layout: false,
         active: false,
         next_tick: None,
     };
 
     pub const ACTIVE: Self = Self {
         changed: true,
+        layout: false,
         active: true,
         next_tick: None,
     };
@@ -183,6 +187,7 @@ impl TickResult {
     pub fn merge(self, other: Self) -> Self {
         Self {
             changed: self.changed || other.changed,
+            layout: self.layout || other.layout,
             active: self.active || other.active,
             next_tick: match (self.next_tick, other.next_tick) {
                 (Some(left), Some(right)) => Some(left.min(right)),
@@ -268,6 +273,7 @@ impl Tween {
         self.active = false;
         TickResult {
             changed,
+            layout: false,
             active: false,
             next_tick: None,
         }
@@ -283,6 +289,7 @@ impl Tween {
         self.active = false;
         TickResult {
             changed,
+            layout: false,
             active: false,
             next_tick: None,
         }
@@ -358,6 +365,7 @@ impl ColorTween {
         self.tween.snap_to_end();
         TickResult {
             changed,
+            layout: false,
             active: false,
             next_tick: None,
         }
@@ -441,6 +449,7 @@ impl ScrollAnimator {
             self.snap_to(self.target);
             return TickResult {
                 changed,
+                layout: false,
                 active: false,
                 next_tick: None,
             };
@@ -457,6 +466,7 @@ impl ScrollAnimator {
 
         TickResult {
             changed: before != self.current,
+            layout: false,
             active: self.is_active(),
             next_tick: None,
         }

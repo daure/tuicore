@@ -3,7 +3,7 @@ mod calendar;
 mod chip;
 mod confirmation_dialog;
 mod data_view;
-mod date_time;
+pub mod date_time;
 mod date_time_indicator;
 mod dialog;
 mod dialog_layer;
@@ -54,7 +54,7 @@ pub use data_view::{
 };
 pub use date_time::{
     DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
-    PickerOutcome, TimeField, TimePicker, TimePrecision,
+    PickerOutcome, RelativeDate, RelativeDateMode, TimeField, TimePicker, TimePrecision,
 };
 pub use dialog::{
     Dialog, DialogAction, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition,

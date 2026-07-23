@@ -8,10 +8,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
 use super::{
-    CellContext, CheckState, DataView, DataViewInteraction, SelectionMode, SortDirection,
-    VisibleRow,
+    CELL_RIGHT_PADDING, CellContext, CheckState, DataView, DataViewInteraction, SelectionMode,
+    SortDirection, VisibleRow,
 };
-use crate::search::{SearchMode, search_match};
+use crate::search::{MatchSpan, SearchMode, search_match};
 use crate::{RenderCtx, keybindings, preset, theme};
 
 impl<T, Id> DataView<T, Id>
@@ -131,7 +131,7 @@ where
         let data_keys = bindings.data_view();
         let (search_area, summary_area) = self.action_bar_areas(area);
         self.search_input.render(frame, search_area);
-        let filters = self.table_transform_controls_enabled().then(|| {
+        let filters = self.filter_controls_enabled().then(|| {
             if self.transform_state.filters.is_empty() {
                 format!("{} filters", data_keys.filter_label())
             } else {
@@ -232,7 +232,11 @@ where
             if column_index == 0 && (self.tree.is_some() || self.displays_selection_glyphs()) {
                 line = self.with_row_prefix(line, row, selection_descendants);
             }
-            line = underline_search_matches(line, self.transform_state.search.trim());
+            line = underline_search_matches(
+                line,
+                self.transform_state.search.trim(),
+                self.search_mode,
+            );
             let mut paragraph = Paragraph::new(line).scroll((0, cell_area.scroll_x));
             if let Some(style) = row_style {
                 paragraph = paragraph.style(style);
@@ -352,7 +356,7 @@ where
                 let cell = Rect::new(
                     (*x).min(u16::MAX as usize) as u16,
                     viewport.y,
-                    width as u16,
+                    width.saturating_sub(CELL_RIGHT_PADDING) as u16,
                     viewport.height,
                 );
                 *x = x.saturating_add(width);
@@ -363,7 +367,11 @@ where
     }
 }
 
-fn underline_search_matches(line: Line<'static>, search: &str) -> Line<'static> {
+fn underline_search_matches(
+    line: Line<'static>,
+    search: &str,
+    search_mode: SearchMode,
+) -> Line<'static> {
     if search.is_empty() {
         return line;
     }
@@ -373,30 +381,72 @@ fn underline_search_matches(line: Line<'static>, search: &str) -> Line<'static> 
         style,
         alignment,
     } = line;
+    let content = spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    let matches = search_highlight_spans(search, &content, search_mode);
+    let mut span_offset = 0;
     Line {
         spans: spans
             .into_iter()
-            .flat_map(|span| underline_span_matches(span, search))
+            .flat_map(|span| {
+                let underlined = underline_span_matches(span, span_offset, &matches);
+                span_offset += underlined
+                    .iter()
+                    .map(|span| span.content.len())
+                    .sum::<usize>();
+                underlined
+            })
             .collect(),
         style,
         alignment,
     }
 }
 
-fn underline_span_matches(span: Span<'static>, search: &str) -> Vec<Span<'static>> {
+fn search_highlight_spans(search: &str, content: &str, search_mode: SearchMode) -> Vec<MatchSpan> {
+    if search_mode == SearchMode::Fuzzy {
+        return search_match(search, content, search_mode)
+            .map(|matched| matched.spans)
+            .unwrap_or_default();
+    }
+
+    let mut matches = Vec::new();
+    let mut cursor = 0;
+    while cursor < content.len() {
+        let Some(matched) = search_match(search, &content[cursor..], search_mode) else {
+            break;
+        };
+        let Some(span) = matched.spans.first() else {
+            break;
+        };
+        matches.push(MatchSpan {
+            start: cursor + span.start,
+            end: cursor + span.end,
+        });
+        cursor += span.end;
+    }
+    matches
+}
+
+fn underline_span_matches(
+    span: Span<'static>,
+    span_offset: usize,
+    matches: &[MatchSpan],
+) -> Vec<Span<'static>> {
     let content = span.content.into_owned();
     let mut output = Vec::new();
     let mut cursor = 0;
+    let span_end = span_offset + content.len();
 
-    while cursor < content.len() {
-        let Some(matched) = search_match(search, &content[cursor..], SearchMode::Contains) else {
-            break;
-        };
-        let Some(span_match) = matched.spans.first() else {
-            break;
-        };
-        let start = cursor + span_match.start;
-        let end = cursor + span_match.end;
+    for matched in matches {
+        let start = matched.start.max(span_offset);
+        let end = matched.end.min(span_end);
+        if start >= end {
+            continue;
+        }
+        let start = start - span_offset;
+        let end = end - span_offset;
         if start > cursor {
             output.push(Span::styled(content[cursor..start].to_string(), span.style));
         }

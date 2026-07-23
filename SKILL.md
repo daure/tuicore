@@ -29,7 +29,7 @@ Use `fill(1)` for main content regions that should consume remaining space.
 - `Menu` — trigger-driven popup actions. Use for compact command lists.
 - `StatusBar` — app chrome for menu/theme/AI/weather/time indicators.
 - `AiDock` — modal chat/tool assistant surface with configurable tool approval policy.
-- `WeatherIndicator` / `WeatherForecastDialog` / `DateTimeIndicator` — status-bar primitives for weather and time display.
+- `WeatherIndicator` / `WeatherForecastDialog` / `DateTimeIndicator` — status-bar primitives for weather and time display. `RelativeDate` formats against a live or fixed reference in distance or calendar-week mode.
 
 ## Overlay portals
 
@@ -126,6 +126,7 @@ Components participate in focus navigation by registering focus targets and reac
   - `focused: bool`: indicates if the component gained (`true`) or lost (`false`) focus.
   - `target_id: Option<&FocusId>`: indicates which sub-element within the component gained focus.
 - **Requesting Focus**: Event handlers can request focus changes on the active `EventCtx` (e.g., `ctx.focus(FocusRequest::Next)`, `ctx.focus_next()`, `ctx.focus_previous()`, or `ctx.unfocus()`).
+- **Shell shortcuts before mnemonics**: Wrap a layout subtree with `ctx.with_focus_events_before_global_hotkeys(...)` when its focused descendants must receive shell keys such as Escape before global hotkey matching.
 - **Focus Routing**: Complex components and containers manage focus internally or route focus using `FocusChain` / `FocusRouter` (helper utilities that advance focus along an array of IDs based on key inputs). Custom containers must forward focus down the tree in `dispatch_focus(target, focused, ctx)` via `slot.dispatch_focus()`.
 
 ## Keyboard Shortcuts & Mnemonics

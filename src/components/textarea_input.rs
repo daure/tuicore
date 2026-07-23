@@ -19,9 +19,10 @@ use crate::{ScrollAxes, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui
 
 use super::Panel;
 use super::text_input::{
-    CursorFade, InputChrome, InputOutcome, append_unfocused_hotkey, cell_width, display_char,
-    focus_navigation_key, label_with_visible_hotkey, placeholder_label, placeholder_line,
-    selected_input_style, text_char, visible_start_for_cursor,
+    CursorFade, InputChrome, InputOutcome, append_unfocused_hotkey, cell_width, dim_buffer_area,
+    display_char, focus_navigation_key, label_with_visible_hotkey, placeholder_label,
+    placeholder_line, restore_disabled_chrome_labels, selected_input_style, text_char,
+    visible_start_for_cursor,
 };
 
 const TEXTAREA_FOCUS: &str = "textarea";
@@ -30,6 +31,7 @@ const TAB_INSERT: &str = "    ";
 pub struct TextareaInput<M = ()> {
     value: String,
     placeholder: String,
+    disabled: bool,
     hotkey: Option<String>,
     cursor: usize,
     focused: bool,
@@ -163,6 +165,7 @@ impl<M> TextareaInput<M> {
         Self {
             value: String::new(),
             placeholder: String::new(),
+            disabled: false,
             hotkey: None,
             cursor: 0,
             focused: false,
@@ -196,6 +199,27 @@ impl<M> TextareaInput<M> {
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
+        if disabled {
+            self.insert_mode = false;
+        }
+        self.cursor_fade.reset();
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    fn cursor_visible(&self) -> bool {
+        self.focused && (self.insert_mode || self.disabled)
     }
 
     pub fn style(mut self, chrome: InputChrome) -> Self {
@@ -402,6 +426,9 @@ impl<M> TextareaInput<M> {
     }
 
     pub fn on_paste(&mut self, value: impl AsRef<str>) -> InputOutcome {
+        if self.disabled {
+            return InputOutcome::HANDLED;
+        }
         let outcome = self.insert_text(value.as_ref());
         self.clamp_lines();
         self.cursor = self.cursor.min(self.len_chars());
@@ -412,6 +439,9 @@ impl<M> TextareaInput<M> {
     }
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
+        if self.disabled {
+            return self.on_disabled_key(key);
+        }
         if matches_any(&self.keys.submit, key) {
             return InputOutcome::SUBMITTED;
         }
@@ -476,12 +506,66 @@ impl<M> TextareaInput<M> {
         }
     }
 
+    fn on_disabled_key(&mut self, key: KeyEvent) -> InputOutcome {
+        if KeySpec::key(Key::Enter).matches(key) || matches_any(&self.keys.submit, key) {
+            return InputOutcome::SUBMITTED;
+        }
+        if matches_any(&self.keys.move_line_start, key) {
+            return self.move_to(self.current_line().start);
+        }
+        if matches_any(&self.keys.move_line_end, key) {
+            return self.move_to(self.current_line().end);
+        }
+        if matches_any(&self.keys.move_previous_word, key) {
+            return self.move_previous_word();
+        }
+        if matches_any(&self.keys.move_next_word, key) {
+            return self.move_next_word();
+        }
+        if matches_any(&self.keys.move_up, key) {
+            return self.move_vertical(-1);
+        }
+        if matches_any(&self.keys.move_down, key) {
+            return self.move_vertical(1);
+        }
+        if matches_any(&self.keys.move_left, key) {
+            return self.move_left();
+        }
+        if matches_any(&self.keys.move_right, key) {
+            return self.move_right();
+        }
+        if matches_any(&self.keys.cancel, key) {
+            return InputOutcome::CANCELED;
+        }
+        if matches_any(&self.keys.clear, key)
+            || matches_any(&self.keys.delete_before_line, key)
+            || matches_any(&self.keys.delete_after_line, key)
+            || matches_any(&self.keys.delete_previous_word, key)
+            || matches_any(&self.keys.delete_next_word, key)
+            || matches_any(&self.keys.insert_tab, key)
+            || matches_any(&self.keys.insert_newline, key)
+            || matches_any(&self.keys.backspace, key)
+            || matches_any(&self.keys.delete_next, key)
+            || delete_forward_key(key)
+            || matches!(key.code, Key::Char(_) if text_char(key))
+        {
+            return InputOutcome::HANDLED;
+        }
+        InputOutcome::IDLE
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
             return;
         }
 
-        let style = if self.focused && !self.insert_mode {
+        let outer_area = Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            self.visible_outer_height(area.width, area.height),
+        );
+        let style = if self.focused && !self.insert_mode && !self.disabled {
             selected_input_style(Style::default())
         } else {
             Style::default()
@@ -499,6 +583,12 @@ impl<M> TextareaInput<M> {
         );
         self.scroll
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
+        if self.disabled {
+            dim_buffer_area(frame, outer_area, theme().subtle_fg());
+            if self.is_panel_mode() {
+                restore_disabled_chrome_labels(frame, outer_area, theme().muted_fg());
+            }
+        }
     }
 
     fn content_area(&self, area: Rect) -> Rect {
@@ -553,7 +643,7 @@ impl<M> TextareaInput<M> {
         }
 
         let theme = theme();
-        let selected = self.focused && !self.insert_mode;
+        let selected = self.focused && !self.insert_mode && !self.disabled;
         let placeholder_style = if selected {
             selected_input_style(Style::default().fg(theme.muted_fg()))
         } else {
@@ -564,7 +654,7 @@ impl<M> TextareaInput<M> {
                 &self.placeholder,
                 self.inline_hotkey(),
                 width,
-                self.focused && self.insert_mode,
+                self.cursor_visible(),
                 self.pending_hotkey_prefix.as_deref(),
                 self.cursor_fade.style(placeholder_style),
                 placeholder_style,
@@ -613,7 +703,7 @@ impl<M> TextareaInput<M> {
         cursor: Option<(usize, usize)>,
     ) -> VisibleLines {
         let theme = theme();
-        let selected = self.focused && !self.insert_mode;
+        let selected = self.focused && !self.insert_mode && !self.disabled;
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
@@ -656,7 +746,7 @@ impl<M> TextareaInput<M> {
                     .skip(range.start)
                     .take(range.len())
                     .collect::<Vec<_>>();
-                let horizontal = if self.focused && self.insert_mode && line_index == cursor_line {
+                let horizontal = if self.cursor_visible() && line_index == cursor_line {
                     visible_start_for_cursor(&line_chars, cursor_col, width)
                 } else {
                     0
@@ -733,7 +823,7 @@ impl<M> TextareaInput<M> {
             }
             let remaining = width.saturating_sub(drawn);
             let position = range.start + col;
-            if self.focused && self.insert_mode && cursor_line && position == self.cursor {
+            if self.cursor_visible() && cursor_line && position == self.cursor {
                 let value = if position < range.end {
                     chars.get(position).copied().unwrap_or(' ')
                 } else {
@@ -1023,7 +1113,7 @@ impl<M> TextareaInput<M> {
 
         let chars = self.value.chars().collect::<Vec<_>>();
         let mut rows = Vec::new();
-        let cursor_line_col = (self.focused && self.insert_mode).then(|| {
+        let cursor_line_col = self.cursor_visible().then(|| {
             let ranges = self.line_ranges();
             self.cursor_line_col(&ranges)
         });
@@ -1379,6 +1469,10 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Ignored;
         }
         if let TuiEvent::ExternalEditor(response) = event {
+            if self.disabled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             let was_editing = self.insert_mode;
             let previous_value = self.value.clone();
             self.apply_external_editor_response(response);
@@ -1429,6 +1523,40 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         };
         if self.handle_scroll_key(*key, ctx) {
             return EventOutcome::Handled;
+        }
+        if self.disabled {
+            if self.external_editor_key_matches(*key) {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            if self.insert_mode && matches_any(&self.keys.cancel, *key) {
+                self.insert_mode = false;
+                self.cursor_fade.reset();
+                ctx.request_layout();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            let outcome = self.on_key(*key);
+            if outcome.submitted
+                && self.focused
+                && let Some(on_submit) = &self.on_submit
+            {
+                ctx.emit(on_submit(self.value.clone()));
+            }
+            if outcome.submitted {
+                self.insert_mode = !self.insert_mode;
+                ctx.request_layout();
+            }
+            let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
+            if outcome.needs_redraw() || scrolled {
+                ctx.request_redraw();
+            }
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            return EventOutcome::Ignored;
         }
         if self.external_editor_key_matches(*key) {
             if !self.insert_mode {

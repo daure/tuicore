@@ -181,11 +181,13 @@ impl NotificationCenter {
 
     fn tick_inner(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let mut changed = false;
+        let mut layout = false;
         let mut active = false;
 
         for toast in &mut self.active {
             let tick = toast.tick(dt, settings);
             changed |= tick.changed;
+            layout |= tick.layout;
             active |= tick.active;
         }
 
@@ -195,6 +197,7 @@ impl NotificationCenter {
 
         TickResult {
             changed,
+            layout,
             active,
             next_tick: None,
         }

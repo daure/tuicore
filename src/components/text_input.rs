@@ -83,6 +83,7 @@ impl InputOutcome {
 pub struct TextInput<M = ()> {
     value: String,
     placeholder: String,
+    disabled: bool,
     hotkey: Option<String>,
     hotkey_focus_enabled: bool,
     cursor: usize,
@@ -237,7 +238,10 @@ pub struct TextInputKeyBindings {
 impl Default for TextInputKeyBindings {
     fn default() -> Self {
         Self {
-            submit: vec![KeySpec::key(Key::Enter)],
+            submit: vec![
+                KeySpec::key(Key::Enter),
+                KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
+            ],
             cancel: vec![
                 KeySpec::key(Key::Esc),
                 KeySpec::key_with_modifiers(Key::Char('['), KeyModifiers::CONTROL),
@@ -307,6 +311,7 @@ impl<M> TextInput<M> {
         Self {
             value: String::new(),
             placeholder: String::new(),
+            disabled: false,
             hotkey: None,
             hotkey_focus_enabled: true,
             cursor: 0,
@@ -336,6 +341,27 @@ impl<M> TextInput<M> {
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
+        if disabled {
+            self.insert_mode = false;
+        }
+        self.cursor_fade.reset();
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    fn cursor_visible(&self) -> bool {
+        self.focused && (self.insert_mode || self.disabled)
     }
 
     pub fn style(mut self, chrome: InputChrome) -> Self {
@@ -529,6 +555,9 @@ impl<M> TextInput<M> {
     }
 
     pub fn on_paste(&mut self, value: impl AsRef<str>) -> InputOutcome {
+        if self.disabled {
+            return InputOutcome::HANDLED;
+        }
         let outcome = self.insert_text(value.as_ref().replace('\n', " "));
         if outcome.needs_redraw() {
             self.cursor_fade.reset();
@@ -537,6 +566,9 @@ impl<M> TextInput<M> {
     }
 
     fn on_key_inner(&mut self, key: KeyEvent) -> InputOutcome {
+        if self.disabled {
+            return self.on_disabled_key(key);
+        }
         if matches_any(&self.keys.move_start, key) {
             return self.move_to(0);
         }
@@ -591,9 +623,57 @@ impl<M> TextInput<M> {
         }
     }
 
+    fn on_disabled_key(&mut self, key: KeyEvent) -> InputOutcome {
+        if KeySpec::key(Key::Enter).matches(key) || matches_any(&self.keys.submit, key) {
+            return InputOutcome::SUBMITTED;
+        }
+        if matches_any(&self.keys.move_start, key) {
+            return self.move_to(0);
+        }
+        if matches_any(&self.keys.move_end, key) {
+            return self.move_to(self.len_chars());
+        }
+        if matches_any(&self.keys.move_previous_word, key) {
+            return self.move_previous_word();
+        }
+        if matches_any(&self.keys.move_next_word, key) {
+            return self.move_next_word();
+        }
+        if matches_any(&self.keys.move_left, key) {
+            return self.move_left();
+        }
+        if matches_any(&self.keys.move_right, key) {
+            return self.move_right();
+        }
+        if matches_any(&self.keys.cancel, key) {
+            return InputOutcome::CANCELED;
+        }
+        if matches_any(&self.keys.clear, key)
+            || matches_any(&self.keys.delete_before_cursor, key)
+            || matches_any(&self.keys.delete_after_cursor, key)
+            || matches_any(&self.keys.delete_previous_word, key)
+            || matches_any(&self.keys.delete_next_word, key)
+            || matches_any(&self.keys.insert_tab, key)
+            || matches_any(&self.keys.backspace, key)
+            || matches_any(&self.keys.delete_next, key)
+            || delete_forward_key(key)
+            || matches!(key.code, Key::Char(_) if text_char(key))
+        {
+            return InputOutcome::HANDLED;
+        }
+        InputOutcome::IDLE
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let outer_area = area;
         let area = self.render_chrome(frame, area);
         self.render_with_style(frame, area, Style::default());
+        if self.disabled {
+            dim_buffer_area(frame, outer_area, theme().subtle_fg());
+            if self.is_panel_mode() {
+                restore_disabled_chrome_labels(frame, outer_area, theme().muted_fg());
+            }
+        }
     }
 
     fn content_area(&self, area: Rect) -> Rect {
@@ -625,7 +705,7 @@ impl<M> TextInput<M> {
         if area.is_empty() {
             return;
         }
-        let style = if self.focused && !self.insert_mode {
+        let style = if self.focused && !self.insert_mode && !self.disabled {
             selected_input_style(style)
         } else {
             style
@@ -643,7 +723,7 @@ impl<M> TextInput<M> {
         }
 
         let theme = theme();
-        let selected = self.focused && !self.insert_mode;
+        let selected = self.focused && !self.insert_mode && !self.disabled;
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
@@ -671,7 +751,7 @@ impl<M> TextInput<M> {
                 &self.placeholder,
                 self.inline_hotkey(),
                 width,
-                self.focused && self.insert_mode,
+                self.cursor_visible(),
                 self.pending_hotkey_prefix.as_deref(),
                 self.cursor_fade.style(placeholder_style),
                 placeholder_style,
@@ -680,7 +760,7 @@ impl<M> TextInput<M> {
 
         let chars = self.value.chars().collect::<Vec<_>>();
         let len = chars.len();
-        let start = if self.focused && self.insert_mode {
+        let start = if self.cursor_visible() {
             visible_start_for_cursor(&chars, self.cursor, width)
         } else {
             0
@@ -693,7 +773,7 @@ impl<M> TextInput<M> {
                 break;
             }
             let remaining = width.saturating_sub(drawn);
-            if self.focused && self.insert_mode && position == self.cursor {
+            if self.cursor_visible() && position == self.cursor {
                 let mut text = display_char(chars.get(position).copied().unwrap_or(' '), remaining);
                 if text.is_empty() && remaining > 0 {
                     text.push(' ');
@@ -1229,6 +1309,10 @@ impl<M> TuiNode<M> for TextInput<M> {
             return EventOutcome::Ignored;
         }
         if let TuiEvent::ExternalEditor(response) = event {
+            if self.disabled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             let was_editing = self.insert_mode;
             let previous_value = self.value.clone();
             self.apply_external_editor_response(response);
@@ -1269,6 +1353,39 @@ impl<M> TuiNode<M> for TextInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.disabled {
+            if self.external_editor_key_matches(*key) {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            if self.insert_mode && matches_any(&self.keys.cancel, *key) {
+                self.insert_mode = false;
+                self.cursor_fade.reset();
+                ctx.request_layout();
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            let outcome = self.on_key(*key);
+            if outcome.submitted
+                && self.focused
+                && let Some(on_submit) = &self.on_submit
+            {
+                ctx.emit(on_submit(self.value.clone()));
+            }
+            if outcome.submitted {
+                self.insert_mode = !self.insert_mode;
+                ctx.request_layout();
+            }
+            if outcome.needs_redraw() {
+                ctx.request_redraw();
+            }
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            return EventOutcome::Ignored;
+        }
         if self.external_editor_key_matches(*key) {
             if !self.insert_mode {
                 if let Some(on_submit) = &self.on_submit {
@@ -1300,7 +1417,7 @@ impl<M> TuiNode<M> for TextInput<M> {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if KeySpec::key(Key::Enter).matches(*key) {
+            if matches_any(&self.keys.submit, *key) {
                 if self.focused
                     && let Some(on_submit) = &self.on_submit
                 {
@@ -1464,7 +1581,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if KeySpec::key(Key::Enter).matches(*key) {
+            if matches_any(&self.input.keys.submit, *key) {
                 if self.input.focused
                     && let Some(on_submit) = &self.input.on_submit
                 {
@@ -1592,6 +1709,51 @@ pub(crate) fn selected_input_style(style: Style) -> Style {
         .fg(theme.highlight_fg())
         .bg(theme.highlight_bg())
         .add_modifier(Modifier::BOLD)
+}
+
+pub(crate) fn dim_buffer_area(frame: &mut Frame, area: Rect, color: Color) {
+    let area = area.intersection(frame.area());
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = frame
+                .buffer_mut()
+                .cell_mut((x, y))
+                .expect("coordinates are inside the frame");
+            cell.set_fg(color);
+            cell.modifier.insert(Modifier::DIM);
+        }
+    }
+}
+
+pub(crate) fn restore_disabled_chrome_labels(frame: &mut Frame, area: Rect, color: Color) {
+    let area = area.intersection(frame.area());
+    if area.is_empty() {
+        return;
+    }
+    for x in area.x..area.right() {
+        restore_disabled_chrome_label_cell(frame, x, area.y, color);
+        if area.height > 1 {
+            restore_disabled_chrome_label_cell(frame, x, area.bottom() - 1, color);
+        }
+    }
+    for y in area.y.saturating_add(1)..area.bottom().saturating_sub(1) {
+        restore_disabled_chrome_label_cell(frame, area.x, y, color);
+        if area.width > 1 {
+            restore_disabled_chrome_label_cell(frame, area.right() - 1, y, color);
+        }
+    }
+}
+
+fn restore_disabled_chrome_label_cell(frame: &mut Frame, x: u16, y: u16, color: Color) {
+    let cell = frame
+        .buffer_mut()
+        .cell_mut((x, y))
+        .expect("coordinates are inside the frame");
+    if !cell.symbol().chars().any(char::is_alphanumeric) {
+        return;
+    }
+    cell.set_fg(color);
+    cell.modifier.remove(Modifier::DIM);
 }
 
 pub(crate) fn focus_navigation_key(key: KeyEvent) -> bool {
@@ -1746,6 +1908,7 @@ impl CursorFade {
             self.reset();
             return TickResult {
                 changed,
+                layout: false,
                 active: false,
                 next_tick: None,
             };
@@ -1756,6 +1919,7 @@ impl CursorFade {
         self.elapsed = duration_mod(self.elapsed.saturating_add(dt.min(settings.max_dt)), total);
         TickResult {
             changed: before != self.elapsed,
+            layout: false,
             active: true,
             next_tick: None,
         }

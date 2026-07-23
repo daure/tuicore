@@ -40,6 +40,7 @@ const MENU_ICON: &str = "󰍜";
 const AI_ICON: &str = "";
 const DEFAULT_MENU_HOTKEY: &str = "`";
 const DEFAULT_AI_HOTKEY: &str = "'";
+const WEATHER_DIALOG_BACKDROP_AMOUNT: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StatusBarMenuItem {
@@ -168,6 +169,7 @@ pub struct StatusBar<M = ()> {
     menu: Menu<StatusBarMenuItem>,
     menu_items: Vec<StatusBarMenuItem>,
     theme_dropdown: Dropdown<ThemeChoice, ThemeName>,
+    theme_return_focus: Option<FocusRequest>,
     ai: Button<M>,
     ai_dock: AiDock<M>,
     ai_dock_open: bool,
@@ -205,6 +207,7 @@ where
             menu: status_menu(menu_items.iter().copied(), keybindings.menu_hotkey()),
             menu_items,
             theme_dropdown: theme_dropdown(),
+            theme_return_focus: None,
             ai: Button::new(AI_ICON)
                 .hotkey(keybindings.ai_hotkey())
                 .tab_stop(false),
@@ -356,6 +359,9 @@ where
                         self.weather_dialog_area,
                         ctx,
                     );
+                    let dialog_focus = FocusId::new(crate::components::dialog::DIALOG_FOCUS);
+                    ctx.set_focus_receives_events_before_global_hotkeys(dialog_focus.clone(), true);
+                    ctx.set_focus_suppresses_global_hotkeys(dialog_focus, true);
                 },
             );
         } else {
@@ -424,7 +430,8 @@ where
                 ctx.stop_propagation();
             }
             StatusBarMenuItem::Theme => {
-                self.theme_dropdown.open_with_context(ctx);
+                self.theme_return_focus = ctx.focus_request().cloned();
+                self.theme_dropdown.open_immediate_with_context(ctx);
                 ctx.stop_propagation();
             }
             StatusBarMenuItem::WeatherForecast => {
@@ -454,6 +461,23 @@ where
             path: self.weather_dialog_path.clone(),
             id: FocusId::new(crate::components::dialog::DIALOG_FOCUS),
         });
+    }
+
+    fn handle_theme_dropdown_event(
+        &mut self,
+        route: Option<&EventRoute>,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        let was_open = self.theme_dropdown.is_open();
+        let outcome = match route {
+            Some(route) => self.theme_dropdown.dispatch_event(route, event, ctx),
+            None => self.theme_dropdown.event(event, ctx),
+        };
+        if was_open && !self.theme_dropdown.is_open() {
+            ctx.focus(self.theme_return_focus.take().unwrap_or(FocusRequest::Last));
+        }
+        outcome
     }
 
     fn open_ai_dock(&mut self, ctx: &mut EventCtx<M>) {
@@ -671,6 +695,11 @@ where
             );
         }
         if self.weather_dialog_open {
+            super::dialog_layer::dim_backdrop_buffer(
+                frame,
+                self.weather_dialog_area,
+                WEATHER_DIALOG_BACKDROP_AMOUNT,
+            );
             <WeatherForecastDialog<M> as TuiNode<M>>::render(
                 &self.weather_dialog,
                 frame,
@@ -758,7 +787,7 @@ where
             .without_first_if(&status_bar_theme_key())
             .map(EventRoute::new)
         {
-            return self.theme_dropdown.dispatch_event(&route, event, ctx);
+            return self.handle_theme_dropdown_event(Some(&route), event, ctx);
         }
 
         if let Some(route) = route
@@ -815,7 +844,7 @@ where
             return outcome;
         }
         if self.theme_dropdown.is_open() {
-            let outcome = self.theme_dropdown.event(event, ctx);
+            let outcome = self.handle_theme_dropdown_event(None, event, ctx);
             if outcome.handled() {
                 return outcome;
             }
@@ -1231,7 +1260,13 @@ fn status_bar_weather_dialog_key() -> ChildKey {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::layout::Rect;
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        layout::Rect,
+        style::{Modifier, Style},
+        widgets::Paragraph,
+    };
 
     use super::*;
     use crate::components::weather_provider::WeatherFetchError;
@@ -1307,6 +1342,25 @@ mod tests {
                 id: FocusId::new("input"),
             })
         );
+    }
+
+    #[test]
+    fn closing_theme_dropdown_restores_focus_held_before_menu_closed() {
+        let mut status = StatusBar::<()>::new();
+        let return_focus = FocusRequest::TargetAt {
+            path: TreePath::from_keys([ChildKey::new("main")]),
+            id: FocusId::new("data-view"),
+        };
+        let mut open_ctx = EventCtx::default();
+        open_ctx.focus(return_focus.clone());
+        status.activate_menu_item(StatusBarMenuItem::Theme, &mut open_ctx);
+        let mut close_ctx = EventCtx::default();
+
+        let outcome = status.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut close_ctx);
+
+        assert!(outcome.handled());
+        assert!(!status.theme_dropdown.is_open());
+        assert_eq!(close_ctx.focus_request(), Some(&return_focus));
     }
 
     #[test]
@@ -1432,6 +1486,61 @@ mod tests {
                 ]),
                 id: FocusId::new(crate::components::dialog::DIALOG_FOCUS),
             })
+        );
+    }
+
+    #[test]
+    fn weather_dialog_receives_keys_before_background_hotkeys() {
+        let bounds = Rect::new(0, 0, 100, 30);
+        let footer = Rect::new(0, 29, 100, 1);
+        let mut status = StatusBar::<()>::new();
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut EventCtx::default());
+        let mut layout = LayoutCtx::new();
+
+        layout.with_overlay_bounds(bounds, |ctx| status.layout(footer, ctx));
+
+        let dialog = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == crate::components::dialog::DIALOG_FOCUS)
+            .expect("weather dialog should register focus");
+        assert!(dialog.focused_events_before_global_hotkeys);
+    }
+
+    #[test]
+    fn weather_dialog_dims_content_behind_it() {
+        let bounds = Rect::new(0, 0, 100, 30);
+        let footer = Rect::new(0, 29, 100, 1);
+        let mut status = StatusBar::<()>::new();
+        status.activate_menu_item(StatusBarMenuItem::WeatherForecast, &mut EventCtx::default());
+        let mut layout = LayoutCtx::new();
+        layout.with_overlay_bounds(bounds, |ctx| status.layout(footer, ctx));
+        let mut terminal = Terminal::new(TestBackend::new(bounds.width, bounds.height))
+            .expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    Paragraph::new("background").style(Style::default().fg(Color::White)),
+                    bounds,
+                );
+                <StatusBar<()> as TuiNode<()>>::render(
+                    &status,
+                    frame,
+                    footer,
+                    &mut crate::RenderCtx::new(),
+                );
+            })
+            .expect("status bar should render");
+
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((0, 0))
+                .expect("background cell should exist")
+                .modifier
+                .contains(Modifier::DIM)
         );
     }
 

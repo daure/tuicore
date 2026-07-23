@@ -58,14 +58,13 @@ impl ModalTabsExample {
 
 pub(crate) fn tabs_demo(variant: TabsVariant) -> Tabs<Msg> {
     let hotkeys = match variant {
-        TabsVariant::Minimal => ["o", "u", "s"],
-        TabsVariant::Underline => ["v", "sa", "ta"],
-        TabsVariant::Boxed => ["w", "e", "tat"],
+        TabsVariant::Minimal => ["o", "u"],
+        TabsVariant::Underline => ["v", "sa"],
+        TabsVariant::Boxed => ["w", "e"],
     };
     Tabs::new(vec![
         Tab::text("Overview", "Simple tabs component for tuicore.").hotkey(hotkeys[0]),
         Tab::text("Usage", "Use Tab::new(title, node), then Tabs::new(tabs).").hotkey(hotkeys[1]),
-        Tab::text("State", "The selected tab is a plain index.").hotkey(hotkeys[2]),
     ])
     .variant(variant)
 }

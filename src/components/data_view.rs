@@ -17,6 +17,7 @@ mod tree_rows;
 #[cfg(test)]
 use crate::Animated;
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::search::SearchMode;
 use crate::{
     AnimationSettings, ChildKey, EventCtx, FocusId, FocusRequest, KeyBindings, ScrollAxes,
     ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig,
@@ -37,6 +38,7 @@ pub use model::{
 use model::{RowIdFn, VisibleRow};
 
 const HORIZONTAL_JUMP: isize = 8;
+const CELL_RIGHT_PADDING: usize = 1;
 const DATA_VIEW_FOCUS: &str = "data-view";
 const SEARCH_SLOT: &str = "search";
 const FILTER_DROPDOWN_SLOT: &str = "filter-dropdown";
@@ -83,8 +85,10 @@ pub struct DataView<T, Id> {
     pending_g: bool,
     area: Rect,
     action_bar: bool,
+    filter_controls: bool,
     transform_state: DataViewTransformState,
     transform_mode: DataViewTransformMode,
+    search_mode: SearchMode,
     interaction: DataViewInteraction,
     search_input: TextInput<()>,
     filter_dropdown: Option<Box<ChoiceDropdown>>,
@@ -137,8 +141,10 @@ where
             pending_g: false,
             area: Rect::default(),
             action_bar: false,
+            filter_controls: true,
             transform_state: DataViewTransformState::default(),
             transform_mode: DataViewTransformMode::Local,
+            search_mode: SearchMode::Fuzzy,
             interaction: DataViewInteraction::Grid,
             search_input: TextInput::new()
                 .placeholder("Search...")
@@ -179,6 +185,16 @@ where
 
     pub fn action_bar(mut self, action_bar: bool) -> Self {
         self.action_bar = action_bar;
+        self
+    }
+
+    pub fn filter_controls(mut self, enabled: bool) -> Self {
+        self.filter_controls = enabled;
+        self
+    }
+
+    pub fn search_mode(mut self, mode: SearchMode) -> Self {
+        self.search_mode = mode;
         self
     }
 
@@ -648,13 +664,13 @@ where
         let data_keys = keys.data_view();
         if !self.transform_state.search.is_empty() && keys.focus().unfocus_matches(key) {
             self.pending_g = false;
-            self.clear_search_to_top(area, settings)
+            self.clear_search_preserving_highlight(area, settings)
         } else if self.action_bar && data_keys.clear_search_matches(key) {
             self.pending_g = false;
-            self.clear_search_to_top(area, settings)
-        } else if self.table_transform_controls_enabled() && data_keys.clear_filters_matches(key) {
+            self.clear_search_and_enter_insert_mode(area, settings)
+        } else if self.filter_controls_enabled() && data_keys.clear_filters_matches(key) {
             self.pending_g = false;
-            self.clear_filters_to_top(area, settings)
+            self.clear_filters_preserving_highlight(area, settings)
         } else if self.action_bar && data_keys.search_matches(key) {
             self.pending_g = false;
             self.interaction = DataViewInteraction::Search;
@@ -662,7 +678,7 @@ where
             self.search_input.set_insert_mode(true);
             DataViewOutcome::CHANGED
         } else if data_keys.filter_matches(key)
-            && self.table_transform_controls_enabled()
+            && self.filter_controls_enabled()
             && !self.filterable_columns().is_empty()
         {
             self.pending_g = false;
@@ -771,13 +787,13 @@ where
         if keybindings().focus().unfocus_matches(key) {
             self.interaction = DataViewInteraction::Grid;
             self.search_input.set_focused(false);
-            let mut outcome = self.clear_search_to_top(area, settings);
+            let mut outcome = self.clear_search_preserving_highlight(area, settings);
             outcome.changed = true;
             return outcome;
         }
 
         if keybindings().data_view().clear_search_matches(key) {
-            return self.clear_search_to_top(area, settings);
+            return self.clear_search_and_enter_insert_mode(area, settings);
         }
 
         let before = self.search_input.current_value().to_owned();
@@ -1182,17 +1198,38 @@ where
         }
     }
 
-    fn clear_search_to_top(&mut self, area: Rect, settings: AnimationSettings) -> DataViewOutcome {
+    fn clear_search_preserving_highlight(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
         let outcome = self.clear_search();
-        self.to_top_after_clear(outcome, area, settings)
+        self.ensure_visible_after_clear(outcome, area, settings)
     }
 
-    fn clear_filters_to_top(&mut self, area: Rect, settings: AnimationSettings) -> DataViewOutcome {
+    fn clear_search_and_enter_insert_mode(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        let mut outcome = self.clear_search_preserving_highlight(area, settings);
+        self.interaction = DataViewInteraction::Search;
+        self.search_input.set_focused(true);
+        self.search_input.set_insert_mode(true);
+        outcome.changed = true;
+        outcome
+    }
+
+    fn clear_filters_preserving_highlight(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
         let outcome = self.clear_filters();
-        self.to_top_after_clear(outcome, area, settings)
+        self.ensure_visible_after_clear(outcome, area, settings)
     }
 
-    fn to_top_after_clear(
+    fn ensure_visible_after_clear(
         &mut self,
         outcome: DataViewOutcome,
         area: Rect,
@@ -1201,13 +1238,12 @@ where
         if !outcome.changed {
             return DataViewOutcome::HANDLED;
         }
-        let top = self.highlight_with_settings(0, area, settings);
-        DataViewOutcome {
-            handled: true,
-            changed: true,
-            active: top.active,
-            activated: outcome.activated || top.activated,
-        }
+        let mut scrolled = self
+            .ensure_highlight_visible(area, settings)
+            .into_data_view_outcome(outcome.handled, outcome.changed);
+        scrolled.active |= outcome.active;
+        scrolled.activated |= outcome.activated;
+        scrolled
     }
 
     fn outcome_after_transform_change(&mut self, before_id: Option<Id>) -> DataViewOutcome {

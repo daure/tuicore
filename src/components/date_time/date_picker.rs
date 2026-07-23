@@ -1,14 +1,14 @@
 use std::time::Duration as StdDuration;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::calendar::{DateStyler, Monthly};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use time::{Date, Duration, Month};
+use time::{Date, Duration, Month, Weekday};
 
 use crate::border_set;
+use crate::components::calendar::date_math::week_range;
 use crate::event::{ExternalEditorResponse, KeyEvent, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
@@ -31,6 +31,7 @@ pub struct DatePicker<M = ()> {
     today: Date,
     min: Option<Date>,
     max: Option<Date>,
+    first_day_of_week: Weekday,
     focused: bool,
     hotkey: Option<String>,
     pending_hotkey_prefix: Option<String>,
@@ -57,6 +58,7 @@ impl<M> DatePicker<M> {
             today,
             min: None,
             max: None,
+            first_day_of_week: Weekday::Monday,
             focused: false,
             hotkey: None,
             pending_hotkey_prefix: None,
@@ -98,6 +100,20 @@ impl<M> DatePicker<M> {
     pub fn on_select(mut self, handler: impl Fn(Date) -> M + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
+    }
+
+    pub fn first_day_of_week(mut self, weekday: Weekday) -> Self {
+        self.set_first_day_of_week(weekday);
+        self
+    }
+
+    pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
+        self.first_day_of_week = weekday;
+    }
+
+    #[cfg(test)]
+    pub(super) fn configured_first_day_of_week(&self) -> Weekday {
+        self.first_day_of_week
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -168,16 +184,16 @@ impl<M> DatePicker<M> {
             self.view = DatePickerView::Day;
             return self.set_cursor(self.today);
         }
-        if bindings.line_left_matches(key) {
+        if date_keys.line_left_matches(key) {
             return self.move_left();
         }
-        if bindings.line_right_matches(key) {
+        if date_keys.line_right_matches(key) {
             return self.move_right();
         }
-        if bindings.line_up_matches(key) {
+        if date_keys.line_up_matches(key) {
             return self.move_up();
         }
-        if bindings.line_down_matches(key) {
+        if date_keys.line_down_matches(key) {
             return self.move_down();
         }
         if bindings.page_up_matches(key) {
@@ -245,27 +261,52 @@ impl<M> DatePicker<M> {
             min: self.min,
             max: self.max,
         };
-        let t = theme();
-        let calendar = Monthly::new(self.display_month, styles)
-            .show_month_header(
-                Style::default()
-                    .fg(t.accent_fg())
-                    .add_modifier(Modifier::BOLD),
-            )
-            .show_weekdays_header(Style::default().fg(t.muted_fg()))
-            .show_surrounding(Style::default().fg(t.subtle_fg()))
-            .default_style(Style::default().fg(t.text_fg()))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_set(border_set(preset().border()))
-                    .border_style(Style::default().fg(if self.focused {
-                        t.highlight_bg()
-                    } else {
-                        t.border_fg()
-                    })),
+        let block = self.block("");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        if inner.height > 0 {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{} {}",
+                    self.display_month.month(),
+                    self.display_month.year()
+                ))
+                .alignment(Alignment::Center)
+                .style(
+                    Style::default()
+                        .fg(theme().accent_fg())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Rect::new(inner.x, inner.y, inner.width, 1),
             );
-        frame.render_widget(calendar, area);
+        }
+        if inner.height > 1 {
+            for (column, label) in narrow_weekday_labels(self.first_day_of_week)
+                .into_iter()
+                .enumerate()
+            {
+                frame.render_widget(
+                    Paragraph::new(label).style(Style::default().fg(theme().muted_fg())),
+                    Rect::new(inner.x + column as u16 * 3, inner.y + 1, 3, 1),
+                );
+            }
+        }
+        let start = week_range(self.display_month, self.first_day_of_week).0;
+        for offset in 0..42 {
+            let Some(date) = start.checked_add(Duration::days(offset)) else {
+                continue;
+            };
+            let row = offset / 7;
+            if row as u16 + 2 >= inner.height {
+                break;
+            }
+            let column = offset % 7;
+            frame.render_widget(
+                Paragraph::new(format!("{:>2} ", date.day()))
+                    .style(styles.style(date, date.month() != self.display_month.month())),
+                Rect::new(inner.x + column as u16 * 3, inner.y + row as u16 + 2, 3, 1),
+            );
+        }
         self.render_hotkey_label(frame, area);
     }
 
@@ -609,6 +650,12 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
     }
 }
 
+fn narrow_weekday_labels(first_day_of_week: Weekday) -> [&'static str; 7] {
+    const LABELS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+    let offset = first_day_of_week.number_days_from_monday() as usize;
+    std::array::from_fn(|index| LABELS[(index + offset) % LABELS.len()])
+}
+
 #[derive(Clone, Copy)]
 struct DateStyles {
     cursor: Date,
@@ -619,8 +666,8 @@ struct DateStyles {
     max: Option<Date>,
 }
 
-impl DateStyler for DateStyles {
-    fn get_style(&self, date: Date) -> Style {
+impl DateStyles {
+    fn style(&self, date: Date, surrounding: bool) -> Style {
         let t = theme();
         if self.min.is_some_and(|min| date < min) || self.max.is_some_and(|max| date > max) {
             return Style::default().fg(t.subtle_fg());
@@ -639,7 +686,11 @@ impl DateStyler for DateStyles {
                 .fg(t.accent_fg())
                 .add_modifier(Modifier::BOLD);
         }
-        Style::default()
+        Style::default().fg(if surrounding {
+            t.subtle_fg()
+        } else {
+            t.text_fg()
+        })
     }
 }
 

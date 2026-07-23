@@ -1570,6 +1570,7 @@ where
 
         TickResult {
             changed: changed || tabs_tick.changed,
+            layout: tabs_tick.layout,
             active: { *self.waiting.lock().unwrap() } || changed || tabs_tick.active,
             next_tick: tabs_tick.next_tick,
         }
@@ -2063,6 +2064,7 @@ impl TuiNode<AiDockMsg> for ChatTabBody {
 
         TickResult {
             changed: scrolled,
+            layout: false,
             active: false,
             next_tick: None,
         }

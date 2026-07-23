@@ -35,6 +35,38 @@ struct TransformRow {
     status: &'static str,
 }
 
+fn clear_transform_view() -> DataView<usize, usize> {
+    DataView::new(1..=12, |id| *id).columns([
+        Column::text(
+            "value",
+            "Value",
+            Constraint::Percentage(50),
+            |id: &usize| id.to_string(),
+        )
+        .filter_key(|id: &usize| id.to_string()),
+        Column::text(
+            "other",
+            "Other",
+            Constraint::Percentage(50),
+            |id: &usize| id.to_string(),
+        ),
+    ])
+}
+
+fn assert_restored_highlight_is_visible(view: &DataView<usize, usize>, area: Rect) {
+    let geometry = view.scroll_geometry(area);
+    let target = view.scroll.target_offset().y;
+
+    assert_eq!(view.highlighted_id(), Some(12));
+    assert_eq!(view.highlighted, 11);
+    assert_eq!(
+        target,
+        view.highlighted
+            .saturating_add(1)
+            .saturating_sub(geometry.viewport.height)
+    );
+}
+
 #[test]
 fn parent_tree_places_children_under_each_parent() {
     let view = tree_view().expanded([1, 2, 3]);
@@ -145,6 +177,24 @@ fn local_search_filters_rows_using_search_key_columns() {
 }
 
 #[test]
+fn fuzzy_search_is_the_default() {
+    let mut view = transform_view();
+
+    view.set_search_query("cp");
+
+    assert_eq!(visible_ids(&view), vec![2]);
+}
+
+#[test]
+fn contains_search_can_be_selected() {
+    let mut view = transform_view().search_mode(SearchMode::Contains);
+
+    view.set_search_query("cp");
+
+    assert!(visible_ids(&view).is_empty());
+}
+
+#[test]
 fn tree_search_keeps_matching_child_ancestors_visible() {
     let mut view = tree_view().expanded([1, 3]);
 
@@ -197,6 +247,43 @@ fn search_matches_are_underlined_when_rendered() {
                 .contains(Modifier::UNDERLINED)
         );
     }
+}
+
+#[test]
+fn fuzzy_search_matches_are_underlined_when_rendered() {
+    let mut view = transform_view();
+    view.set_search_query("aa");
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 1)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 40, 1)))
+        .expect("data view should render");
+
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .cell((0, 0))
+            .unwrap()
+            .style()
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert!(
+        buffer
+            .cell((4, 0))
+            .unwrap()
+            .style()
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert!(
+        !buffer
+            .cell((1, 0))
+            .unwrap()
+            .style()
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
 }
 
 #[test]
@@ -363,6 +450,34 @@ fn search_hotkey_is_ignored_without_action_bar() {
 }
 
 #[test]
+fn clear_search_hotkey_clears_and_enters_insert_mode() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut view = clear_transform_view()
+        .action_bar(true)
+        .selection_mode(SelectionMode::Single)
+        .selection_trigger(SelectionTrigger::OnNavigate)
+        .selected([12]);
+    view.highlight_id(&12);
+    view.set_search_query("12");
+
+    let outcome = view.on_key(
+        KeyEvent {
+            code: Key::Char('/'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        area,
+    );
+
+    assert!(outcome.handled);
+    assert!(outcome.changed);
+    assert!(view.transform_state().search.is_empty());
+    assert_eq!(view.interaction, DataViewInteraction::Search);
+    assert!(view.search_input.insert_mode());
+    assert_eq!(view.selected_ids(), vec![12]);
+    assert_restored_highlight_is_visible(&view, area);
+}
+
+#[test]
 fn unfocus_keys_clear_search_from_grid() {
     let area = Rect::new(0, 0, 40, 6);
     let keys = [
@@ -374,14 +489,16 @@ fn unfocus_keys_clear_search_from_grid() {
     ];
 
     for key in keys {
-        let mut view = transform_view();
-        view.set_search_query("api");
+        let mut view = clear_transform_view();
+        view.highlight_id(&12);
+        view.set_search_query("12");
 
         let outcome = view.on_key(key, area);
 
         assert!(outcome.handled);
         assert!(outcome.changed);
         assert!(view.transform_state().search.is_empty());
+        assert_restored_highlight_is_visible(&view, area);
     }
 }
 
@@ -397,9 +514,10 @@ fn unfocus_keys_clear_search_when_leaving_search_input() {
     ];
 
     for key in keys {
-        let mut view = transform_view().action_bar(true);
+        let mut view = clear_transform_view().action_bar(true);
+        view.highlight_id(&12);
         view.on_key(KeyEvent::from(Key::Char('/')), area);
-        view.set_search_query("api");
+        view.set_search_query("12");
 
         let outcome = view.on_key(key, area);
 
@@ -407,7 +525,29 @@ fn unfocus_keys_clear_search_when_leaving_search_input() {
         assert!(outcome.changed);
         assert!(view.transform_state().search.is_empty());
         assert_eq!(view.interaction, DataViewInteraction::Grid);
+        assert_restored_highlight_is_visible(&view, area);
     }
+}
+
+#[test]
+fn clear_all_filters_preserves_highlight_and_scrolls_it_into_view() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut view = clear_transform_view().headers(true);
+    view.highlight_id(&12);
+    view.set_filter("value", "12");
+
+    let outcome = view.on_key(
+        KeyEvent {
+            code: Key::Char('f'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        area,
+    );
+
+    assert!(outcome.handled);
+    assert!(outcome.changed);
+    assert!(view.transform_state().filters.is_empty());
+    assert_restored_highlight_is_visible(&view, area);
 }
 
 #[test]
@@ -445,6 +585,32 @@ fn horizontal_scroll_offsets_rendered_cells() {
 }
 
 #[test]
+fn cells_have_one_character_of_right_padding() {
+    let view = DataView::new([Row::new(1, "A")], |row| row.id)
+        .columns([
+            Column::text("first", "X", Constraint::Length(1), |row: &Row| {
+                row.name.to_string()
+            }),
+            Column::text("second", "Y", Constraint::Length(1), |_| String::from("B")),
+        ])
+        .headers(true);
+    let mut terminal = Terminal::new(TestBackend::new(4, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 4, 2)))
+        .expect("data view should render");
+
+    let buffer = terminal.backend().buffer();
+    let line = |y| {
+        (0..4)
+            .map(|x| buffer.cell((x, y)).unwrap().symbol())
+            .collect::<String>()
+    };
+    assert_eq!(line(0), "X Y ");
+    assert_eq!(line(1), "A B ");
+}
+
+#[test]
 fn controlled_horizontal_keys_jump_eight_columns() {
     let mut view = DataView::new([Row::new(1, "ABCDEFGHIJKLMNOPQRST")], |row| row.id).column(
         Column::text("name", "Name", Constraint::Length(20), |row: &Row| {
@@ -457,7 +623,7 @@ fn controlled_horizontal_keys_jump_eight_columns() {
 
     let right = view.on_key_with_settings(
         KeyEvent {
-            code: Key::Char('L'),
+            code: Key::Char('l'),
             modifiers: KeyModifiers::CONTROL,
         },
         area,
@@ -468,7 +634,7 @@ fn controlled_horizontal_keys_jump_eight_columns() {
 
     let left = view.on_key_with_settings(
         KeyEvent {
-            code: Key::Char('H'),
+            code: Key::Char('h'),
             modifiers: KeyModifiers::CONTROL,
         },
         area,
@@ -525,6 +691,21 @@ fn handled_key_stops_propagation() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn default_plain_j_and_k_move_highlight_down_and_up() {
+    let mut view = DataView::list(
+        [Row::new(1, "A"), Row::new(2, "B"), Row::new(3, "C")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let area = Rect::new(0, 0, 10, 3);
+
+    assert!(view.on_key(Key::Char('j'), area).changed);
+    assert_eq!(view.highlighted, 1);
+    assert!(view.on_key(Key::Char('k'), area).changed);
+    assert_eq!(view.highlighted, 0);
 }
 
 #[test]
@@ -593,6 +774,37 @@ fn opening_search_focuses_child_and_characters_stop_propagation() {
 }
 
 #[test]
+fn clearing_search_focuses_the_search_child() {
+    let mut view = transform_view().action_bar(true);
+    view.set_focused(true);
+    view.set_search_query("api");
+    let mut layout = LayoutCtx::new();
+    <DataView<TransformRow, usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 60, 6),
+        &mut layout,
+    );
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = view.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('/'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&FocusRequest::TargetAt {
+            path: TreePath::from_keys([ChildKey::new(SEARCH_SLOT)]),
+            id: FocusId::new(TEXT_INPUT_FOCUS),
+        })
+    );
+}
+
+#[test]
 fn filter_picker_uses_dropdown_state() {
     let mut view = transform_view().headers(true).action_bar(true);
 
@@ -613,6 +825,38 @@ fn filter_picker_uses_dropdown_state() {
             .as_ref()
             .is_some_and(|dropdown| dropdown.is_open())
     );
+}
+
+#[test]
+fn disabled_filter_controls_ignore_filter_hotkey() {
+    let mut view = transform_view()
+        .headers(true)
+        .action_bar(true)
+        .filter_controls(false);
+
+    let outcome = view.on_key(KeyEvent::from(Key::Char('f')), Rect::new(0, 0, 60, 6));
+
+    assert_eq!(outcome, DataViewOutcome::IDLE);
+    assert_eq!(view.interaction, DataViewInteraction::Grid);
+}
+
+#[test]
+fn disabled_filter_controls_hide_filter_hint_from_action_bar() {
+    let view = transform_view()
+        .headers(true)
+        .action_bar(true)
+        .filter_controls(false);
+    let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+
+    let action_bar = (0..60)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert!(action_bar.contains("Search..."));
+    assert!(!action_bar.contains("filters"));
 }
 
 #[test]
@@ -764,7 +1008,7 @@ fn horizontal_scroll_extent_uses_rendered_content_width() {
         );
     }
 
-    assert_eq!(view.scroll.offset().x, 5);
+    assert_eq!(view.scroll.offset().x, 6);
 }
 
 #[test]
@@ -1710,7 +1954,7 @@ fn selection_prefix_contributes_render_width_and_shows_indeterminate_glyph() {
         .selected([4])
         .expanded([1]);
 
-    assert_eq!(view.column_widths(1), vec![17]);
+    assert_eq!(view.column_widths(1), vec![18]);
 
     let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
     terminal

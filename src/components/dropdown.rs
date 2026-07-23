@@ -478,6 +478,18 @@ where
         outcome
     }
 
+    pub fn open_immediate_with_context<M>(&mut self, ctx: &mut EventCtx<M>) -> DropdownOutcome {
+        let outcome = self.open();
+        if outcome.opened {
+            ctx.request_layout();
+            self.request_open_focus(ctx);
+        }
+        if outcome.handled || outcome.changed {
+            ctx.request_redraw();
+        }
+        outcome
+    }
+
     fn start_backdrop_tween(&mut self, active: bool, settings: AnimationSettings) {
         let target = if active {
             DROPDOWN_BACKDROP_AMOUNT

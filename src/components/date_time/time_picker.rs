@@ -181,22 +181,22 @@ impl<M> TimePicker<M> {
         if let Some(digit) = plain_digit(key) {
             return self.type_digit(digit);
         }
-        if bindings.line_left_matches(key) {
+        if date_keys.line_left_matches(key) {
             self.typed_digits.clear();
             self.active_field = self.previous_field();
             return PickerOutcome::handled(true);
         }
-        if bindings.line_right_matches(key) {
+        if date_keys.line_right_matches(key) {
             self.typed_digits.clear();
             self.active_field = self.next_field();
             return PickerOutcome::handled(true);
         }
-        if bindings.line_up_matches(key) {
+        if date_keys.line_up_matches(key) {
             self.typed_digits.clear();
             self.adjust_active_field(1, 1);
             return PickerOutcome::handled(true);
         }
-        if bindings.line_down_matches(key) {
+        if date_keys.line_down_matches(key) {
             self.typed_digits.clear();
             self.adjust_active_field(-1, 1);
             return PickerOutcome::handled(true);

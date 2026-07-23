@@ -6,17 +6,17 @@ pub(super) fn today() -> Date {
         .date()
 }
 
-pub(super) fn week_range(date: Date, first_weekday: Weekday) -> (Date, Date) {
+pub(crate) fn week_range(date: Date, first_day_of_week: Weekday) -> (Date, Date) {
     let date_offset = i16::from(date.weekday().number_days_from_monday());
-    let first_offset = i16::from(first_weekday.number_days_from_monday());
+    let first_offset = i16::from(first_day_of_week.number_days_from_monday());
     let offset = i64::from((date_offset - first_offset).rem_euclid(7));
     let start = date - Duration::days(offset);
     (start, start + Duration::days(6))
 }
 
-pub(super) fn weekday_labels(first_weekday: Weekday) -> [&'static str; 7] {
+pub(crate) fn weekday_labels(first_day_of_week: Weekday) -> [&'static str; 7] {
     let labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    let start = first_weekday.number_days_from_monday() as usize;
+    let start = first_day_of_week.number_days_from_monday() as usize;
     std::array::from_fn(|index| labels[(start + index) % labels.len()])
 }
 

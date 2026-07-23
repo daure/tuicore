@@ -38,6 +38,9 @@ use gallery_demo::panels::{
     panel_title_column_layout, panel_title_control_areas, panel_title_dropdown,
     panel_title_dropdown_area, panel_title_index,
 };
+use gallery_demo::relative_date::RelativeDateDemo;
+#[cfg(test)]
+use gallery_demo::relative_date::reference_picker_child_key;
 use gallery_demo::status_bar::demo_weather_report;
 use gallery_demo::tabs::{
     ModalTabsExample, labeled_area, modal_tabs_button_areas, modal_tabs_dialog,
@@ -71,14 +74,14 @@ use tuicore::{
     ConfirmationDialogOutcome, DataView, DataViewTypedEvent, DatePicker, DatePickerDropdown,
     DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, DialogBackdrop,
     DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
-    Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusTarget, Grid,
-    Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent, KeyModifiers,
-    LayoutCtx, LayoutResult, LifecycleCtx, Menu, MenuItem, ModalCloseReason, Overlay, Panel,
-    PanelHost, PanelTitlePosition, Paragraph as TuiParagraph, ParagraphOverflow, PasswordInput,
-    RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar,
-    StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput,
-    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
-    TuiEvent, TuiNode,
+    Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusRequest,
+    FocusTarget, Grid, Header, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key,
+    KeyEvent, KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, Menu, MenuItem,
+    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, Paragraph as TuiParagraph,
+    ParagraphOverflow, PasswordInput, RenderCtx, SelectionMode, SelectionTrigger, Spinner, Split,
+    Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput,
+    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
+    TreeAdapter, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, PartialEq)]
@@ -101,6 +104,10 @@ enum Msg {
     FormPasswordChanged(String),
     FormStartSelected(Date),
     FormEndSelected(Date),
+    RelativeReferenceSelected(Date),
+    RelativeReferenceTimeSelected(Time),
+    RelativeTargetSelected(Date),
+    RelativeTargetTimeSelected(Time),
     FormSubmitAttempt,
     FormSubmitRequested(FormControlId),
     FormControlEditEnded(FormControlId),
@@ -161,6 +168,11 @@ fn main() -> tuicore::Result<()> {
     tuicore::TreeApp::new(final_root)
         .on_message(|root, msg, ctx| {
             if gallery(root).previews.validated_form.apply_message(&msg) {
+                ctx.request_layout();
+                ctx.request_redraw();
+                return;
+            }
+            if gallery(root).previews.relative_date.apply_message(&msg) {
                 ctx.request_layout();
                 ctx.request_redraw();
                 return;
@@ -302,7 +314,13 @@ fn main() -> tuicore::Result<()> {
                 | Msg::FormEndSelected(_)
                 | Msg::FormSubmitAttempt
                 | Msg::FormSubmitRequested(_)
-                | Msg::FormControlEditEnded(_) => unreachable!("form messages handled above"),
+                | Msg::FormControlEditEnded(_)
+                | Msg::RelativeReferenceSelected(_)
+                | Msg::RelativeReferenceTimeSelected(_)
+                | Msg::RelativeTargetSelected(_)
+                | Msg::RelativeTargetTimeSelected(_) => {
+                    unreachable!("component messages handled above")
+                }
             }
         })
         .run()
@@ -457,6 +475,38 @@ impl Gallery {
         matches!(*code, Key::Char(value) if value.eq_ignore_ascii_case(&'q'))
             && modifiers.contains(KeyModifiers::CONTROL)
     }
+
+    fn overview_key(event: &TuiEvent) -> bool {
+        let TuiEvent::Key(key) = event else {
+            return false;
+        };
+        key.code == Key::Esc
+            || (key.code == Key::Char('[') && key.modifiers.contains(KeyModifiers::CONTROL))
+    }
+
+    fn focus_component_overview(ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        let current_path = ctx.current_path();
+        let gallery_prefix_len = current_path
+            .keys()
+            .iter()
+            .rposition(|key| key == &gallery_preview_child_key())
+            .unwrap_or(0);
+        let overview_path = TreePath::from_keys(
+            current_path
+                .keys()
+                .iter()
+                .take(gallery_prefix_len)
+                .cloned()
+                .chain([gallery_list_child_key()]),
+        );
+        ctx.focus(FocusRequest::TargetAt {
+            path: overview_path,
+            id: FocusId::new("data-view"),
+        });
+        ctx.request_redraw();
+        ctx.stop_propagation();
+        EventOutcome::Handled
+    }
 }
 
 impl TuiNode<Msg> for Gallery {
@@ -488,9 +538,15 @@ impl TuiNode<Msg> for Gallery {
             gallery_preview_child_key(),
             self.areas.preview_body,
             |ctx| {
-                self.previews
-                    .layout(self.selected.preview(), self.areas.preview_body, area, ctx);
-                ctx.register_focusable(FocusId::new("preview"), self.areas.preview_body, true);
+                ctx.with_focus_events_before_global_hotkeys(|ctx| {
+                    self.previews.layout(
+                        self.selected.preview(),
+                        self.areas.preview_body,
+                        area,
+                        ctx,
+                    );
+                    ctx.register_focusable(FocusId::new("preview"), self.areas.preview_body, true);
+                });
             },
         );
         ctx.push_slot(gallery_footer_child_key(), footer, |ctx| {
@@ -543,6 +599,19 @@ impl TuiNode<Msg> for Gallery {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if route.path.first() == Some(&gallery_preview_child_key()) && Self::overview_key(event) {
+            let preview = self.selected.preview();
+            let preview_route = EventRoute::new(route.path.without_first());
+            if self.previews.route_has_active_mode(preview, &preview_route) {
+                let child = self
+                    .previews
+                    .dispatch_event(preview, &preview_route, event, ctx);
+                if child.handled() {
+                    return child;
+                }
+            }
+            return Self::focus_component_overview(ctx);
+        }
         if route.path.is_empty() {
             return self.event(event, ctx);
         }
@@ -640,6 +709,7 @@ impl TuiNode<Msg> for Gallery {
 struct PreviewState {
     text_input: TextInput<Msg>,
     text_input_panel: TextInput<Msg>,
+    text_input_disabled: TextInput<Msg>,
     password_input: PasswordInput<Msg>,
     password_panel: PasswordInput<Msg>,
     header_plain: Header,
@@ -647,12 +717,14 @@ struct PreviewState {
     paragraph: TuiParagraph,
     textarea_input: TextareaInput<Msg>,
     textarea_panel: TextareaInput<Msg>,
+    textarea_disabled: TextareaInput<Msg>,
     date_picker: DatePicker<Msg>,
     time_picker: TimePicker<Msg>,
     date_time_picker: DateTimePicker<Msg>,
     date_dropdown: DatePickerDropdown<Msg>,
     date_time_dropdown: DateTimePickerDropdown<Msg>,
     date_time_status: String,
+    relative_date: RelativeDateDemo,
     calendar: Calendar<DemoCalendarEntry, &'static str, Msg>,
     calendar_status: String,
     status_bar: StatusBar<Msg>,
@@ -716,6 +788,19 @@ struct PreviewState {
     validated_form: ValidatedForm,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormNavigation {
+    Previous,
+    Next,
+}
+
+#[derive(Clone, Copy)]
+struct FormNavigationPosition {
+    index: usize,
+    count: usize,
+    mode_active: bool,
+}
+
 #[derive(Clone)]
 struct DemoCalendarEntry {
     id: &'static str,
@@ -736,6 +821,11 @@ impl PreviewState {
                 .placeholder("Nested input")
                 .hotkey("p")
                 .style(InputChrome::panel("Description").top_right("Panel style")),
+            text_input_disabled: TextInput::new()
+                .value("Disabled panel input")
+                .disabled(true)
+                .hotkey("d")
+                .style(InputChrome::panel("Disabled")),
             password_input: PasswordInput::new()
                 .placeholder("Enter password...")
                 .hotkey("pw")
@@ -765,6 +855,13 @@ impl PreviewState {
                 .min_rows(2)
                 .max_rows(4)
                 .style(InputChrome::panel("Description").top_right("2-4 rows")),
+            textarea_disabled: TextareaInput::new()
+                .value("Disabled textarea\nNavigation still works")
+                .hotkey("d")
+                .min_rows(2)
+                .max_rows(2)
+                .disabled(true)
+                .style(InputChrome::panel("Disabled")),
             date_picker: DatePicker::new()
                 .today(demo_date())
                 .value(Some(demo_date()))
@@ -789,6 +886,7 @@ impl PreviewState {
                 .hotkey("dt")
                 .panel("Date & time"),
             date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
+            relative_date: RelativeDateDemo::new(),
             calendar: demo_calendar(),
             calendar_status: String::from("No calendar event yet"),
             status_bar: StatusBar::new()
@@ -902,12 +1000,15 @@ impl PreviewState {
             PreviewKind::Button => self.layout_button(area, ctx),
             PreviewKind::Toggle => self.layout_toggle(area, ctx),
             PreviewKind::TextInput => {
-                let [_, input, panel] = text_input_showcase_layout(area);
+                let [_, input, panel, disabled] = text_input_showcase_layout(area);
                 ctx.push_slot(text_input_child_key(), input, |ctx| {
                     self.text_input.layout(input, ctx);
                 });
                 ctx.push_slot(text_input_panel_child_key(), panel, |ctx| {
                     self.text_input_panel.layout(panel, ctx);
+                });
+                ctx.push_slot(text_input_disabled_child_key(), disabled, |ctx| {
+                    self.text_input_disabled.layout(disabled, ctx);
                 });
             }
             PreviewKind::PasswordInput => {
@@ -932,15 +1033,21 @@ impl PreviewState {
                 });
             }
             PreviewKind::TextareaInput => {
-                let [_, input, panel] = textarea_showcase_layout(area);
+                let [_, input, panel, disabled] = textarea_showcase_layout(area);
                 ctx.push_slot(textarea_input_child_key(), input, |ctx| {
                     self.textarea_input.layout(input, ctx);
                 });
                 ctx.push_slot(textarea_panel_child_key(), panel, |ctx| {
                     self.textarea_panel.layout(panel, ctx);
                 });
+                ctx.push_slot(textarea_disabled_child_key(), disabled, |ctx| {
+                    self.textarea_disabled.layout(disabled, ctx);
+                });
             }
             PreviewKind::DateTimePicker => self.layout_date_time(area, ctx),
+            PreviewKind::RelativeDate => {
+                self.relative_date.layout(area, ctx);
+            }
             PreviewKind::ValidatedForm => {
                 self.validated_form.layout(area, ctx);
             }
@@ -983,6 +1090,133 @@ impl PreviewState {
         }
     }
 
+    fn handle_form_navigation(
+        &self,
+        preview: PreviewKind,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> bool {
+        let Some(direction) = form_navigation_key(event) else {
+            return false;
+        };
+        let Some(position) = self.form_navigation_position(preview, route) else {
+            return false;
+        };
+        if position.mode_active {
+            return false;
+        }
+
+        match direction {
+            FormNavigation::Previous if position.index > 0 => ctx.focus_previous(),
+            FormNavigation::Next if position.index + 1 < position.count => ctx.focus_next(),
+            FormNavigation::Previous | FormNavigation::Next => {}
+        }
+        ctx.stop_propagation();
+        true
+    }
+
+    fn form_navigation_position(
+        &self,
+        preview: PreviewKind,
+        route: &EventRoute,
+    ) -> Option<FormNavigationPosition> {
+        let key = route.path.first()?;
+        let (index, count, mode_active) = match preview {
+            PreviewKind::TextInput => {
+                let keys = [
+                    text_input_child_key(),
+                    text_input_panel_child_key(),
+                    text_input_disabled_child_key(),
+                ];
+                let index = child_position(key, &keys)?;
+                let active = match index {
+                    0 => self.text_input.insert_mode(),
+                    1 => self.text_input_panel.insert_mode(),
+                    _ => self.text_input_disabled.insert_mode(),
+                };
+                (index, keys.len(), active)
+            }
+            PreviewKind::PasswordInput => {
+                let keys = [password_input_child_key(), password_panel_child_key()];
+                let index = child_position(key, &keys)?;
+                let active = if index == 0 {
+                    self.password_input.insert_mode()
+                } else {
+                    self.password_panel.insert_mode()
+                };
+                (index, keys.len(), active)
+            }
+            PreviewKind::TextareaInput => {
+                let keys = [
+                    textarea_input_child_key(),
+                    textarea_panel_child_key(),
+                    textarea_disabled_child_key(),
+                ];
+                let index = child_position(key, &keys)?;
+                let active = match index {
+                    0 => self.textarea_input.insert_mode(),
+                    1 => self.textarea_panel.insert_mode(),
+                    _ => self.textarea_disabled.insert_mode(),
+                };
+                (index, keys.len(), active)
+            }
+            PreviewKind::DateTimePicker => {
+                let keys = [
+                    date_picker_child_key(),
+                    time_picker_child_key(),
+                    date_time_picker_child_key(),
+                    date_dropdown_child_key(),
+                    date_time_dropdown_child_key(),
+                ];
+                let index = child_position(key, &keys)?;
+                let active = match index {
+                    3 => self.date_dropdown.is_open(),
+                    4 => self.date_time_dropdown.is_open(),
+                    _ => false,
+                };
+                (index, keys.len(), active)
+            }
+            PreviewKind::RelativeDate => {
+                let index = self.relative_date.picker_position(key)?;
+                (index, 4, false)
+            }
+            PreviewKind::TagInput => {
+                let keys = [tag_input_child_key(), tag_input_panel_child_key()];
+                let index = child_position(key, &keys)?;
+                let active = if index == 0 {
+                    self.tag_input.is_active()
+                } else {
+                    self.tag_input_panel.is_active()
+                };
+                (index, keys.len(), active)
+            }
+            PreviewKind::Toggle => {
+                let keys = [toggle_switch_child_key(), toggle_checkbox_child_key()];
+                let index = child_position(key, &keys)?;
+                (index, keys.len(), false)
+            }
+            PreviewKind::Dropdown => {
+                let index = dropdown_index(key)?;
+                (index, 6, self.dropdown(index).is_open())
+            }
+            _ => return None,
+        };
+        Some(FormNavigationPosition {
+            index,
+            count,
+            mode_active,
+        })
+    }
+
+    fn route_has_active_mode(&self, preview: PreviewKind, route: &EventRoute) -> bool {
+        self.form_navigation_position(preview, route)
+            .is_some_and(|position| position.mode_active)
+            || (preview == PreviewKind::ValidatedForm
+                && self.validated_form.route_has_active_control(route))
+            || (preview == PreviewKind::Menu && self.menu.is_open())
+    }
+
     fn render<'a>(
         &'a self,
         preview: PreviewKind,
@@ -1006,6 +1240,7 @@ impl PreviewState {
             PreviewKind::Colors => self.render_colors(frame, area),
             PreviewKind::TextareaInput => self.render_textarea_input(frame, area),
             PreviewKind::DateTimePicker => self.render_date_time(frame, area, ctx),
+            PreviewKind::RelativeDate => self.relative_date.render(frame, area, ctx),
             PreviewKind::ValidatedForm => self.validated_form.render(frame, area, ctx),
             PreviewKind::Calendar => self.render_calendar(frame, area, ctx),
             PreviewKind::StatusBar => self.render_status_bar(frame, area, ctx),
@@ -1073,6 +1308,9 @@ impl PreviewState {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if self.handle_form_navigation(preview, route, event, ctx) {
+            return EventOutcome::Handled;
+        }
         if preview == PreviewKind::TextInput {
             if let Some(route) = route
                 .path
@@ -1081,14 +1319,21 @@ impl PreviewState {
             {
                 return self.text_input.dispatch_event(&route, event, ctx);
             }
-            let Some(route) = route
+            if let Some(route) = route
                 .path
                 .without_first_if(&text_input_panel_child_key())
+                .map(EventRoute::new)
+            {
+                return self.text_input_panel.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&text_input_disabled_child_key())
                 .map(EventRoute::new)
             else {
                 return EventOutcome::Ignored;
             };
-            return self.text_input_panel.dispatch_event(&route, event, ctx);
+            return self.text_input_disabled.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::PasswordInput {
             if let Some(route) = route
@@ -1115,17 +1360,27 @@ impl PreviewState {
             {
                 return self.textarea_input.dispatch_event(&route, event, ctx);
             }
-            let Some(route) = route
+            if let Some(route) = route
                 .path
                 .without_first_if(&textarea_panel_child_key())
+                .map(EventRoute::new)
+            {
+                return self.textarea_panel.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&textarea_disabled_child_key())
                 .map(EventRoute::new)
             else {
                 return EventOutcome::Ignored;
             };
-            return self.textarea_panel.dispatch_event(&route, event, ctx);
+            return self.textarea_disabled.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::DateTimePicker {
             return self.date_time_dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::RelativeDate {
+            return self.relative_date.dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::ValidatedForm {
             return self.validated_form.dispatch_event(route, event, ctx);
@@ -1252,10 +1507,19 @@ impl PreviewState {
                 ) {
                     return;
                 }
-                dispatch_focus_child(
+                if dispatch_focus_child(
                     &mut self.text_input_panel,
                     target,
                     text_input_panel_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.text_input_disabled,
+                    target,
+                    text_input_disabled_child_key(),
                     focused,
                     ctx,
                 );
@@ -1288,10 +1552,19 @@ impl PreviewState {
                 ) {
                     return;
                 }
-                dispatch_focus_child(
+                if dispatch_focus_child(
                     &mut self.textarea_panel,
                     target,
                     textarea_panel_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.textarea_disabled,
+                    target,
+                    textarea_disabled_child_key(),
                     focused,
                     ctx,
                 );
@@ -1340,6 +1613,9 @@ impl PreviewState {
                     focused,
                     ctx,
                 );
+            }
+            PreviewKind::RelativeDate => {
+                self.relative_date.dispatch_focus(target, focused, ctx);
             }
             PreviewKind::ValidatedForm => {
                 self.validated_form.dispatch_focus(target, focused, ctx);
@@ -1643,26 +1919,33 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.menu, dt, settings))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
             .merge(Animated::tick(&mut self.text_input_panel, dt, settings))
+            .merge(Animated::tick(&mut self.text_input_disabled, dt, settings))
             .merge(Animated::tick(&mut self.password_input, dt, settings))
             .merge(Animated::tick(&mut self.password_panel, dt, settings))
             .merge(Animated::tick(&mut self.textarea_input, dt, settings))
             .merge(Animated::tick(&mut self.textarea_panel, dt, settings))
+            .merge(Animated::tick(&mut self.textarea_disabled, dt, settings))
+            .merge(self.relative_date.tick(dt, settings))
             .merge(self.validated_form.tick(dt, settings))
     }
 
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.relative_date.init(ctx);
         self.validated_form.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.relative_date.mount(ctx);
         self.validated_form.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.relative_date.unmount(ctx);
         self.validated_form.unmount(ctx);
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.relative_date.destroy(ctx);
         self.validated_form.destroy(ctx);
     }
 
@@ -1775,7 +2058,7 @@ impl PreviewState {
             Paragraph::new(Line::from(vec![
                 Span::raw("1-6 focus demo • Enter/Space opens • "),
                 Span::raw("Ctrl+J/Ctrl+K navigate while typing search; Enter commit; Esc cancel; Space opens/toggles multi • "),
-                Span::raw("Tab/BackTab moves across demos then out • Ctrl+Q quits"),
+                Span::raw("Tab/BackTab or h/k/j/l moves across form demos • Ctrl+Q quits"),
             ])),
             help,
         );
@@ -2101,11 +2384,11 @@ impl PreviewState {
     }
 
     fn render_text_input(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, input, panel] = text_input_showcase_layout(area);
+        let [instructions, input, panel, disabled] = text_input_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type text. Enter submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Plain input has hotkey |i|. Nested panel has hotkey |p|.\n\
+                "Type text. Enter/Ctrl+Enter submits. Tab inserts spaces. Esc/Ctrl+[ exits input mode, then returns to the list.\n\
+                 Hotkeys: |i| plain, |p| panel, |d| disabled. Enter opens disabled browse mode; h/k and j/l move between idle fields.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -2119,14 +2402,15 @@ impl PreviewState {
         );
         self.text_input.render(frame, input);
         self.text_input_panel.render(frame, panel);
+        self.text_input_disabled.render(frame, disabled);
     }
 
     fn render_password_input(&self, frame: &mut Frame, area: Rect) {
         let [instructions, input, panel, preview] = password_input_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Type a secret. Enter submits. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Text is masked; current editing shortcuts match TextInput. Nested panel has hotkey |pp|.\n\
+                "Type a secret. Enter/Ctrl+Enter submits. Tab inserts spaces. Esc/Ctrl+[ exits input mode, then returns to the list.\n\
+                 Text is masked; current editing shortcuts match TextInput. When idle, h/k moves back and j/l forward. Nested panel has hotkey |pp|.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -2221,11 +2505,11 @@ impl PreviewState {
     }
 
     fn render_textarea_input(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, input, panel] = textarea_showcase_layout(area);
+        let [instructions, input, panel, disabled] = textarea_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
                 "Type text. Enter inserts newline. Ctrl+Enter finishes editing. Ctrl+J also inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Plain textarea uses min_rows(2)/max_rows(4); nested panel uses min_rows(2)/max_rows(4). Overflow shows a scrollbar. Hotkeys: |t| textarea, |p| panel.\n\
+                 Plain and nested textareas remain editable. Disabled panel |d| blocks editing. When idle, h/k moves back and j/l forward.\n\
                  Shortcuts:\n\
                  • PgUp / PgDn / Ctrl+U / Ctrl+D          : Scroll overflowing text\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
@@ -2241,6 +2525,7 @@ impl PreviewState {
         );
         self.textarea_input.render(frame, input);
         self.textarea_panel.render(frame, panel);
+        self.textarea_disabled.render(frame, disabled);
     }
 
     fn layout_date_time(&mut self, area: Rect, ctx: &mut LayoutCtx) {
@@ -2288,8 +2573,8 @@ impl PreviewState {
         frame.render_widget(
             Paragraph::new(
                 "DatePicker, TimePicker, composed DateTimePicker, and dropdown DateTimePicker.\n\
-                 Hotkeys: |dp| date, |tp| time, |dt| datetime dropdown. Date: arrows/vim move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
-                 Time: left/right field, up/down increment, Enter select, Esc cancel. Tab changes gallery focus; inside DateTimePicker Tab switches date/time.",
+                 Hotkeys: |dp| date, |tp| time, |dt| datetime dropdown. Date: arrows/hjkl move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
+                 Time: left/right or h/l selects field; up/down or k/j increments. Enter selects. Tab/BackTab or Ctrl+h/k/j/l moves between form fields.",
             ),
             instructions,
         );
@@ -2514,7 +2799,7 @@ impl PreviewState {
         let (help, input_area, panel_area, footer) = self.tag_input_showcase_areas(area);
         frame.render_widget(
             Paragraph::new(
-                "TagInput: plain and panel-outline variants. Type filters existing tags in an overlay popup. Enter adds highlighted existing tag; Ctrl+Enter requests/creates exact text. Ctrl+j/k moves popup, Ctrl+h/l moves through selected tags, Backspace/Delete removes focused tag.",
+                "TagInput: plain and panel-outline variants. Type filters existing tags in an overlay popup. Enter adds highlighted existing tag; Ctrl+Enter requests/creates exact text. Ctrl+j/k moves popup, Ctrl+h/l moves selected tags. When idle, Ctrl+h/k moves back and Ctrl+j/l forward between fields.",
             ),
             help,
         );
@@ -2666,7 +2951,7 @@ impl PreviewState {
         let [instructions, switch_area, checkbox_area] = toggle_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Enter/Space toggles. Press x for switch style or i for checkbox style.",
+                "Enter/Space toggles. Press x for switch style or i for checkbox style. h/k moves back; j/l moves forward.",
             ),
             instructions,
         );
@@ -2944,6 +3229,10 @@ fn text_input_panel_child_key() -> ChildKey {
     ChildKey::new("text-input-panel")
 }
 
+fn text_input_disabled_child_key() -> ChildKey {
+    ChildKey::new("text-input-disabled")
+}
+
 fn password_input_child_key() -> ChildKey {
     ChildKey::new("password-input")
 }
@@ -2970,6 +3259,10 @@ fn textarea_input_child_key() -> ChildKey {
 
 fn textarea_panel_child_key() -> ChildKey {
     ChildKey::new("textarea-panel")
+}
+
+fn textarea_disabled_child_key() -> ChildKey {
+    ChildKey::new("textarea-disabled")
 }
 
 fn tag_input_child_key() -> ChildKey {
@@ -3180,6 +3473,24 @@ fn toggle_checkbox_child_key() -> ChildKey {
     ChildKey::new("toggle-checkbox")
 }
 
+fn form_navigation_key(event: &TuiEvent) -> Option<FormNavigation> {
+    let TuiEvent::Key(KeyEvent { code, modifiers }) = event else {
+        return None;
+    };
+    if *modifiers != KeyModifiers::CONTROL {
+        return None;
+    }
+    match code {
+        Key::Char('h' | 'k') => Some(FormNavigation::Previous),
+        Key::Char('j' | 'l') => Some(FormNavigation::Next),
+        _ => None,
+    }
+}
+
+fn child_position(key: &ChildKey, keys: &[ChildKey]) -> Option<usize> {
+    keys.iter().position(|candidate| candidate == key)
+}
+
 fn modal_tabs_button(example: ModalTabsExample) -> Button<Msg> {
     Button::new(example.button_label())
         .hotkey(example.hotkey())
@@ -3254,6 +3565,7 @@ enum ComponentKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    RelativeDate,
     ValidatedForm,
     Calendar,
     Toggle,
@@ -3272,7 +3584,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 39] = [
+    const ALL: [Self; 40] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3297,6 +3609,7 @@ impl ComponentKind {
         Self::PasswordInput,
         Self::TextareaInput,
         Self::DateTimePicker,
+        Self::RelativeDate,
         Self::ValidatedForm,
         Self::Calendar,
         Self::Toggle,
@@ -3340,6 +3653,7 @@ impl ComponentKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::RelativeDate => "Relative Date",
             Self::ValidatedForm => "Validated Form",
             Self::Calendar => "Calendar",
             Self::Toggle => "Toggle",
@@ -3375,6 +3689,7 @@ impl ComponentKind {
             | Self::PasswordInput
             | Self::TextareaInput
             | Self::DateTimePicker
+            | Self::RelativeDate
             | Self::ValidatedForm
             | Self::Calendar
             | Self::Toggle
@@ -3415,6 +3730,7 @@ impl ComponentKind {
             Self::PasswordInput => PreviewKind::PasswordInput,
             Self::TextareaInput => PreviewKind::TextareaInput,
             Self::DateTimePicker => PreviewKind::DateTimePicker,
+            Self::RelativeDate => PreviewKind::RelativeDate,
             Self::ValidatedForm => PreviewKind::ValidatedForm,
             Self::Calendar => PreviewKind::Calendar,
             Self::Toggle => PreviewKind::Toggle,
@@ -3453,6 +3769,7 @@ enum PreviewKind {
     PasswordInput,
     TextareaInput,
     DateTimePicker,
+    RelativeDate,
     ValidatedForm,
     Calendar,
     StatusBar,
@@ -3493,6 +3810,7 @@ impl PreviewKind {
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",
             Self::DateTimePicker => "Date & Time",
+            Self::RelativeDate => "Relative Date",
             Self::ValidatedForm => "Validated Form",
             Self::Calendar => "Calendar",
             Self::StatusBar => "Status Bar",
@@ -3575,6 +3893,401 @@ mod tests {
             PreviewKind::ValidatedForm
         );
         assert_eq!(PreviewKind::ValidatedForm.title(), "Validated Form");
+    }
+
+    #[test]
+    fn relative_date_is_registered_under_inputs() {
+        assert!(ComponentKind::ALL.contains(&ComponentKind::RelativeDate));
+        assert_eq!(
+            ComponentKind::RelativeDate.parent(),
+            Some(ComponentKind::Inputs)
+        );
+        assert_eq!(
+            ComponentKind::RelativeDate.preview(),
+            PreviewKind::RelativeDate
+        );
+        assert_eq!(PreviewKind::RelativeDate.title(), "Relative Date");
+    }
+
+    #[test]
+    fn relative_date_defaults_are_seven_calendar_days_apart_at_the_same_time() {
+        let state = PreviewState::new();
+
+        assert_eq!(
+            (state.relative_date.target().date() - state.relative_date.reference().date())
+                .whole_days(),
+            7
+        );
+        assert_eq!(
+            state.relative_date.target().time(),
+            state.relative_date.reference().time()
+        );
+        assert_eq!(state.relative_date.reference().second(), 0);
+        assert_eq!(state.relative_date.reference().nanosecond(), 0);
+        assert_eq!(state.relative_date.distance_text(), "In 1 week");
+        assert!(
+            state
+                .relative_date
+                .calendar_week_text()
+                .starts_with("Next ")
+        );
+    }
+
+    #[test]
+    fn relative_date_time_messages_keep_both_outputs_in_sync() {
+        let mut state = PreviewState::new();
+        let reference_time = Time::from_hms(9, 0, 0).expect("valid reference time");
+        let target_time = Time::from_hms(11, 0, 0).expect("valid target time");
+
+        assert!(
+            state
+                .relative_date
+                .apply_message(&Msg::RelativeReferenceSelected(demo_date()))
+        );
+        assert!(
+            state
+                .relative_date
+                .apply_message(&Msg::RelativeTargetSelected(demo_date()))
+        );
+        assert!(
+            state
+                .relative_date
+                .apply_message(&Msg::RelativeReferenceTimeSelected(reference_time))
+        );
+        assert!(
+            state
+                .relative_date
+                .apply_message(&Msg::RelativeTargetTimeSelected(target_time))
+        );
+
+        assert_eq!(state.relative_date.reference().date(), demo_date());
+        assert_eq!(state.relative_date.reference().time(), reference_time);
+        assert_eq!(state.relative_date.target().date(), demo_date());
+        assert_eq!(state.relative_date.target().time(), target_time);
+        assert_eq!(state.relative_date.distance_text(), "In 2 hours");
+        assert_eq!(state.relative_date.calendar_week_text(), "In 2 hours");
+    }
+
+    #[test]
+    fn escape_shortcuts_from_preview_focus_return_to_component_overview() {
+        let mut gallery = Gallery::new();
+        gallery.select(ComponentKind::Toggle);
+        let mut layout = LayoutCtx::new();
+        gallery.layout(Rect::new(0, 0, 100, 30), &mut layout);
+        let route = EventRoute::new(TreePath::from_keys([
+            gallery_preview_child_key(),
+            toggle_switch_child_key(),
+        ]));
+        for key in [
+            KeyEvent::from(Key::Esc),
+            KeyEvent {
+                code: Key::Char('['),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        ] {
+            let mut ctx = EventCtx::default();
+            let outcome = gallery.dispatch_event(&route, &TuiEvent::Key(key), &mut ctx);
+
+            assert_eq!(outcome, EventOutcome::Handled);
+            assert_eq!(
+                ctx.focus_request(),
+                Some(&FocusRequest::TargetAt {
+                    path: TreePath::from_keys([gallery_list_child_key()]),
+                    id: FocusId::new("data-view"),
+                })
+            );
+            let mut focus = tuicore::FocusManager::new();
+            focus.apply_request(ctx.focus_request().unwrap(), layout.focus_targets());
+            assert_eq!(focus.current().unwrap().id.as_str(), "data-view");
+            assert_eq!(
+                focus.current().unwrap().path,
+                TreePath::from_keys([gallery_list_child_key()])
+            );
+        }
+    }
+
+    #[test]
+    fn every_gallery_preview_focus_receives_escape_before_global_hotkeys() {
+        let mut gallery = Gallery::new();
+        let mut layout = LayoutCtx::new();
+        gallery.layout(Rect::new(0, 0, 100, 30), &mut layout);
+        let preview_path = TreePath::from_keys([gallery_preview_child_key()]);
+        let preview_targets = layout
+            .focus_targets()
+            .iter()
+            .filter(|target| target.path.keys().starts_with(preview_path.keys()))
+            .collect::<Vec<_>>();
+
+        assert!(!preview_targets.is_empty());
+        assert!(
+            preview_targets
+                .iter()
+                .all(|target| target.focused_events_before_global_hotkeys)
+        );
+    }
+
+    #[test]
+    fn nested_gallery_escape_targets_absolute_component_overview_path() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(nested_gallery_escape_targets_absolute_component_overview_path_inner)
+            .expect("test thread should start")
+            .join()
+            .expect("test thread should finish");
+    }
+
+    fn nested_gallery_escape_targets_absolute_component_overview_path_inner() {
+        let dialog_layer = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
+        let tabs_layer = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
+        let root_layer = DialogLayer::new(tabs_layer, gallery_dock_overlay()).active(false);
+        let store_view = DialogLayer::new(root_layer, empty_store_debug_dialog()).active(false);
+        let confirmation =
+            DialogLayer::new(store_view, gallery_confirmation_dialog()).active(false);
+        let mut root = DialogLayer::new(confirmation, ai_dock_dialog()).active(false);
+        gallery(&mut root).select(ComponentKind::TextInput);
+        gallery(&mut root).previews.text_input.set_focused(true);
+        gallery(&mut root).previews.text_input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::default(),
+        );
+        let mut layout = LayoutCtx::new();
+        root.layout(Rect::new(0, 0, 100, 30), &mut layout);
+        let preview_target = layout
+            .focus_targets()
+            .iter()
+            .find(|target| {
+                target.id.as_str() == "input"
+                    && target.path.keys().contains(&gallery_preview_child_key())
+            })
+            .expect("gallery preview should register focus")
+            .clone();
+        assert!(preview_target.focused_events_before_global_hotkeys);
+        let overview_target = layout
+            .focus_targets()
+            .iter()
+            .find(|target| {
+                target.id.as_str() == "data-view"
+                    && target.path.keys().contains(&gallery_list_child_key())
+            })
+            .expect("component overview should register focus")
+            .clone();
+        let route = EventRoute::new(preview_target.path);
+        let first = tuicore::TreeDispatcher::new().dispatch_event(
+            &mut root,
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            AnimationSettings::default(),
+        );
+        assert_eq!(first.outcome, EventOutcome::Handled);
+        assert!(first.focus_request.is_none());
+        assert!(!gallery(&mut root).previews.text_input.insert_mode());
+
+        let second = tuicore::TreeDispatcher::new().dispatch_event(
+            &mut root,
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            AnimationSettings::default(),
+        );
+
+        assert_eq!(second.outcome, EventOutcome::Handled);
+        assert_eq!(
+            second.focus_request,
+            Some(FocusRequest::TargetAt {
+                path: overview_target.path,
+                id: overview_target.id,
+            })
+        );
+    }
+
+    #[test]
+    fn controlled_vim_form_navigation_moves_only_between_adjacent_form_components() {
+        let mut state = PreviewState::new();
+        let first = EventRoute::new(TreePath::from_keys([text_input_child_key()]));
+        let middle = EventRoute::new(TreePath::from_keys([text_input_panel_child_key()]));
+
+        let mut forward = EventCtx::default();
+        let outcome = state.dispatch_event(
+            PreviewKind::TextInput,
+            &first,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('l'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut forward,
+        );
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(forward.focus_request(), Some(&FocusRequest::Next));
+
+        let mut backward = EventCtx::default();
+        let outcome = state.dispatch_event(
+            PreviewKind::TextInput,
+            &middle,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('k'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut backward,
+        );
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(backward.focus_request(), Some(&FocusRequest::Previous));
+
+        let mut blocked = EventCtx::default();
+        let outcome = state.dispatch_event(
+            PreviewKind::TextInput,
+            &first,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('h'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut blocked,
+        );
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(blocked.focus_request().is_none());
+    }
+
+    #[test]
+    fn vim_form_navigation_does_not_leave_active_input_mode() {
+        let mut state = PreviewState::new();
+        state.text_input.set_focused(true);
+        state.text_input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::default(),
+        );
+        assert!(state.text_input.insert_mode());
+        let route = EventRoute::new(TreePath::from_keys([text_input_child_key()]));
+        let mut ctx = EventCtx::default();
+
+        let outcome = state.dispatch_event(
+            PreviewKind::TextInput,
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('l'))),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(ctx.focus_request().is_none());
+        assert_eq!(state.text_input.current_value(), "l");
+    }
+
+    #[test]
+    fn controlled_vim_navigation_covers_all_gallery_form_component_previews() {
+        let cases = [
+            (PreviewKind::TextInput, text_input_child_key()),
+            (PreviewKind::PasswordInput, password_input_child_key()),
+            (PreviewKind::TextareaInput, textarea_input_child_key()),
+            (PreviewKind::DateTimePicker, date_picker_child_key()),
+            (PreviewKind::RelativeDate, reference_picker_child_key()),
+            (PreviewKind::Dropdown, dropdown_child_key(0)),
+            (PreviewKind::TagInput, tag_input_child_key()),
+            (PreviewKind::Toggle, toggle_switch_child_key()),
+        ];
+
+        for (preview, key) in cases {
+            let mut state = PreviewState::new();
+            let route = EventRoute::new(TreePath::from_keys([key]));
+            let mut ctx = EventCtx::default();
+
+            let outcome = state.dispatch_event(
+                preview,
+                &route,
+                &TuiEvent::Key(KeyEvent {
+                    code: Key::Char('j'),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
+                &mut ctx,
+            );
+
+            assert_eq!(outcome, EventOutcome::Handled, "preview: {preview:?}");
+            assert_eq!(
+                ctx.focus_request(),
+                Some(&FocusRequest::Next),
+                "preview: {preview:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vim_form_navigation_stays_inside_open_dropdown() {
+        let mut state = PreviewState::new();
+        state.dropdown_mut(0).open();
+        let route = EventRoute::new(TreePath::from_keys([dropdown_child_key(0)]));
+        let mut ctx = EventCtx::default();
+
+        state.dispatch_event(
+            PreviewKind::Dropdown,
+            &route,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut ctx,
+        );
+
+        assert!(state.dropdown(0).is_open());
+        assert!(ctx.focus_request().is_none());
+    }
+
+    #[test]
+    fn preview_escape_exits_text_input_before_returning_to_overview() {
+        let mut gallery = Gallery::new();
+        gallery.select(ComponentKind::TextInput);
+        gallery.previews.text_input.set_focused(true);
+        gallery.previews.text_input.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::default(),
+        );
+        let route = EventRoute::new(TreePath::from_keys([
+            gallery_preview_child_key(),
+            text_input_child_key(),
+        ]));
+
+        let mut first = EventCtx::default();
+        let outcome =
+            gallery.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut first);
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!gallery.previews.text_input.insert_mode());
+        assert!(first.focus_request().is_none());
+
+        let mut second = EventCtx::default();
+        gallery.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut second,
+        );
+        assert_eq!(
+            second.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::from_keys([gallery_list_child_key()]),
+                id: FocusId::new("data-view"),
+            })
+        );
+    }
+
+    #[test]
+    fn preview_escape_closes_dropdown_before_returning_to_overview() {
+        let mut gallery = Gallery::new();
+        gallery.select(ComponentKind::Dropdown);
+        gallery.previews.dropdown_mut(0).open();
+        let route = EventRoute::new(TreePath::from_keys([
+            gallery_preview_child_key(),
+            dropdown_child_key(0),
+        ]));
+
+        let mut first = EventCtx::default();
+        gallery.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut first);
+        assert!(!gallery.previews.dropdown(0).is_open());
+        assert!(first.focus_request().is_none());
+
+        let mut second = EventCtx::default();
+        gallery.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut second,
+        );
+        assert!(matches!(
+            second.focus_request(),
+            Some(FocusRequest::TargetAt { id, .. }) if id.as_str() == "data-view"
+        ));
     }
 
     #[test]

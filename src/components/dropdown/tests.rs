@@ -278,6 +278,22 @@ fn opening_from_event_tweens_backdrop_dim() {
 }
 
 #[test]
+fn immediate_open_keeps_full_backdrop_and_requests_focus() {
+    let mut dropdown = single_dropdown();
+    layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
+    let mut ctx = EventCtx::<()>::new(AnimationSettings::default());
+
+    let outcome = dropdown.open_immediate_with_context(&mut ctx);
+
+    assert!(outcome.opened);
+    assert_eq!(dropdown.backdrop_tween.value(), DROPDOWN_BACKDROP_AMOUNT);
+    assert!(!dropdown.backdrop_tween.is_active());
+    assert!(ctx.layout_requested());
+    assert!(ctx.redraw_requested());
+    assert!(ctx.focus_request().is_some());
+}
+
+#[test]
 fn open_clones_committed_selection_to_draft() {
     let mut dropdown = single_dropdown().selected_one("Beta");
 

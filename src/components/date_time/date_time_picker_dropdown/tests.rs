@@ -37,3 +37,19 @@ fn date_time_picker_dropdown_accepts_external_datetime() {
         )
     );
 }
+
+#[test]
+fn date_time_picker_dropdown_forwards_first_day_of_week_builder_and_setter() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new().first_day_of_week(time::Weekday::Sunday);
+    assert_eq!(
+        dropdown.date.configured_first_day_of_week(),
+        time::Weekday::Sunday
+    );
+
+    dropdown.set_first_day_of_week(time::Weekday::Monday);
+
+    assert_eq!(
+        dropdown.date.configured_first_day_of_week(),
+        time::Weekday::Monday
+    );
+}

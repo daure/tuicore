@@ -2,12 +2,14 @@ mod date_picker;
 mod date_picker_dropdown;
 mod date_time_picker;
 mod date_time_picker_dropdown;
+mod relative_date;
 mod time_picker;
 
 pub use date_picker::DatePicker;
 pub use date_picker_dropdown::DatePickerDropdown;
 pub use date_time_picker::{DateTimePicker, DateTimePickerLayout};
 pub use date_time_picker_dropdown::DateTimePickerDropdown;
+pub use relative_date::{RelativeDate, RelativeDateMode};
 pub use time_picker::{TimeField, TimePicker, TimePrecision};
 
 use ratatui::layout::Rect;

@@ -94,6 +94,10 @@ pub struct DropdownKeyBindings {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateTimePickerKeyBindings {
+    line_up: Vec<KeySpec>,
+    line_down: Vec<KeySpec>,
+    line_left: Vec<KeySpec>,
+    line_right: Vec<KeySpec>,
     today: Vec<KeySpec>,
     month_view: Vec<KeySpec>,
     year_view: Vec<KeySpec>,
@@ -239,6 +243,10 @@ impl Default for DropdownKeyBindings {
 impl Default for DateTimePickerKeyBindings {
     fn default() -> Self {
         Self {
+            line_up: vec![KeySpec::key(Key::Up), KeySpec::plain('k')],
+            line_down: vec![KeySpec::key(Key::Down), KeySpec::plain('j')],
+            line_left: vec![KeySpec::key(Key::Left), KeySpec::plain('h')],
+            line_right: vec![KeySpec::key(Key::Right), KeySpec::plain('l')],
             today: vec![KeySpec::plain('t')],
             month_view: vec![KeySpec::plain('m')],
             year_view: vec![KeySpec::plain('y')],
@@ -433,6 +441,30 @@ impl KeyBindings {
             &mut bindings.dropdown.page_previous,
         )?;
         set_keys(&value, "dropdown", "select", &mut bindings.dropdown.select)?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "line_up",
+            &mut bindings.date_time_picker.line_up,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "line_down",
+            &mut bindings.date_time_picker.line_down,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "line_left",
+            &mut bindings.date_time_picker.line_left,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "line_right",
+            &mut bindings.date_time_picker.line_right,
+        )?;
         set_keys(
             &value,
             "date_time_picker",
@@ -853,6 +885,54 @@ impl KeyBindings {
 
     pub fn set_date_time_picker_today(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
         self.date_time_picker.today = keys.into_iter().collect();
+    }
+
+    pub fn set_date_time_picker_line_up(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.line_up = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_line_up(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_line_up(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_line_down(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.line_down = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_line_down(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_line_down(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_line_left(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.line_left = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_line_left(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_line_left(keys);
+        self
+    }
+
+    pub fn set_date_time_picker_line_right(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.line_right = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_line_right(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_line_right(keys);
+        self
     }
 
     pub fn with_date_time_picker_today(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
@@ -1293,6 +1373,38 @@ impl ToggleKeyBindings {
 }
 
 impl DateTimePickerKeyBindings {
+    pub fn line_up_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.line_up, key.into())
+    }
+
+    pub fn line_up_label(&self) -> String {
+        labels(&self.line_up)
+    }
+
+    pub fn line_down_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.line_down, key.into())
+    }
+
+    pub fn line_down_label(&self) -> String {
+        labels(&self.line_down)
+    }
+
+    pub fn line_left_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.line_left, key.into())
+    }
+
+    pub fn line_left_label(&self) -> String {
+        labels(&self.line_left)
+    }
+
+    pub fn line_right_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.line_right, key.into())
+    }
+
+    pub fn line_right_label(&self) -> String {
+        labels(&self.line_right)
+    }
+
     pub fn today_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.today, key.into())
     }
@@ -1656,6 +1768,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_navigation_matches_arrows_and_plain_hjkl() {
+        let bindings = KeyBindings::default();
+        let cases: [(Key, char, fn(&KeyBindings, KeyEvent) -> bool); 4] = [
+            (Key::Left, 'h', |bindings: &KeyBindings, key| {
+                bindings.line_left_matches(key)
+            }),
+            (Key::Down, 'j', |bindings: &KeyBindings, key| {
+                bindings.line_down_matches(key)
+            }),
+            (Key::Up, 'k', |bindings: &KeyBindings, key| {
+                bindings.line_up_matches(key)
+            }),
+            (Key::Right, 'l', |bindings: &KeyBindings, key| {
+                bindings.line_right_matches(key)
+            }),
+        ];
+
+        for (arrow, character, matches) in cases {
+            assert!(matches(&bindings, KeyEvent::from(arrow)));
+            assert!(!matches(
+                &bindings,
+                KeyEvent {
+                    code: Key::Char(character),
+                    modifiers: KeyModifiers::CONTROL,
+                }
+            ));
+            assert!(matches(
+                &bindings,
+                KeyEvent {
+                    code: Key::Char(character),
+                    modifiers: KeyModifiers::NONE,
+                }
+            ));
+        }
+    }
+
+    #[test]
     fn configured_nav_keys_match_scroll_navigation() {
         let bindings = KeyBindings::from_toml_str(
             r#"
@@ -1696,6 +1845,10 @@ mod tests {
             select = "ctrl+space"
 
             [date_time_picker]
+            line_up = "w"
+            line_down = "s"
+            line_left = "a"
+            line_right = "d"
             today = "t"
             month_view = "m"
             year_view = "y"
@@ -1829,6 +1982,22 @@ mod tests {
             code: Key::End,
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.date_time_picker().line_up_matches(Key::Char('w')));
+        assert!(
+            bindings
+                .date_time_picker()
+                .line_down_matches(Key::Char('s'))
+        );
+        assert!(
+            bindings
+                .date_time_picker()
+                .line_left_matches(Key::Char('a'))
+        );
+        assert!(
+            bindings
+                .date_time_picker()
+                .line_right_matches(Key::Char('d'))
+        );
     }
 
     #[test]
@@ -1863,6 +2032,10 @@ mod tests {
             .with_dropdown_page_next([KeySpec::plain('d')])
             .with_dropdown_page_previous([KeySpec::plain('u')])
             .with_dropdown_select([KeySpec::plain(' ')])
+            .with_date_time_picker_line_up([KeySpec::plain('w')])
+            .with_date_time_picker_line_down([KeySpec::plain('s')])
+            .with_date_time_picker_line_left([KeySpec::plain('a')])
+            .with_date_time_picker_line_right([KeySpec::plain('d')])
             .with_date_time_picker_top_prefix([KeySpec::plain('t')])
             .with_date_time_picker_bottom([KeySpec::plain('b')]);
 
@@ -1990,6 +2163,22 @@ mod tests {
             code: Key::Char('b'),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.date_time_picker().line_up_matches(Key::Char('w')));
+        assert!(
+            bindings
+                .date_time_picker()
+                .line_down_matches(Key::Char('s'))
+        );
+        assert!(
+            bindings
+                .date_time_picker()
+                .line_left_matches(Key::Char('a'))
+        );
+        assert!(
+            bindings
+                .date_time_picker()
+                .line_right_matches(Key::Char('d'))
+        );
     }
 
     #[test]
@@ -2038,6 +2227,38 @@ mod tests {
             code: Key::Char('t'),
             modifiers: KeyModifiers::CONTROL,
         }));
+    }
+
+    #[test]
+    fn default_date_picker_navigation_matches_arrows_and_plain_hjkl_only() {
+        let bindings = KeyBindings::default();
+        let date_keys = bindings.date_time_picker();
+        let cases: [(Key, char, fn(&DateTimePickerKeyBindings, KeyEvent) -> bool); 4] = [
+            (Key::Left, 'h', DateTimePickerKeyBindings::line_left_matches),
+            (Key::Down, 'j', DateTimePickerKeyBindings::line_down_matches),
+            (Key::Up, 'k', DateTimePickerKeyBindings::line_up_matches),
+            (
+                Key::Right,
+                'l',
+                DateTimePickerKeyBindings::line_right_matches,
+            ),
+        ];
+
+        for (arrow, character, matches) in cases {
+            assert!(matches(date_keys, KeyEvent::from(arrow)));
+            assert!(!matches(
+                date_keys,
+                KeyEvent {
+                    code: Key::Char(character),
+                    modifiers: KeyModifiers::CONTROL,
+                }
+            ));
+            assert!(matches(date_keys, KeyEvent::from(Key::Char(character))));
+        }
+        assert_eq!(date_keys.line_up_label(), "Up/k");
+        assert_eq!(date_keys.line_down_label(), "Down/j");
+        assert_eq!(date_keys.line_left_label(), "Left/h");
+        assert_eq!(date_keys.line_right_label(), "Right/l");
     }
 
     #[test]

@@ -14,7 +14,8 @@ use crate::{
     AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
     FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
     Notification, OutsideMousePolicy, OverlayLayer, OverlayLayoutEntry, Propagation,
-    RuntimeKeyBindings, ToastRack, TreePath, TuiEvent, TuiNode, animation_settings, keybindings,
+    RuntimeKeyBindings, TickResult, ToastRack, TreePath, TuiEvent, TuiNode, animation_settings,
+    keybindings,
 };
 
 use super::{
@@ -30,6 +31,7 @@ pub struct TreeApp<N, M = ()> {
     animation_settings: AnimationSettings,
     runtime_keybindings: RuntimeKeyBindings,
     runtime_keybindings_overridden: bool,
+    initial_focus: Option<FocusRequest>,
     on_message: Option<Box<MessageHandler<N, M>>>,
     on_notification: Option<Box<NotificationHandler<N, M>>>,
     notifications: ToastRack,
@@ -60,6 +62,7 @@ impl<N, M> TreeApp<N, M> {
             animation_settings: animation_settings(),
             runtime_keybindings: keybindings().runtime().clone(),
             runtime_keybindings_overridden: false,
+            initial_focus: None,
             on_message: None,
             on_notification: None,
             notifications: ToastRack::new(),
@@ -74,6 +77,11 @@ impl<N, M> TreeApp<N, M> {
     pub fn runtime_keybindings(mut self, keybindings: RuntimeKeyBindings) -> Self {
         self.runtime_keybindings = keybindings;
         self.runtime_keybindings_overridden = true;
+        self
+    }
+
+    pub fn initial_focus(mut self, focus: FocusRequest) -> Self {
+        self.initial_focus = Some(focus);
         self
     }
 
@@ -117,7 +125,7 @@ where
             redraw: true,
             layout: true,
             quit: false,
-            focus_request: None,
+            focus_request: self.initial_focus.take(),
             focus_repair: None,
             clear: false,
             wake_animations: false,
@@ -236,18 +244,7 @@ where
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
                 let notification_tick = self.notifications.tick(dt, self.animation_settings);
-                let active = tick.active || notification_tick.active;
-                flags.redraw |= tick.changed
-                    || tick.active
-                    || notification_tick.changed
-                    || notification_tick.active;
-                scheduler.set_active(active);
-                if let Some(delay) = tick.next_tick {
-                    scheduler.schedule_after(delay);
-                }
-                if let Some(delay) = notification_tick.next_tick {
-                    scheduler.schedule_after(delay);
-                }
+                apply_tick_results(flags, scheduler, tick, notification_tick);
             }
         }
 
@@ -273,7 +270,7 @@ where
             redraw: ctx.redraw_requested(),
             layout: ctx.layout_requested(),
             quit: false,
-            focus_request: None,
+            focus_request: self.initial_focus.take(),
             focus_repair: None,
             clear: false,
             wake_animations: ctx.redraw_requested()
@@ -542,9 +539,14 @@ where
             let suppress_global_hotkeys = focus_manager
                 .current()
                 .is_some_and(|target| target.suppress_global_hotkeys);
-            let focused_event_dispatched = focus_manager
+            let focused_events_before_global_hotkeys = focus_manager
                 .current()
                 .is_some_and(|target| target.focused_events_before_global_hotkeys);
+            let commits_pending_global_hotkey = global_hotkeys.can_commit_pending()
+                && key.code == crate::Key::Enter
+                && key.modifiers == crate::KeyModifiers::NONE;
+            let focused_event_dispatched =
+                focused_events_before_global_hotkeys && !commits_pending_global_hotkey;
             if focused_event_dispatched {
                 let route = EventRoute::new(focus_manager.current_path());
                 let effects = dispatcher.dispatch_event(
@@ -772,6 +774,12 @@ where
             &mut dispatcher,
             area,
         );
+        self.apply_pending_focus(
+            &mut flags,
+            &mut focus_manager,
+            &layout_engine,
+            &mut dispatcher,
+        );
 
         for event in events {
             if flags.quit {
@@ -813,23 +821,30 @@ where
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
                 let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
                 let notification_tick = self.notifications.tick(dt, self.animation_settings);
-                let active = tick.active || notification_tick.active;
-                flags.redraw |= tick.changed
-                    || tick.active
-                    || notification_tick.changed
-                    || notification_tick.active;
-                scheduler.set_active(active);
-                if let Some(delay) = tick.next_tick {
-                    scheduler.schedule_after(delay);
-                }
-                if let Some(delay) = notification_tick.next_tick {
-                    scheduler.schedule_after(delay);
-                }
+                apply_tick_results(&mut flags, &mut scheduler, tick, notification_tick);
             }
         }
 
         flags.merge(self.unmount_root());
         self
+    }
+}
+
+fn apply_tick_results(
+    flags: &mut RuntimeFlags,
+    scheduler: &mut Scheduler,
+    tick: TickResult,
+    notification_tick: TickResult,
+) {
+    flags.layout |= tick.layout;
+    flags.redraw |=
+        tick.changed || tick.active || notification_tick.changed || notification_tick.active;
+    scheduler.set_active(tick.active || notification_tick.active);
+    if let Some(delay) = tick.next_tick {
+        scheduler.schedule_after(delay);
+    }
+    if let Some(delay) = notification_tick.next_tick {
+        scheduler.schedule_after(delay);
     }
 }
 
@@ -1229,9 +1244,9 @@ mod tests {
     use super::*;
     use crate::{
         ChildKey, EventOutcome, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Key, KeyEvent,
-        KeyModifiers, KeySpec, LayoutCtx, LayoutResult, MouseButton, MouseEvent, MouseEventKind,
-        OverlayId, OverlayLayer, OverlayPolicy, OverlaySpec, Preset, RuntimeKeyBindings, TreePath,
-        preset, set_preset,
+        KeyModifiers, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+        MouseButton, MouseEvent, MouseEventKind, OverlayId, OverlayLayer, OverlayPolicy,
+        OverlaySpec, Preset, RuntimeKeyBindings, TreePath, preset, set_preset,
     };
     use crate::{Dialog, DialogLayer, Dropdown, Tab, Tabs, TextInput};
 
@@ -1312,6 +1327,10 @@ mod tests {
 
     struct EmptyNode;
 
+    struct TickSizingNode {
+        width: u16,
+    }
+
     struct HotkeyRouteNode {
         flex: Flex,
         event_log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
@@ -1335,9 +1354,11 @@ mod tests {
         suppress_global_hotkeys: bool,
         focused_first: bool,
         consume_char: Option<char>,
+        consume_enter: bool,
         key_events: usize,
         key_chars: String,
         hotkey_commits: usize,
+        last_hotkey_commit: Option<String>,
         yank_events: usize,
     }
 
@@ -1360,6 +1381,34 @@ mod tests {
 
         fn destroy(&mut self, _ctx: &mut LifecycleCtx<()>) {
             self.destroyed = true;
+        }
+    }
+
+    impl TuiNode<()> for TickSizingNode {
+        fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+            LayoutSizeHint::content(self.width, 1).normalized(proposal)
+        }
+
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+
+        fn mount(&mut self, ctx: &mut LifecycleCtx<()>) {
+            ctx.request_tick();
+        }
+
+        fn tick(&mut self, _dt: Duration, _settings: AnimationSettings) -> TickResult {
+            if self.width == 3 {
+                self.width = 11;
+                TickResult {
+                    layout: true,
+                    ..TickResult::CHANGED
+                }
+            } else {
+                TickResult::IDLE
+            }
         }
     }
 
@@ -1929,6 +1978,9 @@ mod tests {
             match event {
                 TuiEvent::Key(key) => {
                     self.key_events += 1;
+                    if key.code == Key::Enter && self.consume_enter {
+                        return EventOutcome::Handled;
+                    }
                     if let Key::Char(ch) = key.code {
                         self.key_chars.push(ch);
                         if self.consume_char == Some(ch) {
@@ -1936,8 +1988,9 @@ mod tests {
                         }
                     }
                 }
-                TuiEvent::Hotkey(HotkeyEvent::Commit(_)) => {
+                TuiEvent::Hotkey(HotkeyEvent::Commit(sequence)) => {
                     self.hotkey_commits += 1;
+                    self.last_hotkey_commit = Some(sequence.clone());
                     return EventOutcome::Handled;
                 }
                 TuiEvent::Yank => {
@@ -2255,6 +2308,15 @@ mod tests {
         let app = TreeApp::<_, ()>::new(QuitNode::default());
 
         assert!(!app.animation_settings.enabled);
+    }
+
+    #[test]
+    fn initial_focus_is_applied_after_first_layout() {
+        let app = TreeApp::new(DynamicFocusNode::default())
+            .initial_focus(FocusRequest::Target(FocusId::new("old")))
+            .run_test_events(std::iter::empty::<TuiEvent>(), Rect::new(0, 0, 10, 2));
+
+        assert_eq!(app.root.focused.as_deref(), Some("old"));
     }
 
     #[test]
@@ -2788,6 +2850,59 @@ mod tests {
     }
 
     #[test]
+    fn tick_intrinsic_size_change_relayouts_content_sized_flex_child() {
+        let flex = Flex::row().child(
+            "relative-date",
+            TickSizingNode { width: 3 },
+            FlexItem::fit_content(),
+        );
+        let mut app = TreeApp::new(flex);
+        let mut scheduler = Scheduler::new(app.animation_settings);
+        let mut layout_engine = LayoutEngine::new();
+        let mut focus_manager = FocusManager::new();
+        let mut dispatcher = TreeDispatcher::new();
+        let mut flags = app.mount_root();
+        let area = Rect::new(0, 0, 40, 1);
+        app.layout_root(
+            &mut flags,
+            &mut focus_manager,
+            &mut layout_engine,
+            &mut dispatcher,
+            area,
+        );
+        assert_eq!(
+            app.root
+                .child_rect(&ChildKey::new("relative-date"))
+                .expect("content-sized child should be laid out")
+                .width,
+            3
+        );
+
+        let tick = dispatcher.dispatch_tick(
+            &mut app.root,
+            Duration::from_secs(1),
+            app.animation_settings,
+        );
+        apply_tick_results(&mut flags, &mut scheduler, tick, TickResult::IDLE);
+        assert!(flags.layout);
+        app.layout_root(
+            &mut flags,
+            &mut focus_manager,
+            &mut layout_engine,
+            &mut dispatcher,
+            area,
+        );
+
+        assert_eq!(
+            app.root
+                .child_rect(&ChildKey::new("relative-date"))
+                .expect("content-sized child should be laid out")
+                .width,
+            11
+        );
+    }
+
+    #[test]
     fn clipboard_pending_timeout_participates_in_runtime_poll_and_tick() {
         let animation = AnimationSettings {
             enabled: false,
@@ -2823,6 +2938,47 @@ mod tests {
 
         assert_eq!(app.root.key_chars, "tx");
         assert_eq!(app.root.hotkey_commits, 1);
+    }
+
+    #[test]
+    fn enter_commits_pending_global_hotkey_before_focused_first_target() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["m", "ma", "mam"],
+            focused_first: true,
+            consume_enter: true,
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('m'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.key_events, 2);
+        assert_eq!(app.root.hotkey_commits, 1);
+        assert_eq!(app.root.last_hotkey_commit.as_deref(), Some("ma"));
+    }
+
+    #[test]
+    fn enter_reaching_focused_first_target_cancels_incomplete_global_hotkey_prefix() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["ta"],
+            focused_first: true,
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('t'))),
+            TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.key_events, 3);
+        assert_eq!(app.root.key_chars, "ta");
+        assert_eq!(app.root.hotkey_commits, 0);
     }
 
     #[test]

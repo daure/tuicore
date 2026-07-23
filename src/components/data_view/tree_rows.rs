@@ -3,7 +3,7 @@ use std::hash::Hash;
 
 use super::model::{LevelFn, ParentIdFn};
 use super::{DataView, DataViewTransformMode, SortDirection, TreeAdapter, VisibleRow};
-use crate::search::{SearchMode, search_match};
+use crate::search::search_match;
 
 impl<T, Id> DataView<T, Id>
 where
@@ -218,9 +218,7 @@ where
         self.columns
             .iter()
             .filter_map(|column| column.search_key.as_deref())
-            .any(|search_key| {
-                search_match(search, &search_key(row), SearchMode::Contains).is_some()
-            })
+            .any(|search_key| search_match(search, &search_key(row), self.search_mode).is_some())
     }
 
     fn row_matches_filters(&self, row: &T) -> bool {

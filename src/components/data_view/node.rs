@@ -119,14 +119,14 @@ where
             return EventOutcome::Handled;
         }
         let focused_search = matches!(self.interaction, DataViewInteraction::Search);
-        let opens_search = matches!(self.interaction, DataViewInteraction::Grid)
-            && keybindings().data_view().search_matches(*key);
         let before_interaction = self.interaction.clone();
         let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
         if Self::search_exited(&before_interaction, &self.interaction) {
             self.focus_self(ctx);
         }
-        if opens_search {
+        if matches!(before_interaction, DataViewInteraction::Grid)
+            && matches!(self.interaction, DataViewInteraction::Search)
+        {
             ctx.focus(FocusRequest::TargetAt {
                 path: ctx.current_path().child(ChildKey::new(SEARCH_SLOT)),
                 id: FocusId::new(TEXT_INPUT_FOCUS),

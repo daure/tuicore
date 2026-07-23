@@ -1,6 +1,7 @@
 use super::*;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
 use ratatui::style::Modifier;
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn plain_character_bubbles_before_insert_mode() {
@@ -929,6 +930,122 @@ fn focus_loss_without_active_edit_emits_nothing() {
     input.focus(None, false, &mut ctx);
 
     assert!(ctx.drain_messages().next().is_none());
+}
+
+#[test]
+fn disabled_textarea_blocks_all_text_mutation() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo").disabled(true);
+
+    assert_eq!(input.on_key(Key::Char('x')), InputOutcome::HANDLED);
+    assert_eq!(input.on_key(Key::Enter), InputOutcome::SUBMITTED);
+    assert_eq!(input.on_key(Key::Backspace), InputOutcome::HANDLED);
+    assert_eq!(input.on_key(Key::Delete), InputOutcome::HANDLED);
+    assert_eq!(input.on_paste("pasted"), InputOutcome::HANDLED);
+    assert_eq!(input.current_value(), "one\ntwo");
+}
+
+#[test]
+fn disabled_textarea_allows_horizontal_vertical_and_shortcut_navigation() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo").disabled(true);
+
+    assert_eq!(input.on_key(Key::Left), InputOutcome::HANDLED);
+    assert_eq!(input.cursor, 6);
+    assert_eq!(input.on_key(Key::Up), InputOutcome::HANDLED);
+    assert_eq!(input.cursor, 2);
+    assert_eq!(
+        input.on_key(KeyEvent {
+            code: Key::Char('a'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        InputOutcome::HANDLED
+    );
+    assert_eq!(input.cursor, 0);
+    assert_eq!(input.current_value(), "one\ntwo");
+}
+
+#[test]
+fn disabled_textarea_still_submits_on_enter() {
+    let mut input = TextareaInput::new()
+        .value("locked")
+        .focused(true)
+        .disabled(true)
+        .on_submit(|value| format!("submit:{value}"));
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(ctx.messages(), &["submit:locked".to_string()]);
+    assert!(input.insert_mode());
+    assert_eq!(input.current_value(), "locked");
+
+    let mut exit = EventCtx::default();
+    assert_eq!(
+        input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut exit),
+        EventOutcome::Handled
+    );
+    assert!(!input.insert_mode());
+}
+
+#[test]
+fn disabled_textarea_dims_content_and_panel_border() {
+    let input = TextareaInput::<()>::new()
+        .value("locked")
+        .panel("Notes")
+        .disabled(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .cell((0, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert!(
+        buffer
+            .cell((1, 1))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
+    assert!(
+        !buffer
+            .cell((3, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert_ne!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
+}
+
+#[test]
+fn focused_disabled_textarea_uses_local_cursor_focus() {
+    let input = TextareaInput::<()>::new()
+        .value("locked")
+        .panel("Notes")
+        .focused(true)
+        .disabled(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
+    assert_ne!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
 }
 
 fn line_text(line: &Line<'_>) -> String {

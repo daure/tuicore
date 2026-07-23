@@ -1,5 +1,6 @@
 use super::*;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn plain_character_bubbles_before_insert_mode() {
@@ -135,21 +136,43 @@ fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
 }
 
 #[test]
-fn control_enter_does_not_submit_text_input() {
-    let mut input = TextInput::<()>::new().value("ship");
-    input.insert_mode = true;
-    let mut ctx = EventCtx::default();
-
-    let key = KeyEvent {
+fn control_enter_activates_and_finishes_text_input_like_enter() {
+    let mut input = TextInput::<()>::new().value("ship").focused(true);
+    let control_enter = KeyEvent {
         code: Key::Enter,
         modifiers: KeyModifiers::CONTROL,
     };
 
-    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+    let mut activate = EventCtx::default();
+    assert_eq!(
+        input.event(&TuiEvent::Key(control_enter), &mut activate),
+        EventOutcome::Handled
+    );
+    assert!(input.insert_mode());
 
-    assert_eq!(outcome, EventOutcome::Ignored);
-    assert!(input.insert_mode);
-    assert!(ctx.messages().is_empty());
+    let mut finish = EventCtx::default();
+    assert_eq!(
+        input.event(&TuiEvent::Key(control_enter), &mut finish),
+        EventOutcome::Handled
+    );
+    assert!(!input.insert_mode());
+    assert_eq!(input.current_value(), "ship");
+}
+
+#[test]
+fn control_enter_activates_and_finishes_password_input_like_enter() {
+    let mut input = PasswordInput::<()>::new().value("secret").focused(true);
+    let control_enter = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    input.event(&TuiEvent::Key(control_enter), &mut EventCtx::default());
+    assert!(input.insert_mode());
+
+    input.event(&TuiEvent::Key(control_enter), &mut EventCtx::default());
+    assert!(!input.insert_mode());
+    assert_eq!(input.current_value(), "secret");
 }
 
 #[test]
@@ -216,23 +239,6 @@ fn focused_text_input_submit_emits_once_and_enters_insert_mode() {
 
     assert!(input.insert_mode);
     assert_eq!(ctx.messages(), &["submit:ship".to_string()]);
-}
-
-#[test]
-fn control_enter_does_not_submit_password_input() {
-    let mut input = PasswordInput::<()>::new().value("secret");
-    input.input.insert_mode = true;
-    let mut ctx = EventCtx::default();
-    let key = KeyEvent {
-        code: Key::Enter,
-        modifiers: KeyModifiers::CONTROL,
-    };
-
-    let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-    assert_eq!(outcome, EventOutcome::Ignored);
-    assert!(input.input.insert_mode);
-    assert!(ctx.messages().is_empty());
 }
 
 #[test]
@@ -1007,6 +1013,119 @@ fn control_left_bracket_leaves_password_insert_mode_without_bubbling() {
     assert_eq!(input.current_value(), "abc");
     assert!(ctx.layout_requested());
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn disabled_text_input_blocks_all_text_mutation() {
+    let mut input = TextInput::<()>::new().value("locked").disabled(true);
+
+    assert_eq!(input.on_key(Key::Char('x')), InputOutcome::HANDLED);
+    assert_eq!(input.on_key(Key::Backspace), InputOutcome::HANDLED);
+    assert_eq!(input.on_key(Key::Delete), InputOutcome::HANDLED);
+    assert_eq!(input.on_paste("pasted"), InputOutcome::HANDLED);
+    assert_eq!(input.current_value(), "locked");
+}
+
+#[test]
+fn disabled_text_input_allows_cursor_navigation() {
+    let mut input = TextInput::<()>::new().value("one two").disabled(true);
+
+    assert_eq!(input.on_key(Key::Left), InputOutcome::HANDLED);
+    assert_eq!(input.cursor, 6);
+    assert_eq!(
+        input.on_key(KeyEvent {
+            code: Key::Char('b'),
+            modifiers: KeyModifiers::ALT,
+        }),
+        InputOutcome::HANDLED
+    );
+    assert_eq!(input.cursor, 4);
+    assert_eq!(input.current_value(), "one two");
+}
+
+#[test]
+fn disabled_text_input_still_submits_on_enter() {
+    let mut input = TextInput::new()
+        .value("locked")
+        .focused(true)
+        .disabled(true)
+        .on_submit(|value| format!("submit:{value}"));
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(ctx.messages(), &["submit:locked".to_string()]);
+    assert!(input.insert_mode());
+    assert_eq!(input.current_value(), "locked");
+
+    let mut exit = EventCtx::default();
+    assert_eq!(
+        input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut exit),
+        EventOutcome::Handled
+    );
+    assert!(!input.insert_mode());
+}
+
+#[test]
+fn disabled_text_input_dims_content_and_panel_border() {
+    let input = TextInput::<()>::new()
+        .value("locked")
+        .panel("Name")
+        .disabled(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("input should render");
+
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .cell((0, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert!(
+        buffer
+            .cell((1, 1))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
+    assert!(
+        !buffer
+            .cell((3, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert_ne!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
+}
+
+#[test]
+fn focused_disabled_text_input_uses_local_cursor_focus() {
+    let input = TextInput::<()>::new()
+        .value("locked")
+        .panel("Name")
+        .focused(true)
+        .disabled(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("input should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
+    assert_ne!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
 }
 
 fn line_text(line: &Line<'_>) -> String {

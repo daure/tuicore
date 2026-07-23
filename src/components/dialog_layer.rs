@@ -228,6 +228,13 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
         ctx.focus(self.focus_request_for_active_change(active));
     }
 
+    pub fn set_active_immediate_with_context<M>(&mut self, active: bool, ctx: &mut EventCtx<M>) {
+        self.set_active(active);
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.focus(self.focus_request_for_active_change(active));
+    }
+
     #[deprecated(
         since = "0.1.0",
         note = "Use `set_active_with_context` instead to let the focus manager resolve focus natively"
@@ -1065,6 +1072,27 @@ mod tests {
         dialog_layer.set_active_with_context(true, &mut ctx);
 
         assert!(dialog_layer.is_active());
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::Path(TreePath::from_keys([
+                ChildKey::second()
+            ])))
+        );
+    }
+
+    #[test]
+    fn immediate_activation_snaps_backdrop_and_requests_layer_focus() {
+        let mut dialog_layer = DialogLayer::new(StaticBody, StaticBody)
+            .active(false)
+            .backdrop(DialogBackdrop::dim().amount(0.6));
+        let mut ctx = EventCtx::<()>::default();
+
+        dialog_layer.set_active_immediate_with_context(true, &mut ctx);
+
+        assert_eq!(dialog_layer.backdrop_tween.value(), 0.6);
+        assert!(!dialog_layer.backdrop_tween.is_active());
         assert!(ctx.layout_requested());
         assert!(ctx.redraw_requested());
         assert_eq!(

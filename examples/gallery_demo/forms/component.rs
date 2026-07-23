@@ -350,6 +350,56 @@ impl ValidatedForm {
             _ => false,
         }
     }
+
+    pub(crate) fn control_is_active(&self, control: FormControlId) -> bool {
+        match control {
+            FormControlId::Name => self.name.child().insert_mode(),
+            FormControlId::Description => self.description.child().insert_mode(),
+            FormControlId::Password => self.password.child().insert_mode(),
+            FormControlId::Start => self.start.child().is_open(),
+            FormControlId::End => self.end.child().is_open(),
+            FormControlId::Environment => self.environment.child().is_open(),
+            FormControlId::Tags => self.tags.child().is_active(),
+        }
+    }
+
+    pub(crate) fn route_has_active_control(&self, route: &EventRoute) -> bool {
+        route
+            .path
+            .first()
+            .and_then(FormControlId::from_key)
+            .is_some_and(|control| self.control_is_active(control))
+    }
+
+    fn handle_form_navigation(
+        &self,
+        control: FormControlId,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> bool {
+        let TuiEvent::Key(KeyEvent { code, modifiers }) = event else {
+            return false;
+        };
+        if *modifiers != KeyModifiers::CONTROL || self.control_is_active(control) {
+            return false;
+        }
+        let direction = match code {
+            Key::Char('h' | 'k') => -1,
+            Key::Char('j' | 'l') => 1,
+            _ => return false,
+        };
+        let index = FormControlId::ALL
+            .iter()
+            .position(|candidate| *candidate == control)
+            .expect("form control belongs to ALL");
+        if direction < 0 && index > 0 {
+            ctx.focus_previous();
+        } else if direction > 0 && index + 1 < FormControlId::ALL.len() {
+            ctx.focus_next();
+        }
+        ctx.stop_propagation();
+        true
+    }
 }
 
 fn visible_control_error<T: Clone>(
@@ -412,6 +462,9 @@ impl TuiNode<Msg> for ValidatedForm {
         let Some(control) = route.path.first().and_then(FormControlId::from_key) else {
             return EventOutcome::Ignored;
         };
+        if self.handle_form_navigation(control, event, ctx) {
+            return EventOutcome::Handled;
+        }
         let child_route = EventRoute::new(route.path.without_first());
         let submit_shortcut = matches!(
             event,

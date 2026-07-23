@@ -1,8 +1,8 @@
 use ratatui::layout::Rect;
 use tuicore::{
     AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, ExternalEditorResponse, FocusCtx,
-    FocusId, FocusTarget, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, RenderCtx,
-    TreePath, TuiEvent, TuiNode,
+    FocusId, FocusRequest, FocusTarget, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal,
+    RenderCtx, TreePath, TuiEvent, TuiNode,
 };
 
 use super::super::super::Msg;
@@ -172,6 +172,75 @@ fn inactive_enter_requests_one_edit_and_activates_every_field() {
         assert!(model_control_is_editing(&form, control), "{control:?}");
         assert!(!form.model.submitted());
     }
+}
+
+#[test]
+fn inactive_control_hjkl_navigates_only_between_controls_in_mixed_form() {
+    for (index, control) in FormControlId::ALL.into_iter().enumerate() {
+        let mut form = ValidatedForm::new();
+        let forward = dispatch_key(
+            &mut form,
+            control,
+            KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        );
+        assert_eq!(
+            forward.focus_request(),
+            (index + 1 < FormControlId::ALL.len()).then_some(&FocusRequest::Next),
+            "forward {control:?}"
+        );
+
+        let backward = dispatch_key(
+            &mut form,
+            control,
+            KeyEvent {
+                code: Key::Char('h'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        );
+        assert_eq!(
+            backward.focus_request(),
+            (index > 0).then_some(&FocusRequest::Previous),
+            "backward {control:?}"
+        );
+    }
+}
+
+#[test]
+fn active_mixed_form_control_keeps_hjkl_for_its_component() {
+    let mut form = ValidatedForm::new();
+    focus_field(&mut form, FormControlId::Name, "input", true);
+    dispatch_key(&mut form, FormControlId::Name, KeyEvent::from(Key::Enter));
+
+    let ctx = dispatch_key(
+        &mut form,
+        FormControlId::Name,
+        KeyEvent::from(Key::Char('l')),
+    );
+
+    assert!(ctx.focus_request().is_none());
+    assert_eq!(form.name.child().current_value(), "l");
+}
+
+#[test]
+fn plain_hjkl_bypasses_form_navigation_and_reaches_date_picker() {
+    let mut form = ValidatedForm::new();
+    let control = FormControlId::Start;
+    focus_field(&mut form, control, focus_id(control), true);
+    let activation = dispatch_key(&mut form, control, KeyEvent::from(Key::Enter));
+    apply_messages(&mut form, &activation);
+
+    let navigation = dispatch_key(&mut form, control, KeyEvent::from(Key::Char('l')));
+    assert!(navigation.focus_request().is_none());
+    let selection = dispatch_key(&mut form, control, KeyEvent::from(Key::Enter));
+    apply_messages(&mut form, &selection);
+
+    assert_eq!(
+        form.start.child().current_value(),
+        Some(demo_date().next_day().expect("demo date should advance"))
+    );
 }
 
 #[test]
