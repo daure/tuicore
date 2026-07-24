@@ -7,7 +7,7 @@ use std::{env, thread};
 use futures::StreamExt;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use rig::agent::{MultiTurnStreamItem, Text as RigText};
@@ -1216,6 +1216,7 @@ fn status_segment_text_style(focused: bool, segment_bg: Color) -> Style {
         Style::default()
             .fg(theme.highlight_fg())
             .bg(theme.highlight_bg())
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.background_bg()).bg(segment_bg)
     }
@@ -1309,6 +1310,17 @@ mod tests {
             status_action_tail().spans[0].style.fg,
             Some(theme().surface_bg())
         );
+    }
+
+    #[test]
+    fn focused_status_segment_is_bold_and_unfocused_segment_is_not() {
+        let focused = status_segment_text_style(true, theme().surface_bg());
+        let unfocused = status_segment_text_style(false, theme().surface_bg());
+
+        assert_eq!(focused.fg, Some(theme().highlight_fg()));
+        assert_eq!(focused.bg, Some(theme().highlight_bg()));
+        assert!(focused.add_modifier.contains(Modifier::BOLD));
+        assert!(!unfocused.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]

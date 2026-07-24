@@ -969,9 +969,42 @@ fn filled_variant_renders_filled_trigger_with_nerd_font_chevron() {
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().highlight_bg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().selected_fg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().selected_bg());
+    assert!(
+        !buffer
+            .cell((1, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::BOLD)
+    );
     assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "B");
     assert_eq!(buffer.cell((10, 0)).unwrap().symbol(), "");
+}
+
+#[test]
+fn focused_filled_trigger_uses_focus_style() {
+    let mut dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .selected_one("Beta");
+    let mut layout = LayoutCtx::new();
+    <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut layout);
+    let target = layout.focus_targets()[0].clone();
+    dropdown.dispatch_focus(
+        &target,
+        true,
+        &mut FocusCtx::<()>::new(AnimationSettings::default()),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let cell = terminal.backend().buffer().cell((1, 0)).unwrap();
+    assert_eq!(cell.fg, theme().highlight_fg());
+    assert_eq!(cell.bg, theme().highlight_bg());
+    assert!(cell.modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -1011,13 +1044,7 @@ fn filled_inline_label_renders_label_value_and_hotkey_on_one_line() {
         .collect::<String>();
     assert!(row.starts_with("Lane: Gamma |4|"));
     assert!(row.contains("Lane: Gamma |4|"));
-    assert!(
-        buffer
-            .cell((7, 0))
-            .unwrap()
-            .modifier
-            .contains(Modifier::BOLD)
-    );
+    assert!(buffer.cell((7, 0)).unwrap().modifier.is_empty());
 }
 
 #[test]
@@ -1132,7 +1159,7 @@ fn no_selection_highlight_uses_same_style_as_focused_rows() {
 }
 
 #[test]
-fn focused_bordered_popup_uses_accent_border() {
+fn focused_bordered_dropdown_uses_bold_highlight_border() {
     let mut dropdown = single_dropdown();
     let mut initial_layout = LayoutCtx::new();
     <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut initial_layout);
@@ -1152,7 +1179,23 @@ fn focused_bordered_popup_uses_accent_border() {
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 2)).unwrap().fg, theme().accent_fg());
+    let border = buffer.cell((0, 2)).unwrap();
+    assert_eq!(border.fg, theme().highlight_bg());
+    assert!(border.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn unfocused_bordered_dropdown_lacks_focus_cue() {
+    let dropdown = single_dropdown();
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let border = terminal.backend().buffer().cell((0, 2)).unwrap();
+    assert_eq!(border.fg, theme().border_fg());
+    assert!(!border.modifier.contains(Modifier::BOLD));
 }
 
 #[test]

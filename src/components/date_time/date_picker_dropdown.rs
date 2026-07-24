@@ -2,7 +2,7 @@ use std::time::Duration as StdDuration;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use time::{Date, Weekday};
@@ -230,7 +230,10 @@ impl<M> DatePickerDropdown<M> {
     fn field_line(&self, width: u16) -> Line<'static> {
         let t = theme();
         let style = if self.focused {
-            Style::default().fg(t.highlight_fg()).bg(t.highlight_bg())
+            Style::default()
+                .fg(t.highlight_fg())
+                .bg(t.highlight_bg())
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(t.text_fg())
         };

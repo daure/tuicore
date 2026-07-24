@@ -267,10 +267,13 @@ impl Theme {
     pub fn named(name: ThemeName) -> Self {
         let palette = palette_for(name);
         let weather = weather_palette_for(&palette);
+        let selected_bg = neutral_selection_background(&palette);
+        let highlight_bg = interaction_highlight_background(&palette);
+        let highlight_fg = strongest_contrast(palette.base, palette.text, highlight_bg);
         Self {
             name,
-            selected_fg: palette.green,
-            selected_bg: palette.surface,
+            selected_fg: palette.text,
+            selected_bg,
             background_bg: palette.base,
             surface_bg: palette.surface,
             backdrop_bg: palette.base,
@@ -281,8 +284,8 @@ impl Theme {
             success_fg: palette.green,
             error_fg: palette.red,
             border_fg: palette.border,
-            highlight_fg: palette.base,
-            highlight_bg: palette.yellow,
+            highlight_fg,
+            highlight_bg,
             key_fg: palette.blue,
             warning_fg: palette.yellow,
             weather_sun_fg: weather.sun,
@@ -399,6 +402,10 @@ impl Theme {
         self.weather_rain_fg
     }
 
+    pub(crate) fn contrast_foreground(&self, background: Color) -> Color {
+        strongest_contrast(self.background_bg, self.text_fg, background)
+    }
+
     pub fn set_role(&mut self, role: &str, value: &str) -> Result<(), ThemeError> {
         let color = parse_hex_color(value)?;
         match role {
@@ -493,6 +500,69 @@ fn readable_against(color: Color, background: Color, text: Color) -> Color {
         }
     }
     color
+}
+
+fn neutral_selection_background(palette: &Palette) -> Color {
+    let mut background = mix_color(palette.surface, palette.text, 0.16);
+    for _ in 0..12 {
+        if contrast_ratio(palette.text, background) >= 4.5 {
+            break;
+        }
+        background = mix_color(background, palette.base, 0.18);
+    }
+    background
+}
+
+fn strongest_contrast(first: Color, second: Color, background: Color) -> Color {
+    if contrast_ratio(first, background) >= contrast_ratio(second, background) {
+        first
+    } else {
+        second
+    }
+}
+
+fn interaction_highlight_background(palette: &Palette) -> Color {
+    const MIN_INTERACTION_DISTANCE_SQUARED: u32 = 40 * 40;
+
+    let is_suitable = |candidate| {
+        contrast_ratio(
+            strongest_contrast(palette.base, palette.text, candidate),
+            candidate,
+        ) >= 4.5
+            && color_distance_squared(candidate, palette.green) >= MIN_INTERACTION_DISTANCE_SQUARED
+            && color_distance_squared(candidate, palette.yellow) >= MIN_INTERACTION_DISTANCE_SQUARED
+    };
+    if is_suitable(palette.cyan) {
+        return palette.cyan;
+    }
+
+    let fallbacks = [palette.blue, palette.subtle];
+    fallbacks
+        .iter()
+        .copied()
+        .filter(|candidate| is_suitable(*candidate))
+        .max_by_key(|candidate| {
+            color_distance_squared(*candidate, palette.green)
+                .min(color_distance_squared(*candidate, palette.yellow))
+        })
+        .unwrap_or_else(|| {
+            fallbacks
+                .into_iter()
+                .max_by(|a, b| {
+                    contrast_ratio(strongest_contrast(palette.base, palette.text, *a), *a)
+                        .total_cmp(&contrast_ratio(
+                            strongest_contrast(palette.base, palette.text, *b),
+                            *b,
+                        ))
+                })
+                .expect("interaction palette candidates should not be empty")
+        })
+}
+
+fn color_distance_squared(a: Color, b: Color) -> u32 {
+    let [ar, ag, ab] = color_channels(a).map(i32::from);
+    let [br, bg, bb] = color_channels(b).map(i32::from);
+    ((ar - br).pow(2) + (ag - bg).pow(2) + (ab - bb).pow(2)) as u32
 }
 
 fn mix_color(a: Color, b: Color, b_weight: f64) -> Color {
@@ -1270,6 +1340,48 @@ mod tests {
                 assert!(contrast_ratio(color, theme.background_bg()) >= 3.0);
             }
         }
+    }
+
+    #[test]
+    fn built_in_selection_roles_are_distinct_and_readable() {
+        const MIN_INTERACTION_DISTANCE_SQUARED: u32 = 40 * 40;
+
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+
+            assert_ne!(theme.selected_bg(), theme.highlight_bg(), "{name:?}");
+            assert!(
+                color_distance_squared(theme.highlight_bg(), theme.success_fg())
+                    >= MIN_INTERACTION_DISTANCE_SQUARED,
+                "{name:?} interaction/success distance"
+            );
+            assert!(
+                color_distance_squared(theme.highlight_bg(), theme.warning_fg())
+                    >= MIN_INTERACTION_DISTANCE_SQUARED,
+                "{name:?} interaction/warning distance"
+            );
+            assert!(
+                contrast_ratio(theme.selected_fg(), theme.selected_bg()) >= 4.5,
+                "{name:?} selected contrast"
+            );
+            assert!(
+                contrast_ratio(theme.highlight_fg(), theme.highlight_bg()) >= 4.5,
+                "{name:?} highlight contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_role_overrides_still_win() {
+        let theme = Theme::from_toml_str(
+            "[colors]\nselected_fg = \"#112233\"\nselected_bg = \"#445566\"\nhighlight_fg = \"#778899\"\nhighlight_bg = \"#aabbcc\"\n",
+        )
+        .expect("selection overrides should parse");
+
+        assert_eq!(theme.selected_fg(), Color::Rgb(0x11, 0x22, 0x33));
+        assert_eq!(theme.selected_bg(), Color::Rgb(0x44, 0x55, 0x66));
+        assert_eq!(theme.highlight_fg(), Color::Rgb(0x77, 0x88, 0x99));
+        assert_eq!(theme.highlight_bg(), Color::Rgb(0xaa, 0xbb, 0xcc));
     }
 
     #[test]

@@ -237,6 +237,12 @@ where
                 self.transform_state.search.trim(),
                 self.search_mode,
             );
+            if highlighted && self.focused {
+                let foreground = theme().highlight_fg();
+                for span in &mut line.spans {
+                    span.style = span.style.fg(foreground);
+                }
+            }
             let mut paragraph = Paragraph::new(line).scroll((0, cell_area.scroll_x));
             if let Some(style) = row_style {
                 paragraph = paragraph.style(style);
@@ -278,12 +284,7 @@ where
             let check_state = self.check_state_with_descendants(&row.id, selection_descendants);
             let glyph = self.selection_glyphs.glyph(check_state);
             let content = format!("{glyph} ");
-            spans.push(match check_state {
-                CheckState::Unchecked => Span::raw(content),
-                CheckState::Checked | CheckState::Indeterminate => {
-                    Span::styled(content, Style::default().fg(theme().selected_fg()))
-                }
-            });
+            spans.push(Span::raw(content));
         }
         spans.extend(original_spans);
         Line {
@@ -331,8 +332,8 @@ where
     fn highlighted_row_style(&self) -> Style {
         let theme = theme();
         Style::default()
-            .fg(theme.text_fg())
-            .bg(theme.surface_bg())
+            .fg(theme.highlight_fg())
+            .bg(theme.highlight_bg())
             .add_modifier(Modifier::BOLD)
     }
 

@@ -246,13 +246,18 @@ impl List {
             .skip(offset)
             .take(geometry.viewport.height)
             .map(|item| ListItem::new(Line::from(Span::raw(item.as_str()))));
+        let highlight_style = if self.focused {
+            Style::default()
+                .fg(theme.highlight_fg())
+                .bg(theme.highlight_bg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme.selected_fg())
+                .bg(theme.selected_bg())
+        };
         let list = RatatuiList::new(items)
-            .highlight_style(
-                Style::default()
-                    .fg(theme.selected_fg())
-                    .bg(theme.selected_bg())
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(highlight_style)
             .highlight_symbol(self.highlight_symbol.as_str());
         let mut state = ListState::default().with_selected(visible_selected);
 
@@ -366,6 +371,8 @@ impl ScrollOutcomeExt for ScrollOutcome {
 mod tests {
     use super::*;
     use crate::{EventCtx, EventOutcome, Key, Propagation, TuiEvent};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn navigation_clamps_to_items() {
@@ -418,6 +425,29 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn focused_and_blurred_selection_use_distinct_state_styles() {
+        let mut terminal = Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+        let focused = List::new(["one"]).focused(true);
+
+        terminal
+            .draw(|frame| focused.render(frame, frame.area()))
+            .expect("focused list should render");
+        let focused_cell = terminal.backend().buffer().cell((2, 0)).unwrap();
+        assert_eq!(focused_cell.fg, theme().highlight_fg());
+        assert_eq!(focused_cell.bg, theme().highlight_bg());
+        assert!(focused_cell.modifier.contains(Modifier::BOLD));
+
+        let blurred = List::new(["one"]);
+        terminal
+            .draw(|frame| blurred.render(frame, frame.area()))
+            .expect("blurred list should render");
+        let blurred_cell = terminal.backend().buffer().cell((2, 0)).unwrap();
+        assert_eq!(blurred_cell.fg, theme().selected_fg());
+        assert_eq!(blurred_cell.bg, theme().selected_bg());
+        assert!(!blurred_cell.modifier.contains(Modifier::BOLD));
     }
 
     fn disabled_animation_settings() -> AnimationSettings {

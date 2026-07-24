@@ -546,8 +546,8 @@ where
         let theme = theme();
         let style = if highlighted {
             Style::default()
-                .fg(theme.selected_fg())
-                .bg(theme.selected_bg())
+                .fg(theme.highlight_fg())
+                .bg(theme.highlight_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.text_fg())
@@ -587,17 +587,25 @@ where
     fn chip_spans(&self, label: &str, highlighted: bool) -> Vec<Span<'static>> {
         let theme = theme();
         let background = if highlighted {
-            theme.selected_bg()
-        } else {
             theme.highlight_bg()
+        } else {
+            theme.selected_bg()
         };
         let foreground = if highlighted {
-            theme.selected_fg()
-        } else {
             theme.highlight_fg()
+        } else {
+            theme.selected_fg()
         };
         let cap_style = Style::default().fg(background);
-        let chip_style = Style::default().fg(foreground).bg(background);
+        let chip_style =
+            Style::default()
+                .fg(foreground)
+                .bg(background)
+                .add_modifier(if highlighted {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                });
         vec![
             Span::styled(LEFT_CAP, cap_style),
             Span::styled(format!("{label} ×"), chip_style),
@@ -1068,6 +1076,31 @@ fn rect_contains(area: Rect, x: u16, y: u16) -> bool {
 mod tests {
     use super::*;
     use crate::{Propagation, TreePath};
+
+    #[test]
+    fn popup_cursor_uses_focused_selection_style() {
+        let input = TagInput::new(["alpha"]);
+        let line = input.option_line("alpha", true);
+        let style = line.spans[0].style;
+
+        assert_eq!(style.fg, Some(theme().highlight_fg()));
+        assert_eq!(style.bg, Some(theme().highlight_bg()));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn persisted_and_removal_target_tags_use_selection_state_styles() {
+        let input = TagInput::new(["alpha"]);
+        let persisted = input.chip_spans("alpha", false)[1].style;
+        let removal_target = input.chip_spans("alpha", true)[1].style;
+
+        assert_eq!(persisted.fg, Some(theme().selected_fg()));
+        assert_eq!(persisted.bg, Some(theme().selected_bg()));
+        assert!(!persisted.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(removal_target.fg, Some(theme().highlight_fg()));
+        assert_eq!(removal_target.bg, Some(theme().highlight_bg()));
+        assert!(removal_target.add_modifier.contains(Modifier::BOLD));
+    }
 
     #[test]
     fn panel_height_for_width_includes_border_chrome() {

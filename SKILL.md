@@ -105,7 +105,7 @@ No raw color literals in components. Retrieve all colors from the active theme:
 - **Core Roles**:
   - Backgrounds: `background_bg` (root/canvas), `surface_bg` (panels/cards), `backdrop_bg` (dialog overlays).
   - Text: `text_fg` (primary), `muted_fg` (secondary/help), `subtle_fg` (disabled/placeholders).
-  - States: `selected_fg`/`selected_bg` (active elements), `highlight_fg`/`highlight_bg` (focused controls), `success_fg`, `warning_fg`, `error_fg`.
+  - States: `selected_fg`/`selected_bg` (persistent or blurred selection), `highlight_fg`/`highlight_bg` (focused navigation and controls), `success_fg`, `warning_fg`, `error_fg`.
   - Accents/Chrome: `accent_fg` (links/keys), `border_fg` (borders), `key_fg` (hotkeys).
   - Weather: `weather_sun_fg`, `weather_cool_fg`, `weather_warm_fg`, `weather_hot_fg`, `weather_rain_fg`.
 

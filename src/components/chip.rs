@@ -95,7 +95,13 @@ impl Chip {
     pub(crate) fn line(&self) -> Line<'static> {
         let (background, foreground) = self.colors(&theme());
         let cap_style = Style::default().fg(background);
-        let content_style = Style::default().fg(foreground).bg(background);
+        let content_style = Style::default().fg(foreground).bg(background).add_modifier(
+            if self.color_role == ChipColorRole::Highlight {
+                ratatui::style::Modifier::BOLD
+            } else {
+                ratatui::style::Modifier::empty()
+            },
+        );
         let mut spans = vec![Span::styled(LEFT_CAP, cap_style)];
         spans.push(Span::styled(self.content(), content_style));
         spans.push(Span::styled(RIGHT_CAP, cap_style));
@@ -118,10 +124,22 @@ impl Chip {
 
     fn colors(&self, theme: &Theme) -> (Color, Color) {
         match self.color_role {
-            ChipColorRole::Accent => (theme.accent_fg(), theme.highlight_fg()),
-            ChipColorRole::Success => (theme.success_fg(), theme.highlight_fg()),
-            ChipColorRole::Warning => (theme.warning_fg(), theme.highlight_fg()),
-            ChipColorRole::Error => (theme.error_fg(), theme.highlight_fg()),
+            ChipColorRole::Accent => (
+                theme.accent_fg(),
+                theme.contrast_foreground(theme.accent_fg()),
+            ),
+            ChipColorRole::Success => (
+                theme.success_fg(),
+                theme.contrast_foreground(theme.success_fg()),
+            ),
+            ChipColorRole::Warning => (
+                theme.warning_fg(),
+                theme.contrast_foreground(theme.warning_fg()),
+            ),
+            ChipColorRole::Error => (
+                theme.error_fg(),
+                theme.contrast_foreground(theme.error_fg()),
+            ),
             ChipColorRole::Selected => (theme.selected_bg(), theme.selected_fg()),
             ChipColorRole::Highlight => (theme.highlight_bg(), theme.highlight_fg()),
             ChipColorRole::Muted => (theme.surface_bg(), theme.text_fg()),
@@ -153,5 +171,45 @@ mod tests {
         let chip = Chip::new("Muted").color_role(ChipColorRole::Muted);
 
         assert_eq!(chip.colors(&theme()).0, theme().surface_bg());
+    }
+
+    #[test]
+    fn semantic_chip_foreground_is_independent_from_focus_role() {
+        let theme = Theme::from_toml_str("[colors]\nhighlight_fg = \"#ff00ff\"\n")
+            .expect("theme override should parse");
+        let chip = Chip::new("Saved").color_role(ChipColorRole::Success);
+
+        assert_eq!(
+            chip.colors(&theme),
+            (
+                theme.success_fg(),
+                theme.contrast_foreground(theme.success_fg())
+            )
+        );
+        assert_ne!(chip.colors(&theme).1, theme.highlight_fg());
+    }
+
+    #[test]
+    fn highlight_chip_is_bold() {
+        let line = Chip::new("Focused")
+            .color_role(ChipColorRole::Highlight)
+            .line();
+
+        assert_eq!(
+            line.spans[1].style.add_modifier,
+            ratatui::style::Modifier::BOLD
+        );
+    }
+
+    #[test]
+    fn selected_chip_is_not_bold() {
+        let line = Chip::new("Selected")
+            .color_role(ChipColorRole::Selected)
+            .line();
+
+        assert_eq!(
+            line.spans[1].style.add_modifier,
+            ratatui::style::Modifier::empty()
+        );
     }
 }

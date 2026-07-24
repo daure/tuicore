@@ -259,7 +259,7 @@ impl<M> Toggle<M> {
 
         let theme = theme();
         if self.focused {
-            theme.accent_fg()
+            theme.highlight_bg()
         } else if self.value {
             theme.success_fg()
         } else {
@@ -274,7 +274,7 @@ impl<M> Toggle<M> {
 
         let theme = theme();
         if self.focused {
-            theme.accent_fg()
+            theme.highlight_bg()
         } else {
             theme.text_fg()
         }
@@ -287,7 +287,7 @@ impl<M> Toggle<M> {
 
         let theme = theme();
         if self.focused {
-            theme.accent_fg()
+            theme.highlight_bg()
         } else {
             theme.text_fg()
         }
@@ -296,19 +296,19 @@ impl<M> Toggle<M> {
     fn sync_idle_colors(&mut self) {
         let theme = theme();
         self.switch_color.snap_to(if self.focused {
-            theme.accent_fg()
+            theme.highlight_bg()
         } else if self.value {
             theme.success_fg()
         } else {
             theme.muted_fg()
         });
         self.text_color.snap_to(if self.focused {
-            theme.accent_fg()
+            theme.highlight_bg()
         } else {
             theme.text_fg()
         });
         self.hotkey_color.snap_to(if self.focused {
-            theme.accent_fg()
+            theme.highlight_bg()
         } else {
             theme.text_fg()
         });
@@ -318,7 +318,7 @@ impl<M> Toggle<M> {
         let theme = theme();
         self.switch_color.start(
             if self.focused {
-                theme.accent_fg()
+                theme.highlight_bg()
             } else if self.value {
                 theme.success_fg()
             } else {
@@ -329,7 +329,7 @@ impl<M> Toggle<M> {
         );
         self.text_color.start(
             if self.focused {
-                theme.accent_fg()
+                theme.highlight_bg()
             } else {
                 theme.text_fg()
             },
@@ -338,7 +338,7 @@ impl<M> Toggle<M> {
         );
         self.hotkey_color.start(
             if self.focused {
-                theme.accent_fg()
+                theme.highlight_bg()
             } else {
                 theme.text_fg()
             },
@@ -614,9 +614,9 @@ mod tests {
     fn focus_and_blur_tween_all_visible_colors() {
         let mut toggle = Toggle::<()>::new("Telemetry").hotkey("x");
         let theme = theme();
-        let switch_will_change = toggle.switch_color.value() != theme.accent_fg();
-        let text_will_change = toggle.text_color.value() != theme.accent_fg();
-        let hotkey_will_change = toggle.hotkey_color.value() != theme.accent_fg();
+        let switch_will_change = toggle.switch_color.value() != theme.highlight_bg();
+        let text_will_change = toggle.text_color.value() != theme.highlight_bg();
+        let hotkey_will_change = toggle.hotkey_color.value() != theme.highlight_bg();
 
         toggle.set_focused(true, AnimationSettings::default());
 
@@ -641,6 +641,22 @@ mod tests {
         let theme = theme();
 
         assert_eq!(toggle.switch_color.value(), theme.success_fg());
+    }
+
+    #[test]
+    fn focused_toggle_uses_highlight_role_and_bold_switch_only() {
+        let focused = Toggle::<()>::new("Telemetry").focused(true).line();
+        let unfocused = Toggle::<()>::new("Telemetry").line();
+
+        assert_eq!(focused.spans[0].style.fg, Some(theme().highlight_bg()));
+        assert_eq!(focused.spans[2].style.fg, Some(theme().highlight_bg()));
+        assert!(focused.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            !unfocused.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     #[test]

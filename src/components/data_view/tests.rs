@@ -1130,12 +1130,13 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
 
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, theme.text_fg());
-    assert_eq!(cell.bg, theme.surface_bg());
+    assert_eq!(cell.fg, theme.highlight_fg());
+    assert_eq!(cell.bg, theme.highlight_bg());
+    assert!(cell.modifier.contains(Modifier::BOLD));
 }
 
 #[test]
-fn highlighted_row_preserves_explicit_rich_cell_foreground() {
+fn highlighted_row_forces_readable_foreground_and_preserves_rich_modifiers() {
     let semantic_color = crate::theme().error_fg();
     let view = DataView::new([Row::new(1, "BIG")], |row| row.id)
         .column(Column::rich(
@@ -1143,7 +1144,12 @@ fn highlighted_row_preserves_explicit_rich_cell_foreground() {
             "Size",
             Constraint::Length(5),
             move |row: &Row, _| {
-                Line::from(Span::styled(row.name, Style::default().fg(semantic_color)))
+                Line::from(Span::styled(
+                    row.name,
+                    Style::default()
+                        .fg(semantic_color)
+                        .add_modifier(Modifier::UNDERLINED),
+                ))
             },
         ))
         .focused(true);
@@ -1154,8 +1160,10 @@ fn highlighted_row_preserves_explicit_rich_cell_foreground() {
         .expect("data view should render");
 
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, semantic_color);
-    assert_eq!(cell.bg, crate::theme().surface_bg());
+    assert_eq!(cell.fg, crate::theme().highlight_fg());
+    assert_eq!(cell.bg, crate::theme().highlight_bg());
+    assert!(cell.modifier.contains(Modifier::BOLD));
+    assert!(cell.modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]
@@ -1179,8 +1187,8 @@ fn previous_highlight_background_is_cleared_after_navigation() {
     let theme = crate::theme();
     let old_highlight_cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     let current_highlight_cell = terminal.backend().buffer().cell((0, 1)).unwrap();
-    assert_ne!(old_highlight_cell.bg, theme.surface_bg());
-    assert_eq!(current_highlight_cell.bg, theme.surface_bg());
+    assert_ne!(old_highlight_cell.bg, theme.highlight_bg());
+    assert_eq!(current_highlight_cell.bg, theme.highlight_bg());
 }
 
 #[test]
@@ -1223,6 +1231,33 @@ fn selected_row_style_is_applied_when_row_is_not_highlighted() {
     let content_cell = terminal.backend().buffer().cell((4, 1)).unwrap();
     assert_eq!(content_cell.fg, theme.selected_fg());
     assert_eq!(content_cell.bg, theme.selected_bg());
+    assert!(!content_cell.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn focused_selected_cursor_uses_focus_style_and_keeps_selection_glyph() {
+    let view = DataView::list(
+        [Row::new(1, "selected")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi)
+    .selection_glyphs(SelectionGlyphs::ASCII)
+    .selected([1])
+    .focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 1)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let glyph_cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    let content_cell = terminal.backend().buffer().cell((4, 0)).unwrap();
+    assert_eq!(glyph_cell.symbol(), "[");
+    assert_eq!(glyph_cell.fg, theme.highlight_fg());
+    assert_eq!(content_cell.bg, theme.highlight_bg());
+    assert!(content_cell.modifier.contains(Modifier::BOLD));
 }
 
 #[test]

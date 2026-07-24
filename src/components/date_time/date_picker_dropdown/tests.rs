@@ -1,5 +1,24 @@
 use super::*;
+use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
+
+#[test]
+fn focused_field_is_bold_and_unfocused_field_is_not() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    assert!(
+        !dropdown.field_line(24).spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+
+    dropdown.focused = true;
+
+    let style = dropdown.field_line(24).spans[0].style;
+    assert_eq!(style.fg, Some(theme().highlight_fg()));
+    assert_eq!(style.bg, Some(theme().highlight_bg()));
+    assert!(style.add_modifier.contains(Modifier::BOLD));
+}
 
 #[test]
 fn date_picker_dropdown_normalizes_committed_hotkey() {
