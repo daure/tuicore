@@ -881,6 +881,15 @@ impl LayoutCtx {
         result
     }
 
+    pub fn with_global_hotkeys_suppressed<R>(&mut self, layout: impl FnOnce(&mut Self) -> R) -> R {
+        let first_target = self.focus_paths.len();
+        let result = layout(self);
+        for target in &mut self.focus_paths[first_target..] {
+            target.suppress_global_hotkeys = true;
+        }
+        result
+    }
+
     pub fn set_focus_tab_stop(&mut self, id: FocusId, tab_stop: bool) -> bool {
         let Some(target) = self
             .focus_paths

@@ -44,6 +44,7 @@ pub struct DialogLayer<Base, Layer> {
     backdrop_tween: Tween,
     restore_focus_on_close: bool,
     layer_focus_origin: Option<(TreePath, FocusId)>,
+    base_overlays_visible: bool,
     initialized: bool,
     mounted: bool,
 }
@@ -203,6 +204,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             backdrop_tween: Tween::idle(0.0),
             restore_focus_on_close: true,
             layer_focus_origin: None,
+            base_overlays_visible: false,
             initialized: false,
             mounted: false,
         }
@@ -317,6 +319,11 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
 
     pub fn set_fit_content(&mut self, fit_content: bool) {
         self.fit_content = fit_content;
+    }
+
+    pub fn base_overlays_visible(mut self, visible: bool) -> Self {
+        self.base_overlays_visible = visible;
+        self
     }
 
     pub fn fit_content_max(mut self, width: u16, height: u16) -> Self {
@@ -482,11 +489,17 @@ where
         if self.active {
             let was_disabled = ctx.focus_disabled();
             ctx.set_focus_disabled(true);
-            ctx.with_overlays_disabled(|ctx| {
+            if self.base_overlays_visible {
                 ctx.push_slot(ChildKey::first(), self.base_rect, |ctx| {
                     self.base.layout(self.base_rect, ctx);
                 });
-            });
+            } else {
+                ctx.with_overlays_disabled(|ctx| {
+                    ctx.push_slot(ChildKey::first(), self.base_rect, |ctx| {
+                        self.base.layout(self.base_rect, ctx);
+                    });
+                });
+            }
             ctx.set_focus_disabled(was_disabled);
 
             let mut overlay = OverlaySpec::new(MODAL_OVERLAY_ID, self.layer_rect, self.layer_rect);
@@ -510,7 +523,11 @@ where
 
     fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut crate::RenderCtx<'a>) {
         if self.active {
-            ctx.with_overlays_disabled(|ctx| self.base.render(frame, self.base_rect, ctx));
+            if self.base_overlays_visible {
+                self.base.render(frame, self.base_rect, ctx);
+            } else {
+                ctx.with_overlays_disabled(|ctx| self.base.render(frame, self.base_rect, ctx));
+            }
         } else {
             self.base.render(frame, self.base_rect, ctx);
         }
@@ -1654,6 +1671,54 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![MODAL_OVERLAY_ID, 2]);
         assert_eq!(base_bounds.borrow().len(), 1);
+    }
+
+    #[test]
+    fn stacked_dialog_layer_can_keep_base_overlay_visible() {
+        let base_bounds = Rc::new(RefCell::new(Vec::new()));
+        let layer_bounds = Rc::new(RefCell::new(Vec::new()));
+        let base = OverlayProbe::new(1, base_bounds);
+        let layer = OverlayProbe::new(2, layer_bounds);
+        let mut dialog_layer = DialogLayer::new(base, layer)
+            .dock(DockSpec::bottom(50))
+            .base_overlays_visible(true);
+        let mut ctx = LayoutCtx::new();
+
+        dialog_layer.layout(Rect::new(0, 0, 20, 10), &mut ctx);
+
+        let ids = ctx
+            .overlays()
+            .iter()
+            .map(|entry| entry.id.get())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, MODAL_OVERLAY_ID, 2]);
+    }
+
+    #[test]
+    fn stacked_dialog_layer_renders_base_dialog_beneath_top_dialog() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let primary = DialogLayer::new(
+            RenderOrderBody::new("root", Rc::clone(&order)),
+            RenderOrderBody::new("primary", Rc::clone(&order)),
+        );
+        let mut stacked = DialogLayer::new(
+            primary,
+            RenderOrderBody::new("secondary", Rc::clone(&order)),
+        )
+        .base_overlays_visible(true);
+        let area = Rect::new(0, 0, 10, 4);
+        stacked.layout(area, &mut LayoutCtx::new());
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                let mut ctx = crate::RenderCtx::new();
+                stacked.render(frame, area, &mut ctx);
+                ctx.flush(frame);
+            })
+            .expect("render should succeed");
+
+        assert_eq!(*order.borrow(), vec!["root", "primary", "secondary"]);
     }
 
     #[test]

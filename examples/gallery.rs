@@ -862,7 +862,7 @@ impl PreviewState {
                 .style(InputChrome::panel("Time").top_right("15m")),
             date_time_picker: DateTimePicker::new()
                 .value(Some(demo_datetime()))
-                .layout(DateTimePickerLayout::Vertical),
+                .layout(DateTimePickerLayout::Stepped),
             date_dropdown: DatePickerDropdown::new()
                 .today(demo_date())
                 .value(Some(demo_date()))
@@ -2490,6 +2490,12 @@ impl PreviewState {
         let [_, date_area, _, combo_area, dropdown_area, _] = date_time_showcase_layout(area);
         let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
         let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 3);
+        let inline_picker_area = Rect::new(
+            combo_area.x,
+            combo_area.y.saturating_add(1),
+            combo_area.width.min(24),
+            combo_area.height.saturating_sub(1).min(10),
+        );
         let [date_dropdown_area, date_time_dropdown_area] = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(26), Constraint::Length(33)])
@@ -2500,10 +2506,10 @@ impl PreviewState {
         ctx.push_slot(time_picker_child_key(), time_picker_area, |ctx| {
             self.time_picker.layout(time_picker_area, ctx);
         });
-        ctx.push_slot(date_time_picker_child_key(), combo_area, |ctx| {
+        ctx.push_slot(date_time_picker_child_key(), inline_picker_area, |ctx| {
             <DateTimePicker<Msg> as TuiNode<Msg>>::layout(
                 &mut self.date_time_picker,
-                combo_area,
+                inline_picker_area,
                 ctx,
             );
         });
@@ -2532,12 +2538,19 @@ impl PreviewState {
             Paragraph::new(
                 "DatePicker, TimePicker, composed DateTimePicker, and dropdown DateTimePicker.\n\
                  Hotkeys: |dp| date, |tp| time, |dt| datetime dropdown. Date: arrows/hjkl move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
-                 Time: left/right or h/l selects field; up/down or k/j increments. Enter selects. Tab/BackTab or Ctrl+h/k/j/l moves between form fields.",
+                 Month/year selection: press y, move with arrows/hjkl (PgUp/PgDn changes 24-year page), then Enter; choose a month with arrows/hjkl (PgUp/PgDn changes year), then Enter. Press m to open the month grid directly.\n\
+                 Time: left/right or h/l selects field; up/down or k/j increments. Stepped inline picker uses Enter for date → time → commit; Escape from time returns to date. Tab/BackTab or Ctrl+h/k/j/l moves between form fields.",
             ),
             instructions,
         );
         let date_picker_area = Rect::new(date_area.x, date_area.y, date_area.width.min(24), 10);
         let time_picker_area = Rect::new(date_area.x, date_area.y + 10, date_area.width.min(14), 3);
+        let inline_picker_area = Rect::new(
+            combo_area.x,
+            combo_area.y.saturating_add(1),
+            combo_area.width.min(24),
+            combo_area.height.saturating_sub(1).min(10),
+        );
         let [date_dropdown_area, date_time_dropdown_area] = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(26), Constraint::Length(33)])
@@ -2545,13 +2558,17 @@ impl PreviewState {
         self.date_picker.render(frame, date_picker_area);
         self.time_picker.render(frame, time_picker_area);
         frame.render_widget(Paragraph::new(self.date_time_status.clone()), status_area);
-        self.date_time_picker.render(frame, combo_area);
+        frame.render_widget(
+            Paragraph::new("Stepped inline DateTimePicker (date → time)"),
+            Rect::new(combo_area.x, combo_area.y, combo_area.width.min(24), 1),
+        );
+        self.date_time_picker.render(frame, inline_picker_area);
         self.date_dropdown.render(frame, date_dropdown_area, ctx);
         self.date_time_dropdown
             .render(frame, date_time_dropdown_area, ctx);
         frame.render_widget(
             Paragraph::new(
-                "Dropdown datetime field starts with date, then centers time in the same popup. Ctrl+O edits the full datetime.",
+                "Inline and dropdown datetime pickers show one step at a time. Enter advances or commits; Escape cancels time. Inline Ctrl+O edits the active step; closed dropdown Ctrl+O edits the full datetime.",
             ),
             help_area,
         );

@@ -370,8 +370,10 @@ where
         if self.ai_dock_open {
             self.ai_dock_area = bottom_dock_area(overlay_bounds, 80, 80);
             self.ai_dock_path = ctx.current_path().child(status_bar_ai_dock_key());
-            ctx.push_slot(status_bar_ai_dock_key(), self.ai_dock_area, |ctx| {
-                <AiDock<M> as TuiNode<M>>::layout(&mut self.ai_dock, self.ai_dock_area, ctx);
+            ctx.with_global_hotkeys_suppressed(|ctx| {
+                ctx.push_slot(status_bar_ai_dock_key(), self.ai_dock_area, |ctx| {
+                    <AiDock<M> as TuiNode<M>>::layout(&mut self.ai_dock, self.ai_dock_area, ctx);
+                });
             });
         } else {
             self.ai_dock_path = ctx.current_path().child(status_bar_ai_dock_key());
@@ -812,7 +814,8 @@ where
                 self.close_ai_dock(ctx);
                 return EventOutcome::Handled;
             }
-            return outcome;
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
 
         EventOutcome::Ignored
@@ -829,6 +832,8 @@ where
                 self.close_ai_dock(ctx);
                 return EventOutcome::Handled;
             }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
         if self.weather_dialog_open {
             return self.handle_weather_dialog_event(None, event, ctx);
@@ -1148,7 +1153,7 @@ fn theme_dropdown() -> Dropdown<ThemeChoice, ThemeName> {
     .variant(DropdownVariant::Filled)
     .label("Theme")
     .label_position(DropdownLabelPosition::Inline)
-    .search_mode(DropdownSearchMode::Contains)
+    .search_mode(DropdownSearchMode::Fuzzy)
     .commit_mode(DropdownCommitMode::Immediate)
     .centered(true)
     .tab_stop(false)
@@ -1459,6 +1464,42 @@ mod tests {
                 status_bar_ai_dock_key(),
             ])))
         );
+    }
+
+    #[test]
+    fn open_ai_dock_isolates_its_focus_targets_from_background_hotkeys() {
+        let bounds = Rect::new(0, 0, 100, 40);
+        let footer = Rect::new(0, 39, 100, 1);
+        let mut status = StatusBar::<()>::new();
+        status.open_ai_dock(&mut EventCtx::default());
+        let mut layout = LayoutCtx::new();
+
+        layout.with_overlay_bounds(bounds, |ctx| status.layout(footer, ctx));
+
+        let dock_targets = layout
+            .focus_targets()
+            .iter()
+            .filter(|target| target.path.first() == Some(&status_bar_ai_dock_key()))
+            .collect::<Vec<_>>();
+        assert!(!dock_targets.is_empty());
+        assert!(
+            dock_targets
+                .iter()
+                .all(|target| target.suppress_global_hotkeys)
+        );
+    }
+
+    #[test]
+    fn open_ai_dock_consumes_unhandled_keys() {
+        let mut status = StatusBar::<()>::new();
+        status.open_ai_dock(&mut EventCtx::default());
+        let mut ctx = EventCtx::default();
+
+        let outcome = status.event(&TuiEvent::Key(KeyEvent::from(Key::Char('z'))), &mut ctx);
+
+        assert!(outcome.handled());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(status.ai_dock_open);
     }
 
     #[test]

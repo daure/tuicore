@@ -79,6 +79,7 @@ pub struct Dialog<M = ()> {
     content: Vec<Line<'static>>,
     scroll: Option<ScrollState>,
     on_close: Option<Box<dyn Fn(DialogCloseReason) -> M>>,
+    close_on_unfocus_from_descendants: bool,
     focused: bool,
     border_color: ColorTween,
     title_color: ColorTween,
@@ -112,6 +113,7 @@ impl<M> Dialog<M> {
             content: Vec::new(),
             scroll: None,
             on_close: None,
+            close_on_unfocus_from_descendants: false,
             focused: false,
             border_color: ColorTween::idle(theme.border_fg()),
             title_color: ColorTween::idle(theme.muted_fg()),
@@ -225,6 +227,11 @@ impl<M> Dialog<M> {
 
     pub fn on_close(mut self, handler: impl Fn(DialogCloseReason) -> M + 'static) -> Self {
         self.on_close = Some(Box::new(handler));
+        self
+    }
+
+    pub fn close_on_unfocus_from_descendants(mut self, close: bool) -> Self {
+        self.close_on_unfocus_from_descendants = close;
         self
     }
 
@@ -1088,7 +1095,10 @@ where
         if is_focus_unfocus_event(event) && ctx.propagation() == crate::Propagation::Stopped {
             return child;
         }
-        if is_focus_unfocus_event(event) && route.path.keys().len() > 1 {
+        if is_focus_unfocus_event(event)
+            && route.path.keys().len() > 1
+            && !self.dialog.close_on_unfocus_from_descendants
+        {
             return child;
         }
         child.bubble(ctx, |ctx| self.event(event, ctx))
@@ -1781,6 +1791,41 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Ignored);
         assert!(ctx.messages().is_empty());
         assert_eq!(ctx.propagation(), crate::Propagation::Continue);
+    }
+
+    #[test]
+    fn opted_in_dialog_closes_from_nested_focus_mode_on_unfocus_keys() {
+        let keys = [
+            KeyEvent::from(Key::Esc),
+            KeyEvent {
+                code: Key::Char('['),
+                modifiers: crate::KeyModifiers::CONTROL,
+            },
+        ];
+
+        for key in keys {
+            let mut host = Dialog::new()
+                .close_on_unfocus_from_descendants(true)
+                .on_close(|reason| reason)
+                .host(NestedFocusableBody::new());
+            let mut layout = LayoutCtx::new();
+            host.layout(Rect::new(0, 0, 24, 5), &mut layout);
+            let route_path = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == "input")
+                .expect("nested input should be focusable")
+                .path
+                .clone();
+            let mut ctx = EventCtx::new(animation_settings());
+
+            let outcome =
+                host.dispatch_event(&EventRoute::new(route_path), &TuiEvent::Key(key), &mut ctx);
+
+            assert_eq!(outcome, EventOutcome::Handled);
+            assert_eq!(ctx.messages(), &[DialogCloseReason::Escape]);
+            assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+        }
     }
 
     #[test]

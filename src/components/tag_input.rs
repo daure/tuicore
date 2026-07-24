@@ -964,16 +964,12 @@ where
             }
             return EventOutcome::Ignored;
         }
-        if cancel_key(*key)
-            && self.query.is_empty()
-            && !self.popup_open
-            && self.highlighted_tag.is_none()
-        {
+        if cancel_key(*key) && self.highlighted_tag.is_none() {
+            self.clear_query_or_close();
             self.active = false;
             ctx.request_layout();
             ctx.request_redraw();
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
+            return EventOutcome::Ignored;
         }
         if self.on_key(*key) {
             ctx.request_redraw();
@@ -1099,6 +1095,37 @@ mod tests {
     }
 
     #[test]
+    fn active_cancel_exits_input_mode_and_bubbles_to_outer_focus_in_one_keypress() {
+        for cancel in [
+            KeyEvent::from(Key::Esc),
+            KeyEvent {
+                code: Key::Char('['),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        ] {
+            let mut input = TagInput::new(["alpha", "beta"]);
+            input.set_focused(true);
+            input.event(
+                &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+                &mut EventCtx::<()>::default(),
+            );
+            input.event(
+                &TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+                &mut EventCtx::<()>::default(),
+            );
+
+            let mut ctx = EventCtx::<()>::default();
+            let outcome = input.event(&TuiEvent::Key(cancel), &mut ctx);
+
+            assert_eq!(outcome, EventOutcome::Ignored);
+            assert_eq!(ctx.propagation(), Propagation::Continue);
+            assert!(!input.active);
+            assert!(!input.popup_open);
+            assert!(input.query.is_empty());
+        }
+    }
+
+    #[test]
     fn no_hotkey_focus_registration_tracks_input_mode() {
         let mut input = TagInput::new(["alpha", "beta"]);
         input.set_focused(true);
@@ -1120,10 +1147,6 @@ mod tests {
         assert!(target.suppress_global_hotkeys);
         assert!(target.focused_events_before_global_hotkeys);
 
-        input.event(
-            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
-            &mut EventCtx::<()>::default(),
-        );
         input.event(
             &TuiEvent::Key(KeyEvent::from(Key::Esc)),
             &mut EventCtx::<()>::default(),

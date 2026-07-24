@@ -2,12 +2,15 @@ use std::time::Duration as StdDuration;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Borders};
 use time::{PrimitiveDateTime, Weekday};
 
 use crate::event::{KeyEvent, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, TickResult, TreePath, TuiNode, keybindings,
+    LayoutResult, LayoutSizeHint, TickResult, TreePath, TuiNode, border_set, keybindings, preset,
+    theme,
 };
 
 use super::{
@@ -19,6 +22,7 @@ use super::{
 pub enum DateTimePickerLayout {
     Horizontal,
     Vertical,
+    Stepped,
 }
 
 pub struct DateTimePicker<M = ()> {
@@ -26,6 +30,7 @@ pub struct DateTimePicker<M = ()> {
     time: TimePicker<M>,
     layout: DateTimePickerLayout,
     active: DateTimePart,
+    focused: bool,
     focus_path: TreePath,
     on_select: Option<Box<dyn Fn(PrimitiveDateTime) -> M>>,
 }
@@ -43,6 +48,7 @@ impl<M> DateTimePicker<M> {
             time: TimePicker::new(),
             layout: DateTimePickerLayout::Horizontal,
             active: DateTimePart::Date,
+            focused: false,
             focus_path: TreePath::default(),
             on_select: None,
         }
@@ -90,6 +96,26 @@ impl<M> DateTimePicker<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        if self.layout == DateTimePickerLayout::Stepped {
+            match self.active {
+                DateTimePart::Date => self.date.render(frame, area),
+                DateTimePart::Time => {
+                    let t = theme();
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_set(border_set(preset().border()))
+                        .border_style(Style::default().fg(if self.focused {
+                            t.highlight_bg()
+                        } else {
+                            t.border_fg()
+                        }));
+                    let inner = block.inner(area);
+                    frame.render_widget(block, area);
+                    self.time.render(frame, centered_time_area(inner));
+                }
+            }
+            return;
+        }
         let [date_area, time_area] = self.areas(area);
         self.date.render(frame, date_area);
         self.time.render(frame, time_area);
@@ -98,12 +124,18 @@ impl<M> DateTimePicker<M> {
     fn on_key(&mut self, key: KeyEvent) -> PickerOutcome {
         let bindings = keybindings();
         let focus_keys = bindings.focus();
-        if focus_keys.next_matches(key) && self.active == DateTimePart::Date {
+        if self.layout != DateTimePickerLayout::Stepped
+            && focus_keys.next_matches(key)
+            && self.active == DateTimePart::Date
+        {
             self.active = DateTimePart::Time;
             self.sync_focus(true);
             return PickerOutcome::handled(true);
         }
-        if focus_keys.previous_matches(key) && self.active == DateTimePart::Time {
+        if self.layout != DateTimePickerLayout::Stepped
+            && focus_keys.previous_matches(key)
+            && self.active == DateTimePart::Time
+        {
             self.active = DateTimePart::Date;
             self.sync_focus(true);
             return PickerOutcome::handled(true);
@@ -112,6 +144,27 @@ impl<M> DateTimePicker<M> {
             DateTimePart::Date => self.date.on_key(key),
             DateTimePart::Time => self.time.on_key(key),
         };
+        if self.layout == DateTimePickerLayout::Stepped {
+            if outcome.selected {
+                return match self.active {
+                    DateTimePart::Date => {
+                        self.active = DateTimePart::Time;
+                        self.sync_focus(true);
+                        PickerOutcome::handled(true)
+                    }
+                    DateTimePart::Time => {
+                        self.active = DateTimePart::Date;
+                        self.sync_focus(true);
+                        PickerOutcome::selected(outcome.changed)
+                    }
+                };
+            }
+            if outcome.canceled && self.active == DateTimePart::Time {
+                self.active = DateTimePart::Date;
+                self.sync_focus(true);
+            }
+            return outcome;
+        }
         if outcome.selected && self.date.current_value().is_some() {
             return PickerOutcome::selected(outcome.changed);
         }
@@ -133,6 +186,7 @@ impl<M> DateTimePicker<M> {
                     area.height.saturating_sub(10).min(1),
                 ),
             ],
+            DateTimePickerLayout::Stepped => [area, area],
         }
     }
 
@@ -155,12 +209,20 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
         let size = match self.layout {
             DateTimePickerLayout::Horizontal => picker_size_hint(38, 10),
             DateTimePickerLayout::Vertical => picker_size_hint(24, 11),
+            DateTimePickerLayout::Stepped => picker_size_hint(24, 10),
         };
         size.normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.focus_path = ctx.current_path();
+        if self.layout == DateTimePickerLayout::Stepped {
+            let id = FocusId::new("date-time-picker");
+            ctx.register_focusable(id.clone(), area, true);
+            ctx.set_focus_control(id.clone(), true);
+            ctx.set_focus_receives_events_before_global_hotkeys(id, true);
+            return LayoutResult::new(area);
+        }
         let [date_area, time_area] = self.areas(area);
         ctx.register_focusable(FocusId::new("date-time-picker-date"), date_area, true);
         ctx.register_focusable(FocusId::new("date-time-picker-time"), time_area, true);
@@ -186,7 +248,10 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
             match self.active {
                 DateTimePart::Date => {
                     let outcome = self.date.apply_external_editor_response(response);
-                    if outcome.selected
+                    if self.layout == DateTimePickerLayout::Stepped && outcome.selected {
+                        self.active = DateTimePart::Time;
+                        self.sync_focus(true);
+                    } else if outcome.selected
                         && let Some(value) = self.current_value()
                         && let Some(on_select) = &self.on_select
                     {
@@ -203,6 +268,10 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
                         {
                             ctx.emit(on_select(value));
                         }
+                    }
+                    if self.layout == DateTimePickerLayout::Stepped {
+                        self.active = DateTimePart::Date;
+                        self.sync_focus(true);
                     }
                     ctx.request_clear();
                     ctx.request_redraw();
@@ -244,7 +313,10 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
         }
         let before_active = self.active;
         let outcome = self.on_key(*key);
-        if outcome.handled && self.active != before_active {
+        if outcome.handled
+            && self.active != before_active
+            && self.layout != DateTimePickerLayout::Stepped
+        {
             let id = match self.active {
                 DateTimePart::Date => "date-time-picker-date",
                 DateTimePart::Time => "date-time-picker-time",
@@ -264,6 +336,7 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
     }
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.focused = focused;
         if focused {
             if target.is_some_and(|id| id.as_str() == "date-time-picker-time") {
                 self.active = DateTimePart::Time;
@@ -278,6 +351,16 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
     fn tick(&mut self, _dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
         TickResult::IDLE
     }
+}
+
+fn centered_time_area(area: Rect) -> Rect {
+    let width = 8.min(area.width);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(1) / 2,
+        width,
+        1.min(area.height),
+    )
 }
 
 #[cfg(test)]

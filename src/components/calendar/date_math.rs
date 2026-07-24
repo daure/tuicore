@@ -14,10 +14,25 @@ pub(crate) fn week_range(date: Date, first_day_of_week: Weekday) -> (Date, Date)
     (start, start + Duration::days(6))
 }
 
-pub(crate) fn weekday_labels(first_day_of_week: Weekday) -> [&'static str; 7] {
+pub(crate) fn weekday_labels(first_day_of_week: Weekday) -> [(&'static str, Weekday); 7] {
     let labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let start = first_day_of_week.number_days_from_monday() as usize;
-    std::array::from_fn(|index| labels[(start + index) % labels.len()])
+    std::array::from_fn(|index| {
+        let offset = (start + index) % labels.len();
+        (labels[offset], weekday_from_monday_offset(offset))
+    })
+}
+
+fn weekday_from_monday_offset(offset: usize) -> Weekday {
+    [
+        Weekday::Monday,
+        Weekday::Tuesday,
+        Weekday::Wednesday,
+        Weekday::Thursday,
+        Weekday::Friday,
+        Weekday::Saturday,
+        Weekday::Sunday,
+    ][offset]
 }
 
 pub(super) fn weekday_short(date: Date) -> &'static str {

@@ -53,3 +53,24 @@ fn date_time_picker_dropdown_forwards_first_day_of_week_builder_and_setter() {
         time::Weekday::Monday
     );
 }
+
+#[test]
+fn closed_date_time_picker_dropdown_does_not_take_keys_before_global_hotkeys() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new();
+    let mut ctx = LayoutCtx::new();
+
+    dropdown.layout(Rect::new(0, 0, 31, 1), &mut ctx);
+
+    assert!(!ctx.focus_targets()[0].focused_events_before_global_hotkeys);
+}
+
+#[test]
+fn open_date_time_picker_dropdown_takes_picker_keys_before_global_hotkeys() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new();
+    dropdown.set_open(true);
+    let mut ctx = LayoutCtx::new();
+
+    dropdown.layout(Rect::new(0, 0, 31, 1), &mut ctx);
+
+    assert!(ctx.focus_targets()[0].focused_events_before_global_hotkeys);
+}

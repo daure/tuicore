@@ -113,7 +113,7 @@ pub(crate) fn date_time_showcase_layout(area: Rect) -> [Rect; 6] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Length(13),
             Constraint::Length(1),
             Constraint::Length(11),

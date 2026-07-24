@@ -1594,6 +1594,16 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if !self.insert_mode {
+            let bindings = keybindings();
+            let focus = bindings.focus();
+            if focus_navigation_key(*key)
+                || focus.next_control_matches(*key)
+                || focus.previous_control_matches(*key)
+            {
+                return EventOutcome::Ignored;
+            }
+        }
         if self.handle_scroll_key(*key, ctx) {
             return EventOutcome::Handled;
         }
@@ -1661,9 +1671,6 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             }
         }
         if !self.insert_mode {
-            if focus_navigation_key(*key) {
-                return EventOutcome::Ignored;
-            }
             if KeySpec::key(Key::Enter).matches(*key)
                 || matches_any(&self.keys.insert_newline, *key)
             {

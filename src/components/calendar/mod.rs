@@ -2,14 +2,21 @@ use std::cmp::Ordering;
 use std::time::Duration as StdDuration;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::layout::Rect;
+use ratatui::text::{Line, Text};
+#[cfg(test)]
+use ratatui::{style::Style, text::Span};
 use time::{Date, Duration, Weekday};
 
 pub(crate) mod date_math;
+mod event_wrap;
 mod model;
+mod view;
+
+#[cfg(test)]
+use event_wrap::wrap_event_spans;
+#[cfg(test)]
+use view::EventSummaryKind;
 
 pub use model::{
     CalendarEntryRole, CalendarOutcome, CalendarSpan, CalendarTypedEvent, CalendarView,
@@ -23,17 +30,21 @@ use date_math::{
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSizeHint, TickResult, TuiNode, keybindings, theme,
+    LayoutSizeHint, TickResult, TuiNode,
 };
 
 use super::Panel;
 
 const CALENDAR_FOCUS: &str = "calendar";
+const MONTH_EVENT_LINES: usize = 1;
+const WEEK_EVENT_LINES: usize = 3;
+const DAY_EVENT_LINES: usize = 5;
 
 type IdFn<T, Id> = dyn Fn(&T) -> Id;
 type SpanFn<T> = dyn Fn(&T) -> CalendarSpan;
 type TitleFn<T> = dyn Fn(&T) -> String;
 type RoleFn<T> = dyn Fn(&T) -> Option<CalendarEntryRole>;
+type EventMarkerFn<T> = dyn Fn(&T) -> char;
 type EntryRenderFn<T> = dyn Fn(&T) -> Line<'static>;
 type DetailRenderFn<T> = dyn Fn(&T) -> Text<'static>;
 
@@ -43,6 +54,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     span: Box<SpanFn<T>>,
     title: Box<TitleFn<T>>,
     role: Box<RoleFn<T>>,
+    event_marker: Option<Box<EventMarkerFn<T>>>,
     render_entry: Option<Box<EntryRenderFn<T>>>,
     render_detail: Option<Box<DetailRenderFn<T>>>,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
@@ -51,10 +63,11 @@ pub struct Calendar<T, Id = String, M = ()> {
     cursor: Date,
     today: Date,
     first_day_of_week: Weekday,
+    show_weekends: bool,
     highlighted_entry: Option<usize>,
     focused: bool,
     hotkey: Option<String>,
-    keybindings: Option<CalendarKeyBindings>,
+    keybindings: CalendarKeyBindings,
     area: Rect,
     events: Vec<CalendarTypedEvent<Id>>,
 }
@@ -64,6 +77,7 @@ pub struct CalendarKeyBindings {
     pub month_view: Vec<KeySpec>,
     pub week_view: Vec<KeySpec>,
     pub day_view: Vec<KeySpec>,
+    pub toggle_weekends: Vec<KeySpec>,
     pub today: Vec<KeySpec>,
     pub activate: Vec<KeySpec>,
     pub back: Vec<KeySpec>,
@@ -83,6 +97,10 @@ impl Default for CalendarKeyBindings {
             month_view: vec![KeySpec::plain('m')],
             week_view: vec![KeySpec::plain('w')],
             day_view: vec![KeySpec::plain('d')],
+            toggle_weekends: vec![KeySpec::key_with_modifiers(
+                Key::Char('w'),
+                KeyModifiers::CONTROL,
+            )],
             today: vec![KeySpec::plain('t')],
             activate: vec![KeySpec::key(Key::Enter), KeySpec::plain(' ')],
             back: vec![
@@ -111,6 +129,18 @@ impl CalendarKeyBindings {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn month_view_label(&self) -> String {
+        key_specs_label(&self.month_view)
+    }
+
+    pub fn week_view_label(&self) -> String {
+        key_specs_label(&self.week_view)
+    }
+
+    pub fn day_view_label(&self) -> String {
+        key_specs_label(&self.day_view)
+    }
 }
 
 impl<T, Id, M> Calendar<T, Id, M>
@@ -130,6 +160,7 @@ where
             span: Box::new(span),
             title: Box::new(title),
             role: Box::new(|_| None),
+            event_marker: None,
             render_entry: None,
             render_detail: None,
             on_event: None,
@@ -138,10 +169,11 @@ where
             cursor: today,
             today,
             first_day_of_week: Weekday::Monday,
+            show_weekends: true,
             highlighted_entry: None,
             focused: false,
             hotkey: None,
-            keybindings: None,
+            keybindings: CalendarKeyBindings::default(),
             area: Rect::default(),
             events: Vec::new(),
         }
@@ -150,12 +182,14 @@ where
     pub fn today(mut self, today: Date) -> Self {
         self.today = today;
         self.cursor = today;
+        self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
         self
     }
 
     pub fn cursor(mut self, cursor: Date) -> Self {
         self.cursor = cursor;
+        self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
         self
     }
@@ -169,6 +203,28 @@ where
         self.first_day_of_week(weekday)
     }
 
+    pub fn show_weekends(mut self, show: bool) -> Self {
+        self.set_show_weekends(show);
+        self
+    }
+
+    pub fn is_showing_weekends(&self) -> bool {
+        self.show_weekends
+    }
+
+    pub fn set_show_weekends(&mut self, show: bool) {
+        if self.show_weekends == show {
+            return;
+        }
+        self.show_weekends = show;
+        self.normalize_hidden_weekend_cursor();
+        self.highlighted_entry = self.first_entry_on_cursor();
+    }
+
+    pub fn toggle_weekends(&mut self) {
+        self.set_show_weekends(!self.show_weekends);
+    }
+
     pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
         self.first_day_of_week = weekday;
     }
@@ -176,6 +232,7 @@ where
     pub fn view(mut self, view: CalendarView) -> Self {
         self.view = view;
         self.stack.clear();
+        self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
         self
     }
@@ -183,6 +240,19 @@ where
     pub fn role(mut self, role: impl Fn(&T) -> Option<CalendarEntryRole> + 'static) -> Self {
         self.role = Box::new(role);
         self
+    }
+
+    pub fn event_marker(mut self, marker: impl Fn(&T) -> char + 'static) -> Self {
+        self.set_event_marker(marker);
+        self
+    }
+
+    pub fn set_event_marker(&mut self, marker: impl Fn(&T) -> char + 'static) {
+        self.event_marker = Some(Box::new(marker));
+    }
+
+    pub fn clear_event_marker(&mut self) {
+        self.event_marker = None;
     }
 
     pub fn render_entry(mut self, render: impl Fn(&T) -> Line<'static> + 'static) -> Self {
@@ -206,12 +276,12 @@ where
     }
 
     pub fn keybindings(mut self, keybindings: CalendarKeyBindings) -> Self {
-        self.keybindings = Some(keybindings);
+        self.keybindings = keybindings;
         self
     }
 
     pub fn set_keybindings(&mut self, keybindings: CalendarKeyBindings) {
-        self.keybindings = Some(keybindings);
+        self.keybindings = keybindings;
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
@@ -254,63 +324,22 @@ where
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
-        if let Some(action) = self.custom_key_action(key) {
+        if let Some(action) = self.key_action(key) {
             return self.apply_key_action(action);
-        }
-        let bindings = keybindings();
-        if bindings.date_time_picker().month_view_matches(key) {
-            return self.direct_view(CalendarView::Month);
-        }
-        if plain_char(key, 'w') {
-            return self.direct_view(CalendarView::Week);
-        }
-        if plain_char(key, 'd') {
-            return self.direct_view(CalendarView::Day);
-        }
-        if bindings.date_time_picker().today_matches(key) {
-            return self.set_cursor(self.today);
-        }
-        if bindings.button().press_matches(key) {
-            return self.activate();
-        }
-        if bindings.focus().unfocus_matches(key) {
-            return self.back();
-        }
-        if bindings.line_left_matches(key) {
-            return self.move_left();
-        }
-        if bindings.line_right_matches(key) {
-            return self.move_right();
-        }
-        if bindings.line_up_matches(key) {
-            return self.move_up();
-        }
-        if bindings.line_down_matches(key) {
-            return self.move_down();
-        }
-        if bindings.page_up_matches(key) {
-            return self.page(-1);
-        }
-        if bindings.page_down_matches(key) {
-            return self.page(1);
-        }
-        if bindings.home_matches(key) {
-            return self.home();
-        }
-        if bindings.end_matches(key) {
-            return self.end();
         }
         CalendarOutcome::IDLE
     }
 
-    fn custom_key_action(&self, key: KeyEvent) -> Option<CalendarKeyAction> {
-        let keys = self.keybindings.as_ref()?;
+    fn key_action(&self, key: KeyEvent) -> Option<CalendarKeyAction> {
+        let keys = &self.keybindings;
         if matches_key_specs(&keys.month_view, key) {
             Some(CalendarKeyAction::Month)
         } else if matches_key_specs(&keys.week_view, key) {
             Some(CalendarKeyAction::Week)
         } else if matches_key_specs(&keys.day_view, key) {
             Some(CalendarKeyAction::Day)
+        } else if matches_key_specs(&keys.toggle_weekends, key) {
+            Some(CalendarKeyAction::ToggleWeekends)
         } else if matches_key_specs(&keys.today, key) {
             Some(CalendarKeyAction::Today)
         } else if matches_key_specs(&keys.activate, key) {
@@ -343,6 +372,7 @@ where
             CalendarKeyAction::Month => self.direct_view(CalendarView::Month),
             CalendarKeyAction::Week => self.direct_view(CalendarView::Week),
             CalendarKeyAction::Day => self.direct_view(CalendarView::Day),
+            CalendarKeyAction::ToggleWeekends => self.toggle_weekends_action(),
             CalendarKeyAction::Today => self.set_cursor(self.today),
             CalendarKeyAction::Activate => self.activate(),
             CalendarKeyAction::Back => self.back(),
@@ -429,6 +459,7 @@ where
             return CalendarOutcome::HANDLED;
         }
         self.view = view;
+        self.normalize_hidden_weekend_cursor();
         if view != CalendarView::EventDetail {
             self.highlight_first_entry_on_cursor();
         }
@@ -440,7 +471,10 @@ where
         CalendarOutcome::CHANGED
     }
 
-    fn set_cursor(&mut self, date: Date) -> CalendarOutcome {
+    fn set_cursor(&mut self, mut date: Date) -> CalendarOutcome {
+        if !self.show_weekends && matches!(self.view, CalendarView::Month | CalendarView::Week) {
+            date = previous_friday_if_weekend(date);
+        }
         if self.cursor == date {
             return CalendarOutcome::HANDLED;
         }
@@ -494,9 +528,17 @@ where
 
     fn home(&mut self) -> CalendarOutcome {
         match self.view {
-            CalendarView::Month => self.set_cursor(first_of_month(self.cursor)),
+            CalendarView::Month => {
+                let mut date = first_of_month(self.cursor);
+                while !self.show_weekends && is_weekend(date) {
+                    date += Duration::days(1);
+                }
+                self.set_cursor(date)
+            }
             CalendarView::Week => {
-                self.set_cursor(week_range(self.cursor, self.first_day_of_week).0)
+                let start = week_range(self.cursor, self.first_day_of_week).0;
+                let offset = self.visible_weekday_offsets().first().copied().unwrap_or(0);
+                self.set_cursor(start + Duration::days(offset as i64))
             }
             CalendarView::Day => self.highlight_entry_boundary(false),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
@@ -505,9 +547,17 @@ where
 
     fn end(&mut self) -> CalendarOutcome {
         match self.view {
-            CalendarView::Month => self.set_cursor(last_of_month(self.cursor)),
+            CalendarView::Month => {
+                let mut date = last_of_month(self.cursor);
+                while !self.show_weekends && is_weekend(date) {
+                    date -= Duration::days(1);
+                }
+                self.set_cursor(date)
+            }
             CalendarView::Week => {
-                self.set_cursor(week_range(self.cursor, self.first_day_of_week).1)
+                let start = week_range(self.cursor, self.first_day_of_week).0;
+                let offset = self.visible_weekday_offsets().last().copied().unwrap_or(6);
+                self.set_cursor(start + Duration::days(offset as i64))
             }
             CalendarView::Day => self.highlight_entry_boundary(true),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
@@ -515,7 +565,7 @@ where
     }
 
     fn move_days(&mut self, days: i64) -> CalendarOutcome {
-        let date = self
+        let mut date = self
             .cursor
             .checked_add(Duration::days(days))
             .unwrap_or_else(|| {
@@ -525,7 +575,41 @@ where
                     Date::MAX
                 }
             });
+        if !self.show_weekends && matches!(self.view, CalendarView::Month | CalendarView::Week) {
+            let direction = if days.is_negative() { -1 } else { 1 };
+            while is_weekend(date) {
+                let Some(next) = date.checked_add(Duration::days(direction)) else {
+                    break;
+                };
+                date = next;
+            }
+        }
         self.set_cursor(date)
+    }
+
+    fn toggle_weekends_action(&mut self) -> CalendarOutcome {
+        let before_cursor = self.cursor;
+        let before_range = self.current_range();
+        self.show_weekends = !self.show_weekends;
+        self.normalize_hidden_weekend_cursor();
+        if self.cursor != before_cursor {
+            self.push_event(CalendarTypedEvent::CursorChanged { date: self.cursor });
+            if self.current_range() != before_range {
+                self.emit_range_changed();
+            }
+            self.highlight_first_entry_on_cursor();
+        }
+        CalendarOutcome::CHANGED
+    }
+
+    fn normalize_hidden_weekend_cursor(&mut self) {
+        if self.show_weekends
+            || !matches!(self.view, CalendarView::Month | CalendarView::Week)
+            || !is_weekend(self.cursor)
+        {
+            return;
+        }
+        self.cursor = previous_friday_if_weekend(self.cursor);
     }
 
     fn highlight_first_entry_on_cursor(&mut self) {
@@ -663,7 +747,7 @@ where
     Id: Clone + Eq + 'static,
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        LayoutSizeHint::content(34, 12).normalized(proposal)
+        LayoutSizeHint::content(72, 12).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
@@ -719,328 +803,12 @@ where
     }
 }
 
-impl<T, Id, M> Calendar<T, Id, M>
-where
-    Id: Clone + Eq,
-{
-    fn render_month(&self, frame: &mut Frame, area: Rect) {
-        let title = format!(" Month • {} {} ", self.cursor.month(), self.cursor.year());
-        self.render_panel(frame, area, title);
-        let inner = Panel::inner_area(area);
-        if inner.height < 2 {
-            return;
-        }
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-            ])
-            .split(inner);
-        self.render_weekday_header(frame, rows[0]);
-        self.render_month_grid_lines(frame, &rows[1..]);
-        let start = week_range(first_of_month(self.cursor), self.first_day_of_week).0;
-        for week in 0..6 {
-            let cols = week_columns(rows[week + 1]);
-            for day in 0..7 {
-                let date = start + Duration::days((week * 7 + day) as i64);
-                self.render_month_cell(frame, cols[day], date);
-            }
-        }
-    }
-
-    fn render_month_cell(&self, frame: &mut Frame, area: Rect, date: Date) {
-        if area.is_empty() {
-            return;
-        }
-        let inner = grid_cell_inner(area, true);
-        if inner.is_empty() {
-            return;
-        }
-        let mut lines = vec![Line::from(Span::styled(
-            format!("{:>2}", date.day()),
-            self.date_style(date, date.month() != self.cursor.month()),
-        ))];
-        let event_capacity = usize::from(inner.height.saturating_sub(1));
-        let entries = self.entries_on(date);
-        let visible_events = if entries.len() > event_capacity {
-            event_capacity.saturating_sub(1)
-        } else {
-            event_capacity
-        };
-        for index in entries.iter().take(visible_events).copied() {
-            lines.push(self.event_summary_line(index, false));
-        }
-        if entries.len() > visible_events && event_capacity > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("+{} more", entries.len() - visible_events),
-                Style::default().fg(theme().muted_fg()),
-            )));
-        }
-        frame.render_widget(
-            Paragraph::new(lines).style(self.date_cell_style(date)),
-            inner,
-        );
-    }
-
-    fn render_week(&self, frame: &mut Frame, area: Rect) {
-        let (start, end) = week_range(self.cursor, self.first_day_of_week);
-        self.render_panel(frame, area, format!(" Week • {start} — {end} "));
-        let inner = Panel::inner_area(area);
-        if inner.height == 0 {
-            return;
-        }
-        let cols = week_columns(inner);
-        self.render_week_grid_lines(frame, &cols);
-        for offset in 0..7 {
-            let date = start + Duration::days(offset);
-            self.render_week_column(frame, cols[offset as usize], date);
-        }
-    }
-
-    fn render_week_column(&self, frame: &mut Frame, area: Rect, date: Date) {
-        if area.is_empty() {
-            return;
-        }
-        let inner = grid_cell_inner(area, false);
-        if inner.is_empty() {
-            return;
-        }
-        let mut lines = vec![
-            Line::from(Span::styled(
-                weekday_short(date).to_uppercase(),
-                Style::default().fg(theme().muted_fg()),
-            )),
-            Line::from(Span::styled(
-                format!("{}", date.day()),
-                self.date_style(date, false),
-            )),
-        ];
-        let event_capacity = usize::from(inner.height.saturating_sub(2));
-        let entries = self.entries_on(date);
-        let visible_events = if entries.len() > event_capacity {
-            event_capacity.saturating_sub(1)
-        } else {
-            event_capacity
-        };
-        for index in entries.iter().take(visible_events).copied() {
-            lines.push(self.event_summary_line(index, true));
-        }
-        if entries.len() > visible_events && event_capacity > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("+{} more", entries.len() - visible_events),
-                Style::default().fg(theme().muted_fg()),
-            )));
-        }
-        frame.render_widget(
-            Paragraph::new(lines).style(self.date_cell_style(date)),
-            inner,
-        );
-    }
-
-    fn render_month_grid_lines(&self, frame: &mut Frame, rows: &[Rect]) {
-        if rows.is_empty() {
-            return;
-        }
-        let grid = rows[0].union(rows[rows.len() - 1]);
-        let cols = week_columns(grid);
-        self.render_grid_vertical_lines(frame, &cols);
-        let join_xs = cols.iter().skip(1).map(|col| col.x).collect::<Vec<_>>();
-        for row in rows.iter().skip(1) {
-            self.render_horizontal_line(frame, row.y, grid.x, grid.width, &join_xs);
-        }
-    }
-
-    fn render_week_grid_lines(&self, frame: &mut Frame, cols: &[Rect]) {
-        self.render_grid_vertical_lines(frame, cols);
-    }
-
-    fn render_grid_vertical_lines(&self, frame: &mut Frame, cols: &[Rect]) {
-        let Some(first) = cols.first() else {
-            return;
-        };
-        for col in cols.iter().skip(1) {
-            self.render_vertical_line(frame, col.x, first.y, first.height);
-        }
-    }
-
-    fn render_horizontal_line(
-        &self,
-        frame: &mut Frame,
-        y: u16,
-        x: u16,
-        width: u16,
-        join_xs: &[u16],
-    ) {
-        if width == 0 {
-            return;
-        }
-        let line = (0..width)
-            .map(|offset| {
-                if join_xs.contains(&(x + offset)) {
-                    '┼'
-                } else {
-                    '─'
-                }
-            })
-            .collect::<String>();
-        frame.render_widget(
-            Paragraph::new(line).style(Style::default().fg(theme().border_fg())),
-            Rect::new(x, y, width, 1),
-        );
-    }
-
-    fn render_vertical_line(&self, frame: &mut Frame, x: u16, y: u16, height: u16) {
-        for offset in 0..height {
-            frame.render_widget(
-                Paragraph::new("│").style(Style::default().fg(theme().border_fg())),
-                Rect::new(x, y + offset, 1, 1),
-            );
-        }
-    }
-
-    fn render_day(&self, frame: &mut Frame, area: Rect) {
-        self.render_panel(frame, area, format!(" Day • {} ", self.cursor));
-        let inner = Panel::inner_area(area);
-        let entries = self.entries_on(self.cursor);
-        let lines = entries
-            .into_iter()
-            .map(|index| {
-                let span = (self.span)(&self.entries[index]);
-                let selected = self.highlighted_entry == Some(index);
-                let prefix = if span.all_day {
-                    String::from("all-day ")
-                } else {
-                    format!("{} ", format_time(span.start.time()))
-                };
-                let mut line = self.entry_line(index);
-                line.spans.insert(
-                    0,
-                    Span::styled(prefix, Style::default().fg(theme().muted_fg())),
-                );
-                line.style = self.entry_style(index, selected);
-                line
-            })
-            .collect::<Vec<_>>();
-        let text = if lines.is_empty() {
-            Text::from("No entries")
-        } else {
-            Text::from(lines)
-        };
-        frame.render_widget(Paragraph::new(text), inner);
-    }
-
-    fn render_detail_view(&self, frame: &mut Frame, area: Rect) {
-        self.render_panel(frame, area, String::from(" Detail "));
-        let inner = Panel::inner_area(area);
-        let Some(index) = self.highlighted_entry else {
-            frame.render_widget(Paragraph::new("No entry selected"), inner);
-            return;
-        };
-        frame.render_widget(
-            Paragraph::new(self.detail_text(index)).wrap(Wrap { trim: false }),
-            inner,
-        );
-    }
-
-    fn render_weekday_header(&self, frame: &mut Frame, area: Rect) {
-        let cols = week_columns(area);
-        for (index, label) in weekday_labels(self.first_day_of_week)
-            .into_iter()
-            .enumerate()
-        {
-            frame.render_widget(
-                Paragraph::new(label).style(Style::default().fg(theme().muted_fg())),
-                cols[index],
-            );
-        }
-    }
-
-    fn render_panel(&self, frame: &mut Frame, area: Rect, title: impl Into<String>) {
-        Panel::new()
-            .top_left(title)
-            .focused(self.focused)
-            .render(frame, area);
-    }
-
-    fn date_style(&self, date: Date, muted: bool) -> Style {
-        let t = theme();
-        if self.focused && date == self.cursor {
-            return Style::default()
-                .fg(t.highlight_fg())
-                .bg(t.highlight_bg())
-                .add_modifier(Modifier::BOLD);
-        }
-        if date == self.today {
-            return Style::default()
-                .fg(t.accent_fg())
-                .add_modifier(Modifier::BOLD);
-        }
-        if muted {
-            Style::default().fg(t.subtle_fg())
-        } else {
-            Style::default().fg(t.text_fg())
-        }
-    }
-
-    fn date_cell_style(&self, date: Date) -> Style {
-        if self.focused && date == self.cursor {
-            Style::default().bg(theme().highlight_bg())
-        } else {
-            Style::default()
-        }
-    }
-
-    fn entry_style(&self, index: usize, selected: bool) -> Style {
-        let t = theme();
-        if selected && self.focused {
-            return Style::default()
-                .fg(t.highlight_fg())
-                .bg(t.highlight_bg())
-                .add_modifier(Modifier::BOLD);
-        }
-        match (self.role)(&self.entries[index]) {
-            Some(CalendarEntryRole::Accent) => Style::default().fg(t.accent_fg()),
-            Some(CalendarEntryRole::Success) => Style::default().fg(t.success_fg()),
-            Some(CalendarEntryRole::Warning) => Style::default().fg(t.warning_fg()),
-            Some(CalendarEntryRole::Error) => Style::default().fg(t.error_fg()),
-            Some(CalendarEntryRole::Muted) => Style::default().fg(t.muted_fg()),
-            None => Style::default().fg(t.text_fg()),
-        }
-    }
-
-    fn event_summary_line(&self, index: usize, show_time: bool) -> Line<'static> {
-        let span = (self.span)(&self.entries[index]);
-        let prefix = if span.all_day {
-            String::from("■ ")
-        } else if show_time {
-            format!("• {} ", format_time(span.start.time()))
-        } else {
-            String::from("• ")
-        };
-        let mut spans = vec![Span::styled(
-            prefix,
-            Style::default().fg(theme().accent_fg()),
-        )];
-        spans.extend(self.entry_line(index).spans);
-        Line::from(spans).style(self.entry_style(index, self.highlighted_entry == Some(index)))
-    }
-}
-
-fn plain_char(key: KeyEvent, value: char) -> bool {
-    key.modifiers.is_empty() && matches!(key.code, Key::Char(ch) if ch == value)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CalendarKeyAction {
     Month,
     Week,
     Day,
+    ToggleWeekends,
     Today,
     Activate,
     Back,
@@ -1058,16 +826,47 @@ fn matches_key_specs(keys: &[KeySpec], key: KeyEvent) -> bool {
     keys.iter().copied().any(|spec| spec.matches(key))
 }
 
-fn week_columns(area: Rect) -> Vec<Rect> {
-    let width = area.width / 7;
-    let remainder = area.width % 7;
-    (0..7)
+fn key_specs_label(keys: &[KeySpec]) -> String {
+    keys.iter()
+        .map(|key| key.label())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn calendar_columns(area: Rect, count: usize) -> Vec<Rect> {
+    let count = count.max(1) as u16;
+    let width = area.width / count;
+    let remainder = area.width % count;
+    (0..usize::from(count))
         .map(|index| {
             let extra = u16::from(index < remainder as usize);
             let x = area.x + width * index as u16 + remainder.min(index as u16);
             Rect::new(x, area.y, width + extra, area.height)
         })
         .collect()
+}
+
+fn weekday_after(mut weekday: Weekday, offset: usize) -> Weekday {
+    for _ in 0..offset {
+        weekday = weekday.next();
+    }
+    weekday
+}
+
+fn is_weekend(date: Date) -> bool {
+    is_weekend_weekday(date.weekday())
+}
+
+fn is_weekend_weekday(weekday: Weekday) -> bool {
+    matches!(weekday, Weekday::Saturday | Weekday::Sunday)
+}
+
+fn previous_friday_if_weekend(date: Date) -> Date {
+    match date.weekday() {
+        Weekday::Saturday => date - Duration::days(1),
+        Weekday::Sunday => date - Duration::days(2),
+        _ => date,
+    }
 }
 
 fn grid_cell_inner(area: Rect, reserve_top_line: bool) -> Rect {

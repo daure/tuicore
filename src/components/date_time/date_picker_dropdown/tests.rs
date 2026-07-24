@@ -50,6 +50,27 @@ fn date_picker_dropdown_measure_stays_field_height_when_open() {
 }
 
 #[test]
+fn closed_date_picker_dropdown_does_not_take_keys_before_global_hotkeys() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    let mut ctx = LayoutCtx::new();
+
+    dropdown.layout(Rect::new(0, 0, 24, 1), &mut ctx);
+
+    assert!(!ctx.focus_targets()[0].focused_events_before_global_hotkeys);
+}
+
+#[test]
+fn open_date_picker_dropdown_takes_picker_keys_before_global_hotkeys() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    dropdown.set_open(true);
+    let mut ctx = LayoutCtx::new();
+
+    dropdown.layout(Rect::new(0, 0, 24, 1), &mut ctx);
+
+    assert!(ctx.focus_targets()[0].focused_events_before_global_hotkeys);
+}
+
+#[test]
 fn date_picker_dropdown_places_popup_inside_overlay_bounds() {
     let mut dropdown = DatePickerDropdown::<()>::new();
     let mut ctx = LayoutCtx::new();

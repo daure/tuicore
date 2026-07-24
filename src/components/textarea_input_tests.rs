@@ -3,6 +3,29 @@ use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, 
 use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
 
+struct KeyBindingsGuard {
+    previous: crate::KeyBindings,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl KeyBindingsGuard {
+    fn replace(next: crate::KeyBindings) -> Self {
+        let lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
+        let previous = crate::keybindings();
+        crate::set_keybindings(next);
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for KeyBindingsGuard {
+    fn drop(&mut self) {
+        crate::set_keybindings(self.previous.clone());
+    }
+}
+
 #[test]
 fn plain_character_bubbles_before_insert_mode() {
     let mut input = TextareaInput::<()>::new();
@@ -12,6 +35,46 @@ fn plain_character_bubbles_before_insert_mode() {
 
     assert_eq!(outcome, EventOutcome::Ignored);
     assert_eq!(ctx.propagation(), Propagation::Continue);
+}
+
+#[test]
+fn control_navigation_keys_bubble_before_insert_mode() {
+    let custom_key = KeySpec::key_with_modifiers(Key::Char('n'), KeyModifiers::CONTROL);
+    let bindings = crate::KeyBindings::default()
+        .with_focus_next_control([
+            KeySpec::key_with_modifiers(Key::Char('j'), KeyModifiers::CONTROL),
+            custom_key.clone(),
+        ])
+        .with_focus_previous_control([KeySpec::key_with_modifiers(
+            Key::Char('p'),
+            KeyModifiers::CONTROL,
+        )]);
+    let _guard = KeyBindingsGuard::replace(bindings);
+    let mut keys = TextareaInputKeyBindings::default();
+    keys.insert_newline.push(custom_key);
+    let mut input = TextareaInput::<()>::new().focused(true).keybindings(keys);
+
+    for key in [
+        KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        KeyEvent {
+            code: Key::Char('n'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        KeyEvent {
+            code: Key::Char('p'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ] {
+        let mut ctx = EventCtx::<()>::default();
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert!(!input.insert_mode);
+        assert_eq!(ctx.propagation(), Propagation::Continue);
+    }
 }
 
 #[test]
@@ -92,14 +155,20 @@ fn enter_inserts_newline() {
 fn control_j_inserts_newline() {
     let mut input = TextareaInput::<()>::new().value("first");
     input.insert_mode = true;
+    let mut ctx = EventCtx::<()>::default();
 
-    let outcome = input.on_key(KeyEvent {
-        code: Key::Char('j'),
-        modifiers: KeyModifiers::CONTROL,
-    });
+    let outcome = input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
 
-    assert_eq!(outcome, InputOutcome::CHANGED);
+    assert_eq!(outcome, EventOutcome::Handled);
     assert_eq!(input.current_value(), "first\n");
+    assert!(input.insert_mode);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]
