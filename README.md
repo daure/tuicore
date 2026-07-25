@@ -79,9 +79,8 @@ cargo major
 These repository-local Cargo aliases work directly inside the Tuicore checkout.
 Direct fallback: `./scripts/release.sh [major|minor|patch]`. With no argument, it
 bumps the minor version (for example, `0.1.0` to `0.2.0`).
-It updates the lockfile, tests, asks before committing, validates the clean crates.io
-package and dry run, then tags and asks before publishing. It never pushes; successful
-publishing prints the exact push commands.
+It updates the lockfile, tests, asks once before committing, validating, tagging, and
+publishing. It never pushes; successful publishing prints the exact push commands.
 
 ## License
 

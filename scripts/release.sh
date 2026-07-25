@@ -90,12 +90,8 @@ PY
 fi
 
 if [[ "$credentials_configured" != true ]]; then
-    printf 'warning: conventional crates.io credentials were not detected.\n' >&2
-    printf 'Cargo credential providers or keychains may still supply them; otherwise run `cargo login`.\n' >&2
-    if ! confirm "Continue and let Cargo verify crates.io credentials?"; then
-        printf 'Release canceled; run `cargo login` before retrying.\n' >&2
-        exit 1
-    fi
+    printf 'error: crates.io credentials were not detected; run `cargo login` before retrying\n' >&2
+    exit 1
 fi
 
 read -r old_version new_version < <(python3 - "$bump" <<'PY'
@@ -177,7 +173,7 @@ cargo test
 printf '\nVersion: %s -> %s\n' "$old_version" "$new_version"
 git --no-pager diff -- Cargo.toml Cargo.lock
 printf 'Next: create commit %q, then validate the clean crates.io package.\n' "release: $tag"
-if ! confirm "Prepare crates.io release $tag?"; then
+if ! confirm "Commit, tag, and publish $tag to crates.io?"; then
     printf 'Release canceled; version changes remain in working tree.\n' >&2
     exit 1
 fi
@@ -194,11 +190,6 @@ if ! cargo package --registry crates-io || ! cargo publish --dry-run --registry 
 fi
 
 git tag -a "$tag" -m "release: $tag"
-
-if ! confirm "Publish $tag to crates.io?"; then
-    printf 'Publish canceled. Local release commit and tag %s remain.\n' "$tag" >&2
-    exit 1
-fi
 
 if [[ -n "$(git status --porcelain)" ]]; then
     printf 'error: Git working tree must be clean before publishing\n' >&2
