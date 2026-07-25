@@ -19,6 +19,32 @@ use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 use crate::event::{Key, KeyEvent};
 use crate::{AxisExpand, EventCtx, EventOutcome, HintSource, LayoutSize, LayoutSizeHint, theme};
 
+#[cfg(test)]
+pub(super) struct KeyBindingsGuard {
+    previous: crate::KeyBindings,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl KeyBindingsGuard {
+    pub(super) fn replace(next: crate::KeyBindings) -> Self {
+        let lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
+        let previous = crate::keybindings();
+        crate::set_keybindings(next);
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for KeyBindingsGuard {
+    fn drop(&mut self) {
+        crate::set_keybindings(self.previous.clone());
+    }
+}
+
 const DATE_PICKER_FOCUS: &str = "date-picker";
 const DATE_PICKER_DROPDOWN_FOCUS: &str = "date-picker-dropdown";
 const DATE_TIME_PICKER_DROPDOWN_FOCUS: &str = "date-time-picker-dropdown";
@@ -89,6 +115,12 @@ fn finish_event<M>(ctx: &mut EventCtx<M>, outcome: PickerOutcome) -> EventOutcom
         EventOutcome::Handled
     } else {
         EventOutcome::Ignored
+    }
+}
+
+fn request_unfocus_if_canceled<M>(ctx: &mut EventCtx<M>, outcome: PickerOutcome) {
+    if outcome.canceled {
+        ctx.unfocus();
     }
 }
 
@@ -167,6 +199,25 @@ fn month_abbr(month: Month) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_canceled_picker_outcomes_request_unfocus() {
+        let mut handled_ctx = EventCtx::<()>::default();
+        request_unfocus_if_canceled(&mut handled_ctx, PickerOutcome::handled(true));
+        assert_eq!(handled_ctx.focus_request(), None);
+
+        let mut canceled_ctx = EventCtx::<()>::default();
+        request_unfocus_if_canceled(&mut canceled_ctx, PickerOutcome::canceled(false));
+        assert_eq!(
+            canceled_ctx.focus_request(),
+            Some(&crate::FocusRequest::Unfocus)
+        );
+    }
+}
+
 fn parse_editor_date(value: &str) -> Option<Date> {
     let value = value.trim().lines().next()?.trim();
     let mut parts = value.split('-');
@@ -213,6 +264,13 @@ pub(super) fn parse_editor_time(value: &str) -> Option<Time> {
 
 pub(super) fn format_picker_time(time: Time) -> String {
     format!("{:02}:{:02}", time.hour(), time.minute())
+}
+
+pub(super) fn format_picker_time_for_precision(time: Time, precision: TimePrecision) -> String {
+    match precision {
+        TimePrecision::HourMinute => format_picker_time(time),
+        TimePrecision::HourMinuteSecond => format_iso_time(time),
+    }
 }
 
 pub(super) fn format_iso_time(time: Time) -> String {

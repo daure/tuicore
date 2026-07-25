@@ -479,8 +479,7 @@ impl Gallery {
         let TuiEvent::Key(key) = event else {
             return false;
         };
-        key.code == Key::Esc
-            || (key.code == Key::Char('[') && key.modifiers.contains(KeyModifiers::CONTROL))
+        tuicore::keybindings().focus().unfocus_matches(*key)
     }
 
     fn focus_component_overview(route: &EventRoute, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -599,6 +598,9 @@ impl TuiNode<Msg> for Gallery {
             let child = self
                 .previews
                 .dispatch_event(preview, &preview_route, event, ctx);
+            if matches!(ctx.focus_request(), Some(FocusRequest::Unfocus)) {
+                return Self::focus_component_overview(route, ctx);
+            }
             if child.handled() {
                 return child;
             }
@@ -3966,6 +3968,106 @@ mod tests {
                 focus.current().unwrap().path,
                 TreePath::from_keys([gallery_list_child_key()])
             );
+        }
+    }
+
+    #[test]
+    fn inline_date_time_controls_unfocus_to_exact_component_overview_target() {
+        let cancel_keys = [
+            KeyEvent::from(Key::Esc),
+            KeyEvent {
+                code: Key::Char('['),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        ];
+
+        for child_key in [
+            date_picker_child_key(),
+            time_picker_child_key(),
+            date_time_picker_child_key(),
+        ] {
+            for key in cancel_keys {
+                let mut gallery = Gallery::new();
+                gallery.select(ComponentKind::DateTimePicker);
+                if child_key == date_time_picker_child_key() {
+                    gallery
+                        .previews
+                        .date_time_picker
+                        .event(&TuiEvent::Key(Key::Enter.into()), &mut EventCtx::default());
+                }
+                let mut layout = LayoutCtx::new();
+                gallery.layout(Rect::new(0, 0, 100, 30), &mut layout);
+                let route = EventRoute::new(TreePath::from_keys([
+                    gallery_preview_child_key(),
+                    child_key.clone(),
+                ]));
+                let mut ctx = EventCtx::default();
+
+                let outcome = gallery.dispatch_event(&route, &TuiEvent::Key(key), &mut ctx);
+
+                assert_eq!(outcome, EventOutcome::Handled);
+                assert_eq!(
+                    ctx.focus_request(),
+                    Some(&FocusRequest::TargetAt {
+                        path: TreePath::from_keys([gallery_list_child_key()]),
+                        id: FocusId::new("data-view"),
+                    })
+                );
+                let mut focus = tuicore::FocusManager::new();
+                focus.apply_request(ctx.focus_request().unwrap(), layout.focus_targets());
+                assert_eq!(focus.current().unwrap().id.as_str(), "data-view");
+                assert_eq!(
+                    focus.current().unwrap().path,
+                    TreePath::from_keys([gallery_list_child_key()])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn date_time_dropdowns_close_before_next_cancel_targets_component_overview() {
+        let cancel_keys = [
+            KeyEvent::from(Key::Esc),
+            KeyEvent {
+                code: Key::Char('['),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        ];
+
+        for child_key in [date_dropdown_child_key(), date_time_dropdown_child_key()] {
+            for key in cancel_keys {
+                let mut gallery = Gallery::new();
+                gallery.select(ComponentKind::DateTimePicker);
+                if child_key == date_dropdown_child_key() {
+                    gallery.previews.date_dropdown.set_open(true);
+                } else {
+                    gallery.previews.date_time_dropdown.set_open(true);
+                }
+                let route = EventRoute::new(TreePath::from_keys([
+                    gallery_preview_child_key(),
+                    child_key.clone(),
+                ]));
+                let mut close_ctx = EventCtx::default();
+
+                let close = gallery.dispatch_event(&route, &TuiEvent::Key(key), &mut close_ctx);
+
+                assert_eq!(close, EventOutcome::Handled);
+                assert_eq!(close_ctx.focus_request(), None);
+                assert!(!gallery.previews.date_dropdown.is_open());
+                assert!(!gallery.previews.date_time_dropdown.is_open());
+
+                let mut leave_ctx = EventCtx::default();
+                let leave = gallery.dispatch_event(&route, &TuiEvent::Key(key), &mut leave_ctx);
+
+                assert_eq!(leave, EventOutcome::Handled);
+                assert_eq!(
+                    leave_ctx.focus_request(),
+                    Some(&FocusRequest::TargetAt {
+                        path: TreePath::from_keys([gallery_list_child_key()]),
+                        id: FocusId::new("data-view"),
+                    })
+                );
+            }
         }
     }
 

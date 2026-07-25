@@ -150,6 +150,14 @@ impl WeatherReport {
         self.refresh_summary();
         self
     }
+
+    pub(crate) fn with_hourly_at(mut self, hourly: HourlyWeather, now: OffsetDateTime) -> Self {
+        if let Some(summary) = hourly.current_summary_at(self.summary.location.clone(), now) {
+            self.summary = summary;
+        }
+        self.hourly = Some(hourly);
+        self
+    }
 }
 
 impl HourlyWeather {
@@ -173,7 +181,15 @@ impl HourlyWeather {
     }
 
     fn current_summary(&self, location: Option<String>) -> Option<WeatherSummary> {
-        let index = self.current_hour_index()?;
+        self.current_summary_at(location, self.now())
+    }
+
+    fn current_summary_at(
+        &self,
+        location: Option<String>,
+        now: OffsetDateTime,
+    ) -> Option<WeatherSummary> {
+        let index = self.current_hour_index_at(now)?;
         let hour = self.hours.get(index)?;
         let mut summary = WeatherSummary::new(hour.temperature.clone(), hour.condition.clone());
         summary.location = location;
@@ -185,7 +201,15 @@ impl HourlyWeather {
     }
 
     fn current_hour_index(&self) -> Option<usize> {
-        let now = self.now();
+        self.current_hour_index_at(self.now())
+    }
+
+    fn current_hour_index_at(&self, now: OffsetDateTime) -> Option<usize> {
+        let now = self
+            .utc_offset_seconds
+            .and_then(|seconds| UtcOffset::from_whole_seconds(seconds).ok())
+            .map(|offset| now.to_offset(offset))
+            .unwrap_or(now);
         let today = format!("{}T", now.date());
         let current_hour = now.time().hour();
         let same_day = self

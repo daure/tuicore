@@ -2,14 +2,16 @@
 
 Reusable `ratatui` components and direct `crossterm` tree runtime helpers.
 
-## Use from another TUI app on disk
+## Add to your app
 
-Add `tuicore` as a path dependency from your app's `Cargo.toml`:
+After release, add the crates.io version to your app's `Cargo.toml`:
 
 ```toml
 [dependencies]
-tuicore = { path = "../tuicore" } # replace with your local path
+tuicore = "0.1"
 ```
+
+For local development, use `tuicore = { path = "../tuicore" }` instead.
 
 Minimal app:
 
@@ -62,3 +64,25 @@ Run examples:
 ```sh
 cargo run --example gallery
 ```
+
+## Release
+
+Prerequisites: Bash, Git, Cargo, Python 3, a clean working tree, and crates.io
+credentials configured with `cargo login`.
+
+```sh
+cargo patch
+cargo minor
+cargo major
+```
+
+These repository-local Cargo aliases work directly inside the Tuicore checkout.
+Direct fallback: `./scripts/release.sh [major|minor|patch]`. With no argument, it
+bumps the minor version (for example, `0.1.0` to `0.2.0`).
+It updates the lockfile, tests, asks before committing, validates the clean crates.io
+package and dry run, then tags and asks before publishing. It never pushes; successful
+publishing prints the exact push commands.
+
+## License
+
+Licensed under either MIT or Apache-2.0, at your option.

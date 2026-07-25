@@ -59,6 +59,12 @@ where
                 self.render_field(frame, field_area);
             }
             self.render_popup(frame, popup_area);
+            if self.show_field_when_open
+                && self.popup_direction == super::DropdownPopupDirection::Up
+                && let Some(label) = &self.label
+            {
+                self.render_title(frame, field_area, label, Alignment::Left, field_area.y);
+            }
         }
     }
 
@@ -293,7 +299,7 @@ where
         let popup_content_style = self.popup_content_style();
         let inner = if self.popup_has_border() {
             let border = if self.variant == DropdownVariant::Bordered && !self.centered {
-                connected_popup_border_set(preset().border())
+                connected_popup_border_set(preset().border(), self.popup_direction)
             } else {
                 border_set(preset().border())
             };

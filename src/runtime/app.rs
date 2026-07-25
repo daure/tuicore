@@ -547,11 +547,8 @@ where
             let focused_events_before_global_hotkeys = focus_manager
                 .current()
                 .is_some_and(|target| target.focused_events_before_global_hotkeys);
-            let commits_pending_global_hotkey = global_hotkeys.can_commit_pending()
-                && key.code == crate::Key::Enter
-                && key.modifiers == crate::KeyModifiers::NONE;
             let focused_event_dispatched =
-                focused_events_before_global_hotkeys && !commits_pending_global_hotkey;
+                focused_events_before_global_hotkeys && !global_hotkeys.is_pending();
             if focused_event_dispatched {
                 let route = EventRoute::new(focus_manager.current_path());
                 let effects = dispatcher.dispatch_event(
@@ -3112,6 +3109,26 @@ mod tests {
     }
 
     #[test]
+    fn pending_global_hotkey_bypasses_focused_first_local_keys() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["rh"],
+            focused_first: true,
+            consume_char: Some('h'),
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('h'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.key_chars, "r");
+        assert_eq!(app.root.hotkey_commits, 1);
+        assert_eq!(app.root.last_hotkey_commit.as_deref(), Some("rh"));
+    }
+
+    #[test]
     fn enter_commits_pending_global_hotkey_before_focused_first_target() {
         let app = TreeApp::new(HotkeyPrecedenceProbe {
             hotkeys: vec!["m", "ma", "mam"],
@@ -3127,13 +3144,13 @@ mod tests {
 
         let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
 
-        assert_eq!(app.root.key_events, 2);
+        assert_eq!(app.root.key_events, 1);
         assert_eq!(app.root.hotkey_commits, 1);
         assert_eq!(app.root.last_hotkey_commit.as_deref(), Some("ma"));
     }
 
     #[test]
-    fn enter_reaching_focused_first_target_cancels_incomplete_global_hotkey_prefix() {
+    fn incomplete_global_hotkey_prefix_consumes_enter_before_focused_target() {
         let app = TreeApp::new(HotkeyPrecedenceProbe {
             hotkeys: vec!["ta"],
             focused_first: true,
@@ -3147,7 +3164,7 @@ mod tests {
 
         let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
 
-        assert_eq!(app.root.key_events, 3);
+        assert_eq!(app.root.key_events, 2);
         assert_eq!(app.root.key_chars, "ta");
         assert_eq!(app.root.hotkey_commits, 0);
     }

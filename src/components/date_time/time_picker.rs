@@ -17,7 +17,8 @@ use crate::{
 use crate::components::{InputChrome, Panel};
 
 use super::{
-    PickerOutcome, TIME_PICKER_FOCUS, finish_event, picker_size_hint, plain_digit, wrap_step,
+    PickerOutcome, TIME_PICKER_FOCUS, finish_event, picker_size_hint, plain_digit,
+    request_unfocus_if_canceled, wrap_step,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,13 +76,25 @@ impl<M> TimePicker<M> {
     }
 
     pub fn precision(mut self, precision: TimePrecision) -> Self {
-        self.precision = precision;
+        self.set_precision(precision);
         self
     }
 
+    pub fn set_precision(&mut self, precision: TimePrecision) {
+        self.precision = precision;
+        if precision == TimePrecision::HourMinute && self.active_field == TimeField::Second {
+            self.active_field = TimeField::Minute;
+        }
+        self.typed_digits.clear();
+    }
+
     pub fn minute_step(mut self, step: u8) -> Self {
-        self.minute_step = step.clamp(1, 60);
+        self.set_minute_step(step);
         self
+    }
+
+    pub fn set_minute_step(&mut self, step: u8) {
+        self.minute_step = step.clamp(1, 60);
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -531,7 +544,7 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
             .date_time_picker()
             .external_editor_matches(*key)
         {
-            let value = super::format_picker_time(self.draft);
+            let value = super::format_picker_time_for_precision(self.draft, self.precision);
             let col = match self.active_field {
                 TimeField::Hour => 1,
                 TimeField::Minute => 4,
@@ -542,6 +555,7 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
             return EventOutcome::Handled;
         }
         let outcome = self.on_key(*key);
+        request_unfocus_if_canceled(ctx, outcome);
         if outcome.selected
             && let Some(on_select) = &self.on_select
         {

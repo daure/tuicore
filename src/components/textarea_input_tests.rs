@@ -682,12 +682,12 @@ fn wrapped_cursor_row_scrolls_into_view_after_layout() {
 
     input.layout(Rect::new(0, 0, 3, 2), &mut layout);
 
-    assert_eq!(input.scroll.target_offset().y, 1);
+    assert_eq!(input.scroll.target_offset().y, 3);
 }
 
 #[test]
 fn wrapped_content_height_uses_viewport_width_after_scrollbar_gutter() {
-    let input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour five");
+    let input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour five!");
 
     let geometry = input.scroll_geometry(Rect::new(0, 0, 10, 4));
 

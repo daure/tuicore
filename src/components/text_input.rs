@@ -1427,6 +1427,9 @@ impl<M> TuiNode<M> for TextInput<M> {
             return EventOutcome::Ignored;
         };
         if self.disabled {
+            if !self.insert_mode && control_enter_key(*key) {
+                return EventOutcome::Ignored;
+            }
             if self.external_editor_key_matches(*key) {
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
@@ -1490,7 +1493,7 @@ impl<M> TuiNode<M> for TextInput<M> {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if matches_any(&self.keys.submit, *key) {
+            if inactive_activation_key_matches(&self.keys.submit, *key) {
                 if self.focused
                     && let Some(on_submit) = &self.on_submit
                 {
@@ -1657,7 +1660,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
-            if matches_any(&self.input.keys.submit, *key) {
+            if inactive_activation_key_matches(&self.input.keys.submit, *key) {
                 if self.input.focused
                     && let Some(on_submit) = &self.input.on_submit
                 {
@@ -1834,6 +1837,14 @@ fn restore_disabled_chrome_label_cell(frame: &mut Frame, x: u16, y: u16, color: 
 
 pub(crate) fn focus_navigation_key(key: KeyEvent) -> bool {
     matches!(key.code, Key::Tab | Key::BackTab)
+}
+
+fn inactive_activation_key_matches(bindings: &[KeySpec], key: KeyEvent) -> bool {
+    !control_enter_key(key) && matches_any(bindings, key)
+}
+
+fn control_enter_key(key: KeyEvent) -> bool {
+    key.code == Key::Enter && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 fn rect_contains(area: Rect, x: u16, y: u16) -> bool {

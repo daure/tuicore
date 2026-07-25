@@ -12,7 +12,7 @@ use crate::event::KeyModifiers;
 use crate::{
     ChildKey, Dialog, DialogLayer, EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
     FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, NonFocusable, Propagation,
-    RenderCtx, Tab, Tabs, TuiEvent, TuiNode,
+    RenderCtx, Tab, Tabs, TuiEvent, TuiNode, border_chars, preset,
 };
 
 fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -683,7 +683,7 @@ fn immediate_enter_closes_without_changing_current_selection() {
 }
 
 #[test]
-fn immediate_escape_restores_value_from_before_open() {
+fn immediate_escape_keeps_committed_navigation_value() {
     let mut dropdown = single_dropdown()
         .commit_mode(DropdownCommitMode::Immediate)
         .selected_one("Alpha");
@@ -693,11 +693,11 @@ fn immediate_escape_restores_value_from_before_open() {
     dropdown.on_key(Key::Esc, AREA);
 
     assert!(!dropdown.is_open());
-    assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    assert_eq!(dropdown.selected_id(), Some("Gamma"));
 }
 
 #[test]
-fn immediate_ctrl_left_bracket_restores_value_from_before_open() {
+fn immediate_ctrl_left_bracket_keeps_committed_navigation_value() {
     let mut dropdown = single_dropdown()
         .commit_mode(DropdownCommitMode::Immediate)
         .selected_one("Alpha");
@@ -707,7 +707,24 @@ fn immediate_ctrl_left_bracket_restores_value_from_before_open() {
     dropdown.on_key(ctrl('['), AREA);
 
     assert!(!dropdown.is_open());
-    assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    assert_eq!(dropdown.selected_id(), Some("Gamma"));
+}
+
+#[test]
+fn immediate_cancel_keeps_callback_and_selection_consistent() {
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&selected);
+    let mut dropdown = single_dropdown()
+        .commit_mode(DropdownCommitMode::Immediate)
+        .selected_one("Alpha")
+        .on_select(move |ids| *captured.borrow_mut() = ids);
+
+    dropdown.open();
+    dropdown.on_key(ctrl('j'), AREA);
+    dropdown.cancel();
+
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+    assert_eq!(&*selected.borrow(), &["Beta"]);
 }
 
 #[test]
@@ -1664,18 +1681,46 @@ fn centered_popup_overlay_centers_popup_within_bounds() {
 }
 
 #[test]
-fn upward_popup_opens_above_trigger() {
-    let mut dropdown = single_dropdown().popup_direction(DropdownPopupDirection::Up);
+fn upward_bordered_popup_connects_to_trigger_and_preserves_header() {
+    let mut dropdown = single_dropdown()
+        .label("Size")
+        .popup_direction(DropdownPopupDirection::Up);
     dropdown.open();
-    layout_dropdown(
-        &mut dropdown,
-        Rect::new(0, 10, 24, 1),
-        Rect::new(0, 0, 24, 12),
+    let field_area = Rect::new(0, 8, 24, 3);
+    let bounds = Rect::new(0, 0, 24, 12);
+    layout_dropdown(&mut dropdown, field_area, bounds);
+
+    let popup_area = dropdown.popup_overlay_area(bounds);
+
+    assert_eq!(popup_area.y + popup_area.height, field_area.y + 1);
+
+    let mut terminal = Terminal::new(TestBackend::new(bounds.width, bounds.height)).unwrap();
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, field_area))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let chars = border_chars(preset().border());
+    assert_eq!(
+        buffer.cell((0, popup_area.y)).unwrap().symbol(),
+        chars.top_left
     );
-
-    let popup_area = dropdown.popup_overlay_area(Rect::new(0, 0, 24, 12));
-
-    assert_eq!(popup_area.y + popup_area.height, 10);
+    assert_eq!(
+        buffer.cell((23, popup_area.y)).unwrap().symbol(),
+        chars.top_right
+    );
+    assert_eq!(
+        buffer.cell((0, field_area.y)).unwrap().symbol(),
+        chars.left_join
+    );
+    assert_eq!(
+        buffer.cell((23, field_area.y)).unwrap().symbol(),
+        chars.right_join
+    );
+    let shared_header = (0..24)
+        .map(|x| buffer.cell((x, field_area.y)).unwrap().symbol())
+        .collect::<String>();
+    assert!(shared_header.contains("Size"));
 }
 
 #[test]

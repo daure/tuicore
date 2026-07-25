@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Key, LayoutSize};
+use crate::{Key, KeyModifiers, LayoutSize};
 use ratatui::{Terminal, backend::TestBackend};
 use time::{Date, Month, Time};
 
@@ -119,6 +119,30 @@ fn stepped_date_time_picker_escape_cancels_time_and_returns_to_date() {
     assert_eq!(picker.active, DateTimePart::Date);
     assert_eq!(picker.current_value(), Some(value));
     assert!(ctx.messages().is_empty());
+    assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Unfocus));
+}
+
+#[test]
+fn direct_stepped_date_time_picker_cancel_keys_request_unfocus_from_time_step() {
+    let cancel_keys = [
+        KeyEvent::from(Key::Esc),
+        KeyEvent {
+            code: Key::Char('['),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ];
+
+    for key in cancel_keys {
+        let mut picker = DateTimePicker::<()>::new().layout(DateTimePickerLayout::Stepped);
+        picker.on_key(Key::Enter.into());
+        let mut ctx = EventCtx::default();
+
+        let outcome = picker.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(picker.active, DateTimePart::Date);
+        assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Unfocus));
+    }
 }
 
 #[test]

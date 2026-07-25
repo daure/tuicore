@@ -1139,10 +1139,6 @@ impl<M> TextareaInput<M> {
         self.value.chars().filter(|value| *value == '\n').count() + 1
     }
 
-    fn content_size(&self, area: Rect) -> ScrollSize {
-        self.content_size_for_width(area.width as usize)
-    }
-
     fn content_size_for_width(&self, width: usize) -> ScrollSize {
         ScrollSize::new(width, self.content_rows_for_width(width))
     }
@@ -1302,10 +1298,16 @@ impl<M> TextareaInput<M> {
 
     fn scroll_geometry(&self, area: Rect) -> crate::ScrollGeometry {
         let area = self.scroll_area(area);
-        let content = self.content_size(area);
-        let layout = self.scroll.layout(area, content);
-        let content = self.content_size_for_width(layout.viewport.width as usize);
-        let layout = self.scroll.layout(area, content);
+        let mut content = self.content_size_for_width(area.width.saturating_sub(1) as usize);
+        let mut layout = self.scroll.layout(area, content);
+        for _ in 0..2 {
+            let next_content = self.content_size_for_width(layout.viewport.width as usize);
+            if next_content == content {
+                break;
+            }
+            content = next_content;
+            layout = self.scroll.layout(area, content);
+        }
         crate::ScrollGeometry {
             layout,
             viewport: ScrollSize::from_area(layout.viewport),

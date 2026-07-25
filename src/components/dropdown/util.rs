@@ -5,17 +5,34 @@ use ratatui::text::Line;
 use crate::event::{Key, KeyEvent};
 use crate::{KeySpec, border_chars, line_width};
 
-pub(super) fn connected_popup_border_set(border: crate::BorderKind) -> Set<'static> {
+use super::DropdownPopupDirection;
+
+pub(super) fn connected_popup_border_set(
+    border: crate::BorderKind,
+    direction: DropdownPopupDirection,
+) -> Set<'static> {
     let chars = border_chars(border);
-    Set {
-        top_left: chars.left_join,
-        top_right: chars.right_join,
-        bottom_left: chars.bottom_left,
-        bottom_right: chars.bottom_right,
-        vertical_left: chars.vertical,
-        vertical_right: chars.vertical,
-        horizontal_top: chars.horizontal,
-        horizontal_bottom: chars.horizontal,
+    match direction {
+        DropdownPopupDirection::Down => Set {
+            top_left: chars.left_join,
+            top_right: chars.right_join,
+            bottom_left: chars.bottom_left,
+            bottom_right: chars.bottom_right,
+            vertical_left: chars.vertical,
+            vertical_right: chars.vertical,
+            horizontal_top: chars.horizontal,
+            horizontal_bottom: chars.horizontal,
+        },
+        DropdownPopupDirection::Up => Set {
+            top_left: chars.top_left,
+            top_right: chars.top_right,
+            bottom_left: chars.left_join,
+            bottom_right: chars.right_join,
+            vertical_left: chars.vertical,
+            vertical_right: chars.vertical,
+            horizontal_top: chars.horizontal,
+            horizontal_bottom: chars.horizontal,
+        },
     }
 }
 

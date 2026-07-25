@@ -17,9 +17,9 @@ use crate::{
 use crate::components::{InputChrome, Panel};
 
 use super::{
-    DATE_TIME_PICKER_DROPDOWN_FOCUS, DatePicker, TimeField, TimePicker, finish_event,
-    format_iso_datetime, format_picker_time, parse_editor_date, parse_editor_datetime,
-    parse_editor_time, picker_size_hint,
+    DATE_TIME_PICKER_DROPDOWN_FOCUS, DatePicker, TimeField, TimePicker, TimePrecision,
+    finish_event, format_iso_datetime, format_picker_time, parse_editor_date,
+    parse_editor_datetime, parse_editor_time, picker_size_hint,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,24 @@ impl<M> DateTimePickerDropdown<M> {
 
     pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
         self.date.set_first_day_of_week(weekday);
+    }
+
+    pub fn precision(mut self, precision: TimePrecision) -> Self {
+        self.set_precision(precision);
+        self
+    }
+
+    pub fn set_precision(&mut self, precision: TimePrecision) {
+        self.time.set_precision(precision);
+    }
+
+    pub fn minute_step(mut self, step: u8) -> Self {
+        self.set_minute_step(step);
+        self
+    }
+
+    pub fn set_minute_step(&mut self, step: u8) {
+        self.time.set_minute_step(step);
     }
 
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {

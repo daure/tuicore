@@ -182,6 +182,25 @@ fn callback_events_are_drained_after_dispatch() {
 }
 
 #[test]
+fn yank_copies_cursor_date_in_every_view_and_stops_propagation() {
+    for view in [
+        CalendarView::Month,
+        CalendarView::Week,
+        CalendarView::Day,
+        CalendarView::EventDetail,
+    ] {
+        let mut calendar = demo_calendar().view(view);
+        let mut ctx = EventCtx::default();
+
+        let outcome = calendar.event(&TuiEvent::Yank, &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled, "{view:?}");
+        assert_eq!(ctx.clipboard_request(), Some("2026-06-22"), "{view:?}");
+        assert_eq!(ctx.propagation(), crate::Propagation::Stopped, "{view:?}");
+    }
+}
+
+#[test]
 fn all_day_ranges_are_end_exclusive() {
     let start = date(2026, Month::June, 22);
     let span = CalendarSpan::all_day_range(start, start + Duration::days(2));
@@ -262,6 +281,167 @@ fn custom_keybindings_switch_views() {
     assert_eq!(calendar.current_view(), CalendarView::Week);
     assert_eq!(calendar.on_key(Key::Char('b')), CalendarOutcome::CHANGED);
     assert_eq!(calendar.current_view(), CalendarView::Day);
+}
+
+#[test]
+fn gg_matches_home_in_every_view() {
+    for view in [
+        CalendarView::Month,
+        CalendarView::Week,
+        CalendarView::Day,
+        CalendarView::EventDetail,
+    ] {
+        let mut expected = demo_calendar().view(view);
+        let mut actual = demo_calendar().view(view);
+
+        let expected_outcome = expected.on_key(Key::Home);
+        assert_eq!(actual.on_key(Key::Char('g')), CalendarOutcome::HANDLED);
+        let actual_outcome = actual.on_key(Key::Char('g'));
+
+        assert_eq!(actual_outcome, expected_outcome);
+        assert_eq!(actual.cursor_date(), expected.cursor_date());
+        assert_eq!(
+            actual.highlighted_entry_id(),
+            expected.highlighted_entry_id()
+        );
+    }
+}
+
+#[test]
+fn shift_g_matches_end_in_every_view() {
+    for view in [
+        CalendarView::Month,
+        CalendarView::Week,
+        CalendarView::Day,
+        CalendarView::EventDetail,
+    ] {
+        let mut expected = demo_calendar().view(view);
+        let mut actual = demo_calendar().view(view);
+
+        let expected_outcome = expected.on_key(Key::End);
+        let actual_outcome = actual.on_key(KeyEvent {
+            code: Key::Char('G'),
+            modifiers: KeyModifiers::SHIFT,
+        });
+
+        assert_eq!(actual_outcome, expected_outcome);
+        assert_eq!(actual.cursor_date(), expected.cursor_date());
+        assert_eq!(
+            actual.highlighted_entry_id(),
+            expected.highlighted_entry_id()
+        );
+    }
+}
+
+#[test]
+fn calendar_g_aliases_require_exact_modifiers() {
+    let date = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar().view(CalendarView::Month);
+
+    assert_eq!(
+        calendar.on_key(KeyEvent {
+            code: Key::Char('g'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        CalendarOutcome::IDLE
+    );
+    assert_eq!(calendar.cursor_date(), date);
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::HANDLED);
+    assert_eq!(calendar.cursor_date(), date);
+}
+
+#[test]
+fn non_g_after_prefix_clears_prefix_and_is_processed_normally() {
+    let mut calendar = demo_calendar().view(CalendarView::Month);
+
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::HANDLED);
+    assert_eq!(calendar.on_key(Key::Right), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 23));
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::HANDLED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 23));
+}
+
+#[test]
+fn replacing_keybindings_requires_a_fresh_full_prefix() {
+    let replacement = CalendarKeyBindings::new().with_top_prefix([KeySpec::plain('z')]);
+    let mut builder_calendar = demo_calendar().view(CalendarView::Month);
+    assert_eq!(
+        builder_calendar.on_key(Key::Char('g')),
+        CalendarOutcome::HANDLED
+    );
+
+    builder_calendar = builder_calendar.keybindings(replacement.clone());
+
+    assert_eq!(
+        builder_calendar.on_key(Key::Char('z')),
+        CalendarOutcome::HANDLED
+    );
+    assert_eq!(
+        builder_calendar.on_key(Key::Char('z')),
+        CalendarOutcome::CHANGED
+    );
+
+    let mut setter_calendar = demo_calendar().view(CalendarView::Month);
+    assert_eq!(
+        setter_calendar.on_key(Key::Char('g')),
+        CalendarOutcome::HANDLED
+    );
+
+    setter_calendar.set_keybindings(replacement);
+
+    assert_eq!(
+        setter_calendar.on_key(Key::Char('z')),
+        CalendarOutcome::HANDLED
+    );
+    assert_eq!(
+        setter_calendar.on_key(Key::Char('z')),
+        CalendarOutcome::CHANGED
+    );
+}
+
+#[test]
+fn blur_and_refocus_require_a_fresh_full_prefix() {
+    let mut calendar = demo_calendar().view(CalendarView::Month);
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::HANDLED);
+
+    calendar.set_focused(false);
+    calendar.set_focused(true);
+
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::HANDLED);
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::CHANGED);
+}
+
+#[test]
+fn calendar_alias_bindings_are_configurable_per_instance() {
+    let keys = CalendarKeyBindings::new()
+        .with_top_prefix([KeySpec::plain('z')])
+        .with_bottom([KeySpec::plain('x')]);
+    let mut calendar = demo_calendar().view(CalendarView::Month).keybindings(keys);
+
+    assert_eq!(calendar.on_key(Key::Char('g')), CalendarOutcome::IDLE);
+    assert_eq!(calendar.on_key(Key::Char('z')), CalendarOutcome::HANDLED);
+    assert_eq!(calendar.on_key(Key::Char('z')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 1));
+    assert_eq!(calendar.on_key(Key::Char('x')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 30));
+}
+
+#[test]
+fn calendar_aliases_preserve_hidden_weekend_boundaries() {
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Month)
+        .cursor(date(2026, Month::August, 12))
+        .show_weekends(false);
+
+    calendar.on_key(Key::Char('g'));
+    calendar.on_key(Key::Char('g'));
+    assert_eq!(calendar.cursor_date(), date(2026, Month::August, 3));
+
+    calendar.on_key(KeyEvent {
+        code: Key::Char('G'),
+        modifiers: KeyModifiers::SHIFT,
+    });
+    assert_eq!(calendar.cursor_date(), date(2026, Month::August, 31));
 }
 
 #[test]

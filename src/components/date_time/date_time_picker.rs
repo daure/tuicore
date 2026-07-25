@@ -14,8 +14,8 @@ use crate::{
 };
 
 use super::{
-    DatePicker, PickerOutcome, TimeField, TimePicker, finish_event, format_picker_time,
-    parse_editor_time, picker_size_hint,
+    DatePicker, PickerOutcome, TimeField, TimePicker, TimePrecision, finish_event,
+    format_picker_time, parse_editor_time, picker_size_hint, request_unfocus_if_canceled,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,24 @@ impl<M> DateTimePicker<M> {
 
     pub fn set_first_day_of_week(&mut self, weekday: Weekday) {
         self.date.set_first_day_of_week(weekday);
+    }
+
+    pub fn precision(mut self, precision: TimePrecision) -> Self {
+        self.set_precision(precision);
+        self
+    }
+
+    pub fn set_precision(&mut self, precision: TimePrecision) {
+        self.time.set_precision(precision);
+    }
+
+    pub fn minute_step(mut self, step: u8) -> Self {
+        self.set_minute_step(step);
+        self
+    }
+
+    pub fn set_minute_step(&mut self, step: u8) {
+        self.time.set_minute_step(step);
     }
 
     pub fn on_select(mut self, handler: impl Fn(PrimitiveDateTime) -> M + 'static) -> Self {
@@ -313,6 +331,7 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
         }
         let before_active = self.active;
         let outcome = self.on_key(*key);
+        request_unfocus_if_canceled(ctx, outcome);
         if outcome.handled
             && self.active != before_active
             && self.layout != DateTimePickerLayout::Stepped

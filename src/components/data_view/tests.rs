@@ -227,6 +227,18 @@ fn active_tree_transform_still_allows_node_toggle() {
 }
 
 #[test]
+fn revealing_programmatic_highlight_scrolls_it_into_view() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut view = clear_transform_view();
+    <DataView<_, _> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+
+    view.highlight_id(&12);
+    view.reveal_highlighted();
+
+    assert_restored_highlight_is_visible(&view, area);
+}
+
+#[test]
 fn search_matches_are_underlined_when_rendered() {
     let mut view = transform_view();
     view.set_search_query("api");

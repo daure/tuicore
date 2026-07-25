@@ -540,11 +540,13 @@ where
             return DropdownOutcome::HANDLED;
         }
 
-        if !self.opened_committed.is_empty() || !self.committed.is_empty() {
-            self.committed = self.opened_committed.clone();
+        if self.commit_mode == DropdownCommitMode::Explicit {
+            if !self.opened_committed.is_empty() || !self.committed.is_empty() {
+                self.committed = self.opened_committed.clone();
+            }
+            self.draft = self.committed.clone();
+            self.sync_view_selection();
         }
-        self.draft = self.committed.clone();
-        self.sync_view_selection();
         let mut outcome = self.close();
         outcome.canceled = true;
         outcome.handled = true;
@@ -1083,9 +1085,10 @@ where
                 (y, available)
             }
             DropdownPopupDirection::Up => {
-                let available = field_area.y.saturating_sub(bounds.y);
+                let anchor_bottom = field_area.y.saturating_add(self.popup_overlap());
+                let available = anchor_bottom.saturating_sub(bounds.y);
                 let height = desired_height.min(available);
-                (field_area.y.saturating_sub(height), available)
+                (anchor_bottom.saturating_sub(height), available)
             }
         };
         let popup_height = desired_height.min(available_height);

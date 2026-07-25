@@ -101,6 +101,7 @@ pub struct DateTimePickerKeyBindings {
     line_left: Vec<KeySpec>,
     line_right: Vec<KeySpec>,
     today: Vec<KeySpec>,
+    day_view: Vec<KeySpec>,
     month_view: Vec<KeySpec>,
     year_view: Vec<KeySpec>,
     external_editor: Vec<KeySpec>,
@@ -258,6 +259,7 @@ impl Default for DateTimePickerKeyBindings {
             line_left: vec![KeySpec::key(Key::Left), KeySpec::plain('h')],
             line_right: vec![KeySpec::key(Key::Right), KeySpec::plain('l')],
             today: vec![KeySpec::plain('t')],
+            day_view: vec![KeySpec::plain('d')],
             month_view: vec![KeySpec::plain('m')],
             year_view: vec![KeySpec::plain('y')],
             external_editor: vec![KeySpec::key_with_modifiers(
@@ -492,6 +494,12 @@ impl KeyBindings {
             "date_time_picker",
             "today",
             &mut bindings.date_time_picker.today,
+        )?;
+        set_keys(
+            &value,
+            "date_time_picker",
+            "day_view",
+            &mut bindings.date_time_picker.day_view,
         )?;
         set_keys(
             &value,
@@ -980,6 +988,18 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_date_time_picker_day_view(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.date_time_picker.day_view = keys.into_iter().collect();
+    }
+
+    pub fn with_date_time_picker_day_view(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_date_time_picker_day_view(keys);
+        self
+    }
+
     pub fn set_date_time_picker_month_view(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
         self.date_time_picker.month_view = keys.into_iter().collect();
     }
@@ -1461,6 +1481,14 @@ impl DateTimePickerKeyBindings {
         labels(&self.today)
     }
 
+    pub fn day_view_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.day_view, key.into())
+    }
+
+    pub fn day_view_label(&self) -> String {
+        labels(&self.day_view)
+    }
+
     pub fn month_view_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.month_view, key.into())
     }
@@ -1898,6 +1926,7 @@ mod tests {
             line_left = "a"
             line_right = "d"
             today = "t"
+            day_view = "v"
             month_view = "m"
             year_view = "y"
             external_editor = "ctrl+o"
@@ -2031,6 +2060,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.date_time_picker().line_up_matches(Key::Char('w')));
+        assert!(bindings.date_time_picker().day_view_matches(Key::Char('v')));
         assert!(
             bindings
                 .date_time_picker()
@@ -2084,6 +2114,7 @@ mod tests {
             .with_date_time_picker_line_down([KeySpec::plain('s')])
             .with_date_time_picker_line_left([KeySpec::plain('a')])
             .with_date_time_picker_line_right([KeySpec::plain('d')])
+            .with_date_time_picker_day_view([KeySpec::plain('v')])
             .with_date_time_picker_top_prefix([KeySpec::plain('t')])
             .with_date_time_picker_bottom([KeySpec::plain('b')]);
 
@@ -2212,6 +2243,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.date_time_picker().line_up_matches(Key::Char('w')));
+        assert!(bindings.date_time_picker().day_view_matches(Key::Char('v')));
         assert!(
             bindings
                 .date_time_picker()
@@ -2273,6 +2305,20 @@ mod tests {
         }));
         assert!(!bindings.date_time_picker().today_matches(KeyEvent {
             code: Key::Char('t'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
+    }
+
+    #[test]
+    fn default_date_picker_day_view_matches_plain_d_only() {
+        let bindings = KeyBindings::default();
+
+        assert!(bindings.date_time_picker().day_view_matches(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!bindings.date_time_picker().day_view_matches(KeyEvent {
+            code: Key::Char('d'),
             modifiers: KeyModifiers::CONTROL,
         }));
     }

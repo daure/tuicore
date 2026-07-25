@@ -46,7 +46,7 @@ pub struct WeatherForecastDay {
 impl<M> WeatherForecastDialog<M> {
     pub fn new() -> Self {
         Self {
-            dialog: Dialog::new().scrollable(ScrollAxes::Both),
+            dialog: Dialog::new().wrap(false).scrollable(ScrollAxes::Both),
             content: Vec::new(),
         }
     }
@@ -135,6 +135,15 @@ impl WeatherReport {
         location: impl Into<String>,
         json: impl AsRef<str>,
     ) -> Result<Self, WeatherForecastError> {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        Self::from_open_meteo_json_at(location, json, now)
+    }
+
+    fn from_open_meteo_json_at(
+        location: impl Into<String>,
+        json: impl AsRef<str>,
+        now: OffsetDateTime,
+    ) -> Result<Self, WeatherForecastError> {
         let location = location.into();
         let root: Value = serde_json::from_str(json.as_ref()).map_err(|error| {
             WeatherForecastError::new(format!("invalid Open-Meteo JSON: {error}"))
@@ -152,31 +161,71 @@ impl WeatherReport {
         let lows = f64_array(daily, "temperature_2m_min")?;
         let hourly_times = string_array(hourly, "time")?;
         let hourly_temps = f64_array(hourly, "temperature_2m")?;
-        let hourly_feels_like = optional_f64_array(hourly, "apparent_temperature");
+        let hourly_feels_like = optional_f64_array(hourly, "apparent_temperature")?;
         let hourly_codes = i64_array(hourly, "weather_code")?;
         let hourly_winds = f64_array(hourly, "wind_speed_10m")?;
         let hourly_precip = f64_array(hourly, "precipitation")?;
-        let hourly_precip_probability = optional_f64_array(hourly, "precipitation_probability");
-        let hourly_visibility = optional_f64_array(hourly, "visibility");
-        let minutely = root.get("minutely_15");
-        let radiation_times = minutely
-            .and_then(|value| string_array(value, "time").ok())
-            .unwrap_or_default();
-        let shortwave_radiation = minutely
-            .and_then(|value| f64_array(value, "shortwave_radiation").ok())
-            .unwrap_or_default();
+        let hourly_precip_probability = optional_f64_array(hourly, "precipitation_probability")?;
+        let hourly_visibility = optional_f64_array(hourly, "visibility")?;
+
+        validate_array_lengths(
+            "daily.time",
+            dates.len(),
+            &[
+                ("daily.weather_code", daily_codes.len()),
+                ("daily.temperature_2m_max", highs.len()),
+                ("daily.temperature_2m_min", lows.len()),
+            ],
+        )?;
+        validate_array_lengths(
+            "hourly.time",
+            hourly_times.len(),
+            &[
+                ("hourly.temperature_2m", hourly_temps.len()),
+                ("hourly.weather_code", hourly_codes.len()),
+                ("hourly.wind_speed_10m", hourly_winds.len()),
+                ("hourly.precipitation", hourly_precip.len()),
+            ],
+        )?;
+        for (field, values) in [
+            ("hourly.apparent_temperature", hourly_feels_like.as_ref()),
+            (
+                "hourly.precipitation_probability",
+                hourly_precip_probability.as_ref(),
+            ),
+            ("hourly.visibility", hourly_visibility.as_ref()),
+        ] {
+            if let Some(values) = values {
+                validate_array_lengths(
+                    "hourly.time",
+                    hourly_times.len(),
+                    &[(field, values.len())],
+                )?;
+            }
+        }
+
+        let (radiation_times, shortwave_radiation) = if let Some(minutely) = root.get("minutely_15")
+        {
+            let times = string_array(minutely, "time")?;
+            let radiation = f64_array(minutely, "shortwave_radiation")?;
+            validate_array_lengths(
+                "minutely_15.time",
+                times.len(),
+                &[("minutely_15.shortwave_radiation", radiation.len())],
+            )?;
+            (times, radiation)
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         let utc_offset_seconds = open_meteo_utc_offset_seconds(&root);
-        let start_index = current_forecast_start_index(&dates, provider_today(utc_offset_seconds));
+        let start_index =
+            current_forecast_start_index(&dates, provider_today_at(now, utc_offset_seconds));
         let mut rendered_days = Vec::new();
         for (index, date) in dates.iter().enumerate().skip(start_index).take(7) {
             let date = date.as_str();
-            let condition = condition_for_wmo(*daily_codes.get(index).unwrap_or(&0));
-            let range = format!(
-                "{}/{} °C",
-                rounded(*lows.get(index).unwrap_or(&0.0)),
-                rounded(*highs.get(index).unwrap_or(&0.0))
-            );
+            let condition = condition_for_wmo(daily_codes[index]);
+            let range = format!("{}/{} °C", rounded(lows[index]), rounded(highs[index]));
             let periods = [
                 open_meteo_period(
                     "Morning",
@@ -190,7 +239,7 @@ impl WeatherReport {
                     &hourly_precip,
                     hourly_precip_probability.as_deref(),
                     hourly_visibility.as_deref(),
-                ),
+                )?,
                 open_meteo_period(
                     "Noon",
                     date,
@@ -203,7 +252,7 @@ impl WeatherReport {
                     &hourly_precip,
                     hourly_precip_probability.as_deref(),
                     hourly_visibility.as_deref(),
-                ),
+                )?,
                 open_meteo_period(
                     "Evening",
                     date,
@@ -216,7 +265,7 @@ impl WeatherReport {
                     &hourly_precip,
                     hourly_precip_probability.as_deref(),
                     hourly_visibility.as_deref(),
-                ),
+                )?,
                 open_meteo_period(
                     "Night",
                     date,
@@ -229,7 +278,7 @@ impl WeatherReport {
                     &hourly_precip,
                     hourly_precip_probability.as_deref(),
                     hourly_visibility.as_deref(),
-                ),
+                )?,
             ];
             rendered_days.push(
                 WeatherForecastDay::new(
@@ -279,7 +328,7 @@ impl WeatherReport {
             "Weather report: {location}\n\n{}\nLocation: {location}",
             rendered_days.join("\n")
         );
-        Ok(Self::from_parts(raw, summary).with_hourly(hourly_summary))
+        Ok(Self::from_parts(raw, summary).with_hourly_at(hourly_summary, now))
     }
 }
 
@@ -288,17 +337,11 @@ fn current_forecast_start_index(dates: &[String], today: Date) -> usize {
     dates.iter().position(|date| date >= &today).unwrap_or(0)
 }
 
-fn provider_today(utc_offset_seconds: Option<i32>) -> Date {
+fn provider_today_at(now: OffsetDateTime, utc_offset_seconds: Option<i32>) -> Date {
     utc_offset_seconds
         .and_then(|seconds| UtcOffset::from_whole_seconds(seconds).ok())
-        .map(|offset| OffsetDateTime::now_utc().to_offset(offset).date())
-        .unwrap_or_else(local_today)
-}
-
-fn local_today() -> Date {
-    OffsetDateTime::now_local()
-        .unwrap_or_else(|_| OffsetDateTime::now_utc())
-        .date()
+        .map(|offset| now.to_offset(offset).date())
+        .unwrap_or_else(|| now.date())
 }
 
 fn open_meteo_utc_offset_seconds(root: &Value) -> Option<i32> {
@@ -502,12 +545,14 @@ fn open_meteo_period(
     precipitation: &[f64],
     precipitation_probability: Option<&[f64]>,
     visibility: Option<&[f64]>,
-) -> OpenMeteoPeriod {
+) -> Result<OpenMeteoPeriod, WeatherForecastError> {
     let index = times
         .iter()
         .position(|time| time == &format!("{date}T{hour}"))
         .or_else(|| times.iter().position(|time| time.starts_with(date)))
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            WeatherForecastError::new(format!("Open-Meteo hourly data missing for date: {date}"))
+        })?;
     let part_index = match label {
         "Morning" => 0,
         "Noon" => 1,
@@ -518,28 +563,24 @@ fn open_meteo_period(
         .and_then(|values| values.get(index))
         .map(|value| format!(" | {}%", rounded(*value)))
         .unwrap_or_default();
-    let temperature = *temps.get(index).unwrap_or(&0.0);
+    let temperature = temps[index];
     let feels = feels_like
         .and_then(|values| values.get(index))
         .copied()
         .unwrap_or(temperature);
-    let code = *codes.get(index).unwrap_or(&0);
-    OpenMeteoPeriod {
+    let code = codes[index];
+    Ok(OpenMeteoPeriod {
         width: PERIOD_WIDTHS[part_index],
         code,
         condition: condition_for_wmo(code).to_string(),
         temperature: format!("{}({}) °C", rounded(temperature), rounded(feels)),
-        wind: format!("{} km/h", rounded(*winds.get(index).unwrap_or(&0.0))),
+        wind: format!("{} km/h", rounded(winds[index])),
         visibility: visibility
             .and_then(|values| values.get(index))
             .map(|meters| format!("{} km", rounded(*meters / 1000.0)))
             .unwrap_or_else(|| "-- km".to_string()),
-        precipitation: format!(
-            "{:.1} mm{}",
-            precipitation.get(index).copied().unwrap_or_default(),
-            probability
-        ),
-    }
+        precipitation: format!("{:.1} mm{}", precipitation[index], probability),
+    })
 }
 
 fn art_row(
@@ -727,13 +768,22 @@ fn f64_array(parent: &Value, key: &str) -> Result<Vec<f64>, WeatherForecastError
         .collect()
 }
 
-fn optional_f64_array(parent: &Value, key: &str) -> Option<Vec<f64>> {
-    parent
-        .get(key)?
-        .as_array()?
+fn optional_f64_array(parent: &Value, key: &str) -> Result<Option<Vec<f64>>, WeatherForecastError> {
+    let Some(value) = parent.get(key) else {
+        return Ok(None);
+    };
+    let values = value.as_array().ok_or_else(|| {
+        WeatherForecastError::new(format!("Open-Meteo field is not array: {key}"))
+    })?;
+    values
         .iter()
-        .map(Value::as_f64)
-        .collect()
+        .map(|value| {
+            value.as_f64().ok_or_else(|| {
+                WeatherForecastError::new(format!("Open-Meteo field is not number: {key}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn i64_array(parent: &Value, key: &str) -> Result<Vec<i64>, WeatherForecastError> {
@@ -748,6 +798,21 @@ fn i64_array(parent: &Value, key: &str) -> Result<Vec<i64>, WeatherForecastError
             })
         })
         .collect()
+}
+
+fn validate_array_lengths(
+    reference_field: &str,
+    expected: usize,
+    fields: &[(&str, usize)],
+) -> Result<(), WeatherForecastError> {
+    for (field, actual) in fields {
+        if *actual != expected {
+            return Err(WeatherForecastError::new(format!(
+                "Open-Meteo field length mismatch: {field} has {actual}, {reference_field} has {expected}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn condition_for_wmo(code: i64) -> &'static str {
@@ -1126,11 +1191,22 @@ fn styled_line(chars: Vec<char>, styles: Vec<Style>) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
     use super::*;
+
+    fn fixed_now() -> OffsetDateTime {
+        Date::from_calendar_date(2026, Month::July, 25)
+            .unwrap()
+            .with_hms(14, 30, 0)
+            .unwrap()
+            .assume_utc()
+    }
 
     #[test]
     fn open_meteo_summary_uses_current_hourly_weather() {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let now = fixed_now();
         let current_hour = format!("{:02}:00", now.time().hour());
         let current_time = format!("{}T{current_hour}", now.date());
         let json = serde_json::json!({
@@ -1150,7 +1226,7 @@ mod tests {
             }
         });
 
-        let report = WeatherReport::from_open_meteo_json("Here", json.to_string())
+        let report = WeatherReport::from_open_meteo_json_at("Here", json.to_string(), now)
             .expect("valid Open-Meteo report");
 
         assert_eq!(report.summary().temperature(), "12(14) °C");
@@ -1159,7 +1235,7 @@ mod tests {
 
     #[test]
     fn open_meteo_forecast_starts_at_today_when_response_includes_past_days() {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let now = fixed_now();
         let yesterday = now
             .saturating_sub(time::Duration::days(1))
             .date()
@@ -1186,7 +1262,7 @@ mod tests {
             }
         });
 
-        let report = WeatherReport::from_open_meteo_json("Here", json.to_string())
+        let report = WeatherReport::from_open_meteo_json_at("Here", json.to_string(), now)
             .expect("valid Open-Meteo report");
 
         let today_label = date_label(&now.date().to_string()).expect("today should format");
@@ -1202,12 +1278,10 @@ mod tests {
 
     #[test]
     fn open_meteo_forecast_uses_response_timezone_for_today() {
-        let provider_now = OffsetDateTime::now_utc()
-            .to_offset(UtcOffset::from_whole_seconds(14 * 60 * 60).expect("valid offset"));
-        let yesterday_utc = OffsetDateTime::now_utc()
-            .saturating_sub(time::Duration::days(1))
-            .date()
-            .to_string();
+        let now = fixed_now().replace_hour(20).unwrap();
+        let provider_now =
+            now.to_offset(UtcOffset::from_whole_seconds(14 * 60 * 60).expect("valid offset"));
+        let yesterday_utc = now.date().to_string();
         let provider_today = provider_now.date().to_string();
         let json = serde_json::json!({
             "utc_offset_seconds": 14 * 60 * 60,
@@ -1227,11 +1301,62 @@ mod tests {
             }
         });
 
-        let report = WeatherReport::from_open_meteo_json("Here", json.to_string())
+        let report = WeatherReport::from_open_meteo_json_at("Here", json.to_string(), now)
             .expect("valid Open-Meteo report");
 
         let today_label = date_label(&provider_today).expect("provider today should format");
         assert!(report.raw().contains(&today_label));
+    }
+
+    #[test]
+    fn open_meteo_rejects_required_array_length_mismatch() {
+        let now = fixed_now();
+        let json = serde_json::json!({
+            "hourly": {
+                "time": [format!("{}T12:00", now.date())],
+                "temperature_2m": [12.0, 13.0],
+                "weather_code": [0],
+                "wind_speed_10m": [8.0],
+                "precipitation": [0.0]
+            },
+            "daily": {
+                "time": [now.date().to_string()],
+                "weather_code": [0],
+                "temperature_2m_max": [18.0],
+                "temperature_2m_min": [10.0]
+            }
+        });
+
+        let error = WeatherReport::from_open_meteo_json_at("Here", json.to_string(), now)
+            .expect_err("mismatched required array should fail");
+
+        assert!(error.to_string().contains("hourly.temperature_2m"));
+    }
+
+    #[test]
+    fn open_meteo_rejects_optional_array_length_mismatch() {
+        let now = fixed_now();
+        let json = serde_json::json!({
+            "hourly": {
+                "time": [format!("{}T12:00", now.date())],
+                "temperature_2m": [12.0],
+                "apparent_temperature": [],
+                "weather_code": [0],
+                "wind_speed_10m": [8.0],
+                "precipitation": [0.0]
+            },
+            "daily": {
+                "time": [now.date().to_string()],
+                "weather_code": [0],
+                "temperature_2m_max": [18.0],
+                "temperature_2m_min": [10.0]
+            }
+        });
+
+        let error = WeatherReport::from_open_meteo_json_at("Here", json.to_string(), now)
+            .expect_err("mismatched optional array should fail");
+
+        assert!(error.to_string().contains("hourly.apparent_temperature"));
     }
 
     #[test]
@@ -1240,6 +1365,55 @@ mod tests {
             .content((0..100).map(|index| format!("forecast line {index}")));
 
         assert_eq!(dialog.dialog_area(Rect::new(0, 0, 120, 50)).height, 40);
+    }
+
+    #[test]
+    fn narrow_weather_dialog_preserves_rows_and_exposes_horizontal_overflow() {
+        let row = format!("START{}END", "─".repeat(115));
+        assert_eq!(display_width(&row), FORECAST_DAY_TABLE_WIDTH);
+        let dialog = WeatherForecastDialog::<()>::new().content([row]);
+        let app_area = Rect::new(0, 0, 40, 8);
+        let dialog_area = dialog.dialog_area(app_area);
+        let geometry = dialog.dialog().scroll_geometry(dialog_area);
+        let mut terminal = Terminal::new(TestBackend::new(app_area.width, app_area.height))
+            .expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                let mut ctx = crate::RenderCtx::new();
+                TuiNode::render(&dialog, frame, app_area, &mut ctx);
+            })
+            .expect("weather dialog should render");
+
+        let first_content_row = dialog_area.y + 1;
+        let visible = (dialog_area.x + 1..dialog_area.right().saturating_sub(1))
+            .map(|x| {
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((x, first_content_row))
+                    .unwrap()
+                    .symbol()
+            })
+            .collect::<String>();
+        assert!(visible.starts_with("START"), "{visible}");
+        assert_eq!(geometry.content.width, FORECAST_DAY_TABLE_WIDTH);
+        assert_eq!(geometry.content.height, 1);
+        assert!(geometry.layout.horizontal_bar.is_some());
+    }
+
+    #[test]
+    fn exact_fit_weather_dialog_reserves_vertical_bar_without_horizontal_bar() {
+        let row = "─".repeat(FORECAST_DAY_TABLE_WIDTH);
+        let dialog = WeatherForecastDialog::<()>::new().content(vec![row; 5]);
+        let app_area = Rect::new(0, 0, FORECAST_DAY_TABLE_WIDTH as u16 + 3, 8);
+        let geometry = dialog
+            .dialog()
+            .scroll_geometry(dialog.dialog_area(app_area));
+
+        assert_eq!(geometry.viewport.width, FORECAST_DAY_TABLE_WIDTH);
+        assert!(geometry.layout.vertical_bar.is_some());
+        assert!(geometry.layout.horizontal_bar.is_none());
     }
 
     #[test]

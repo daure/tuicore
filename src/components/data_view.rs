@@ -629,6 +629,13 @@ where
         }
     }
 
+    pub fn reveal_highlighted(&mut self) -> DataViewOutcome {
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        self.ensure_highlight_visible(self.area, settings)
+            .into_data_view_outcome(true, false)
+    }
+
     pub(crate) fn snap_highlight_centered(&mut self, area: Rect) -> ScrollOutcome {
         let mut settings = animation_settings();
         settings.enabled = false;

@@ -238,43 +238,79 @@ fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
 }
 
 #[test]
-fn control_enter_activates_and_finishes_text_input_like_enter() {
+fn inactive_text_input_ignores_control_enter() {
     let mut input = TextInput::<()>::new().value("ship").focused(true);
     let control_enter = KeyEvent {
         code: Key::Enter,
         modifiers: KeyModifiers::CONTROL,
     };
+    let mut ctx = EventCtx::default();
 
-    let mut activate = EventCtx::default();
-    assert_eq!(
-        input.event(&TuiEvent::Key(control_enter), &mut activate),
-        EventOutcome::Handled
-    );
-    assert!(input.insert_mode());
+    let outcome = input.event(&TuiEvent::Key(control_enter), &mut ctx);
 
-    let mut finish = EventCtx::default();
-    assert_eq!(
-        input.event(&TuiEvent::Key(control_enter), &mut finish),
-        EventOutcome::Handled
-    );
     assert!(!input.insert_mode());
     assert_eq!(input.current_value(), "ship");
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
 #[test]
-fn control_enter_activates_and_finishes_password_input_like_enter() {
-    let mut input = PasswordInput::<()>::new().value("secret").focused(true);
+fn active_text_input_control_enter_finishes_edit() {
+    let mut input = TextInput::new()
+        .value("ship")
+        .on_edit_end(|value| format!("end:{value}"));
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
     let control_enter = KeyEvent {
         code: Key::Enter,
         modifiers: KeyModifiers::CONTROL,
     };
 
-    input.event(&TuiEvent::Key(control_enter), &mut EventCtx::default());
-    assert!(input.insert_mode());
+    let outcome = input.event(&TuiEvent::Key(control_enter), &mut ctx);
 
-    input.event(&TuiEvent::Key(control_enter), &mut EventCtx::default());
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode());
+    assert_eq!(input.current_value(), "ship");
+    assert_eq!(ctx.messages(), &["end:ship".to_string()]);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn inactive_password_input_ignores_control_enter() {
+    let mut input = PasswordInput::<()>::new().value("secret").focused(true);
+    let control_enter = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(control_enter), &mut ctx);
+
     assert!(!input.insert_mode());
     assert_eq!(input.current_value(), "secret");
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
+}
+
+#[test]
+fn active_password_input_control_enter_finishes_edit() {
+    let mut input = PasswordInput::new()
+        .value("secret")
+        .on_edit_end(|value| format!("end:{value}"));
+    input.input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+    let control_enter = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let outcome = input.event(&TuiEvent::Key(control_enter), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode());
+    assert_eq!(input.current_value(), "secret");
+    assert_eq!(ctx.messages(), &["end:secret".to_string()]);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]

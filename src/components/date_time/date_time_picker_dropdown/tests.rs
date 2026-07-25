@@ -93,3 +93,25 @@ fn open_date_time_picker_dropdown_takes_picker_keys_before_global_hotkeys() {
 
     assert!(ctx.focus_targets()[0].focused_events_before_global_hotkeys);
 }
+
+#[test]
+fn open_date_time_picker_dropdown_cancel_keys_close_without_requesting_unfocus() {
+    for key in [
+        crate::KeyEvent::from(crate::Key::Esc),
+        crate::KeyEvent {
+            code: crate::Key::Char('['),
+            modifiers: crate::KeyModifiers::CONTROL,
+        },
+    ] {
+        let mut dropdown = DateTimePickerDropdown::<()>::new();
+        dropdown.focused = true;
+        dropdown.set_open(true);
+        let mut ctx = EventCtx::default();
+
+        let outcome = dropdown.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!dropdown.is_open());
+        assert_eq!(ctx.focus_request(), None);
+    }
+}

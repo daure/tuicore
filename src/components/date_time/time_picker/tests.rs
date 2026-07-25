@@ -1,5 +1,5 @@
 use super::*;
-use crate::Key;
+use crate::{Key, KeyModifiers};
 
 #[test]
 fn time_picker_arrow_keys_move_minutes_by_one() {
@@ -146,4 +146,69 @@ fn time_picker_applies_external_editor_time_with_whitespace() {
         picker.current_value(),
         time::Time::from_hms(14, 35, 0).unwrap()
     );
+}
+
+#[test]
+fn second_precision_external_editor_round_trip_preserves_seconds() {
+    let value = time::Time::from_hms(14, 35, 42).unwrap();
+    let mut picker = TimePicker::<()>::new()
+        .value(value)
+        .precision(TimePrecision::HourMinuteSecond);
+    let mut launch = EventCtx::default();
+
+    picker.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut launch,
+    );
+
+    let request = launch
+        .external_editor_request()
+        .expect("external editor should be requested");
+    assert_eq!(request.value, "14:35:42");
+    let mut response = EventCtx::default();
+    picker.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: request.value.clone(),
+            line: request.line,
+            col: request.col,
+        }),
+        &mut response,
+    );
+    assert_eq!(picker.current_value(), value);
+}
+
+#[test]
+fn reducing_precision_moves_hidden_second_field_to_minute_and_clears_typing() {
+    let mut picker = TimePicker::<()>::new().precision(TimePrecision::HourMinuteSecond);
+    picker.active_field = TimeField::Second;
+    picker.typed_digits.push('4');
+
+    picker.set_precision(TimePrecision::HourMinute);
+
+    assert_eq!(picker.active_field(), TimeField::Minute);
+    assert!(picker.typed_digits.is_empty());
+}
+
+#[test]
+fn direct_time_picker_cancel_keys_request_unfocus_and_remain_handled() {
+    let cancel_keys = [
+        KeyEvent::from(Key::Esc),
+        KeyEvent {
+            code: Key::Char('['),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ];
+
+    for key in cancel_keys {
+        let mut picker = TimePicker::<()>::new();
+        let mut ctx = EventCtx::default();
+
+        let outcome = picker.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Unfocus));
+    }
 }

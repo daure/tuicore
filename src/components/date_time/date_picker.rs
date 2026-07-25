@@ -12,14 +12,14 @@ use crate::components::calendar::date_math::week_range;
 use crate::event::{ExternalEditorResponse, KeyEvent, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_label_spans, hotkey_underline_style,
-    keybindings, preset, theme,
+    LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_badge_width, hotkey_edge_spans,
+    hotkey_underline_style, keybindings, preset, theme,
 };
 
 use super::{
     DATE_PICKER_FOCUS, PickerOutcome, add_months, centered_grid, choice_style, date_in_month,
     finish_event, first_of_month, last_of_month, month_abbr, parse_editor_date, picker_size_hint,
-    today, year_page_start,
+    request_unfocus_if_canceled, today, year_page_start,
 };
 
 pub struct DatePicker<M = ()> {
@@ -170,6 +170,10 @@ impl<M> DatePicker<M> {
         self.pending_top_prefix = false;
         if date_keys.bottom_matches(key) {
             return self.set_cursor(self.view_end_date());
+        }
+        if date_keys.day_view_matches(key) {
+            self.view = DatePickerView::Day;
+            return PickerOutcome::handled(true);
         }
         if bindings.date_time_picker().month_view_matches(key) {
             self.view = DatePickerView::Month;
@@ -403,25 +407,33 @@ impl<M> DatePicker<M> {
         let Some(hotkey) = self.hotkey.as_deref() else {
             return;
         };
-        if area.width < 6 || area.height < 2 {
+        if area.width <= 4 || area.height < 2 {
             return;
         }
-        let style = Style::default().fg(theme().text_fg());
-        let line = Line::from(hotkey_label_spans(
-            "",
-            Some(hotkey),
-            crate::HotkeyLabelMode::Inline,
+        let border = preset().border();
+        let border_style = Style::default().fg(if self.focused {
+            theme().highlight_bg()
+        } else {
+            theme().border_fg()
+        });
+        let hotkey_style = Style::default().fg(theme().text_fg());
+        let line = Line::from(hotkey_edge_spans(
+            hotkey,
             self.pending_hotkey_prefix.as_deref(),
-            style,
-            hotkey_underline_style(style),
+            border,
+            border_style,
+            hotkey_style,
+            hotkey_underline_style(hotkey_style),
         ));
-        let width = crate::line_width(&line).min(u16::MAX as usize) as u16;
-        if width == 0 || width >= area.width {
-            return;
-        }
+        let width = hotkey_badge_width(hotkey).min(u16::MAX as usize) as u16;
         frame.render_widget(
             Paragraph::new(line),
-            Rect::new(area.right().saturating_sub(width + 1), area.y + 1, width, 1),
+            Rect::new(
+                area.x + area.width.saturating_sub(width),
+                area.bottom().saturating_sub(1),
+                width,
+                1,
+            ),
         );
     }
 
@@ -633,6 +645,7 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
             return EventOutcome::Handled;
         }
         let outcome = self.on_key(*key);
+        request_unfocus_if_canceled(ctx, outcome);
         if outcome.selected
             && let Some(on_select) = &self.on_select
         {

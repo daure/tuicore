@@ -138,6 +138,28 @@ fn open_enter_selects_without_submit_request() {
 }
 
 #[test]
+fn open_date_picker_dropdown_escape_closes_without_requesting_unfocus() {
+    for key in [
+        crate::KeyEvent::from(crate::Key::Esc),
+        crate::KeyEvent {
+            code: crate::Key::Char('['),
+            modifiers: crate::KeyModifiers::CONTROL,
+        },
+    ] {
+        let mut dropdown = DatePickerDropdown::<()>::new();
+        dropdown.focused = true;
+        dropdown.set_open(true);
+        let mut ctx = EventCtx::default();
+
+        let outcome = dropdown.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!dropdown.is_open());
+        assert_eq!(ctx.focus_request(), None);
+    }
+}
+
+#[test]
 fn inactive_external_editor_session_requests_submit_once_and_closes_on_response() {
     let mut dropdown = DatePickerDropdown::new()
         .today(Date::from_calendar_date(2026, time::Month::July, 16).unwrap())

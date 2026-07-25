@@ -77,6 +77,7 @@ pub struct Dialog<M = ()> {
     edge_borders: Option<Borders>,
     content_padding: Padding,
     content: Vec<Line<'static>>,
+    wrap: bool,
     scroll: Option<ScrollState>,
     on_close: Option<Box<dyn Fn(DialogCloseReason) -> M>>,
     close_on_unfocus_from_descendants: bool,
@@ -111,6 +112,7 @@ impl<M> Dialog<M> {
             edge_borders: None,
             content_padding: Padding::default(),
             content: Vec::new(),
+            wrap: true,
             scroll: None,
             on_close: None,
             close_on_unfocus_from_descendants: false,
@@ -225,6 +227,11 @@ impl<M> Dialog<M> {
         self.content.clear();
     }
 
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
     pub fn on_close(mut self, handler: impl Fn(DialogCloseReason) -> M + 'static) -> Self {
         self.on_close = Some(Box::new(handler));
         self
@@ -317,6 +324,14 @@ impl<M> Dialog<M> {
         ScrollSize::new(width as usize, height)
     }
 
+    fn layout_content_size(&self, width: u16) -> ScrollSize {
+        if self.wrap {
+            self.wrapped_content_size(width)
+        } else {
+            self.content_size()
+        }
+    }
+
     fn natural_width(&self) -> u16 {
         let borders = self.resolved_edge_borders();
         let full = Rect::new(0, 0, u16::MAX, 1);
@@ -356,7 +371,7 @@ impl<M> Dialog<M> {
 
     pub fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
         let inner = self.content_area_for(area, self.resolved_edge_borders());
-        let content = self.wrapped_content_size(inner.width);
+        let content = self.layout_content_size(inner.width);
         if let Some(scroll) = &self.scroll {
             scroll.geometry(inner, content)
         } else {
@@ -501,21 +516,22 @@ impl<M> Dialog<M> {
 
         if !inner.is_empty() {
             if let Some(scroll) = &self.scroll {
-                let geometry = scroll.geometry(inner, self.wrapped_content_size(inner.width));
+                let geometry = scroll.geometry(inner, self.layout_content_size(inner.width));
                 let offset = scroll.offset();
-                let paragraph = Paragraph::new(lines)
+                let mut paragraph = Paragraph::new(lines)
                     .alignment(Alignment::Left)
-                    .wrap(Wrap { trim: true })
                     .scroll(paragraph_scroll(offset));
+                if self.wrap {
+                    paragraph = paragraph.wrap(Wrap { trim: true });
+                }
                 frame.render_widget(paragraph, geometry.layout.viewport);
                 scroll.render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
             } else {
-                frame.render_widget(
-                    Paragraph::new(lines)
-                        .alignment(Alignment::Left)
-                        .wrap(Wrap { trim: true }),
-                    inner,
-                );
+                let mut paragraph = Paragraph::new(lines).alignment(Alignment::Left);
+                if self.wrap {
+                    paragraph = paragraph.wrap(Wrap { trim: true });
+                }
+                frame.render_widget(paragraph, inner);
             }
         }
     }
@@ -918,7 +934,7 @@ impl<M> TuiNode<M> for Dialog<M> {
         };
         let borders = self.resolved_edge_borders();
         let inner = self.content_area_for(Rect::new(0, 0, measured_width, u16::MAX), borders);
-        let content_height = self.wrapped_content_size(inner.width).height;
+        let content_height = self.layout_content_size(inner.width).height;
         let border_height =
             borders.contains(Borders::TOP) as usize + borders.contains(Borders::BOTTOM) as usize;
         let measured_height = content_height
@@ -1396,6 +1412,120 @@ mod tests {
         };
         assert!(row(1).contains("one two three four"), "{}", row(1));
         assert!(row(2).contains("five six"), "{}", row(2));
+    }
+
+    #[test]
+    fn no_wrap_dialog_reports_display_width_and_preserves_line_height() {
+        let dialog = Dialog::<()>::new()
+            .wrap(false)
+            .scrollable(ScrollAxes::Both)
+            .content(["界123456789", "short"]);
+
+        let geometry = dialog.scroll_geometry(Rect::new(0, 0, 8, 5));
+
+        assert_eq!(geometry.content, ScrollSize::new(11, 2));
+        assert!(geometry.layout.horizontal_bar.is_some());
+        assert!(geometry.layout.vertical_bar.is_none());
+    }
+
+    #[test]
+    fn no_wrap_horizontal_scroll_reveals_later_content_and_clamps() {
+        let area = Rect::new(0, 0, 10, 4);
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        let mut dialog = Dialog::<()>::new()
+            .wrap(false)
+            .scrollable(ScrollAxes::Both)
+            .content(["0123456789abcdef"]);
+
+        dialog.scroll_to(ScrollOffset::new(99, 0), area, settings);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("terminal should build");
+        terminal
+            .draw(|frame| dialog.render(frame, area))
+            .expect("dialog should render");
+
+        let geometry = dialog.scroll_geometry(area);
+        let row = (1..9)
+            .map(|x| terminal.backend().buffer().cell((x, 1)).unwrap().symbol())
+            .collect::<String>();
+        assert_eq!(row, "89abcdef");
+        assert_eq!(geometry.viewport.width, 8);
+    }
+
+    #[test]
+    fn no_wrap_dialog_uses_existing_horizontal_keybindings() {
+        let area = Rect::new(0, 0, 10, 4);
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        let mut dialog = Dialog::<()>::new()
+            .wrap(false)
+            .scrollable(ScrollAxes::Both)
+            .content(["0123456789abcdefghijklmnop"]);
+        let ctrl = |value| KeyEvent {
+            code: Key::Char(value),
+            modifiers: crate::KeyModifiers::CONTROL,
+        };
+
+        for key in [
+            KeyEvent::from(Key::Right),
+            KeyEvent::from(Key::Left),
+            KeyEvent::from(Key::Char('l')),
+            KeyEvent::from(Key::Char('h')),
+            ctrl('l'),
+            ctrl('h'),
+        ] {
+            assert!(dialog.on_key(key, area, settings).changed, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn no_wrap_horizontal_bar_accounts_for_reserved_vertical_bar_at_exact_fit() {
+        let area = Rect::new(0, 0, 12, 5);
+        let exact = Dialog::<()>::new()
+            .wrap(false)
+            .scrollable(ScrollAxes::Both)
+            .content(["123456789", "2", "3", "4"]);
+        let overflow = Dialog::<()>::new()
+            .wrap(false)
+            .scrollable(ScrollAxes::Both)
+            .content(["1234567890", "2", "3", "4"]);
+
+        assert!(exact.scroll_geometry(area).layout.vertical_bar.is_some());
+        assert!(exact.scroll_geometry(area).layout.horizontal_bar.is_none());
+        assert!(
+            overflow
+                .scroll_geometry(area)
+                .layout
+                .horizontal_bar
+                .is_some()
+        );
+        assert!(
+            overflow
+                .scroll_geometry(Rect::new(0, 0, 13, 5))
+                .layout
+                .horizontal_bar
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn widening_no_wrap_dialog_resets_horizontal_scroll() {
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        let mut dialog = Dialog::<()>::new()
+            .wrap(false)
+            .scrollable(ScrollAxes::Both)
+            .content(["0123456789abcdef"]);
+        let mut ctx = LayoutCtx::new();
+        let narrow = Rect::new(0, 0, 10, 4);
+        dialog.layout(narrow, &mut ctx);
+        dialog.scroll_to(ScrollOffset::new(6, 0), narrow, settings);
+
+        dialog.layout(Rect::new(0, 0, 20, 4), &mut ctx);
+        let outcome = dialog.scroll_by(ScrollDelta::new(-1, 0), Rect::new(0, 0, 20, 4), settings);
+
+        assert!(!outcome.changed);
     }
 
     #[test]

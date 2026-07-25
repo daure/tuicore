@@ -68,6 +68,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     focused: bool,
     hotkey: Option<String>,
     keybindings: CalendarKeyBindings,
+    pending_top_prefix: bool,
     area: Rect,
     events: Vec<CalendarTypedEvent<Id>>,
 }
@@ -89,6 +90,8 @@ pub struct CalendarKeyBindings {
     pub page_down: Vec<KeySpec>,
     pub home: Vec<KeySpec>,
     pub end: Vec<KeySpec>,
+    pub top_prefix: Vec<KeySpec>,
+    pub bottom: Vec<KeySpec>,
 }
 
 impl Default for CalendarKeyBindings {
@@ -121,6 +124,8 @@ impl Default for CalendarKeyBindings {
             ],
             home: vec![KeySpec::key(Key::Home)],
             end: vec![KeySpec::key(Key::End)],
+            top_prefix: vec![KeySpec::plain('g')],
+            bottom: vec![KeySpec::shifted('g')],
         }
     }
 }
@@ -140,6 +145,16 @@ impl CalendarKeyBindings {
 
     pub fn day_view_label(&self) -> String {
         key_specs_label(&self.day_view)
+    }
+
+    pub fn with_top_prefix(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.top_prefix = keys.into_iter().collect();
+        self
+    }
+
+    pub fn with_bottom(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.bottom = keys.into_iter().collect();
+        self
     }
 }
 
@@ -174,6 +189,7 @@ where
             focused: false,
             hotkey: None,
             keybindings: CalendarKeyBindings::default(),
+            pending_top_prefix: false,
             area: Rect::default(),
             events: Vec::new(),
         }
@@ -276,12 +292,13 @@ where
     }
 
     pub fn keybindings(mut self, keybindings: CalendarKeyBindings) -> Self {
-        self.keybindings = keybindings;
+        self.set_keybindings(keybindings);
         self
     }
 
     pub fn set_keybindings(&mut self, keybindings: CalendarKeyBindings) {
         self.keybindings = keybindings;
+        self.pending_top_prefix = false;
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
@@ -291,6 +308,9 @@ where
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        if !focused {
+            self.pending_top_prefix = false;
+        }
     }
 
     pub fn current_view(&self) -> CalendarView {
@@ -324,6 +344,15 @@ where
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
+        if matches_key_specs(&self.keybindings.top_prefix, key) {
+            if self.pending_top_prefix {
+                self.pending_top_prefix = false;
+                return self.apply_key_action(CalendarKeyAction::Home);
+            }
+            self.pending_top_prefix = true;
+            return CalendarOutcome::HANDLED;
+        }
+        self.pending_top_prefix = false;
         if let Some(action) = self.key_action(key) {
             return self.apply_key_action(action);
         }
@@ -361,6 +390,8 @@ where
         } else if matches_key_specs(&keys.home, key) {
             Some(CalendarKeyAction::Home)
         } else if matches_key_specs(&keys.end, key) {
+            Some(CalendarKeyAction::End)
+        } else if matches_key_specs(&keys.bottom, key) {
             Some(CalendarKeyAction::End)
         } else {
             None
@@ -771,6 +802,11 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if matches!(event, TuiEvent::Yank) {
+            ctx.copy_to_clipboard(self.cursor_date().to_string());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
