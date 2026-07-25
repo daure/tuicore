@@ -145,12 +145,6 @@ impl WeatherReport {
         }
     }
 
-    pub(crate) fn with_hourly(mut self, hourly: HourlyWeather) -> Self {
-        self.hourly = Some(hourly);
-        self.refresh_summary();
-        self
-    }
-
     pub(crate) fn with_hourly_at(mut self, hourly: HourlyWeather, now: OffsetDateTime) -> Self {
         if let Some(summary) = hourly.current_summary_at(self.summary.location.clone(), now) {
             self.summary = summary;
@@ -573,8 +567,11 @@ mod tests {
             .saturating_sub(time::Duration::days(1));
         let expired_time = format!("{}T23:00", yesterday.date());
         let hourly = HourlyWeather::new([(expired_time, "14 °C".to_string(), "Rain".to_string())]);
-        let report = WeatherReport::from_parts("raw", WeatherSummary::new("14 °C", "Rain"))
-            .with_hourly(hourly);
+        let report = WeatherReport {
+            raw: "raw".to_string(),
+            summary: WeatherSummary::new("14 °C", "Rain"),
+            hourly: Some(hourly),
+        };
         let mut indicator = WeatherIndicator::<()>::new().report(report);
 
         let tick = indicator.tick(Duration::from_secs(60), AnimationSettings::default());

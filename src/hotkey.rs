@@ -71,10 +71,6 @@ impl HotkeySequenceMatcher {
         !self.prefix.is_empty()
     }
 
-    pub(crate) fn can_commit_pending(&self) -> bool {
-        self.pending_match.is_some()
-    }
-
     pub fn remaining_timeout(&self) -> Option<Duration> {
         self.is_pending()
             .then(|| self.timeout.saturating_sub(self.elapsed))
@@ -562,7 +558,6 @@ mod tests {
             matcher.on_key(KeyEvent::from(Key::Char('s'))),
             HotkeyMatch::Pending
         );
-        assert!(matcher.can_commit_pending());
         assert_eq!(
             matcher.on_key(KeyEvent::from(Key::Enter)),
             HotkeyMatch::Matched(0)
@@ -577,7 +572,6 @@ mod tests {
             matcher.on_key(KeyEvent::from(Key::Char('t'))),
             HotkeyMatch::Pending
         );
-        assert!(!matcher.can_commit_pending());
         assert_eq!(
             matcher.on_key(KeyEvent::from(Key::Enter)),
             HotkeyMatch::Canceled

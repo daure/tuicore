@@ -10,6 +10,15 @@ commit and annotated tag, then publish to crates.io. The script never pushes.
 EOF
 }
 
+confirm() {
+    local prompt="$1"
+    local answer
+
+    [[ -t 0 ]] || return 1
+    read -r -p "$prompt [y/N] " answer || return 1
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
 case "${1:-minor}" in
     -h|--help)
         usage
@@ -83,15 +92,7 @@ fi
 if [[ "$credentials_configured" != true ]]; then
     printf 'warning: conventional crates.io credentials were not detected.\n' >&2
     printf 'Cargo credential providers or keychains may still supply them; otherwise run `cargo login`.\n' >&2
-    if [[ ! -t 0 ]]; then
-        printf 'error: run `cargo login` or retry interactively to continue\n' >&2
-        exit 1
-    fi
-    read -r -p "Type 'continue crates.io' to let Cargo verify credentials: " credential_confirmation || {
-        printf '\nRelease canceled; run `cargo login` before retrying.\n' >&2
-        exit 1
-    }
-    if [[ "$credential_confirmation" != "continue crates.io" ]]; then
+    if ! confirm "Continue and let Cargo verify crates.io credentials?"; then
         printf 'Release canceled; run `cargo login` before retrying.\n' >&2
         exit 1
     fi
@@ -174,17 +175,9 @@ PY
 cargo test
 
 printf '\nVersion: %s -> %s\n' "$old_version" "$new_version"
-git diff -- Cargo.toml Cargo.lock
+git --no-pager diff -- Cargo.toml Cargo.lock
 printf 'Next: create commit %q, then validate the clean crates.io package.\n' "release: $tag"
-if [[ ! -t 0 ]]; then
-    printf 'error: interactive confirmation requires a terminal; version changes remain in working tree\n' >&2
-    exit 1
-fi
-read -r -p "Type 'release $tag' to prepare the crates.io release: " confirmation || {
-    printf '\nRelease canceled; version changes remain in working tree.\n' >&2
-    exit 1
-}
-if [[ "$confirmation" != "release $tag" ]]; then
+if ! confirm "Prepare crates.io release $tag?"; then
     printf 'Release canceled; version changes remain in working tree.\n' >&2
     exit 1
 fi
@@ -202,11 +195,7 @@ fi
 
 git tag -a "$tag" -m "release: $tag"
 
-read -r -p "Type 'publish $tag' to publish to crates.io: " confirmation || {
-    printf '\nPublish canceled. Local release commit and tag %s remain.\n' "$tag" >&2
-    exit 1
-}
-if [[ "$confirmation" != "publish $tag" ]]; then
+if ! confirm "Publish $tag to crates.io?"; then
     printf 'Publish canceled. Local release commit and tag %s remain.\n' "$tag" >&2
     exit 1
 fi
