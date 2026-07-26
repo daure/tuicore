@@ -1,3 +1,5 @@
+use std::any::Any;
+use std::cmp::Ordering;
 use std::rc::Rc;
 
 use ratatui::layout::Constraint;
@@ -7,8 +9,30 @@ pub(super) type RowIdFn<T, Id> = dyn Fn(&T) -> Id;
 pub(super) type ParentIdFn<T, Id> = dyn Fn(&T) -> Option<Id>;
 pub(super) type LevelFn<T> = dyn Fn(&T) -> usize;
 type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Line<'static>;
-type SortFn<T> = dyn Fn(&T) -> String;
+pub(super) type SortFn<T> = dyn Fn(&T, &T) -> Ordering;
 type TransformKeyFn<T> = dyn Fn(&T) -> String;
+
+pub(super) struct ReorderOps<T> {
+    pub compare: Box<SortFn<T>>,
+    pub snapshot: Box<dyn Fn(&[T], &[usize]) -> Box<dyn Any>>,
+    pub snapshot_matches: Box<dyn Fn(&[T], &[usize], &dyn Any) -> bool>,
+    pub apply: Box<dyn Fn(&[T], &[usize], &dyn Any) -> Option<Vec<T>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReorderUnavailableReason {
+    Tree,
+    VisibleSubset,
+    TransformActive,
+    Paginated,
+    DuplicateRowIds,
+    DuplicateRankKeys,
+}
+
+pub(crate) struct ReorderSnapshot<Id> {
+    pub ids: Vec<Id>,
+    pub(super) ranks: Box<dyn Any>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataViewOutcome {
@@ -260,10 +284,12 @@ pub enum ColumnSizing {
 pub struct Column<T, Id> {
     pub(super) id: String,
     pub(super) header: String,
+    pub(super) visible: bool,
     pub(super) width: Constraint,
     pub(super) sizing: ColumnSizing,
     pub(super) renderer: Box<CellFn<T, Id>>,
-    pub(super) sort_key: Option<Box<SortFn<T>>>,
+    pub(super) sort_compare: Option<Box<SortFn<T>>>,
+    pub(super) reorder: Option<ReorderOps<T>>,
     pub(super) search_key: Option<Box<TransformKeyFn<T>>>,
     pub(super) filter_key: Option<Box<TransformKeyFn<T>>>,
 }
@@ -281,10 +307,12 @@ impl<T, Id> Column<T, Id> {
         Self {
             id: id.into(),
             header: header.into(),
+            visible: true,
             width,
             sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(move |row, _| Line::from(renderer_accessor(row))),
-            sort_key: None,
+            sort_compare: None,
+            reorder: None,
             search_key: Some(Box::new(move |row| search_accessor(row))),
             filter_key: None,
         }
@@ -299,17 +327,76 @@ impl<T, Id> Column<T, Id> {
         Self {
             id: id.into(),
             header: header.into(),
+            visible: true,
             width,
             sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(renderer),
-            sort_key: None,
+            sort_compare: None,
+            reorder: None,
             search_key: None,
             filter_key: None,
         }
     }
 
-    pub fn sortable(mut self, sort_key: impl Fn(&T) -> String + 'static) -> Self {
-        self.sort_key = Some(Box::new(sort_key));
+    pub fn sortable<K: Ord + 'static>(mut self, key: impl Fn(&T) -> K + 'static) -> Self {
+        self.sort_compare = Some(Box::new(move |left, right| key(left).cmp(&key(right))));
+        self
+    }
+
+    pub fn sortable_by(mut self, compare: impl Fn(&T, &T) -> Ordering + 'static) -> Self {
+        self.sort_compare = Some(Box::new(compare));
+        self
+    }
+
+    /// Configures property-backed row ordering.
+    ///
+    /// The setter must assign the supplied rank key without changing row identity. Commits verify
+    /// both the assigned keys and row IDs before reporting success.
+    pub fn reorderable<K: Ord + Clone + 'static>(
+        mut self,
+        getter: impl Fn(&T) -> K + 'static,
+        setter: impl Fn(&mut T, K) + 'static,
+    ) -> Self
+    where
+        T: Clone,
+    {
+        let getter = Rc::new(getter);
+        let compare_getter = Rc::clone(&getter);
+        let snapshot_getter = Rc::clone(&getter);
+        let matches_getter = Rc::clone(&getter);
+        self.reorder = Some(ReorderOps {
+            compare: Box::new(move |left, right| compare_getter(left).cmp(&compare_getter(right))),
+            snapshot: Box::new(move |rows, ordered| {
+                Box::new(
+                    ordered
+                        .iter()
+                        .map(|index| snapshot_getter(&rows[*index]))
+                        .collect::<Vec<_>>(),
+                )
+            }),
+            snapshot_matches: Box::new(move |rows, ordered, snapshot| {
+                let Some(snapshot) = snapshot.downcast_ref::<Vec<K>>() else {
+                    return false;
+                };
+                ordered
+                    .iter()
+                    .map(|index| matches_getter(&rows[*index]))
+                    .eq(snapshot.iter().cloned())
+            }),
+            apply: Box::new(move |rows, staged, snapshot| {
+                let Some(keys) = snapshot.downcast_ref::<Vec<K>>() else {
+                    return None;
+                };
+                if staged.len() != keys.len() {
+                    return None;
+                }
+                let mut candidate = rows.to_vec();
+                for (index, key) in staged.iter().copied().zip(keys.iter().cloned()) {
+                    setter(&mut candidate[index], key);
+                }
+                Some(candidate)
+            }),
+        });
         self
     }
 
@@ -330,6 +417,15 @@ impl<T, Id> Column<T, Id> {
 
     pub fn constrained(self) -> Self {
         self.sizing(ColumnSizing::Constrained)
+    }
+
+    pub fn hidden(self) -> Self {
+        self.visible(false)
+    }
+
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
     }
 
     pub fn id(&self) -> &str {

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use super::model::{LevelFn, ParentIdFn};
+use super::model::{LevelFn, ParentIdFn, SortFn};
 use super::{DataView, DataViewTransformMode, SortDirection, TreeAdapter, VisibleRow};
 use crate::search::search_match;
 
@@ -208,7 +208,7 @@ where
         (search.is_empty() || self.row_matches_search(row, search)) && self.row_matches_filters(row)
     }
 
-    fn local_transform_active(&self) -> bool {
+    pub(super) fn local_transform_active(&self) -> bool {
         self.transform_mode == DataViewTransformMode::Local
             && (!self.transform_state.search.trim().is_empty()
                 || !self.transform_state.filters.is_empty())
@@ -217,6 +217,7 @@ where
     fn row_matches_search(&self, row: &T, search: &str) -> bool {
         self.columns
             .iter()
+            .filter(|column| column.visible)
             .filter_map(|column| column.search_key.as_deref())
             .any(|search_key| search_match(search, &search_key(row), self.search_mode).is_some())
     }
@@ -273,24 +274,37 @@ where
             .collect()
     }
 
-    fn active_sort(&self) -> Option<(&dyn Fn(&T) -> String, SortDirection)> {
-        let sort = self.sort.as_ref()?;
-        let column = self
-            .columns
-            .iter()
-            .find(|column| column.id == sort.column_id)?;
-        let sort_key = column.sort_key.as_deref()?;
-        Some((sort_key, sort.direction))
+    fn active_sort(&self) -> Option<(&SortFn<T>, SortDirection)> {
+        if let Some(sort) = self.sort.as_ref() {
+            let column = self
+                .columns
+                .iter()
+                .find(|column| column.id == sort.column_id)?;
+            return Some((column.sort_compare.as_deref()?, sort.direction));
+        }
+        let column_id = self.reorder_sort.as_ref()?;
+        let column = self.columns.iter().find(|column| &column.id == column_id)?;
+        Some((
+            column.reorder.as_ref()?.compare.as_ref(),
+            SortDirection::Ascending,
+        ))
     }
 
     fn sorted_rows(&self) -> Vec<&T> {
         let mut rows = self.row_refs();
-        let Some((sort_key, direction)) = self.active_sort() else {
-            return rows;
-        };
-        rows.sort_by_key(|row| sort_key(row));
-        if direction == SortDirection::Descending {
-            rows.reverse();
+        if let Some((compare, direction)) = self.active_sort() {
+            rows.sort_by(|left, right| match direction {
+                SortDirection::Ascending => compare(left, right),
+                SortDirection::Descending => compare(right, left),
+            });
+        }
+        if let Some(order) = &self.derived_row_order {
+            rows.sort_by_key(|row| {
+                order
+                    .iter()
+                    .position(|id| id == &(self.row_id)(row))
+                    .unwrap_or(usize::MAX)
+            });
         }
         rows
     }
@@ -405,12 +419,12 @@ where
             stack.push(Some(index));
         }
 
-        if let Some((sort_key, direction)) = self.active_sort() {
+        if let Some((compare, direction)) = self.active_sort() {
             let sort_siblings = |indices: &mut Vec<usize>| {
-                indices.sort_by_key(|index| sort_key(rows[*index]));
-                if direction == SortDirection::Descending {
-                    indices.reverse();
-                }
+                indices.sort_by(|left, right| match direction {
+                    SortDirection::Ascending => compare(rows[*left], rows[*right]),
+                    SortDirection::Descending => compare(rows[*right], rows[*left]),
+                });
             };
             sort_siblings(&mut roots);
             for children in &mut children_by_parent {

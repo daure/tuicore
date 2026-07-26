@@ -21,7 +21,7 @@ where
     pub fn filterable_columns(&self) -> Vec<&str> {
         self.columns
             .iter()
-            .filter(|column| column.filter_key.is_some())
+            .filter(|column| column.visible && column.filter_key.is_some())
             .map(|column| column.id.as_str())
             .collect()
     }
@@ -39,11 +39,14 @@ where
     }
 
     pub(crate) fn filter_column_id_for_key(&self, key: char) -> Option<String> {
-        self.columns.iter().enumerate().find_map(|(index, column)| {
-            (column.filter_key.is_some()
-                && column_key(index).is_some_and(|candidate| candidate == key.to_ascii_lowercase()))
-            .then(|| column.id.clone())
-        })
+        self.visible_columns()
+            .enumerate()
+            .find_map(|(index, column)| {
+                (column.filter_key.is_some()
+                    && column_key(index)
+                        .is_some_and(|candidate| candidate == key.to_ascii_lowercase()))
+                .then(|| column.id.clone())
+            })
     }
 
     pub(super) fn open_filter_values(&mut self, column_id: String) {
@@ -177,6 +180,6 @@ where
     }
 
     pub(super) fn filter_controls_enabled(&self) -> bool {
-        self.filter_controls && self.headers && self.columns.len() > 1
+        self.filter_controls && self.shows_headers() && self.visible_column_count() > 1
     }
 }

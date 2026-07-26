@@ -68,6 +68,31 @@ fn assert_restored_highlight_is_visible(view: &DataView<usize, usize>, area: Rec
 }
 
 #[test]
+fn focused_event_precedence_can_be_disabled_for_app_hotkeys() {
+    for (view, expected) in [
+        (DataView::new([1], |id| *id), true),
+        (
+            DataView::new([1], |id| *id).focused_events_before_global_hotkeys(false),
+            false,
+        ),
+    ] {
+        let mut view: DataView<usize, usize> = view;
+        let mut layout = LayoutCtx::new();
+
+        <DataView<usize, usize> as TuiNode<()>>::layout(
+            &mut view,
+            Rect::new(0, 0, 20, 5),
+            &mut layout,
+        );
+
+        assert_eq!(
+            layout.focus_targets()[0].focused_events_before_global_hotkeys,
+            expected
+        );
+    }
+}
+
+#[test]
 fn row_update_preserves_order_and_resynchronizes_filtered_highlight() {
     let mut view = DataView::new(
         [(1, "Ada".to_string()), (2, "Grace".to_string())],
@@ -88,6 +113,198 @@ fn row_update_preserves_order_and_resynchronizes_filtered_highlight() {
     assert_eq!(view.rows()[0].0, 1);
     assert_eq!(view.rows()[1], (2, "Linus".to_string()));
     assert_eq!(view.highlighted_id(), None);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReorderRow {
+    id: usize,
+    rank: usize,
+    group: &'static str,
+}
+
+fn reorder_view(rows: impl IntoIterator<Item = ReorderRow>) -> DataView<ReorderRow, usize> {
+    let mut view = DataView::new(rows, |row| row.id).column(
+        Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
+            row.rank.to_string()
+        })
+        .filter_key(|row| row.group.to_string())
+        .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+    );
+    view.configure_reorder_sort("rank");
+    view
+}
+
+#[test]
+fn reorder_rejects_search_and_filters_in_local_and_external_modes() {
+    for mode in [
+        DataViewTransformMode::Local,
+        DataViewTransformMode::External,
+    ] {
+        let mut searched = reorder_view([ReorderRow {
+            id: 1,
+            rank: 10,
+            group: "a",
+        }]);
+        searched.set_transform_mode(mode);
+        searched.set_search_query("1");
+        assert_eq!(
+            searched.reorder_snapshot("rank").err(),
+            Some(ReorderUnavailableReason::TransformActive)
+        );
+
+        let mut filtered = reorder_view([ReorderRow {
+            id: 1,
+            rank: 10,
+            group: "a",
+        }]);
+        filtered.set_transform_mode(mode);
+        filtered.set_filter("rank", "a");
+        assert_eq!(
+            filtered.reorder_snapshot("rank").err(),
+            Some(ReorderUnavailableReason::TransformActive)
+        );
+    }
+}
+
+#[test]
+fn reorder_rejects_paginated_tree_subset_and_duplicate_data() {
+    let rows = || {
+        [
+            ReorderRow {
+                id: 1,
+                rank: 10,
+                group: "a",
+            },
+            ReorderRow {
+                id: 2,
+                rank: 20,
+                group: "b",
+            },
+        ]
+    };
+    assert_eq!(
+        reorder_view(rows())
+            .pagination(1)
+            .reorder_snapshot("rank")
+            .err(),
+        Some(ReorderUnavailableReason::Paginated)
+    );
+    assert_eq!(
+        reorder_view(rows())
+            .tree(TreeAdapter::level(|_: &ReorderRow| 0))
+            .reorder_snapshot("rank")
+            .err(),
+        Some(ReorderUnavailableReason::Tree)
+    );
+    assert_eq!(
+        reorder_view(rows())
+            .visible_row_ids([1])
+            .reorder_snapshot("rank")
+            .err(),
+        Some(ReorderUnavailableReason::VisibleSubset)
+    );
+    assert_eq!(
+        reorder_view([
+            ReorderRow {
+                id: 1,
+                rank: 10,
+                group: "a",
+            },
+            ReorderRow {
+                id: 1,
+                rank: 20,
+                group: "b",
+            },
+        ])
+        .reorder_snapshot("rank")
+        .err(),
+        Some(ReorderUnavailableReason::DuplicateRowIds)
+    );
+    assert_eq!(
+        reorder_view([
+            ReorderRow {
+                id: 1,
+                rank: 10,
+                group: "a",
+            },
+            ReorderRow {
+                id: 2,
+                rank: 10,
+                group: "b",
+            },
+        ])
+        .reorder_snapshot("rank")
+        .err(),
+        Some(ReorderUnavailableReason::DuplicateRankKeys)
+    );
+}
+
+#[test]
+fn reorder_commit_rejects_setter_that_does_not_assign_rank_keys() {
+    let mut view = DataView::new(
+        [
+            ReorderRow {
+                id: 1,
+                rank: 10,
+                group: "a",
+            },
+            ReorderRow {
+                id: 2,
+                rank: 20,
+                group: "b",
+            },
+        ],
+        |row| row.id,
+    )
+    .column(
+        Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
+            row.rank.to_string()
+        })
+        .reorderable(|row| row.rank, |_row, _rank| {}),
+    );
+    view.configure_reorder_sort("rank");
+    let snapshot = view.reorder_snapshot("rank").unwrap();
+    let before = view.rows().to_vec();
+
+    assert!(!view.commit_reorder("rank", &[2, 1], &snapshot));
+    assert_eq!(view.rows(), before);
+}
+
+#[test]
+fn reorder_commit_rejects_setter_that_mutates_row_ids() {
+    let mut view = DataView::new(
+        [
+            ReorderRow {
+                id: 1,
+                rank: 10,
+                group: "a",
+            },
+            ReorderRow {
+                id: 2,
+                rank: 20,
+                group: "b",
+            },
+        ],
+        |row| row.id,
+    )
+    .column(
+        Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
+            row.rank.to_string()
+        })
+        .reorderable(
+            |row| row.rank,
+            |row, rank| {
+                row.rank = rank;
+                row.id += 100;
+            },
+        ),
+    );
+    view.configure_reorder_sort("rank");
+    let snapshot = view.reorder_snapshot("rank").unwrap();
+    let before = view.rows().to_vec();
+
+    assert!(!view.commit_reorder("rank", &[2, 1], &snapshot));
+    assert_eq!(view.rows(), before);
 }
 
 #[test]
@@ -255,6 +472,126 @@ fn toggle_sort_can_target_any_sortable_column() {
 
     assert!(view.toggle_sort("id").changed);
     assert_eq!(visible_ids(&view), vec![1, 2, 3]);
+}
+
+#[test]
+fn hidden_columns_support_alphabetical_and_numeric_automatic_sorting() {
+    let alphabetical = DataView::new(
+        [Row::new(1, "B"), Row::new(2, "A"), Row::new(3, "C")],
+        |row| row.id,
+    )
+    .columns([
+        Column::text("name", "Name", Constraint::Fill(1), |row: &Row| {
+            row.name.to_string()
+        })
+        .sortable(|row: &Row| row.name.to_string())
+        .hidden(),
+        Column::text("id", "ID", Constraint::Fill(1), |row: &Row| {
+            row.id.to_string()
+        }),
+    ])
+    .sorted_by("name", SortDirection::Ascending);
+    assert_eq!(visible_ids(&alphabetical), vec![2, 1, 3]);
+
+    let numeric = DataView::new(
+        [Row::new(10, "ten"), Row::new(2, "two"), Row::new(1, "one")],
+        |row| row.id,
+    )
+    .columns([
+        Column::text("id", "ID", Constraint::Fill(1), |row: &Row| {
+            row.id.to_string()
+        })
+        .sortable(|row: &Row| row.id)
+        .hidden(),
+        Column::text("name", "Name", Constraint::Fill(1), |row: &Row| {
+            row.name.to_string()
+        }),
+    ])
+    .sorted_by("id", SortDirection::Ascending);
+    assert_eq!(visible_ids(&numeric), vec![1, 2, 10]);
+}
+
+#[test]
+fn hidden_columns_are_excluded_from_presentation_search_filters_and_measurement() {
+    let mut view = DataView::new([Row::new(1, "secret")], |row| row.id)
+        .columns([
+            Column::text("hidden", "Hidden", Constraint::Length(40), |row: &Row| {
+                row.name.to_string()
+            })
+            .filter_key(|row: &Row| row.name.to_string())
+            .hidden(),
+            Column::text("shown", "Shown", Constraint::Fill(1), |_| {
+                String::from("public")
+            }),
+        ])
+        .headers(true);
+
+    assert_eq!(view.column_widths(12).len(), 1);
+    assert_eq!(
+        view.scroll_geometry(Rect::new(0, 0, 12, 2)).content.width,
+        12
+    );
+    assert!(view.filterable_columns().is_empty());
+    assert_eq!(view.filter_column_id_for_key('1'), None);
+    view.set_search_query("secret");
+    assert!(visible_ids(&view).is_empty());
+
+    view.clear_search();
+    let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("Shown"));
+    assert!(rendered.contains("public"));
+    assert!(!rendered.contains("Hidden"));
+    assert!(!rendered.contains("secret"));
+}
+
+#[test]
+fn all_hidden_columns_render_empty_content_without_panicking() {
+    let view = DataView::new([Row::new(1, "secret")], |row| row.id)
+        .column(
+            Column::text("hidden", "Hidden", Constraint::Length(40), |row: &Row| {
+                row.name.to_string()
+            })
+            .hidden(),
+        )
+        .headers(true);
+    assert!(view.column_widths(20).is_empty());
+    assert_eq!(view.measurement_chrome_height(), 0);
+
+    let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("all-hidden data view should render");
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .all(|cell| cell.symbol() == " ")
+    );
+}
+
+#[test]
+#[should_panic(expected = "must be sortable")]
+fn plain_hidden_column_remains_invalid_for_automatic_sorting() {
+    let _ = DataView::new([Row::new(1, "A")], |row| row.id)
+        .column(
+            Column::text("name", "Name", Constraint::Fill(1), |row: &Row| {
+                row.name.to_string()
+            })
+            .hidden(),
+        )
+        .sorted_by("name", SortDirection::Ascending);
 }
 
 #[test]
@@ -714,7 +1051,7 @@ fn cells_have_right_padding_except_for_the_last_column() {
 }
 
 #[test]
-fn controlled_horizontal_keys_jump_eight_columns() {
+fn shifted_horizontal_keys_jump_eight_columns() {
     let mut view = DataView::new([Row::new(1, "ABCDEFGHIJKLMNOPQRST")], |row| row.id).column(
         Column::text("name", "Name", Constraint::Length(20), |row: &Row| {
             row.name.to_string()
@@ -727,7 +1064,7 @@ fn controlled_horizontal_keys_jump_eight_columns() {
     let right = view.on_key_with_settings(
         KeyEvent {
             code: Key::Char('l'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         area,
         settings,
@@ -738,12 +1075,23 @@ fn controlled_horizontal_keys_jump_eight_columns() {
     let left = view.on_key_with_settings(
         KeyEvent {
             code: Key::Char('h'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         area,
         settings,
     );
     assert!(left.handled);
+    assert_eq!(view.scroll.offset().x, 0);
+
+    let old_right = view.on_key_with_settings(
+        KeyEvent {
+            code: Key::Char('l'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        area,
+        settings,
+    );
+    assert!(!old_right.handled);
     assert_eq!(view.scroll.offset().x, 0);
 }
 
@@ -764,7 +1112,7 @@ fn width_change_resets_horizontal_scroll_to_start() {
     let outcome = view.on_key_with_settings(
         KeyEvent {
             code: Key::Char('L'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         narrow,
         settings,
@@ -1002,7 +1350,7 @@ fn cleared_hotkey_is_not_registered_on_focus_target() {
 }
 
 #[test]
-fn controlled_horizontal_keys_scroll_tree_instead_of_expanding() {
+fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
     let mut view = DataView::new(
         [
             Row {
@@ -1031,7 +1379,7 @@ fn controlled_horizontal_keys_scroll_tree_instead_of_expanding() {
     let outcome = view.on_key_with_settings(
         KeyEvent {
             code: Key::Char('L'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         Rect::new(0, 0, 8, 3),
         settings,
@@ -1043,7 +1391,7 @@ fn controlled_horizontal_keys_scroll_tree_instead_of_expanding() {
 }
 
 #[test]
-fn controlled_horizontal_keys_follow_configured_navigation_keys() {
+fn shifted_horizontal_keys_follow_configured_navigation_keys() {
     let bindings = KeyBindings::new()
         .with_nav_line_left([
             KeySpec::key(Key::Left),
@@ -1067,7 +1415,7 @@ fn controlled_horizontal_keys_follow_configured_navigation_keys() {
     let right = view.on_key_with_settings_and_bindings(
         KeyEvent {
             code: Key::Char('D'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         area,
         settings,
@@ -1079,7 +1427,7 @@ fn controlled_horizontal_keys_follow_configured_navigation_keys() {
     let left = view.on_key_with_settings_and_bindings(
         KeyEvent {
             code: Key::Char('A'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         area,
         settings,
@@ -1819,7 +2167,7 @@ fn page_change_emits_navigation_activation_when_highlighted_index_stays_same() {
 }
 
 #[test]
-fn collapse_and_sort_emit_navigation_activation_when_row_changes_at_same_index() {
+fn collapse_emits_navigation_activation_but_sort_preserves_highlighted_id() {
     let mut collapsed = DataView::list(
         [
             Row {
@@ -1870,16 +2218,10 @@ fn collapse_and_sort_emit_navigation_activation_when_row_changes_at_same_index()
 
     let sort_outcome = sorted.sort_by("name", SortDirection::Ascending);
 
-    assert!(sort_outcome.activated);
-    assert_eq!(sorted.highlighted, 0);
-    assert_eq!(sorted.highlighted_id(), Some(2));
-    assert_eq!(
-        sorted.take_events(),
-        vec![
-            DataViewTypedEvent::HighlightChanged { row_id: Some(2) },
-            DataViewTypedEvent::Activated { row_id: 2 },
-        ]
-    );
+    assert!(!sort_outcome.activated);
+    assert_eq!(sorted.highlighted, 1);
+    assert_eq!(sorted.highlighted_id(), Some(1));
+    assert!(sorted.take_events().is_empty());
 }
 
 #[test]
@@ -2508,4 +2850,54 @@ fn level_rows() -> Vec<LevelRow> {
             name: "a child",
         },
     ]
+}
+
+#[test]
+fn typed_sort_orders_numbers_and_preserves_equal_ties_in_both_directions() {
+    #[derive(Clone)]
+    struct NumericRow {
+        id: usize,
+        value: usize,
+    }
+    let rows = [
+        NumericRow { id: 1, value: 10 },
+        NumericRow { id: 2, value: 2 },
+        NumericRow { id: 3, value: 100 },
+        NumericRow { id: 4, value: 10 },
+    ];
+    let mut view = DataView::new(rows, |row| row.id).column(
+        Column::text("value", "Value", Constraint::Fill(1), |row: &NumericRow| {
+            row.value.to_string()
+        })
+        .sortable(|row| row.value),
+    );
+
+    view.sort_by("value", SortDirection::Ascending);
+    assert_eq!(visible_ids(&view), vec![2, 1, 4, 3]);
+    view.sort_by("value", SortDirection::Descending);
+    assert_eq!(visible_ids(&view), vec![3, 1, 4, 2]);
+}
+
+#[test]
+fn custom_comparator_and_sort_change_preserve_highlighted_id() {
+    let mut view = DataView::new(rows(), |row| row.id).column(
+        Column::text("name", "Name", Constraint::Fill(1), |row: &Row| {
+            row.name.to_string()
+        })
+        .sortable_by(|left, right| left.name.len().cmp(&right.name.len())),
+    );
+    view.highlight_id(&3);
+    view.take_events();
+
+    view.sort_by("name", SortDirection::Ascending);
+
+    assert_eq!(view.highlighted_id(), Some(3));
+    assert!(view.take_events().is_empty());
+}
+
+#[test]
+#[should_panic(expected = "must be sortable")]
+fn automatic_sort_rejects_non_sortable_column() {
+    let _ = DataView::list(rows(), |row| row.id, |row| row.name.to_string())
+        .sorted_by("label", SortDirection::Ascending);
 }

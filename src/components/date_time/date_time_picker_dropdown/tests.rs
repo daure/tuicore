@@ -1,5 +1,6 @@
 use super::*;
 use ratatui::style::Modifier;
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn focused_field_is_bold_and_unfocused_field_is_not() {
@@ -54,6 +55,76 @@ fn date_time_picker_dropdown_accepts_external_datetime() {
                 .unwrap()
                 .with_time(time::Time::from_hms(9, 30, 0).unwrap())
         )
+    );
+}
+
+#[test]
+fn second_precision_external_editor_round_trip_preserves_date_time() {
+    let value = Date::from_calendar_date(2026, time::Month::July, 22)
+        .unwrap()
+        .with_time(time::Time::from_hms(9, 30, 42).unwrap());
+    let mut dropdown = DateTimePickerDropdown::<()>::new()
+        .value(Some(value))
+        .precision(TimePrecision::HourMinuteSecond);
+    let mut launch = EventCtx::default();
+
+    dropdown.event(
+        &TuiEvent::Key(crate::KeyEvent {
+            code: crate::Key::Char('o'),
+            modifiers: crate::KeyModifiers::CONTROL,
+        }),
+        &mut launch,
+    );
+
+    let request = launch
+        .external_editor_request()
+        .expect("external editor should be requested");
+    assert_eq!(request.value, "2026-07-22 09:30:42");
+    dropdown.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: request.value.clone(),
+            line: request.line,
+            col: request.col,
+        }),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(dropdown.current_value(), Some(value));
+}
+
+#[test]
+fn second_precision_field_renders_and_measures_seconds() {
+    let value = Date::from_calendar_date(2026, time::Month::July, 22)
+        .unwrap()
+        .with_time(time::Time::from_hms(9, 30, 42).unwrap());
+    let dropdown = DateTimePickerDropdown::<()>::new()
+        .value(Some(value))
+        .precision(TimePrecision::HourMinuteSecond);
+
+    assert_eq!(dropdown.measure_size(), (34, 1));
+    let text = dropdown
+        .field_line(34)
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("09:30:42"));
+}
+
+#[test]
+fn focused_time_popup_border_uses_accent_chrome() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new();
+    dropdown.focused = true;
+    dropdown.set_open(true);
+    dropdown.step = DateTimeDropdownStep::Time;
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render_portal_popup(frame, frame.area()))
+        .expect("popup should render");
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().fg,
+        theme().accent_fg()
     );
 }
 

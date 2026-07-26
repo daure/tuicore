@@ -2,7 +2,7 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::{AnimationSettings, LayoutCtx, LayoutProposal, TuiNode};
+use crate::{AnimationSettings, KeyModifiers, LayoutCtx, LayoutProposal, TuiNode};
 
 type Row = (usize, String, String, String);
 
@@ -64,6 +64,13 @@ fn expected_viewport_area(control: &ListControl<Row, usize>) -> Rect {
 }
 
 #[test]
+fn default_remove_binding_is_plain_x_only() {
+    let bindings = ListControlKeyBindings::default();
+
+    assert_eq!(bindings.remove, vec![KeySpec::plain('x')]);
+}
+
+#[test]
 fn active_input_spans_data_view_viewport_at_normal_and_narrow_widths() {
     for width in [80, 24] {
         let mut control = table(2);
@@ -81,6 +88,205 @@ fn active_input_uses_scrollbar_adjusted_data_view_viewport() {
 
     assert_eq!(control.input_area, expected_viewport_area(&control));
     assert!(control.input_area.right() < Panel::inner_area(area).right());
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RankedRow {
+    id: usize,
+    rank: usize,
+}
+
+fn ranked_control(rows: impl IntoIterator<Item = RankedRow>) -> ListControl<RankedRow, usize> {
+    ListControl::new(rows, |row| row.id, |_, _| unreachable!())
+        .columns([
+            Column::text("rank", "Rank", Constraint::Fill(1), |row: &RankedRow| {
+                row.rank.to_string()
+            })
+            .reorderable(|row| row.rank, |row, rank| row.rank = rank)
+            .hidden(),
+            Column::text("id", "ID", Constraint::Fill(1), |row: &RankedRow| {
+                row.id.to_string()
+            }),
+        ])
+        .reorderable_by("rank")
+}
+
+fn modified_key(code: Key, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent { code, modifiers }
+}
+
+#[test]
+fn configured_reorder_stages_movement_and_commit_rewrites_only_rank_properties() {
+    let mut control = ranked_control([
+        RankedRow { id: 1, rank: 10 },
+        RankedRow { id: 2, rank: 20 },
+        RankedRow { id: 3, rank: 30 },
+    ]);
+    control.panel_mut().set_bottom_left(" Ready ");
+    let mut ctx = EventCtx::default();
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert!(control.is_reordering());
+    assert_eq!(
+        control
+            .panel_ref()
+            .title_text(PanelTitlePosition::BottomLeft),
+        Some("Moving")
+    );
+
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+    control.handle_reorder_key(KeyEvent::from(Key::Char('j')), &mut ctx);
+    assert_eq!(control.data_view.highlighted_id(), Some(1));
+    control.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+
+    assert!(!control.is_reordering());
+    assert_eq!(
+        control
+            .panel_ref()
+            .title_text(PanelTitlePosition::BottomLeft),
+        Some(" Ready ")
+    );
+    assert_eq!(
+        control.items().iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .map(|row| row.rank)
+            .collect::<Vec<_>>(),
+        vec![30, 10, 20]
+    );
+    assert_eq!(control.data_view.highlighted_id(), Some(1));
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Reordered {
+            row_ids: vec![2, 3, 1]
+        }]
+    );
+}
+
+#[test]
+fn hidden_reorder_column_does_not_change_visible_layout() {
+    let control = ranked_control([RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 20 }]);
+
+    assert_eq!(
+        control
+            .data_view
+            .visible_column_rects(Rect::new(0, 0, 30, 3), 1, 1)
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn reorder_cancel_restores_order_and_unconfigured_key_propagates() {
+    let mut plain = table(2);
+    assert!(
+        plain
+            .handle_reorder_key(
+                modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+                &mut EventCtx::default()
+            )
+            .is_none()
+    );
+
+    for cancel in [
+        KeyEvent::from(Key::Esc),
+        modified_key(Key::Char('['), KeyModifiers::CONTROL),
+    ] {
+        let mut control =
+            ranked_control([RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 20 }]);
+        let mut ctx = EventCtx::default();
+        control.handle_reorder_key(
+            modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+            &mut ctx,
+        );
+        control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+        control.handle_reorder_key(cancel, &mut ctx);
+        assert!(!control.is_reordering());
+        assert_eq!(
+            control
+                .panel_ref()
+                .title_text(PanelTitlePosition::BottomLeft),
+            None
+        );
+        assert_eq!(control.items()[0].rank, 10);
+        assert_eq!(
+            control.take_events(),
+            vec![ListControlEvent::ReorderCancelled { row_id: 1 }]
+        );
+    }
+}
+
+#[test]
+fn reorder_rejects_duplicate_rank_keys_and_blocks_other_actions_while_active() {
+    let mut duplicate =
+        ranked_control([RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 10 }]);
+    duplicate.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut EventCtx::default(),
+    );
+    assert!(!duplicate.is_reordering());
+    assert_eq!(
+        duplicate.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DuplicateRankKeys
+        }]
+    );
+
+    let mut control =
+        ranked_control([RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 20 }]);
+    let mut ctx = EventCtx::default();
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_reorder_key(KeyEvent::from(Key::Char('+')), &mut ctx);
+    assert!(control.is_reordering());
+    assert!(!control.is_adding());
+}
+
+#[test]
+#[should_panic(expected = "must be reorderable")]
+fn reorder_configuration_rejects_non_reorderable_column() {
+    let _ = ListControl::<RankedRow, usize>::new([], |row| row.id, |_, _| unreachable!())
+        .column(
+            Column::text("rank", "Rank", Constraint::Fill(1), |row: &RankedRow| {
+                row.rank.to_string()
+            })
+            .hidden(),
+        )
+        .reorderable_by("rank");
+}
+
+#[test]
+#[should_panic(expected = "mutually exclusive")]
+fn automatic_sort_and_reorder_configuration_are_exclusive() {
+    let _ = ListControl::<RankedRow, usize>::new(
+        [RankedRow { id: 1, rank: 10 }],
+        |row| row.id,
+        |_, _| unreachable!(),
+    )
+    .column(
+        Column::text("rank", "Rank", Constraint::Fill(1), |row: &RankedRow| {
+            row.rank.to_string()
+        })
+        .sortable(|row| row.rank)
+        .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+    )
+    .sorted_by("rank", SortDirection::Ascending)
+    .reorderable_by("rank");
+}
+
+#[test]
+#[should_panic(expected = "mutually exclusive")]
+fn reorder_and_automatic_sort_configuration_are_exclusive() {
+    let _ =
+        ranked_control([RankedRow { id: 1, rank: 10 }]).sorted_by("rank", SortDirection::Ascending);
 }
 
 fn key(code: Key) -> TuiEvent {
@@ -264,6 +470,27 @@ fn measure_grows_by_rows_and_caps_with_headers_chrome_and_draft() {
     assert_eq!(many.measure(proposal).preferred.height, 9);
     empty.begin_add();
     assert_eq!(empty.measure(proposal).preferred.height, 7);
+}
+
+#[test]
+fn measure_reserves_height_for_horizontal_scrollbar() {
+    let mut control: ListControl<_, _, ()> = ListControl::list(
+        [(1, "https://example.com/a/very/long/link".to_string())],
+        |row: &(usize, String)| row.0,
+        |row| row.1.clone(),
+        |value, _| (2, value),
+    );
+
+    let height = control
+        .measure(LayoutProposal::at_most(20, u16::MAX))
+        .preferred
+        .height;
+    assert_eq!(height, 4);
+
+    control.layout(Rect::new(0, 0, 20, height), &mut LayoutCtx::new());
+    let geometry = control.data_view.scroll_geometry(control.data_area);
+    assert!(geometry.layout.horizontal_bar.is_some());
+    assert!(geometry.layout.vertical_bar.is_none());
 }
 
 #[test]

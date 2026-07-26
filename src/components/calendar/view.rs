@@ -366,6 +366,14 @@ where
         };
         let entry = self.entry_line(index);
         let line_style = self.entry_summary_style(index, entry.style);
+        let on_highlight_background = self.highlighted_entry == Some(index)
+            || matches!(kind, EventSummaryKind::Month | EventSummaryKind::Week)
+                && span.covers_date(self.cursor);
+        let marker_style = if self.focused && on_highlight_background {
+            Style::default().fg(theme().highlight_fg())
+        } else {
+            Style::default().fg(theme().accent_fg())
+        };
         let mut body_spans = Vec::new();
         if week_timed {
             body_spans.push(Span::styled(
@@ -378,13 +386,7 @@ where
         let body_width = width.saturating_sub(prefix_width.min(u16::MAX as usize) as u16);
         if body_width == 0 {
             return (max_lines > 0)
-                .then(|| {
-                    Line::from(Span::styled(
-                        prefix,
-                        Style::default().fg(theme().accent_fg()),
-                    ))
-                    .style(line_style)
-                })
+                .then(|| Line::from(Span::styled(prefix, marker_style)).style(line_style))
                 .into_iter()
                 .collect();
         }
@@ -398,7 +400,7 @@ where
                     } else {
                         " ".repeat(prefix_width)
                     },
-                    Style::default().fg(theme().accent_fg()),
+                    marker_style,
                 )];
                 spans.extend(body_spans);
                 Line::from(spans).style(line_style)

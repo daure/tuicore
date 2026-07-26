@@ -35,6 +35,7 @@ pub use model::{
     DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
+pub(crate) use model::{ReorderSnapshot, ReorderUnavailableReason};
 use model::{RowIdFn, VisibleRow};
 
 const HORIZONTAL_JUMP: isize = 8;
@@ -48,6 +49,7 @@ const EMPTY_CHOICE_ID: &str = "";
 const HEADER_PICK_TIMEOUT: Duration = Duration::from_secs(1);
 
 type ChoiceDropdown = Dropdown<DataViewChoice, String>;
+type CopyFormatter<T> = dyn Fn(&T) -> String;
 
 pub(crate) fn search_focus_id() -> FocusId {
     FocusId::new(TEXT_INPUT_FOCUS)
@@ -64,14 +66,18 @@ pub struct DataView<T, Id> {
     visible_row_indices: Option<Vec<usize>>,
     columns: Vec<Column<T, Id>>,
     row_id: Box<RowIdFn<T, Id>>,
+    copy_formatter: Option<Box<CopyFormatter<T>>>,
     tree: Option<TreeAdapter<T, Id>>,
     expanded: HashSet<Id>,
     highlighted: usize,
     focused: bool,
+    focused_events_before_global_hotkeys: bool,
     headers: bool,
     row_height: u16,
     scroll: ScrollState,
     sort: Option<DataViewSort>,
+    reorder_sort: Option<String>,
+    derived_row_order: Option<Vec<Id>>,
     pagination: Option<DataViewPagination>,
     last_activated: Option<Id>,
     events: Vec<DataViewTypedEvent<Id>>,
@@ -121,14 +127,18 @@ where
             visible_row_indices: None,
             columns: Vec::new(),
             row_id: Box::new(row_id),
+            copy_formatter: None,
             tree: None,
             expanded: HashSet::new(),
             highlighted: 0,
             focused: false,
+            focused_events_before_global_hotkeys: true,
             headers: false,
             row_height: 1,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             sort: None,
+            reorder_sort: None,
+            derived_row_order: None,
             pagination: None,
             last_activated: None,
             events: Vec::new(),
@@ -188,6 +198,11 @@ where
         self.columns.extend(columns);
     }
 
+    pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
+        self.copy_formatter = Some(Box::new(formatter));
+        self
+    }
+
     pub fn headers(mut self, headers: bool) -> Self {
         self.headers = headers;
         self
@@ -213,6 +228,11 @@ where
 
     pub fn filter_controls(mut self, enabled: bool) -> Self {
         self.filter_controls = enabled;
+        self
+    }
+
+    pub fn focused_events_before_global_hotkeys(mut self, enabled: bool) -> Self {
+        self.focused_events_before_global_hotkeys = enabled;
         self
     }
 
@@ -411,7 +431,19 @@ where
     }
 
     pub(crate) fn measurement_chrome_height(&self) -> u16 {
-        u16::from(self.headers).saturating_add(u16::from(self.action_bar))
+        u16::from(self.shows_headers()).saturating_add(u16::from(self.action_bar))
+    }
+
+    pub(super) fn visible_columns(&self) -> impl Iterator<Item = &Column<T, Id>> {
+        self.columns.iter().filter(|column| column.visible)
+    }
+
+    pub(super) fn visible_column_count(&self) -> usize {
+        self.visible_columns().count()
+    }
+
+    pub(super) fn shows_headers(&self) -> bool {
+        self.headers && self.visible_column_count() > 0
     }
 
     pub fn row_id(&self, row: &T) -> Id {
@@ -489,8 +521,18 @@ where
         self.scroll.offset().y
     }
 
+    #[cfg(test)]
+    pub(crate) fn horizontal_scroll_offset_for_test(&self) -> usize {
+        self.scroll.offset().x
+    }
+
     pub fn pagination(mut self, page_size: usize) -> Self {
         self.pagination = (page_size > 0).then_some(DataViewPagination { page_size, page: 0 });
+        self
+    }
+
+    pub fn sorted_by(mut self, column_id: impl Into<String>, direction: SortDirection) -> Self {
+        self.set_sort(column_id.into(), direction);
         self
     }
 
@@ -510,14 +552,22 @@ where
         direction: SortDirection,
     ) -> DataViewOutcome {
         let before_id = self.highlighted_id();
-        self.sort = Some(DataViewSort {
-            column_id: column_id.into(),
-            direction,
-        });
-        let update = self.set_highlighted_index_from(
-            self.highlighted.min(self.visible_len().saturating_sub(1)),
-            before_id,
-        );
+        self.set_sort(column_id.into(), direction);
+        let update = self.restore_highlight(before_id.clone());
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
+    }
+
+    pub fn clear_sort(&mut self) -> DataViewOutcome {
+        let before_id = self.highlighted_id();
+        if self.sort.take().is_none() {
+            return DataViewOutcome::IDLE;
+        }
+        let update = self.restore_highlight(before_id);
         DataViewOutcome {
             handled: true,
             changed: true,
@@ -541,19 +591,157 @@ where
         if let Some(direction) = next {
             self.sort_by(column_id, direction)
         } else {
-            let before_id = self.highlighted_id();
-            self.sort = None;
-            let update = self.set_highlighted_index_from(
-                self.highlighted.min(self.visible_len().saturating_sub(1)),
-                before_id,
-            );
-            DataViewOutcome {
-                handled: true,
-                changed: true,
-                active: false,
-                activated: update.activated,
-            }
+            self.clear_sort()
         }
+    }
+
+    fn set_sort(&mut self, column_id: String, direction: SortDirection) {
+        assert!(
+            self.columns
+                .iter()
+                .any(|column| column.id == column_id && column.sort_compare.is_some()),
+            "DataView automatic sort column `{column_id}` must be sortable"
+        );
+        assert!(
+            self.reorder_sort.is_none(),
+            "DataView automatic sorting and reorder sorting are mutually exclusive"
+        );
+        self.sort = Some(DataViewSort {
+            column_id,
+            direction,
+        });
+    }
+
+    fn restore_highlight(&mut self, before_id: Option<Id>) -> HighlightUpdate {
+        let highlighted = before_id
+            .as_ref()
+            .and_then(|id| self.visible_rows().iter().position(|row| &row.id == id))
+            .unwrap_or_else(|| self.highlighted.min(self.visible_len().saturating_sub(1)));
+        self.set_highlighted_index_from(highlighted, before_id)
+    }
+
+    pub(crate) fn has_automatic_sort(&self) -> bool {
+        self.sort.is_some()
+    }
+
+    pub(crate) fn configure_reorder_sort(&mut self, column_id: &str) {
+        assert!(
+            self.columns
+                .iter()
+                .any(|column| column.id == column_id && column.reorder.is_some()),
+            "ListControl reorder column `{column_id}` must be reorderable"
+        );
+        assert!(
+            self.sort.is_none(),
+            "ListControl automatic sorting and reorderable mode are mutually exclusive"
+        );
+        self.reorder_sort = Some(column_id.to_string());
+    }
+
+    pub(crate) fn reorder_snapshot(
+        &self,
+        column_id: &str,
+    ) -> Result<ReorderSnapshot<Id>, ReorderUnavailableReason> {
+        if self.tree.is_some() {
+            return Err(ReorderUnavailableReason::Tree);
+        }
+        if self.visible_row_indices.is_some() {
+            return Err(ReorderUnavailableReason::VisibleSubset);
+        }
+        if !self.transform_state.search.trim().is_empty()
+            || !self.transform_state.filters.is_empty()
+        {
+            return Err(ReorderUnavailableReason::TransformActive);
+        }
+        if self.pagination.is_some() {
+            return Err(ReorderUnavailableReason::Paginated);
+        }
+        let ids = self.row_ids();
+        if ids.iter().collect::<HashSet<_>>().len() != ids.len() {
+            return Err(ReorderUnavailableReason::DuplicateRowIds);
+        }
+        let column = self
+            .columns
+            .iter()
+            .find(|column| column.id == column_id)
+            .and_then(|column| column.reorder.as_ref())
+            .expect("configured reorder column exists");
+        let mut indices = (0..self.rows.len()).collect::<Vec<_>>();
+        indices.sort_by(|left, right| (column.compare)(&self.rows[*left], &self.rows[*right]));
+        if indices
+            .windows(2)
+            .any(|pair| (column.compare)(&self.rows[pair[0]], &self.rows[pair[1]]).is_eq())
+        {
+            return Err(ReorderUnavailableReason::DuplicateRankKeys);
+        }
+        let ranks = (column.snapshot)(&self.rows, &indices);
+        Ok(ReorderSnapshot {
+            ids: indices
+                .into_iter()
+                .map(|index| (self.row_id)(&self.rows[index]))
+                .collect(),
+            ranks,
+        })
+    }
+
+    pub(crate) fn set_derived_row_order(&mut self, ids: Option<Vec<Id>>) {
+        self.derived_row_order = ids;
+    }
+
+    pub(crate) fn reorder_snapshot_matches(
+        &self,
+        column_id: &str,
+        snapshot: &ReorderSnapshot<Id>,
+    ) -> bool {
+        let Ok(current) = self.reorder_snapshot(column_id) else {
+            return false;
+        };
+        if current.ids != snapshot.ids {
+            return false;
+        }
+        let ordered = self.row_indices_for_ids(current.ids);
+        let column = self
+            .columns
+            .iter()
+            .find(|column| column.id == column_id)
+            .and_then(|column| column.reorder.as_ref())
+            .expect("configured reorder column exists");
+        (column.snapshot_matches)(&self.rows, &ordered, snapshot.ranks.as_ref())
+    }
+
+    pub(crate) fn commit_reorder(
+        &mut self,
+        column_id: &str,
+        staged: &[Id],
+        snapshot: &ReorderSnapshot<Id>,
+    ) -> bool {
+        if !self.reorder_snapshot_matches(column_id, snapshot)
+            || snapshot.ids.len() != staged.len()
+            || snapshot.ids.iter().collect::<HashSet<_>>() != staged.iter().collect::<HashSet<_>>()
+        {
+            return false;
+        }
+        let staged_indices = self.row_indices_for_ids(staged.iter().cloned());
+        let row_ids_before = self.row_ids();
+        let column = self
+            .columns
+            .iter()
+            .find(|column| column.id == column_id)
+            .and_then(|column| column.reorder.as_ref())
+            .expect("configured reorder column exists");
+        let Some(candidate) = (column.apply)(&self.rows, &staged_indices, snapshot.ranks.as_ref())
+        else {
+            return false;
+        };
+        let valid = candidate
+            .iter()
+            .map(|row| (self.row_id)(row))
+            .eq(row_ids_before)
+            && (column.snapshot_matches)(&candidate, &staged_indices, snapshot.ranks.as_ref());
+        if valid {
+            self.rows = candidate;
+        }
+        valid
     }
 
     pub fn next_page(&mut self) -> DataViewOutcome {
@@ -705,7 +893,7 @@ where
         let rows = self.visible_rows();
         let row = rows.get(self.highlighted)?;
         let mut value = serde_json::Map::new();
-        for column in &self.columns {
+        for column in self.visible_columns() {
             let line = (column.renderer)(
                 row.row,
                 &CellContext {
@@ -726,6 +914,14 @@ where
             value.insert(column.id.clone(), serde_json::Value::String(text));
         }
         Some(serde_json::Value::Object(value).to_string())
+    }
+
+    fn highlighted_copy_value(&self) -> Option<String> {
+        if let Some(formatter) = &self.copy_formatter {
+            let rows = self.visible_rows();
+            return rows.get(self.highlighted).map(|row| formatter(row.row));
+        }
+        self.highlighted_json()
     }
 
     pub fn highlight_id(&mut self, id: &Id) -> DataViewOutcome {
@@ -1527,16 +1723,16 @@ where
 }
 
 fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
-    let plain_control = key.modifiers.contains(KeyModifiers::CONTROL)
+    let plain_shift = key.modifiers.contains(KeyModifiers::SHIFT)
         && !key
             .modifiers
-            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         && matches!(key.code, Key::Char(_));
-    if !plain_control {
+    if !plain_shift {
         return None;
     }
 
-    let base_key = uncontrol_key(key);
+    let base_key = unshift_key(key);
     if keys.line_left_matches(base_key) {
         Some(-HORIZONTAL_JUMP)
     } else if keys.line_right_matches(base_key) {
@@ -1546,8 +1742,8 @@ fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
     }
 }
 
-fn uncontrol_key(mut key: KeyEvent) -> KeyEvent {
-    key.modifiers.remove(KeyModifiers::CONTROL);
+fn unshift_key(mut key: KeyEvent) -> KeyEvent {
+    key.modifiers.remove(KeyModifiers::SHIFT);
     if let Key::Char(c) = key.code {
         key.code = Key::Char(c.to_ascii_lowercase());
     }

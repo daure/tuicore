@@ -15,7 +15,8 @@ use crate::{
 
 use super::{
     DatePicker, PickerOutcome, TimeField, TimePicker, TimePrecision, finish_event,
-    format_picker_time, parse_editor_time, picker_size_hint, request_unfocus_if_canceled,
+    format_picker_time_for_precision, parse_editor_time, picker_size_hint,
+    request_unfocus_if_canceled,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,13 +124,14 @@ impl<M> DateTimePicker<M> {
                         .borders(Borders::ALL)
                         .border_set(border_set(preset().border()))
                         .border_style(Style::default().fg(if self.focused {
-                            t.highlight_bg()
+                            t.accent_fg()
                         } else {
                             t.border_fg()
                         }));
                     let inner = block.inner(area);
                     frame.render_widget(block, area);
-                    self.time.render(frame, centered_time_area(inner));
+                    self.time
+                        .render(frame, centered_time_area(inner, self.time.rendered_width()));
                 }
             }
             return;
@@ -317,7 +319,10 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
                     ctx.request_external_editor(value.clone(), 1, value.len() + 1);
                 }
                 DateTimePart::Time => {
-                    let value = format_picker_time(self.time.draft_value());
+                    let value = format_picker_time_for_precision(
+                        self.time.draft_value(),
+                        self.time.configured_precision(),
+                    );
                     let col = match self.time.active_field() {
                         TimeField::Hour => 1,
                         TimeField::Minute => 4,
@@ -372,8 +377,8 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
     }
 }
 
-fn centered_time_area(area: Rect) -> Rect {
-    let width = 8.min(area.width);
+fn centered_time_area(area: Rect, content_width: u16) -> Rect {
+    let width = content_width.min(area.width);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(1) / 2,

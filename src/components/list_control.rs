@@ -4,19 +4,22 @@ mod confirmation;
 mod editor;
 mod input;
 mod node;
+mod reorder;
 #[cfg(test)]
 mod tests;
 
 use ratatui::layout::{Constraint, Rect};
 
+use super::data_view::ReorderSnapshot;
 use super::{
     Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView, Dropdown,
-    DropdownSearchMode, DropdownVariant, Panel, TextInput,
+    DropdownSearchMode, DropdownVariant, Panel, PanelTitlePosition, SortDirection, TextInput,
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
     KeyEvent, KeySpec, TreePath, TuiEvent,
 };
+use confirmation::DynamicChild;
 use input::ListControlInput;
 
 const DATA_SLOT: &str = "data";
@@ -92,11 +95,39 @@ impl ListControlField {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListControlEvent<Id> {
-    Added { row_id: Id },
-    Removed { row_id: Id },
-    Edited { row_id: Id },
+    Added {
+        row_id: Id,
+    },
+    Removed {
+        row_id: Id,
+    },
+    Edited {
+        row_id: Id,
+    },
     AddCancelled,
-    EditCancelled { row_id: Id },
+    EditCancelled {
+        row_id: Id,
+    },
+    Reordered {
+        row_ids: Vec<Id>,
+    },
+    ReorderCancelled {
+        row_id: Id,
+    },
+    ReorderUnavailable {
+        reason: ListControlReorderUnavailable,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListControlReorderUnavailable {
+    Tree,
+    VisibleSubset,
+    TransformActive,
+    Paginated,
+    DuplicateRowIds,
+    DuplicateRankKeys,
+    DataChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,14 +135,19 @@ pub struct ListControlKeyBindings {
     pub add: Vec<KeySpec>,
     pub remove: Vec<KeySpec>,
     pub edit: Vec<KeySpec>,
+    pub reorder: Vec<KeySpec>,
 }
 
 impl Default for ListControlKeyBindings {
     fn default() -> Self {
         Self {
             add: vec![KeySpec::plain('+')],
-            remove: vec![KeySpec::plain('-')],
+            remove: vec![KeySpec::plain('x')],
             edit: vec![KeySpec::plain('e')],
+            reorder: vec![KeySpec::key_with_modifiers(
+                Key::Char('m'),
+                crate::KeyModifiers::CONTROL,
+            )],
         }
     }
 }
@@ -132,6 +168,11 @@ impl ListControlKeyBindings {
         self
     }
 
+    pub fn reorder(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.reorder = keys.into_iter().collect();
+        self
+    }
+
     fn add_matches(&self, key: KeyEvent) -> bool {
         self.add.iter().any(|binding| binding.matches(key))
     }
@@ -143,6 +184,17 @@ impl ListControlKeyBindings {
     fn edit_matches(&self, key: KeyEvent) -> bool {
         self.edit.iter().any(|binding| binding.matches(key))
     }
+
+    fn reorder_matches(&self, key: KeyEvent) -> bool {
+        self.reorder.iter().any(|binding| binding.matches(key))
+    }
+}
+
+struct ReorderState<Id> {
+    snapshot: ReorderSnapshot<Id>,
+    staged: Vec<Id>,
+    moving_id: Id,
+    previous_bottom_left: Option<String>,
 }
 
 pub struct ListControl<T, Id, M = ()> {
@@ -166,8 +218,11 @@ pub struct ListControl<T, Id, M = ()> {
     remove_confirmation: Option<RemoveConfirmation<T>>,
     confirmation_keys: ConfirmationDialogKeyBindings,
     pending_remove: Option<Id>,
-    confirmation_dialog: Option<ConfirmationDialog<M>>,
+    confirmation_dialog: DynamicChild<ConfirmationDialog<M>, M>,
     confirmation_area: Rect,
+    confirmation_bounds: Rect,
+    reorder_column: Option<String>,
+    reorder: Option<ReorderState<Id>>,
 }
 
 impl<T, Id, M: 'static> ListControl<T, Id, M>
@@ -248,12 +303,15 @@ where
             max_rows: DEFAULT_MAX_ROWS,
             remove_confirmation: None,
             confirmation_keys: ConfirmationDialogKeyBindings {
-                yes: Some(KeySpec::plain('r')),
-                no: Some(KeySpec::plain('k')),
+                yes: Some(KeySpec::plain('d')),
+                no: Some(KeySpec::plain('c')),
             },
             pending_remove: None,
-            confirmation_dialog: None,
+            confirmation_dialog: DynamicChild::default(),
             confirmation_area: Rect::default(),
+            confirmation_bounds: Rect::default(),
+            reorder_column: None,
+            reorder: None,
         }
     }
 
@@ -278,6 +336,11 @@ where
 
     pub fn columns(mut self, columns: impl IntoIterator<Item = Column<T, Id>>) -> Self {
         self.data_view.add_columns(columns);
+        self
+    }
+
+    pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
+        self.data_view = self.data_view.copy_with(formatter);
         self
     }
 
@@ -352,6 +415,26 @@ where
         self
     }
 
+    pub fn sorted_by(mut self, column_id: impl Into<String>, direction: SortDirection) -> Self {
+        assert!(
+            self.reorder_column.is_none(),
+            "ListControl automatic sorting and reorderable mode are mutually exclusive"
+        );
+        self.data_view = self.data_view.sorted_by(column_id, direction);
+        self
+    }
+
+    pub fn reorderable_by(mut self, column_id: impl Into<String>) -> Self {
+        assert!(
+            !self.data_view.has_automatic_sort(),
+            "ListControl automatic sorting and reorderable mode are mutually exclusive"
+        );
+        let column_id = column_id.into();
+        self.data_view.configure_reorder_sort(&column_id);
+        self.reorder_column = Some(column_id);
+        self
+    }
+
     pub fn editable(
         mut self,
         getter: impl Fn(&T) -> Vec<String> + 'static,
@@ -390,6 +473,10 @@ where
 
     pub fn is_editing(&self) -> bool {
         self.editing.is_some()
+    }
+
+    pub fn is_reordering(&self) -> bool {
+        self.reorder.is_some()
     }
 
     pub fn take_events(&mut self) -> Vec<ListControlEvent<Id>> {
@@ -497,7 +584,7 @@ where
             ctx.request_layout();
         } else if self.keys.remove_matches(key) {
             if self.remove_confirmation.is_some() {
-                if self.request_remove_confirmation() {
+                if self.request_remove_confirmation(ctx) {
                     Self::focus_child(ctx, route, CONFIRM_SLOT, DIALOG_FOCUS);
                     ctx.request_layout();
                 }

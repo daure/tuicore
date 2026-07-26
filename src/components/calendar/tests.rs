@@ -1094,6 +1094,43 @@ fn event_markers_default_by_span_and_callback_supports_per_event_unicode() {
     assert!(buffer_row(buffer, 3, 20).starts_with(" • Call"));
 }
 
+#[test]
+fn focused_date_event_markers_use_selection_foreground() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "highlighted",
+                title: "Highlighted",
+                span: CalendarSpan::all_day(day),
+            },
+            DemoEntry {
+                id: "other",
+                title: "Other",
+                span: CalendarSpan::all_day(day),
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .event_marker(|_| '◆');
+    calendar.set_focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(20, 4)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
+        .unwrap();
+
+    for y in [2, 3] {
+        let marker = terminal.backend().buffer().cell((1, y)).unwrap();
+        assert_eq!(marker.symbol(), "◆");
+        assert_eq!(marker.fg, crate::theme().highlight_fg());
+        assert_eq!(marker.bg, crate::theme().highlight_bg());
+    }
+}
+
 fn demo_calendar() -> Calendar<DemoEntry, &'static str> {
     Calendar::new(
         [

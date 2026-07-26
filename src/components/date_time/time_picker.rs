@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use time::Time;
 
-use crate::event::{KeyEvent, TuiEvent};
+use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_underline_style, keybindings,
@@ -86,6 +86,14 @@ impl<M> TimePicker<M> {
             self.active_field = TimeField::Minute;
         }
         self.typed_digits.clear();
+    }
+
+    pub(super) fn configured_precision(&self) -> TimePrecision {
+        self.precision
+    }
+
+    pub(super) fn rendered_width(&self) -> u16 {
+        self.time_line_width()
     }
 
     pub fn minute_step(mut self, step: u8) -> Self {
@@ -229,6 +237,19 @@ impl<M> TimePicker<M> {
         }
         if bindings.end_matches(key) {
             return self.set_active_field_to_max();
+        }
+        if key.code == Key::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.typed_digits.clear();
+            self.value = self.draft;
+            return PickerOutcome::selected(true);
+        }
+        if key.code == Key::Enter
+            && key.modifiers.is_empty()
+            && self.active_field != self.last_field()
+        {
+            self.typed_digits.clear();
+            self.active_field = self.next_field();
+            return PickerOutcome::handled(true);
         }
         if bindings.button().press_matches(key) {
             self.typed_digits.clear();
@@ -453,6 +474,13 @@ impl<M> TimePicker<M> {
             (TimeField::Minute, TimePrecision::HourMinute) => TimeField::Hour,
             (TimeField::Minute, TimePrecision::HourMinuteSecond) => TimeField::Second,
             (TimeField::Second, _) => TimeField::Hour,
+        }
+    }
+
+    fn last_field(&self) -> TimeField {
+        match self.precision {
+            TimePrecision::HourMinute => TimeField::Minute,
+            TimePrecision::HourMinuteSecond => TimeField::Second,
         }
     }
 }

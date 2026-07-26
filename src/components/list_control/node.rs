@@ -10,9 +10,9 @@ use super::{
 };
 use crate::components::{DataView, Dropdown, Panel, TextInput};
 use crate::{
-    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx,
-    OverlayLayer, OverlaySpec, TickResult, TreePath, TuiEvent, TuiNode,
+    Animated, AnimationSettings, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute,
+    FocusCtx, FocusId, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    LifecycleCtx, OverlayLayer, OverlaySpec, TickResult, TreePath, TuiEvent, TuiNode,
 };
 
 impl<T, Id, M: 'static> TuiNode<M> for ListControl<T, Id, M>
@@ -27,10 +27,27 @@ where
             .saturating_add(usize::from(self.editor_active()))
             .min(self.max_rows)
             .min(u16::MAX as usize) as u16;
-        let height = self
-            .data_view
-            .measurement_chrome_height()
-            .saturating_add(visible_rows.saturating_mul(self.data_view.configured_row_height()))
+        let chrome_height = self.data_view.measurement_chrome_height();
+        let row_height = self.data_view.configured_row_height();
+        let editor_rows = u16::from(self.editor_active()).min(visible_rows);
+        let data_height = chrome_height.saturating_add(
+            visible_rows
+                .saturating_sub(editor_rows)
+                .saturating_mul(row_height),
+        );
+        let horizontal_scrollbar_height = match proposal.width {
+            AxisProposal::Unbounded => 0,
+            AxisProposal::AtMost(width) | AxisProposal::Exact(width) => {
+                let layout = self
+                    .data_view
+                    .scroll_geometry(Rect::new(0, 0, width.saturating_sub(2), data_height))
+                    .layout;
+                u16::from(layout.viewport.height < layout.outer.height)
+            }
+        };
+        let height = chrome_height
+            .saturating_add(visible_rows.saturating_mul(row_height))
+            .saturating_add(horizontal_scrollbar_height)
             .saturating_add(2);
         LayoutSizeHint::content(child.preferred.width.saturating_add(2), height)
             .normalized(proposal)
@@ -38,6 +55,12 @@ where
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
+        let overlay_bounds = ctx.overlay_bounds();
+        self.confirmation_bounds = if overlay_bounds.is_empty() {
+            area
+        } else {
+            overlay_bounds
+        };
         let inner = Panel::inner_area(area);
         let input_height = if self.editor_active() {
             self.data_view.configured_row_height().min(inner.height)
@@ -87,13 +110,14 @@ where
                 };
             });
         }
-        if let Some(dialog) = &mut self.confirmation_dialog {
-            let hint = dialog.measure(LayoutProposal::at_most(inner.width, inner.height));
-            let width = hint.preferred.width.min(inner.width);
-            let height = hint.preferred.height.min(inner.height);
+        if let Some(dialog) = self.confirmation_dialog.child_mut() {
+            let bounds = self.confirmation_bounds;
+            let hint = dialog.measure(LayoutProposal::at_most(bounds.width, bounds.height));
+            let width = hint.preferred.width.min(bounds.width);
+            let height = hint.preferred.height.min(bounds.height);
             self.confirmation_area = Rect::new(
-                inner.x + inner.width.saturating_sub(width) / 2,
-                inner.y + inner.height.saturating_sub(height) / 2,
+                bounds.x + bounds.width.saturating_sub(width) / 2,
+                bounds.y + bounds.height.saturating_sub(height) / 2,
                 width,
                 height,
             );
@@ -102,7 +126,7 @@ where
                 self.confirmation_area,
                 self.confirmation_area,
             );
-            overlay.bounds = Some(area);
+            overlay.bounds = Some(bounds);
             overlay.layer = OverlayLayer::Modal;
             ctx.register_overlay(overlay);
             ctx.with_overlay_bounds(self.confirmation_area, |ctx| {
@@ -115,6 +139,7 @@ where
             });
         } else {
             self.confirmation_area = Rect::default();
+            self.confirmation_bounds = Rect::default();
         }
         LayoutResult::new(area)
     }
@@ -137,8 +162,12 @@ where
                 }
             }
         }
-        if let Some(dialog) = &self.confirmation_dialog {
-            crate::components::dialog_layer::dim_backdrop_buffer(frame, area, 0.45);
+        if let Some(dialog) = self.confirmation_dialog.child() {
+            crate::components::dialog_layer::dim_backdrop_buffer(
+                frame,
+                self.confirmation_bounds,
+                0.45,
+            );
             ctx.push_portal_with_ctx(
                 OverlayLayer::Modal,
                 0,
@@ -150,12 +179,29 @@ where
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         self.handle_visual_hotkey(event, ctx);
+        if let TuiEvent::Key(key) = event
+            && self.is_reordering()
+            && let Some(outcome) = self.handle_reorder_key(*key, ctx)
+        {
+            return outcome;
+        }
         if self.confirmation_dialog.is_some() {
             return self.confirmation_event(&EventRoute::new(TreePath::new()), event, ctx);
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.editor_active() {
+            return self
+                .handle_control_key(*key, &EventRoute::new(TreePath::new()), ctx)
+                .unwrap_or(EventOutcome::Ignored);
+        }
+        if self.data_view.has_active_interaction() {
+            return EventOutcome::Ignored;
+        }
+        if let Some(outcome) = self.handle_reorder_key(*key, ctx) {
+            return outcome;
+        }
         self.handle_control_key(*key, &EventRoute::new(TreePath::new()), ctx)
             .unwrap_or(EventOutcome::Ignored)
     }
@@ -167,6 +213,12 @@ where
         ctx: &mut EventCtx<M>,
     ) -> EventOutcome {
         self.handle_visual_hotkey(event, ctx);
+        if let TuiEvent::Key(key) = event
+            && self.is_reordering()
+            && let Some(outcome) = self.handle_reorder_key(*key, ctx)
+        {
+            return outcome;
+        }
         if self.confirmation_dialog.is_some() {
             return self.confirmation_event(route, event, ctx);
         }
@@ -218,6 +270,12 @@ where
                     .data_view
                     .dispatch_event(&EventRoute::new(path), event, ctx);
             }
+            if !self.editor_active()
+                && let TuiEvent::Key(key) = event
+                && let Some(outcome) = self.handle_reorder_key(*key, ctx)
+            {
+                return outcome;
+            }
             if let TuiEvent::Key(key) = event
                 && let Some(outcome) = self.handle_control_key(*key, route, ctx)
             {
@@ -226,6 +284,13 @@ where
             return self
                 .data_view
                 .dispatch_event(&EventRoute::new(path), event, ctx);
+        }
+        if route.path.is_empty()
+            && !self.editor_active()
+            && let TuiEvent::Key(key) = event
+            && let Some(outcome) = self.handle_reorder_key(*key, ctx)
+        {
+            return outcome;
         }
         if route.path.is_empty()
             && let TuiEvent::Key(key) = event
@@ -252,14 +317,14 @@ where
                 ),
             });
         }
-        if let Some(dialog) = &mut self.confirmation_dialog {
+        if let Some(dialog) = self.confirmation_dialog.child_mut() {
             result = result.merge(dialog.tick(dt, settings));
         }
         result
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
-        if let Some(dialog) = &mut self.confirmation_dialog {
+        if let Some(dialog) = self.confirmation_dialog.child_mut() {
             if let Some(target) = target.for_child(&ChildKey::new(CONFIRM_SLOT)) {
                 self.panel.set_focused(focused, ctx.animation());
                 dialog.dispatch_focus(&target, focused, ctx);
@@ -288,6 +353,10 @@ where
         if let Some(target) = target.for_child(&ChildKey::new(DATA_SLOT)) {
             self.panel.set_focused(focused, ctx.animation());
             self.data_view.dispatch_focus(&target, focused, ctx);
+            if !focused && self.is_reordering() {
+                self.cancel_reorder();
+                ctx.request_redraw();
+            }
         }
     }
 
@@ -301,9 +370,7 @@ where
                 }
             }
         }
-        if let Some(dialog) = &mut self.confirmation_dialog {
-            dialog.init(ctx);
-        }
+        self.confirmation_dialog.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
@@ -317,9 +384,7 @@ where
                     .mount(ctx),
             }
         }
-        if let Some(dialog) = &mut self.confirmation_dialog {
-            dialog.mount(ctx);
-        }
+        self.confirmation_dialog.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
@@ -333,9 +398,7 @@ where
                     .unmount(ctx),
             }
         }
-        if let Some(dialog) = &mut self.confirmation_dialog {
-            dialog.unmount(ctx);
-        }
+        self.confirmation_dialog.unmount(ctx);
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
@@ -349,8 +412,6 @@ where
                     .destroy(ctx),
             }
         }
-        if let Some(dialog) = &mut self.confirmation_dialog {
-            dialog.destroy(ctx);
-        }
+        self.confirmation_dialog.destroy(ctx);
     }
 }

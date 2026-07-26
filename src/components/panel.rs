@@ -143,6 +143,10 @@ impl Panel {
         *self.title_slot_mut(position) = None;
     }
 
+    pub fn title_text(&self, position: PanelTitlePosition) -> Option<&str> {
+        self.title_slot(position).map(|title| title.text.as_str())
+    }
+
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
         self.set_hotkey(hotkey);
         self

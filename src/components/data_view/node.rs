@@ -50,8 +50,8 @@ where
     Id: Clone + Eq + Hash,
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        let width = self.columns.len().max(1).min(u16::MAX as usize) as u16;
-        let header = self.headers as u16;
+        let width = self.visible_column_count().max(1).min(u16::MAX as usize) as u16;
+        let header = self.shows_headers() as u16;
         let action_bar = self.action_bar as u16;
         let rows = self
             .visible_rows()
@@ -84,6 +84,10 @@ where
         } else {
             ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
         }
+        ctx.set_focus_receives_events_before_global_hotkeys(
+            FocusId::new(DATA_VIEW_FOCUS),
+            self.focused_events_before_global_hotkeys,
+        );
         self.layout_children::<M>(area, ctx);
         LayoutResult::new(area)
     }
@@ -94,7 +98,7 @@ where
 
     fn event(&mut self, event: &crate::TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if matches!(event, crate::TuiEvent::Yank) {
-            if let Some(value) = self.highlighted_json() {
+            if let Some(value) = self.highlighted_copy_value() {
                 ctx.copy_to_clipboard(value);
             }
             ctx.stop_propagation();

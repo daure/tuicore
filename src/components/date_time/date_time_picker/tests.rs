@@ -68,6 +68,83 @@ fn stepped_date_time_picker_renders_time_centered_inside_date_sized_border() {
 }
 
 #[test]
+fn stepped_date_time_picker_renders_seconds_without_clipping() {
+    let value = Date::from_calendar_date(2026, Month::June, 22)
+        .unwrap()
+        .with_time(Time::from_hms(9, 30, 42).unwrap());
+    let mut picker = DateTimePicker::<()>::new()
+        .value(Some(value))
+        .precision(TimePrecision::HourMinuteSecond)
+        .layout(DateTimePickerLayout::Stepped);
+    picker.on_key(Key::Enter.into());
+    let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("09:30:42"));
+}
+
+#[test]
+fn focused_stepped_time_border_uses_accent_chrome() {
+    let mut picker = DateTimePicker::<()>::new().layout(DateTimePickerLayout::Stepped);
+    picker.on_key(Key::Enter.into());
+    picker.focused = true;
+    let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().fg,
+        theme().accent_fg()
+    );
+}
+
+#[test]
+fn second_precision_external_editor_round_trip_preserves_date_time() {
+    let value = Date::from_calendar_date(2026, Month::June, 22)
+        .unwrap()
+        .with_time(Time::from_hms(9, 30, 42).unwrap());
+    let mut picker = DateTimePicker::<()>::new()
+        .value(Some(value))
+        .precision(TimePrecision::HourMinuteSecond);
+    picker.active = DateTimePart::Time;
+    let mut launch = EventCtx::default();
+
+    picker.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut launch,
+    );
+
+    let request = launch
+        .external_editor_request()
+        .expect("external editor should be requested");
+    assert_eq!(request.value, "09:30:42");
+    picker.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: request.value.clone(),
+            line: request.line,
+            col: request.col,
+        }),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(picker.current_value(), Some(value));
+}
+
+#[test]
 fn stepped_date_time_picker_measure_is_intrinsic_date_surface_size() {
     let picker = DateTimePicker::<()>::new().layout(DateTimePickerLayout::Stepped);
 
@@ -91,6 +168,7 @@ fn stepped_date_time_picker_emits_combined_selection_then_returns_to_date() {
     let mut date_ctx = EventCtx::default();
     picker.event(&TuiEvent::Key(Key::Enter.into()), &mut date_ctx);
     let mut time_ctx = EventCtx::default();
+    picker.event(&TuiEvent::Key(Key::Enter.into()), &mut time_ctx);
 
     let outcome = picker.event(&TuiEvent::Key(Key::Enter.into()), &mut time_ctx);
 

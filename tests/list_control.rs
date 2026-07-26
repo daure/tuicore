@@ -3,11 +3,11 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::Modifier;
 use tuicore::{
-    AnimationSettings, ChildKey, Column, ConfirmationDialogKeyBindings, DispatchEffects, EventCtx,
-    EventRoute, FocusCtx, FocusManager, FocusRequest, HotkeyEvent, Key, KeyBindings, KeyEvent,
+    AnimationSettings, ChildKey, Column, ConfirmationDialogKeyBindings, DataView, DispatchEffects,
+    EventCtx, EventRoute, FocusCtx, FocusManager, FocusRequest, HotkeyEvent, Key, KeyEvent,
     KeyModifiers, KeySpec, LayoutCtx, LayoutEngine, ListControl, ListControlEvent,
-    ListControlField, ListControlKeyBindings, Panel, RenderCtx, TreeDispatcher, TreePath, TuiEvent,
-    TuiNode, keybindings, set_keybindings,
+    ListControlField, ListControlKeyBindings, ListControlReorderUnavailable, Panel, RenderCtx,
+    SortDirection, TreeAdapter, TreeDispatcher, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +208,409 @@ fn key(code: Key, modifiers: KeyModifiers) -> TuiEvent {
     TuiEvent::Key(KeyEvent { code, modifiers })
 }
 
+fn reorder_key() -> TuiEvent {
+    key(Key::Char('m'), KeyModifiers::CONTROL)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RankedRow {
+    id: usize,
+    rank: usize,
+}
+
+fn ranked_control(rows: impl IntoIterator<Item = RankedRow>) -> ListControl<RankedRow, usize> {
+    ListControl::new(rows, |row| row.id, |_, _| unreachable!())
+        .columns([
+            Column::text("rank", "Rank", Constraint::Fill(1), |row: &RankedRow| {
+                row.rank.to_string()
+            })
+            .filter_key(|row| row.rank.to_string())
+            .sortable(|row| row.rank)
+            .reorderable(|row| row.rank, |row, rank| row.rank = rank)
+            .hidden(),
+            Column::text("id", "ID", Constraint::Fill(1), |row: &RankedRow| {
+                row.id.to_string()
+            }),
+        ])
+        .reorderable_by("rank")
+}
+
+fn ranked_rows() -> [RankedRow; 3] {
+    [
+        RankedRow { id: 1, rank: 10 },
+        RankedRow { id: 2, rank: 20 },
+        RankedRow { id: 3, rank: 30 },
+    ]
+}
+
+#[test]
+fn routed_reorder_entry_movement_commit_cancel_and_active_blocking() {
+    for route in [EventRoute::new(TreePath::new()), data_route()] {
+        let mut control = ranked_control(ranked_rows());
+        assert_eq!(
+            control.dispatch_event(&route, &reorder_key(), &mut EventCtx::default()),
+            tuicore::EventOutcome::Handled
+        );
+        assert!(control.is_reordering());
+        control.dispatch_event(
+            &data_descendant_route("search"),
+            &add_key(),
+            &mut EventCtx::default(),
+        );
+        control.dispatch_event(
+            &data_descendant_route("search"),
+            &key(Key::Char('x'), KeyModifiers::NONE),
+            &mut EventCtx::default(),
+        );
+        assert!(control.is_reordering());
+        assert!(!control.is_adding());
+        assert_eq!(control.items().len(), 3);
+        control.dispatch_event(
+            &data_route(),
+            &key(Key::Down, KeyModifiers::NONE),
+            &mut EventCtx::default(),
+        );
+        control.dispatch_event(
+            &data_route(),
+            &key(Key::Down, KeyModifiers::NONE),
+            &mut EventCtx::default(),
+        );
+        control.dispatch_event(
+            &data_route(),
+            &key(Key::Enter, KeyModifiers::NONE),
+            &mut EventCtx::default(),
+        );
+        assert_eq!(
+            control
+                .items()
+                .iter()
+                .map(|row| row.rank)
+                .collect::<Vec<_>>(),
+            vec![30, 10, 20]
+        );
+        assert_eq!(
+            control.take_events(),
+            vec![ListControlEvent::Reordered {
+                row_ids: vec![2, 3, 1]
+            }]
+        );
+
+        control.dispatch_event(&route, &reorder_key(), &mut EventCtx::default());
+        control.dispatch_event(
+            &route,
+            &key(Key::Esc, KeyModifiers::NONE),
+            &mut EventCtx::default(),
+        );
+        assert!(!control.is_reordering());
+        assert!(matches!(
+            control.take_events().as_slice(),
+            [ListControlEvent::ReorderCancelled { .. }]
+        ));
+    }
+
+    let mut plain = control([]);
+    assert_eq!(
+        plain.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default()),
+        tuicore::EventOutcome::Ignored
+    );
+}
+
+#[test]
+fn reorder_status_restores_custom_and_empty_panel_titles_on_key_exits() {
+    for prior in [Some("Caller help"), None] {
+        for exit in [Key::Enter, Key::Esc, Key::Char('[')] {
+            let panel = prior.map_or_else(Panel::new, |title| Panel::new().bottom_left(title));
+            let mut control = ranked_control(ranked_rows()).panel(panel);
+            control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+            assert_eq!(
+                control
+                    .panel_ref()
+                    .title_text(tuicore::PanelTitlePosition::BottomLeft),
+                Some("Moving")
+            );
+
+            let modifiers = if exit == Key::Char('[') {
+                KeyModifiers::CONTROL
+            } else {
+                KeyModifiers::NONE
+            };
+            control.dispatch_event(
+                &data_route(),
+                &key(exit, modifiers),
+                &mut EventCtx::default(),
+            );
+            assert_eq!(
+                control
+                    .panel_ref()
+                    .title_text(tuicore::PanelTitlePosition::BottomLeft),
+                prior
+            );
+        }
+    }
+}
+
+#[test]
+fn reorder_status_restores_after_focus_loss_and_data_change_rejection() {
+    let mut blurred = ranked_control(ranked_rows()).panel(Panel::new().bottom_left("Caller help"));
+    blurred.layout(Rect::new(0, 0, 40, 8), &mut LayoutCtx::new());
+    blurred.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    let mut layout = LayoutCtx::new();
+    blurred.layout(Rect::new(0, 0, 40, 8), &mut layout);
+    let target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == "data-view")
+        .expect("data view target should exist")
+        .clone();
+    blurred.dispatch_focus(&target, false, &mut FocusCtx::default());
+    assert_eq!(
+        blurred
+            .panel_ref()
+            .title_text(tuicore::PanelTitlePosition::BottomLeft),
+        Some("Caller help")
+    );
+
+    let mut changed = ranked_control(ranked_rows());
+    changed.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    changed.data_view_mut().update_row(&2, |row| row.rank = 25);
+    changed.dispatch_event(
+        &data_route(),
+        &key(Key::Down, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(
+        changed
+            .panel_ref()
+            .title_text(tuicore::PanelTitlePosition::BottomLeft),
+        None
+    );
+    assert_eq!(
+        changed.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DataChanged
+        }]
+    );
+}
+
+#[test]
+fn routed_custom_reorder_binding_replaces_default() {
+    let mut control = ranked_control(ranked_rows())
+        .keybindings(ListControlKeyBindings::default().reorder([KeySpec::plain('r')]));
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    assert!(!control.is_reordering());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('r'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert!(control.is_reordering());
+}
+
+#[test]
+fn routed_search_editor_dropdown_and_confirmation_own_reorder_binding() {
+    let mut search = ranked_control(ranked_rows()).action_bar(true);
+    search.data_view_mut().set_focused(true);
+    search.dispatch_event(
+        &data_route(),
+        &key(Key::Char('/'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    search.dispatch_event(
+        &data_descendant_route("search"),
+        &reorder_key(),
+        &mut EventCtx::default(),
+    );
+    assert!(!search.is_reordering());
+
+    let mut editor = ranked_control(ranked_rows());
+    editor.dispatch_event(&data_route(), &add_key(), &mut EventCtx::default());
+    editor.dispatch_event(&input_route(), &reorder_key(), &mut EventCtx::default());
+    assert!(editor.is_adding());
+    assert!(!editor.is_reordering());
+
+    let mut dropdown = ListControl::<RankedRow, usize>::new_fields(
+        ranked_rows(),
+        |row: &RankedRow| row.id,
+        [ListControlField::dropdown("Rank", ["10", "20"])],
+        |_, _| unreachable!(),
+    )
+    .column(
+        Column::text("rank", "Rank", Constraint::Fill(1), |row: &RankedRow| {
+            row.rank.to_string()
+        })
+        .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+    )
+    .reorderable_by("rank");
+    dropdown.dispatch_event(&data_route(), &add_key(), &mut EventCtx::default());
+    dropdown.dispatch_event(&input_route(), &reorder_key(), &mut EventCtx::default());
+    assert!(dropdown.is_adding());
+    assert!(!dropdown.is_reordering());
+
+    let mut confirmation =
+        ranked_control(ranked_rows()).confirm_remove("Remove?", |_| "row".into());
+    confirmation.dispatch_event(
+        &data_route(),
+        &key(Key::Char('x'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    confirmation.dispatch_event(
+        &EventRoute::new(TreePath::from_keys([ChildKey::new("remove-confirmation")])),
+        &reorder_key(),
+        &mut EventCtx::default(),
+    );
+    assert!(confirmation.is_confirming_remove());
+    assert!(!confirmation.is_reordering());
+}
+
+#[test]
+fn reorder_rejects_local_and_external_search_filter_and_visible_subset() {
+    for mode in [
+        tuicore::DataViewTransformMode::Local,
+        tuicore::DataViewTransformMode::External,
+    ] {
+        for filter in [false, true] {
+            let mut control = ranked_control(ranked_rows());
+            control.data_view_mut().set_transform_mode(mode);
+            if filter {
+                control.data_view_mut().set_filter("rank", "10");
+            } else {
+                control.data_view_mut().set_search_query("10");
+            }
+            control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+            assert_eq!(
+                control.take_events(),
+                vec![ListControlEvent::ReorderUnavailable {
+                    reason: ListControlReorderUnavailable::TransformActive
+                }]
+            );
+        }
+    }
+
+    let mut subset = ranked_control(ranked_rows());
+    subset.data_view_mut().set_visible_row_ids([1, 2]);
+    subset.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    assert_eq!(
+        subset.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::VisibleSubset
+        }]
+    );
+}
+
+#[test]
+fn routed_reorder_rejects_pagination_tree_and_duplicate_ids_or_ranks() {
+    let mut paginated = ranked_control(ranked_rows());
+    let view = std::mem::replace(
+        paginated.data_view_mut(),
+        DataView::new([], |row: &RankedRow| row.id),
+    );
+    *paginated.data_view_mut() = view.pagination(2);
+    paginated.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    assert_eq!(
+        paginated.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::Paginated
+        }]
+    );
+
+    let mut tree = ranked_control(ranked_rows());
+    let view = std::mem::replace(
+        tree.data_view_mut(),
+        DataView::new([], |row: &RankedRow| row.id),
+    );
+    *tree.data_view_mut() = view.tree(TreeAdapter::level(|_: &RankedRow| 0));
+    tree.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    assert_eq!(
+        tree.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::Tree
+        }]
+    );
+
+    for (rows, reason) in [
+        (
+            vec![RankedRow { id: 1, rank: 10 }, RankedRow { id: 1, rank: 20 }],
+            ListControlReorderUnavailable::DuplicateRowIds,
+        ),
+        (
+            vec![RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 10 }],
+            ListControlReorderUnavailable::DuplicateRankKeys,
+        ),
+    ] {
+        let mut duplicate = ranked_control(rows);
+        duplicate.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+        assert_eq!(
+            duplicate.take_events(),
+            vec![ListControlEvent::ReorderUnavailable { reason }]
+        );
+    }
+}
+
+#[test]
+fn reorder_rejects_external_id_and_rank_mutation_without_overwriting_it() {
+    let mut rank_changed = ranked_control(ranked_rows());
+    rank_changed.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    rank_changed
+        .data_view_mut()
+        .update_row(&2, |row| row.rank = 25);
+    rank_changed.dispatch_event(
+        &data_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(rank_changed.items()[1].rank, 25);
+    assert_eq!(
+        rank_changed.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DataChanged
+        }]
+    );
+
+    let mut data_changed = ranked_control(ranked_rows());
+    data_changed.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    data_changed.data_view_mut().set_rows([
+        RankedRow { id: 1, rank: 10 },
+        RankedRow { id: 2, rank: 20 },
+        RankedRow { id: 4, rank: 30 },
+    ]);
+    data_changed.dispatch_event(
+        &data_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(
+        data_changed.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DataChanged
+        }]
+    );
+}
+
+#[test]
+#[should_panic(expected = "mutually exclusive")]
+fn public_sort_then_reorder_configuration_is_rejected() {
+    let _ = ListControl::<RankedRow, usize>::new(
+        ranked_rows(),
+        |row: &RankedRow| row.id,
+        |_, _| unreachable!(),
+    )
+    .column(
+        Column::text("rank", "Rank", Constraint::Fill(1), |row: &RankedRow| {
+            row.rank.to_string()
+        })
+        .sortable(|row| row.rank)
+        .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+    )
+    .sorted_by("rank", SortDirection::Ascending)
+    .reorderable_by("rank");
+}
+
+#[test]
+#[should_panic(expected = "mutually exclusive")]
+fn public_reorder_then_sort_configuration_is_rejected() {
+    let _ = ranked_control(ranked_rows()).sorted_by("rank", SortDirection::Ascending);
+}
+
 fn add_key() -> TuiEvent {
     key(Key::Char('+'), KeyModifiers::NONE)
 }
@@ -254,8 +657,8 @@ fn action_bar_search_edits_plus_without_adding_row() {
 }
 
 #[test]
-fn action_bar_search_edits_minus_without_removing_row() {
-    assert_action_bar_search_character_does_not_mutate_rows('-');
+fn action_bar_search_edits_x_without_removing_row() {
+    assert_action_bar_search_character_does_not_mutate_rows('x');
 }
 
 #[test]
@@ -311,7 +714,7 @@ fn header_filter_receives_add_key_before_list_control() {
 
 #[test]
 fn header_filter_receives_remove_key_before_list_control() {
-    assert_header_filter_receives_list_binding('-');
+    assert_header_filter_receives_list_binding('x');
 }
 
 #[test]
@@ -791,7 +1194,7 @@ fn remove_selects_nearest_survivor_and_empty_remove_is_noop() {
     ]);
     control.data_view_mut().highlight_id(&2);
     let mut ctx = EventCtx::default();
-    let remove = key(Key::Char('-'), KeyModifiers::NONE);
+    let remove = key(Key::Char('x'), KeyModifiers::NONE);
 
     control.dispatch_event(&data_route(), &remove, &mut ctx);
 
@@ -840,7 +1243,7 @@ fn confirmation_opens_without_removing_and_renders_selected_row_details() {
 
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('-'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::NONE),
         &mut ctx,
     );
     assert!(control.is_confirming_remove());
@@ -889,13 +1292,69 @@ fn confirmation_opens_without_removing_and_renders_selected_row_details() {
 }
 
 #[test]
+fn confirmation_centers_and_renders_in_screen_overlay_bounds() {
+    let mut control = confirmed_control();
+    let component_area = Rect::new(1, 1, 12, 4);
+    let overlay_bounds = Rect::new(0, 0, 80, 24);
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('x'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    let mut layout = LayoutCtx::new();
+    layout.with_overlay_bounds(overlay_bounds, |ctx| {
+        control.layout(component_area, ctx);
+    });
+    let dialog = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == "dialog")
+        .expect("confirmation dialog focus target");
+    assert_eq!(
+        dialog.area.x,
+        overlay_bounds.x + (overlay_bounds.width - dialog.area.width) / 2
+    );
+    assert_eq!(
+        dialog.area.y,
+        overlay_bounds.y + (overlay_bounds.height - dialog.area.height) / 2
+    );
+    assert!(dialog.area.x >= component_area.right());
+    assert_eq!(layout.overlays()[0].area, dialog.area);
+    assert_eq!(layout.overlays()[0].bounds, overlay_bounds);
+
+    let mut terminal = Terminal::new(TestBackend::new(
+        overlay_bounds.width,
+        overlay_bounds.height,
+    ))
+    .unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            control.render(frame, component_area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("Remove item?"));
+    assert!(rendered.contains("Delete"));
+    assert!(rendered.contains("Cancel"));
+}
+
+#[test]
 fn confirmation_removes_pending_stable_id_once() {
     let mut control = confirmed_control();
     control.data_view_mut().highlight_id(&20);
     let mut ctx = EventCtx::default();
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('-'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::NONE),
         &mut ctx,
     );
     control.data_view_mut().highlight_id(&10);
@@ -903,7 +1362,7 @@ fn confirmation_removes_pending_stable_id_once() {
     let mut confirm_ctx = EventCtx::default();
     control.dispatch_event(
         &EventRoute::new(TreePath::from_keys([ChildKey::new("remove-confirmation")])),
-        &key(Key::Char('r'), KeyModifiers::NONE),
+        &key(Key::Char('d'), KeyModifiers::NONE),
         &mut confirm_ctx,
     );
 
@@ -922,7 +1381,7 @@ fn confirmation_removes_pending_stable_id_once() {
     ));
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('r'), KeyModifiers::NONE),
+        &key(Key::Char('d'), KeyModifiers::NONE),
         &mut EventCtx::default(),
     );
     assert!(control.take_events().is_empty());
@@ -931,7 +1390,7 @@ fn confirmation_removes_pending_stable_id_once() {
 #[test]
 fn confirmation_cancel_keys_keep_item_and_restore_data_focus() {
     for cancel in [
-        key(Key::Char('k'), KeyModifiers::NONE),
+        key(Key::Char('c'), KeyModifiers::NONE),
         key(Key::Esc, KeyModifiers::NONE),
         key(Key::Char('['), KeyModifiers::CONTROL),
         key(Key::Char('x'), KeyModifiers::NONE),
@@ -940,7 +1399,7 @@ fn confirmation_cancel_keys_keep_item_and_restore_data_focus() {
         let mut ctx = EventCtx::default();
         control.dispatch_event(
             &data_route(),
-            &key(Key::Char('-'), KeyModifiers::NONE),
+            &key(Key::Char('x'), KeyModifiers::NONE),
             &mut ctx,
         );
         let mut cancel_ctx = EventCtx::default();
@@ -977,7 +1436,7 @@ fn custom_confirmation_bindings_confirm_and_cancel_removal() {
         let mut control = confirmed_control().confirmation_keybindings(bindings);
         control.dispatch_event(
             &data_route(),
-            &key(Key::Char('-'), KeyModifiers::NONE),
+            &key(Key::Char('x'), KeyModifiers::NONE),
             &mut EventCtx::default(),
         );
 
@@ -1024,35 +1483,6 @@ fn browsing_control_navigation_requests_control_specific_focus() {
         editing_ctx.focus_request(),
         Some(&FocusRequest::NextControl)
     );
-
-    let _guard = KeybindingsGuard::replace(
-        KeyBindings::new()
-            .with_focus_next_control([KeySpec::plain('n')])
-            .with_focus_previous_control([KeySpec::plain('p')]),
-    );
-    let mut configured = control([]);
-    for (character, expected) in [
-        ('n', FocusRequest::NextControl),
-        ('p', FocusRequest::PreviousControl),
-    ] {
-        let mut ctx = EventCtx::default();
-        configured.dispatch_event(
-            &data_route(),
-            &key(Key::Char(character), KeyModifiers::NONE),
-            &mut ctx,
-        );
-        assert_eq!(ctx.focus_request(), Some(&expected));
-    }
-    let mut default_ctx = EventCtx::default();
-    configured.dispatch_event(
-        &data_route(),
-        &key(Key::Char('j'), KeyModifiers::CONTROL),
-        &mut default_ctx,
-    );
-    assert_ne!(
-        default_ctx.focus_request(),
-        Some(&FocusRequest::NextControl)
-    );
 }
 
 #[test]
@@ -1093,24 +1523,8 @@ fn focus_manager_stops_before_non_control_tabbable_between_list_controls() {
     );
 }
 
-struct KeybindingsGuard(KeyBindings);
-
-impl KeybindingsGuard {
-    fn replace(next: KeyBindings) -> Self {
-        let previous = keybindings();
-        set_keybindings(next);
-        Self(previous)
-    }
-}
-
-impl Drop for KeybindingsGuard {
-    fn drop(&mut self) {
-        set_keybindings(self.0.clone());
-    }
-}
-
 #[test]
-fn default_bindings_ignore_ctrl_plus_and_minus() {
+fn default_bindings_accept_plain_x_only_for_remove() {
     let mut control = control([Row {
         id: 1,
         name: "one".into(),
@@ -1124,7 +1538,12 @@ fn default_bindings_ignore_ctrl_plus_and_minus() {
     );
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('-'), KeyModifiers::CONTROL),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('-'), KeyModifiers::NONE),
         &mut ctx,
     );
 
@@ -1132,6 +1551,40 @@ fn default_bindings_ignore_ctrl_plus_and_minus() {
     assert_eq!(control.items().len(), 1);
     assert!(control.take_events().is_empty());
     assert!(!ctx.layout_requested());
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('x'), KeyModifiers::NONE),
+        &mut ctx,
+    );
+    assert!(control.items().is_empty());
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Removed { row_id: 1 }]
+    );
+}
+
+#[test]
+fn custom_minus_remove_binding_replaces_default_x() {
+    let mut control = control([Row {
+        id: 1,
+        name: "one".into(),
+    }])
+    .keybindings(ListControlKeyBindings::default().remove([KeySpec::plain('-')]));
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('x'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(control.items().len(), 1);
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('-'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert!(control.items().is_empty());
 }
 
 #[test]
@@ -1517,4 +1970,151 @@ fn nested_hotkey_events_highlight_and_clear_multiletter_panel_badge() {
     );
     assert!(commit_ctx.redraw_requested());
     assert!(!badge_l_is_underlined(&control));
+}
+
+#[test]
+fn data_view_yank_copies_exact_visible_column_json() {
+    let mut view = DataView::new([(1, "Ada".to_string(), "Ready".to_string())], |row| row.0)
+        .columns([
+            Column::text(
+                "name",
+                "Name",
+                Constraint::Fill(1),
+                |row: &(usize, String, String)| row.1.clone(),
+            ),
+            Column::text(
+                "state",
+                "State",
+                Constraint::Fill(1),
+                |row: &(usize, String, String)| row.2.clone(),
+            ),
+        ]);
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = view.event(&TuiEvent::Yank, &mut ctx);
+
+    assert_eq!(outcome, tuicore::EventOutcome::Handled);
+    assert_eq!(
+        ctx.clipboard_request(),
+        Some(r#"{"name":"Ada","state":"Ready"}"#)
+    );
+}
+
+#[test]
+fn data_view_default_yank_excludes_hidden_columns() {
+    let mut view = DataView::new([(1, "Ada", "secret")], |row| row.0).columns([
+        Column::text(
+            "name",
+            "Name",
+            Constraint::Fill(1),
+            |row: &(usize, &str, &str)| row.1.to_string(),
+        ),
+        Column::text(
+            "private",
+            "Private",
+            Constraint::Fill(1),
+            |row: &(usize, &str, &str)| row.2.to_string(),
+        )
+        .hidden(),
+    ]);
+    let mut ctx = EventCtx::<()>::default();
+
+    view.event(&TuiEvent::Yank, &mut ctx);
+
+    assert_eq!(ctx.clipboard_request(), Some(r#"{"name":"Ada"}"#));
+}
+
+#[test]
+fn empty_data_view_yank_makes_no_clipboard_request() {
+    let mut view = DataView::<Row, usize>::new([], |row| row.id).column(Column::text(
+        "name",
+        "Name",
+        Constraint::Fill(1),
+        |row: &Row| row.name.clone(),
+    ));
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = view.event(&TuiEvent::Yank, &mut ctx);
+
+    assert_eq!(outcome, tuicore::EventOutcome::Handled);
+    assert_eq!(ctx.clipboard_request(), None);
+}
+
+#[test]
+fn list_control_copy_formatter_selects_exact_row_value() {
+    let mut control = control([Row {
+        id: 1,
+        name: "Ada".into(),
+    }])
+    .copy_with(|row| format!("person:{}", row.name));
+    let mut ctx = EventCtx::default();
+
+    control.dispatch_event(&data_route(), &TuiEvent::Yank, &mut ctx);
+
+    assert_eq!(ctx.clipboard_request(), Some("person:Ada"));
+}
+
+#[test]
+fn custom_copy_follows_highlighted_id_after_sorting_and_reordering() {
+    let mut sorted: ListControl<Row, usize> = ListControl::new(
+        [
+            Row {
+                id: 1,
+                name: "Beta".into(),
+            },
+            Row {
+                id: 2,
+                name: "Alpha".into(),
+            },
+        ],
+        |row| row.id,
+        |_, _| unreachable!(),
+    )
+    .column(
+        Column::text("name", "Name", Constraint::Fill(1), |row: &Row| {
+            row.name.clone()
+        })
+        .sortable(|row| row.name.clone()),
+    )
+    .copy_with(|row| row.name.clone());
+    sorted.data_view_mut().highlight_id(&1);
+    sorted
+        .data_view_mut()
+        .sort_by("name", SortDirection::Ascending);
+    let mut sorted_ctx = EventCtx::<()>::default();
+    sorted.dispatch_event(&data_route(), &TuiEvent::Yank, &mut sorted_ctx);
+    assert_eq!(sorted.data_view().highlighted_id(), Some(1));
+    assert_eq!(sorted_ctx.clipboard_request(), Some("Beta"));
+
+    let mut reordered = ranked_control(ranked_rows()).copy_with(|row| format!("row-{}", row.id));
+    reordered.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    reordered.dispatch_event(
+        &data_route(),
+        &key(Key::Down, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    let mut reordered_ctx = EventCtx::<()>::default();
+    reordered.dispatch_event(&data_route(), &TuiEvent::Yank, &mut reordered_ctx);
+    assert_eq!(reordered.data_view().highlighted_id(), Some(1));
+    assert_eq!(reordered_ctx.clipboard_request(), Some("row-1"));
+}
+
+#[test]
+fn active_list_editor_owns_yank() {
+    let mut control = control([Row {
+        id: 1,
+        name: "Existing".into(),
+    }])
+    .copy_with(|row| format!("row:{}", row.name));
+    control.dispatch_event(&data_route(), &add_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &input_route(),
+        &TuiEvent::Paste("Draft".into()),
+        &mut EventCtx::default(),
+    );
+    let mut ctx = EventCtx::default();
+
+    control.dispatch_event(&input_route(), &TuiEvent::Yank, &mut ctx);
+
+    assert_eq!(ctx.clipboard_request(), Some("Draft"));
 }

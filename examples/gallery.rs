@@ -3975,6 +3975,24 @@ mod tests {
     }
 
     #[test]
+    fn all_text_entity_example_opens_confirmation_with_default_remove_key() {
+        let mut controls = entity_controls();
+        assert!(controls[0].has_remove_confirmation());
+        assert!(!controls[1].has_remove_confirmation());
+        assert!(!controls[2].has_remove_confirmation());
+        let initial_len = controls[0].items().len();
+
+        controls[0].dispatch_event(
+            &EventRoute::new(TreePath::from_keys([ChildKey::new("data")])),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &mut EventCtx::default(),
+        );
+
+        assert!(controls[0].is_confirming_remove());
+        assert_eq!(controls[0].items().len(), initial_len);
+    }
+
+    #[test]
     fn derived_people_creator_accepts_only_first_name_and_surname() {
         let mut controls = entity_controls();
         let derived = &mut controls[2];
@@ -4032,15 +4050,15 @@ mod tests {
         }
 
         let edited = &derived.items()[0];
-        assert_eq!(edited.name, "DorothyKatherine");
-        assert_eq!(edited.owner, "VaughanJohnson");
-        assert_eq!(edited.state, "DorothyKatherine VaughanJohnson");
+        assert_eq!(edited.name, "KatherineDorothy");
+        assert_eq!(edited.owner, "JohnsonVaughan");
+        assert_eq!(edited.state, "KatherineDorothy JohnsonVaughan");
         let cells = derived
             .data_view()
             .highlighted_json()
             .expect("edited person highlighted");
-        assert!(cells.contains("DV"));
-        assert!(cells.contains("DorothyKatherine VaughanJohnson"));
+        assert!(cells.contains("KJ"));
+        assert!(cells.contains("KatherineDorothy JohnsonVaughan"));
     }
 
     #[test]

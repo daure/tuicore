@@ -64,12 +64,12 @@ where
         base_row_style: Option<Style>,
         ctx: &mut RenderCtx<'a>,
     ) {
-        if area.is_empty() || self.columns.is_empty() {
+        if area.is_empty() || self.visible_column_count() == 0 {
             return;
         }
 
         let action_height = u16::from(self.action_bar);
-        let header_height = u16::from(self.headers);
+        let header_height = u16::from(self.shows_headers());
         let [action_area, header_area, body_area] = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -88,7 +88,7 @@ where
             self.render_action_bar(frame, action_area);
         }
 
-        if self.headers {
+        if self.shows_headers() {
             let header_viewport = Rect::new(
                 geometry.layout.viewport.x,
                 header_area.y,
@@ -191,7 +191,7 @@ where
         }
         let theme = theme();
         let cells = self.column_areas(area, column_widths, offset_x);
-        for (column, cell_area) in self.columns.iter().zip(cells) {
+        for (column, cell_area) in self.visible_columns().zip(cells) {
             let Some(cell_area) = cell_area else {
                 continue;
             };
@@ -244,7 +244,7 @@ where
         selection_descendants: &HashMap<Id, Vec<Id>>,
     ) {
         let cells = self.column_areas(area, column_widths, offset_x);
-        for (column_index, (column, cell_area)) in self.columns.iter().zip(cells).enumerate() {
+        for (column_index, (column, cell_area)) in self.visible_columns().zip(cells).enumerate() {
             let Some(cell_area) = cell_area else {
                 continue;
             };

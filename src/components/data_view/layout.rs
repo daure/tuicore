@@ -16,7 +16,7 @@ impl<T, Id> DataView<T, Id>
 where
     Id: Clone + Eq + Hash,
 {
-    pub(super) fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
+    pub(crate) fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
         let body_area = self.body_area(area);
         let mut content = self.content_size(body_area.width as usize);
         let mut geometry = self.scroll.geometry(body_area, content);
@@ -34,7 +34,7 @@ where
     }
 
     pub(super) fn body_area(&self, area: Rect) -> Rect {
-        let reserved = u16::from(self.action_bar) + u16::from(self.headers);
+        let reserved = u16::from(self.action_bar) + u16::from(self.shows_headers());
         if reserved > 0 {
             Rect::new(
                 area.x,
@@ -106,6 +106,7 @@ where
     }
 
     pub(super) fn column_widths(&self, viewport_width: usize) -> Vec<usize> {
+        let columns = self.visible_columns().collect::<Vec<_>>();
         let configured = self.configured_column_widths(viewport_width);
         let rendered = self.rendered_column_widths();
 
@@ -114,12 +115,12 @@ where
             .zip(rendered)
             .enumerate()
             .map(|(index, (configured, rendered))| {
-                let padding = if index + 1 == self.columns.len() {
+                let padding = if index + 1 == columns.len() {
                     0
                 } else {
                     CELL_RIGHT_PADDING
                 };
-                if self.columns[index].sizing == super::ColumnSizing::Constrained {
+                if columns[index].sizing == super::ColumnSizing::Constrained {
                     configured
                 } else {
                     configured.max(rendered.saturating_add(padding))
@@ -129,7 +130,8 @@ where
     }
 
     fn configured_column_widths(&self, viewport_width: usize) -> Vec<usize> {
-        if self.columns.is_empty() {
+        let columns = self.visible_columns().collect::<Vec<_>>();
+        if columns.is_empty() {
             return Vec::new();
         }
 
@@ -141,7 +143,7 @@ where
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints(
-                self.columns
+                columns
                     .iter()
                     .map(|column| column.width)
                     .collect::<Vec<_>>(),
@@ -150,7 +152,7 @@ where
             .iter()
             .enumerate()
             .map(|(index, cell)| {
-                let padding = if index + 1 == self.columns.len() {
+                let padding = if index + 1 == columns.len() {
                     0
                 } else {
                     CELL_RIGHT_PADDING
@@ -170,15 +172,13 @@ where
     }
 
     fn column_padding_width(&self) -> usize {
-        self.columns
-            .len()
+        self.visible_column_count()
             .saturating_sub(1)
             .saturating_mul(CELL_RIGHT_PADDING)
     }
 
     fn configured_minimum_column_widths(&self) -> Vec<usize> {
-        self.columns
-            .iter()
+        self.visible_columns()
             .map(|column| match column.width {
                 Constraint::Length(width) | Constraint::Min(width) => width as usize,
                 _ => 0,
@@ -187,17 +187,18 @@ where
     }
 
     fn rendered_column_widths(&self) -> Vec<usize> {
-        let mut widths = vec![0; self.columns.len()];
+        let columns = self.visible_columns().collect::<Vec<_>>();
+        let mut widths = vec![0; columns.len()];
 
-        if self.headers {
-            for (index, column) in self.columns.iter().enumerate() {
+        if self.shows_headers() {
+            for (index, column) in columns.iter().enumerate() {
                 widths[index] = widths[index].max(self.header_width(column));
             }
         }
 
         let selection_descendants = self.selection_descendants_by_id();
         for (row_index, row) in self.visible_rows().into_iter().enumerate() {
-            for (index, column) in self.columns.iter().enumerate() {
+            for (index, column) in columns.iter().enumerate() {
                 widths[index] = widths[index].max(self.rendered_cell_width(
                     index,
                     column,
@@ -231,8 +232,7 @@ where
         if self.interaction == DataViewInteraction::HeaderFilter
             && column.filter_key.is_some()
             && let Some(index) = self
-                .columns
-                .iter()
+                .visible_columns()
                 .position(|candidate| candidate.id == column.id)
             && let Some(key) = column_key(index)
         {

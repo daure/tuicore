@@ -18,7 +18,7 @@ use crate::components::{InputChrome, Panel};
 
 use super::{
     DATE_TIME_PICKER_DROPDOWN_FOCUS, DatePicker, TimeField, TimePicker, TimePrecision,
-    finish_event, format_iso_datetime, format_picker_time, parse_editor_date,
+    finish_event, format_iso_datetime, format_picker_time_for_precision, parse_editor_date,
     parse_editor_datetime, parse_editor_time, picker_size_hint,
 };
 
@@ -200,9 +200,13 @@ impl<M> DateTimePickerDropdown<M> {
     }
 
     fn measure_size(&self) -> (u16, u16) {
+        let width = match self.time.configured_precision() {
+            TimePrecision::HourMinute => 31,
+            TimePrecision::HourMinuteSecond => 34,
+        };
         match self.chrome {
-            InputChrome::Plain => (31, 1),
-            InputChrome::Panel(_) => (33, 3),
+            InputChrome::Plain => (width, 1),
+            InputChrome::Panel(_) => (width + 2, 3),
         }
     }
 
@@ -223,13 +227,14 @@ impl<M> DateTimePickerDropdown<M> {
                     .borders(Borders::ALL)
                     .border_set(border_set(preset().border()))
                     .border_style(Style::default().fg(if self.focused {
-                        t.highlight_bg()
+                        t.accent_fg()
                     } else {
                         t.border_fg()
                     }));
                 let inner = block.inner(popup);
                 frame.render_widget(block, popup);
-                self.time.render(frame, centered_time_area(inner));
+                self.time
+                    .render(frame, centered_time_area(inner, self.time.rendered_width()));
             }
         }
     }
@@ -282,7 +287,16 @@ impl<M> DateTimePickerDropdown<M> {
         };
         let value = self
             .current_value()
-            .map(|value| format!("{} 󰅐 {}", value.date(), format_picker_time(value.time())))
+            .map(|value| {
+                format!(
+                    "{} 󰅐 {}",
+                    value.date(),
+                    format_picker_time_for_precision(
+                        value.time(),
+                        self.time.configured_precision(),
+                    )
+                )
+            })
             .unwrap_or_else(|| self.placeholder.clone());
         let mut spans = vec![Span::styled(" ", style)];
         spans.extend(hotkey_label_spans(
@@ -501,12 +515,24 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             if !self.open {
                 let value = self
                     .current_value()
-                    .map(|value| format!("{} {}", value.date(), format_picker_time(value.time())))
+                    .map(|value| {
+                        format!(
+                            "{} {}",
+                            value.date(),
+                            format_picker_time_for_precision(
+                                value.time(),
+                                self.time.configured_precision(),
+                            )
+                        )
+                    })
                     .unwrap_or_else(|| {
                         format!(
                             "{} {}",
                             self.date.cursor(),
-                            format_picker_time(self.time.current_value())
+                            format_picker_time_for_precision(
+                                self.time.current_value(),
+                                self.time.configured_precision(),
+                            )
                         )
                     });
                 ctx.request_external_editor(value.clone(), 1, value.len() + 1);
@@ -517,7 +543,10 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
                         ctx.request_external_editor(value.clone(), 1, value.len() + 1);
                     }
                     DateTimeDropdownStep::Time => {
-                        let value = format_picker_time(self.time.draft_value());
+                        let value = format_picker_time_for_precision(
+                            self.time.draft_value(),
+                            self.time.configured_precision(),
+                        );
                         let col = match self.time.active_field() {
                             TimeField::Hour => 1,
                             TimeField::Minute => 4,
@@ -606,8 +635,8 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
     }
 }
 
-fn centered_time_area(area: Rect) -> Rect {
-    let width = 8.min(area.width);
+fn centered_time_area(area: Rect, content_width: u16) -> Rect {
+    let width = content_width.min(area.width);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(1) / 2,

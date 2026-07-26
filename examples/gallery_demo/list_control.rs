@@ -1,5 +1,5 @@
 use ratatui::layout::Constraint;
-use tuicore::{Column, Flex, FlexItem, ListControl, ListControlField};
+use tuicore::{Column, Flex, FlexItem, ListControl, ListControlField, SortDirection};
 
 use crate::Msg;
 
@@ -13,6 +13,7 @@ pub(crate) struct ListDemoRow {
     pub(crate) name: String,
     pub(crate) owner: String,
     pub(crate) state: String,
+    pub(crate) rank: usize,
 }
 
 pub(crate) type ListControlShowcase = Flex<Msg>;
@@ -87,7 +88,7 @@ pub(crate) fn entity_table() -> ListControlShowcase {
 
 pub(crate) fn entity_controls() -> [ListControl<ListDemoRow, usize, Msg>; 3] {
     [
-        entity_control(false, "All-text fields", "le"),
+        entity_control(false, "All-text fields · x confirms delete", "le"),
         entity_control(true, "Mixed fields", "lm"),
         people_control(),
     ]
@@ -107,6 +108,7 @@ fn people_control() -> ListControl<ListDemoRow, usize, Msg> {
         name: name.to_string(),
         owner: surname.to_string(),
         state: format!("{name} {surname}"),
+        rank: (index + 1) * 10,
     })
     .collect::<Vec<_>>();
     let mut next_id = next_id(&rows);
@@ -124,6 +126,7 @@ fn people_control() -> ListControl<ListDemoRow, usize, Msg> {
             let row = ListDemoRow {
                 id: next_id,
                 state: format!("{name} {owner}"),
+                rank: next_id * 10,
                 name,
                 owner,
             };
@@ -175,8 +178,9 @@ fn people_control() -> ListControl<ListDemoRow, usize, Msg> {
         )
         .constrained(),
     ])
+    .copy_with(|row| row.state.clone())
     .headers(true)
-    .title("Derived people")
+    .title("Derived people · yy copies full name")
     .hotkey("lp")
     .max_rows(3)
 }
@@ -195,7 +199,7 @@ fn entity_control(mixed: bool, title: &str, hotkey: &str) -> ListControl<ListDem
     } else {
         ListControlField::text("State")
     };
-    ListControl::new_fields(
+    let control = ListControl::new_fields(
         rows,
         |row| row.id,
         [ListControlField::text("Entity"), owner, state],
@@ -206,6 +210,7 @@ fn entity_control(mixed: bool, title: &str, hotkey: &str) -> ListControl<ListDem
                 name: values.next().expect("entity field exists"),
                 owner: values.next().expect("owner field exists"),
                 state: values.next().expect("state field exists"),
+                rank: next_id * 10,
             };
             next_id += 1;
             row
@@ -223,11 +228,30 @@ fn entity_control(mixed: bool, title: &str, hotkey: &str) -> ListControl<ListDem
     .headers(true)
     .title(title)
     .hotkey(hotkey)
-    .max_rows(4)
+    .max_rows(4);
+    if mixed {
+        control.reorderable_by("rank")
+    } else {
+        control
+            .confirm_remove("Remove entity?", |row| {
+                format!(
+                    "Remove {}? Current owner is {} and state is {}.",
+                    row.name, row.owner, row.state
+                )
+            })
+            .sorted_by("rank", SortDirection::Descending)
+    }
 }
 
-fn entity_columns() -> [Column<ListDemoRow, usize>; 3] {
+fn entity_columns() -> [Column<ListDemoRow, usize>; 4] {
     [
+        Column::text("rank", "#", Constraint::Length(5), |row: &ListDemoRow| {
+            row.rank.to_string()
+        })
+        .sortable(|row| row.rank)
+        .reorderable(|row| row.rank, |row, rank| row.rank = rank)
+        .hidden()
+        .constrained(),
         Column::text(
             "name",
             "Entity",
@@ -258,6 +282,7 @@ fn new_row(next_id: &mut usize, name: String) -> ListDemoRow {
         name,
         owner: "You".to_string(),
         state: "Active".to_string(),
+        rank: *next_id * 10,
     };
     *next_id += 1;
     row
@@ -272,6 +297,7 @@ fn rows<const N: usize>(names: [&str; N]) -> Vec<ListDemoRow> {
             name: name.to_string(),
             owner: ["Ada", "Grace", "Linus", "Mina"][index % 4].to_string(),
             state: ["Active", "Ready", "Paused", "Running"][index % 4].to_string(),
+            rank: (index + 1) * 10,
         })
         .collect()
 }

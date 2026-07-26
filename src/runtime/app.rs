@@ -3109,6 +3109,30 @@ mod tests {
     }
 
     #[test]
+    fn focused_list_navigation_wins_over_its_own_hotkey_prefix() {
+        let list: ListControl<_, _, ()> = ListControl::list(
+            [(1usize, "ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string())],
+            |row| row.0,
+            |row| row.1.clone(),
+            |name, _| (2, name),
+        )
+        .columns([crate::Column::text(
+            "name",
+            "Name",
+            ratatui::layout::Constraint::Length(26),
+            |row: &(usize, String)| row.1.clone(),
+        )])
+        .hotkey("li");
+
+        let app = TreeApp::new(list).run_test_events(
+            [TuiEvent::Key(KeyEvent::from(Key::Char('l')))],
+            Rect::new(0, 0, 12, 4),
+        );
+
+        assert!(app.root.data_view().horizontal_scroll_offset_for_test() > 0);
+    }
+
+    #[test]
     fn list_confirmation_action_wins_over_sibling_global_hotkey() {
         let sibling_presses = std::rc::Rc::new(std::cell::Cell::new(0));
         let presses = std::rc::Rc::clone(&sibling_presses);
@@ -3126,7 +3150,7 @@ mod tests {
             .child("list", list, FlexItem::fixed(6))
             .child("sibling", sibling, FlexItem::fit_content());
         let events = [
-            TuiEvent::Key(KeyEvent::from(Key::Char('-'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
             TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
         ];
 

@@ -12,6 +12,38 @@ fn time_picker_arrow_keys_move_minutes_by_one() {
 }
 
 #[test]
+fn enter_advances_from_hours_and_submits_from_minutes() {
+    let mut picker = TimePicker::<()>::new();
+
+    let hour_outcome = picker.on_key(Key::Enter);
+
+    assert!(hour_outcome.handled);
+    assert!(!hour_outcome.selected);
+    assert_eq!(picker.active_field(), TimeField::Minute);
+
+    let minute_outcome = picker.on_key(Key::Enter);
+
+    assert!(minute_outcome.selected);
+}
+
+#[test]
+fn control_enter_submits_from_any_time_field() {
+    let control_enter = KeyEvent {
+        code: Key::Enter,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    for field in [TimeField::Hour, TimeField::Minute, TimeField::Second] {
+        let mut picker = TimePicker::<()>::new().precision(TimePrecision::HourMinuteSecond);
+        picker.active_field = field;
+
+        let outcome = picker.on_key(control_enter);
+
+        assert!(outcome.selected, "Ctrl+Enter should submit from {field:?}");
+    }
+}
+
+#[test]
 fn time_picker_uses_plain_hjkl_instead_of_control_hjkl() {
     let mut picker = TimePicker::<()>::new();
 
