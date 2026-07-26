@@ -1287,13 +1287,13 @@ mod tests {
     use ratatui::{Frame, layout::Rect};
 
     use super::*;
+    use crate::{Button, Dialog, DialogLayer, Dropdown, ListControl, Tab, Tabs, TextInput};
     use crate::{
         ChildKey, EventOutcome, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Key, KeyEvent,
         KeyModifiers, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
         MouseButton, MouseEvent, MouseEventKind, OverlayId, OverlayLayer, OverlayPolicy,
         OverlaySpec, Preset, RuntimeKeyBindings, TreePath, preset, set_preset,
     };
-    use crate::{Dialog, DialogLayer, Dropdown, Tab, Tabs, TextInput};
 
     #[derive(Default)]
     struct QuitNode {
@@ -3106,6 +3106,33 @@ mod tests {
 
         assert_eq!(app.root.key_chars, "tx");
         assert_eq!(app.root.hotkey_commits, 1);
+    }
+
+    #[test]
+    fn list_confirmation_action_wins_over_sibling_global_hotkey() {
+        let sibling_presses = std::rc::Rc::new(std::cell::Cell::new(0));
+        let presses = std::rc::Rc::clone(&sibling_presses);
+        let list = ListControl::list(
+            [(1usize, "Ada".to_string())],
+            |row| row.0,
+            |row| row.1.clone(),
+            |name, _| (2, name),
+        )
+        .confirm_remove("Remove item?", |row| format!("Remove {}?", row.1));
+        let sibling = Button::new("Sibling")
+            .hotkey("r")
+            .on_press(move || presses.set(presses.get() + 1));
+        let root = Flex::column()
+            .child("list", list, FlexItem::fixed(6))
+            .child("sibling", sibling, FlexItem::fit_content());
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('-'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
+        ];
+
+        let _app = TreeApp::new(root).run_test_events(events, Rect::new(0, 0, 40, 8));
+
+        assert_eq!(sibling_presses.get(), 0);
     }
 
     #[test]

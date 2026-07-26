@@ -24,6 +24,9 @@ use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
     layout_split_demo, layout_stack_demo, render_layout_intro,
 };
+use gallery_demo::list_control::{ListControlShowcase, compact_names, entity_table};
+#[cfg(test)]
+use gallery_demo::list_control::{compact_name_controls, entity_controls};
 use gallery_demo::notifications::{
     notification_button_areas, notification_button_child_key, notification_button_child_route,
     notification_button_index, notification_buttons, notification_for_index,
@@ -368,6 +371,7 @@ impl Gallery {
             ComponentKind::StatusBar,
             ComponentKind::Layouts,
             ComponentKind::DataView,
+            ComponentKind::ListControl,
         ])
         .focused(true);
 
@@ -759,6 +763,8 @@ struct PreviewState {
     data_checklist_tree: DataView<DemoRow, usize>,
     data_activate_on_navigate: DataView<DemoRow, usize>,
     data_status: String,
+    list_compact: ListControlShowcase,
+    list_entity_table: ListControlShowcase,
     panel_top_left: Dropdown<PanelTitleChoice, &'static str>,
     panel_top_right: Dropdown<PanelTitleChoice, &'static str>,
     panel_bottom_left: Dropdown<PanelTitleChoice, &'static str>,
@@ -949,6 +955,8 @@ impl PreviewState {
             data_checklist_tree: DataViewMode::ChecklistTree.data_view(),
             data_activate_on_navigate: DataViewMode::ActivateOnNavigate.data_view(),
             data_status: String::from("No event yet"),
+            list_compact: compact_names(),
+            list_entity_table: entity_table(),
             panel_top_left: panel_title_dropdown(PanelTitlePosition::TopLeft),
             panel_top_right: panel_title_dropdown(PanelTitlePosition::TopRight),
             panel_bottom_left: panel_title_dropdown(PanelTitlePosition::BottomLeft),
@@ -1049,6 +1057,11 @@ impl PreviewState {
                     body,
                     ctx,
                 );
+            }
+            preview if preview.is_list_control() => {
+                ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                    self.active_list_control_mut(preview).layout(area, ctx);
+                });
             }
             PreviewKind::Dropdown => self.layout_dropdowns(area, overlay_bounds, ctx),
             PreviewKind::Menu => self.layout_menu(area, overlay_bounds, ctx),
@@ -1229,6 +1242,9 @@ impl PreviewState {
             | PreviewKind::DataMultiSelect
             | PreviewKind::DataChecklistTree
             | PreviewKind::DataActivateOnNavigate => self.render_data_view(preview, frame, area),
+            preview @ (PreviewKind::ListCompact | PreviewKind::ListEntityTable) => {
+                self.active_list_control(preview).render(frame, area, ctx);
+            }
             PreviewKind::Dropdown => self.render_dropdown_preview(frame, area, ctx),
             PreviewKind::Menu => self.render_menu(frame, area, ctx),
             PreviewKind::LayoutFlex => self.render_layout_flex(frame, area, ctx),
@@ -1420,6 +1436,11 @@ impl PreviewState {
         }
         if preview.is_data_view() {
             return self.data_view_dispatch_event(preview, route, event, ctx);
+        }
+        if preview.is_list_control() {
+            return self
+                .active_list_control_mut(preview)
+                .dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::Panel {
             if let Some(route) = panel_demo_child_route(route) {
@@ -1679,6 +1700,9 @@ impl PreviewState {
             preview if preview.is_data_view() => self
                 .active_data_view_mut(preview)
                 .dispatch_focus(target, focused, ctx),
+            preview if preview.is_list_control() => self
+                .active_list_control_mut(preview)
+                .dispatch_focus(target, focused, ctx),
             PreviewKind::Panel => {
                 if !dispatch_focus_child(
                     &mut self.panel_demo,
@@ -1851,6 +1875,8 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(self.list_compact.tick(dt, settings))
+            .merge(self.list_entity_table.tick(dt, settings))
             .merge(Animated::tick(&mut self.panel_demo, dt, settings))
             .merge(self.panel_join_demo.tick(dt, settings))
             .merge(self.panel_tabs_join_demo.tick(dt, settings))
@@ -1905,21 +1931,29 @@ impl PreviewState {
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.relative_date.init(ctx);
         self.validated_form.init(ctx);
+        self.list_compact.init(ctx);
+        self.list_entity_table.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.relative_date.mount(ctx);
         self.validated_form.mount(ctx);
+        self.list_compact.mount(ctx);
+        self.list_entity_table.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.relative_date.unmount(ctx);
         self.validated_form.unmount(ctx);
+        self.list_compact.unmount(ctx);
+        self.list_entity_table.unmount(ctx);
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.relative_date.destroy(ctx);
         self.validated_form.destroy(ctx);
+        self.list_compact.destroy(ctx);
+        self.list_entity_table.destroy(ctx);
     }
 
     fn panel_title_dropdown_mut(
@@ -1991,6 +2025,20 @@ impl PreviewState {
             PreviewKind::DataChecklistTree => &mut self.data_checklist_tree,
             PreviewKind::DataActivateOnNavigate => &mut self.data_activate_on_navigate,
             _ => &mut self.data_list,
+        }
+    }
+
+    fn active_list_control(&self, preview: PreviewKind) -> &ListControlShowcase {
+        match preview {
+            PreviewKind::ListEntityTable => &self.list_entity_table,
+            _ => &self.list_compact,
+        }
+    }
+
+    fn active_list_control_mut(&mut self, preview: PreviewKind) -> &mut ListControlShowcase {
+        match preview {
+            PreviewKind::ListEntityTable => &mut self.list_entity_table,
+            _ => &mut self.list_compact,
         }
     }
 
@@ -3546,10 +3594,13 @@ enum ComponentKind {
     DataViewMultiSelect,
     DataViewChecklistTree,
     DataViewActivateOnNavigate,
+    ListControl,
+    ListCompact,
+    ListEntityTable,
 }
 
 impl ComponentKind {
-    const ALL: [Self; 40] = [
+    const ALL: [Self; 43] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3590,6 +3641,9 @@ impl ComponentKind {
         Self::DataViewMultiSelect,
         Self::DataViewChecklistTree,
         Self::DataViewActivateOnNavigate,
+        Self::ListControl,
+        Self::ListCompact,
+        Self::ListEntityTable,
     ];
 
     fn title(self) -> &'static str {
@@ -3634,6 +3688,9 @@ impl ComponentKind {
             Self::DataViewMultiSelect => "Multi Select",
             Self::DataViewChecklistTree => "Tree Checklist",
             Self::DataViewActivateOnNavigate => "Activate On Navigate",
+            Self::ListControl => "List Control",
+            Self::ListCompact => "Compact names",
+            Self::ListEntityTable => "Entity table",
         }
     }
 
@@ -3647,6 +3704,7 @@ impl ComponentKind {
             | Self::DataViewMultiSelect
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
+            Self::ListCompact | Self::ListEntityTable => Some(Self::ListControl),
             Self::Button
             | Self::Chip
             | Self::TagInput
@@ -3710,6 +3768,8 @@ impl ComponentKind {
             Self::DataViewMultiSelect => PreviewKind::DataMultiSelect,
             Self::DataViewChecklistTree => PreviewKind::DataChecklistTree,
             Self::DataViewActivateOnNavigate => PreviewKind::DataActivateOnNavigate,
+            Self::ListControl | Self::ListCompact => PreviewKind::ListCompact,
+            Self::ListEntityTable => PreviewKind::ListEntityTable,
         }
     }
 }
@@ -3752,6 +3812,8 @@ enum PreviewKind {
     DataMultiSelect,
     DataChecklistTree,
     DataActivateOnNavigate,
+    ListCompact,
+    ListEntityTable,
 }
 
 impl PreviewKind {
@@ -3793,6 +3855,8 @@ impl PreviewKind {
             Self::DataMultiSelect => "Multi Select",
             Self::DataChecklistTree => "Tree Checklist",
             Self::DataActivateOnNavigate => "Activate On Navigate",
+            Self::ListCompact => "Compact names",
+            Self::ListEntityTable => "Entity table",
         }
     }
 
@@ -3808,6 +3872,10 @@ impl PreviewKind {
                 | Self::DataChecklistTree
                 | Self::DataActivateOnNavigate
         )
+    }
+
+    fn is_list_control(self) -> bool {
+        matches!(self, Self::ListCompact | Self::ListEntityTable)
     }
 }
 
@@ -3844,6 +3912,228 @@ mod tests {
         assert_eq!(ComponentKind::Layouts.preview(), PreviewKind::LayoutFlex);
         assert_eq!(ComponentKind::Inputs.preview(), PreviewKind::Button);
         assert_eq!(ComponentKind::DataView.preview(), PreviewKind::DataList);
+        assert_eq!(
+            ComponentKind::ListControl.preview(),
+            PreviewKind::ListCompact
+        );
+    }
+
+    #[test]
+    fn both_list_control_variants_are_registered() {
+        let variants = [ComponentKind::ListCompact, ComponentKind::ListEntityTable];
+        for variant in variants {
+            assert!(ComponentKind::ALL.contains(&variant));
+            assert_eq!(variant.parent(), Some(ComponentKind::ListControl));
+            assert!(variant.preview().is_list_control());
+        }
+    }
+
+    #[test]
+    fn list_control_gallery_variants_start_seeded() {
+        let compact = compact_name_controls();
+        let entities = entity_controls();
+
+        assert!(compact.iter().all(|control| !control.items().is_empty()));
+        assert!(entities.iter().all(|control| !control.items().is_empty()));
+        assert_eq!(compact.len(), 2);
+        assert_eq!(entities.len(), 3);
+    }
+
+    #[test]
+    fn mixed_list_control_example_supports_editing() {
+        let mut controls = entity_controls();
+        let mixed = &mut controls[1];
+
+        mixed.dispatch_event(
+            &EventRoute::new(TreePath::from_keys([ChildKey::new("data")])),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('e'))),
+            &mut EventCtx::default(),
+        );
+
+        assert!(mixed.is_editing());
+    }
+
+    #[test]
+    fn derived_people_example_displays_initials_and_full_name() {
+        let controls = entity_controls();
+        let derived = &controls[2];
+        let row = derived
+            .data_view()
+            .highlighted_json()
+            .expect("seeded person is highlighted");
+
+        assert!(row.contains("KJ"));
+        assert!(row.contains("Katherine Johnson"));
+    }
+
+    #[test]
+    fn compact_names_compares_confirmed_and_immediate_removal() {
+        let controls = compact_name_controls();
+
+        assert!(controls[0].has_remove_confirmation());
+        assert!(!controls[1].has_remove_confirmation());
+    }
+
+    #[test]
+    fn derived_people_creator_accepts_only_first_name_and_surname() {
+        let mut controls = entity_controls();
+        let derived = &mut controls[2];
+        let mut ctx = EventCtx::default();
+        derived.dispatch_event(
+            &EventRoute::new(TreePath::from_keys([ChildKey::new("data")])),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('+'))),
+            &mut ctx,
+        );
+        for (index, value) in ["Dorothy", "Vaughan"].into_iter().enumerate() {
+            let slot = if index == 0 {
+                "add-input".to_string()
+            } else {
+                format!("add-input-{index}")
+            };
+            let route = EventRoute::new(TreePath::from_keys([ChildKey::new(slot)]));
+            derived.dispatch_event(&route, &TuiEvent::Paste(value.to_string()), &mut ctx);
+            derived.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+        }
+
+        let added = derived.items().last().expect("person added");
+        assert_eq!(added.name, "Dorothy");
+        assert_eq!(added.owner, "Vaughan");
+        assert_eq!(added.state, "Dorothy Vaughan");
+        let added_id = added.id;
+        derived.data_view_mut().highlight_id(&added_id);
+        let cells = derived
+            .data_view()
+            .highlighted_json()
+            .expect("added person highlighted");
+        assert!(cells.contains("DV"));
+        assert!(cells.contains("Dorothy Vaughan"));
+    }
+
+    #[test]
+    fn derived_people_editor_recomputes_full_name() {
+        let mut controls = entity_controls();
+        let derived = &mut controls[2];
+        let mut ctx = EventCtx::default();
+        let data = EventRoute::new(TreePath::from_keys([ChildKey::new("data")]));
+        derived.dispatch_event(
+            &data,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('e'))),
+            &mut ctx,
+        );
+        for (index, value) in ["Dorothy", "Vaughan"].into_iter().enumerate() {
+            let slot = if index == 0 {
+                "add-input".to_string()
+            } else {
+                format!("add-input-{index}")
+            };
+            let route = EventRoute::new(TreePath::from_keys([ChildKey::new(slot)]));
+            derived.dispatch_event(&route, &TuiEvent::Paste(value.to_string()), &mut ctx);
+            derived.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+        }
+
+        let edited = &derived.items()[0];
+        assert_eq!(edited.name, "DorothyKatherine");
+        assert_eq!(edited.owner, "VaughanJohnson");
+        assert_eq!(edited.state, "DorothyKatherine VaughanJohnson");
+        let cells = derived
+            .data_view()
+            .highlighted_json()
+            .expect("edited person highlighted");
+        assert!(cells.contains("DV"));
+        assert!(cells.contains("DorothyKatherine VaughanJohnson"));
+    }
+
+    #[test]
+    fn list_control_gallery_stacks_intrinsic_capped_examples() {
+        let mut state = PreviewState::new();
+        let area = Rect::new(0, 0, 80, 30);
+        state.layout(PreviewKind::ListCompact, area, area, &mut LayoutCtx::new());
+        let areas = [
+            state
+                .list_compact
+                .child_rect(&ChildKey::new("first"))
+                .unwrap(),
+            state
+                .list_compact
+                .child_rect(&ChildKey::new("second"))
+                .unwrap(),
+        ];
+
+        assert!(areas[0].height > 0);
+        assert!(areas[1].height > 0);
+        assert_eq!(areas[1].y, areas[0].bottom() + 1);
+        assert!(areas[1].bottom() <= area.bottom());
+        assert!(areas.iter().all(|child| child.height < area.height));
+    }
+
+    #[test]
+    fn short_list_control_gallery_shares_height_between_examples() {
+        let mut state = PreviewState::new();
+        let area = Rect::new(4, 2, 40, 3);
+        state.layout(PreviewKind::ListCompact, area, area, &mut LayoutCtx::new());
+        let areas = [
+            state
+                .list_compact
+                .child_rect(&ChildKey::new("first"))
+                .unwrap(),
+            state
+                .list_compact
+                .child_rect(&ChildKey::new("second"))
+                .unwrap(),
+        ];
+
+        assert!(areas.iter().all(|child| !child.is_empty()));
+        assert!(areas.iter().all(|child| child.x == area.x));
+        assert!(areas.iter().all(|child| child.right() <= area.right()));
+        assert!(areas.iter().all(|child| child.bottom() <= area.bottom()));
+        assert_eq!(areas[1].y, areas[0].bottom() + 1);
+    }
+
+    #[test]
+    fn short_entity_gallery_clips_fit_content_children_to_available_height() {
+        let mut state = PreviewState::new();
+        let area = Rect::new(4, 2, 40, 3);
+        state.layout(
+            PreviewKind::ListEntityTable,
+            area,
+            area,
+            &mut LayoutCtx::new(),
+        );
+
+        let areas = ["first", "second", "third"].map(|key| {
+            state
+                .list_entity_table
+                .child_rect(&ChildKey::new(key))
+                .unwrap()
+        });
+        assert!(areas.iter().any(|child| !child.is_empty()));
+        assert!(areas.iter().all(|child| child.bottom() <= area.bottom()));
+    }
+
+    #[test]
+    fn hidden_list_control_examples_receive_empty_layout_areas() {
+        let mut state = PreviewState::new();
+        let area = Rect::new(0, 0, 40, 1);
+        let mut layout = LayoutCtx::new();
+        state.layout(PreviewKind::ListCompact, area, area, &mut layout);
+        let areas = [
+            state
+                .list_compact
+                .child_rect(&ChildKey::new("first"))
+                .unwrap(),
+            state
+                .list_compact
+                .child_rect(&ChildKey::new("second"))
+                .unwrap(),
+        ];
+
+        assert!(areas.iter().all(|area| area.is_empty()));
+        assert!(
+            layout
+                .focus_targets()
+                .iter()
+                .all(|target| target.area.is_empty())
+        );
     }
 
     #[test]

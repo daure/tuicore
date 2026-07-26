@@ -602,6 +602,10 @@ impl<M> TextInput<M> {
         self.cursor = self.cursor.min(self.len_chars());
     }
 
+    pub fn move_cursor_to_end(&mut self) {
+        self.cursor = self.len_chars();
+    }
+
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> InputOutcome {
         let outcome = self.on_key_inner(key.into());
         if outcome.needs_redraw() {

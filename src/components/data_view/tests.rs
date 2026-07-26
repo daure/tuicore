@@ -68,6 +68,97 @@ fn assert_restored_highlight_is_visible(view: &DataView<usize, usize>, area: Rec
 }
 
 #[test]
+fn row_update_preserves_order_and_resynchronizes_filtered_highlight() {
+    let mut view = DataView::new(
+        [(1, "Ada".to_string()), (2, "Grace".to_string())],
+        |row: &(usize, String)| row.0,
+    )
+    .column(Column::text(
+        "name",
+        "Name",
+        Constraint::Percentage(100),
+        |row: &(usize, String)| row.1.clone(),
+    ));
+    view.set_search_query("Grace");
+    assert_eq!(view.highlighted_id(), Some(2));
+
+    view.update_row(&2, |row| row.1 = "Linus".to_string())
+        .expect("row exists");
+
+    assert_eq!(view.rows()[0].0, 1);
+    assert_eq!(view.rows()[1], (2, "Linus".to_string()));
+    assert_eq!(view.highlighted_id(), None);
+}
+
+#[test]
+fn row_height_defaults_to_one_and_clamps_zero() {
+    let mut view = DataView::list([1, 2], |row| *row, |row| row.to_string());
+
+    assert_eq!(view.configured_row_height(), 1);
+    view.set_row_height(0);
+    assert_eq!(view.configured_row_height(), 1);
+}
+
+#[test]
+fn row_height_changes_measurement_and_render_spacing() {
+    let view = DataView::list([1, 2], |row| *row, |row| format!("row {row}"))
+        .row_height(3)
+        .focused(true);
+    let measured =
+        <DataView<usize, usize> as TuiNode<()>>::measure(&view, crate::LayoutProposal::unbounded());
+    assert_eq!(measured.preferred.height, 6);
+
+    let mut terminal = Terminal::new(TestBackend::new(12, 6)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "r");
+    assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), " ");
+    assert_eq!(buffer.cell((0, 2)).unwrap().symbol(), " ");
+    assert_eq!(buffer.cell((0, 3)).unwrap().symbol(), "r");
+    for y in 0..3 {
+        assert_eq!(
+            buffer.cell((0, y)).unwrap().bg,
+            crate::theme().highlight_bg()
+        );
+    }
+}
+
+#[test]
+fn row_height_uses_physical_lines_for_page_visibility() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut view = DataView::list(1..=8, |row| *row, |row| row.to_string()).row_height(2);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    view.on_key_with_settings(Key::PageDown, area, settings);
+
+    assert_eq!(view.highlighted_id(), Some(3));
+    assert_eq!(view.scroll.target_offset().y, 3);
+}
+
+#[test]
+fn oversized_row_reveal_aligns_text_line_with_viewport_start() {
+    let area = Rect::new(0, 0, 20, 3);
+    let mut view = DataView::list([1, 2, 3], |row| *row, |row| format!("row {row}")).row_height(4);
+    <DataView<_, _> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    view.highlight_id(&3);
+
+    view.reveal_highlighted();
+
+    assert_eq!(view.scroll.target_offset().y, 8);
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "r"
+    );
+}
+
+#[test]
 fn parent_tree_places_children_under_each_parent() {
     let view = tree_view().expanded([1, 2, 3]);
 
@@ -2109,6 +2200,50 @@ fn filtered_row_ids_apply_ranked_visible_order() {
     .visible_row_ids([3, 1]);
 
     assert_eq!(visible_ids(&view), vec![3, 1]);
+}
+
+#[test]
+fn replacing_rows_preserves_visible_subset_order_by_id_after_reorder() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .visible_row_ids([3, 1]);
+    view.highlight_id(&1);
+
+    view.set_rows([
+        Row::new(1, "Alpha updated"),
+        Row::new(3, "Gamma updated"),
+        Row::new(2, "Beta updated"),
+    ]);
+
+    assert_eq!(visible_ids(&view), vec![3, 1]);
+    assert_eq!(view.highlighted_id(), Some(1));
+}
+
+#[test]
+fn replacing_rows_removes_missing_visible_ids_and_synchronizes_highlight() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .visible_row_ids([3, 1]);
+    view.highlight_id(&3);
+
+    view.set_rows([Row::new(2, "Beta updated"), Row::new(1, "Alpha updated")]);
+
+    assert_eq!(visible_ids(&view), vec![1]);
+    assert_eq!(view.highlighted_id(), Some(1));
 }
 
 #[test]

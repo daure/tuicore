@@ -546,7 +546,7 @@ impl<M> Dialog<M> {
         ctx.request_layout();
     }
 
-    fn close_reason(&self, key: KeyEvent) -> Option<DialogCloseReason> {
+    pub(crate) fn close_reason(&self, key: KeyEvent) -> Option<DialogCloseReason> {
         if matches_any(&self.keys.close, key) {
             Some(DialogCloseReason::CloseKey)
         } else if keybindings().focus().unfocus_matches(key) {

@@ -18,6 +18,30 @@ impl<T, Id> DataView<T, Id>
 where
     Id: Clone + Eq + Hash,
 {
+    pub(crate) fn visible_column_rects(
+        &self,
+        area: Rect,
+        row_y: u16,
+        row_height: u16,
+    ) -> Vec<Rect> {
+        let geometry = self.scroll_geometry(area);
+        let offset = self.visible_offset(geometry.viewport, geometry.content);
+        let viewport = Rect::new(
+            geometry.layout.viewport.x,
+            row_y,
+            geometry.layout.viewport.width,
+            row_height,
+        );
+        let column_widths = self.column_widths(geometry.layout.viewport.width as usize);
+        self.column_areas(viewport, &column_widths, offset.x)
+            .into_iter()
+            .map(|cell| {
+                cell.map(|cell| cell.area)
+                    .unwrap_or(Rect::new(viewport.x, row_y, 0, row_height))
+            })
+            .collect()
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         self.render_with_row_style(frame, area, None);
     }
@@ -85,18 +109,23 @@ where
             return;
         }
 
-        for (line_index, row) in visible
-            .iter()
-            .enumerate()
-            .skip(offset.y)
-            .take(geometry.viewport.height)
-        {
-            let y = body_area.y + (line_index - offset.y) as u16;
+        let row_height = self.row_height as usize;
+        let first_row = offset.y / row_height;
+        let last_line = offset.y.saturating_add(geometry.viewport.height);
+        let row_count = last_line.saturating_add(row_height.saturating_sub(1)) / row_height;
+        for (line_index, row) in visible.iter().enumerate().take(row_count).skip(first_row) {
+            let row_start = line_index.saturating_mul(row_height);
+            let clipped_start = row_start.max(offset.y);
+            let clipped_end = row_start.saturating_add(row_height).min(last_line);
+            if clipped_start >= clipped_end {
+                continue;
+            }
+            let y = body_area.y + clipped_start.saturating_sub(offset.y) as u16;
             let row_area = Rect::new(
                 geometry.layout.viewport.x,
                 y,
                 geometry.layout.viewport.width,
-                1,
+                clipped_end.saturating_sub(clipped_start) as u16,
             );
             let highlighted = line_index == self.highlighted;
             let row_style =
@@ -105,16 +134,18 @@ where
                 Block::default().style(row_style.unwrap_or_default()),
                 row_area,
             );
-            self.render_row(
-                frame,
-                row_area,
-                &column_widths,
-                offset.x,
-                row,
-                highlighted,
-                row_style,
-                &selection_descendants,
-            );
+            if clipped_start == row_start {
+                self.render_row(
+                    frame,
+                    row_area,
+                    &column_widths,
+                    offset.x,
+                    row,
+                    highlighted,
+                    row_style,
+                    &selection_descendants,
+                );
+            }
         }
 
         self.scroll

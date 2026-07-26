@@ -45,6 +45,7 @@ pub struct ConfirmationDialog<M = ()> {
     no_text: String,
     keys: ConfirmationDialogKeyBindings,
     on_outcome: Option<OutcomeHandler<M>>,
+    outcomes: Vec<ConfirmationDialogOutcome>,
     dialog: Dialog<M>,
 }
 
@@ -66,6 +67,7 @@ where
             no_text,
             keys,
             on_outcome: None,
+            outcomes: Vec::new(),
             dialog,
         }
     }
@@ -162,6 +164,10 @@ where
         &mut self.dialog
     }
 
+    pub fn take_outcomes(&mut self) -> Vec<ConfirmationDialogOutcome> {
+        std::mem::take(&mut self.outcomes)
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         self.dialog.render(frame, area);
     }
@@ -195,6 +201,16 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Key(key) = event {
+            if self.keys.yes.is_some_and(|binding| binding.matches(*key)) {
+                self.outcomes.push(ConfirmationDialogOutcome::Confirmed);
+            } else if self.keys.no.is_some_and(|binding| binding.matches(*key)) {
+                self.outcomes.push(ConfirmationDialogOutcome::Cancelled);
+            } else if let Some(reason) = self.dialog.close_reason(*key) {
+                self.outcomes
+                    .push(ConfirmationDialogOutcome::Closed(reason));
+            }
+        }
         self.dialog.event(event, ctx)
     }
 

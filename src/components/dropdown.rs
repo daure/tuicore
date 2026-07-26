@@ -414,6 +414,14 @@ where
         self.committed.clone()
     }
 
+    pub fn clear_selection(&mut self) {
+        self.committed.clear();
+        self.opened_committed.clear();
+        self.draft.clear();
+        self.no_selection_highlighted = false;
+        self.sync_view_selection();
+    }
+
     pub fn search_query(&self) -> &str {
         self.search_input.current_value()
     }
@@ -1304,7 +1312,7 @@ where
         self.on_key(*key, self.overlay_bounds)
     }
 
-    fn apply_event_outcome<M>(
+    pub(crate) fn apply_event_outcome<M>(
         &mut self,
         outcome: DropdownOutcome,
         ctx: &mut EventCtx<M>,

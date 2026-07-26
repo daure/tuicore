@@ -91,16 +91,17 @@ where
 
     fn content_size(&self, viewport_width: usize) -> ScrollSize {
         let width = self.column_widths(viewport_width).into_iter().sum();
-        ScrollSize::new(width, self.visible_len())
+        ScrollSize::new(
+            width,
+            self.visible_len().saturating_mul(self.row_height as usize),
+        )
     }
 
     pub(super) fn visible_offset(&self, viewport: ScrollSize, content: ScrollSize) -> ScrollOffset {
         let offset = self.scroll.offset();
         ScrollOffset::new(
             offset.x.min(content.width.saturating_sub(viewport.width)),
-            offset
-                .y
-                .min(self.visible_len().saturating_sub(viewport.height)),
+            offset.y.min(content.height.saturating_sub(viewport.height)),
         )
     }
 

@@ -12,6 +12,7 @@ mod flex;
 mod form_field;
 mod grid;
 mod list;
+mod list_control;
 mod menu;
 mod notifications;
 mod overlay;
@@ -70,6 +71,7 @@ pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use form_field::FormField;
 pub use grid::{Grid, GridItem, GridTrack};
 pub use list::{List, ListOutcome};
+pub use list_control::{ListControl, ListControlEvent, ListControlField, ListControlKeyBindings};
 pub use menu::{Menu, MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode};
 pub use notifications::{
     Notification, NotificationCenter, NotificationId, NotificationKind, ToastIcons, ToastRack,

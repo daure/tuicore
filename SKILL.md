@@ -26,6 +26,7 @@ Use `fill(1)` for main content regions that should consume remaining space.
 - `DialogLayer` + `DockSpec` — modal/overlay host. Use `docked(DockSpec::bottom(80))` for top/bottom/left/right docked overlays so placement and chrome borders stay in sync.
 - `DialogLayer::fit_content().fit_content_max(width, height)` — intrinsic modal sizing from child measurement, capped within terminal bounds.
 - `Panel` — chrome wrapper with title/border/help. Remember inner area is smaller.
+- `ListControl` — panel-contained mutable `DataView` with text/dropdown inline fields, sequential add/remove flow, and intrinsic height capped by `max_rows` before scrolling.
 - `Header` / `Paragraph` — measured semantic typography for headings and body copy; both provide intrinsic layout hints.
 - `Tabs` — tab header + selected body. Body should own its own layout.
 - `Menu` — trigger-driven popup actions. Use for compact command lists.

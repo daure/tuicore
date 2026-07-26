@@ -53,7 +53,11 @@ where
         let width = self.columns.len().max(1).min(u16::MAX as usize) as u16;
         let header = self.headers as u16;
         let action_bar = self.action_bar as u16;
-        let rows = self.visible_rows().len().min(u16::MAX as usize) as u16;
+        let rows = self
+            .visible_rows()
+            .len()
+            .saturating_mul(self.row_height as usize)
+            .min(u16::MAX as usize) as u16;
         LayoutSizeHint::content(
             width,
             action_bar

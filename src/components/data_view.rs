@@ -69,6 +69,7 @@ pub struct DataView<T, Id> {
     highlighted: usize,
     focused: bool,
     headers: bool,
+    row_height: u16,
     scroll: ScrollState,
     sort: Option<DataViewSort>,
     pagination: Option<DataViewPagination>,
@@ -125,6 +126,7 @@ where
             highlighted: 0,
             focused: false,
             headers: false,
+            row_height: 1,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             sort: None,
             pagination: None,
@@ -173,14 +175,35 @@ where
         self
     }
 
+    pub fn add_column(&mut self, column: Column<T, Id>) {
+        self.columns.push(column);
+    }
+
     pub fn columns(mut self, columns: impl IntoIterator<Item = Column<T, Id>>) -> Self {
         self.columns.extend(columns);
         self
     }
 
+    pub fn add_columns(&mut self, columns: impl IntoIterator<Item = Column<T, Id>>) {
+        self.columns.extend(columns);
+    }
+
     pub fn headers(mut self, headers: bool) -> Self {
         self.headers = headers;
         self
+    }
+
+    pub fn row_height(mut self, row_height: u16) -> Self {
+        self.set_row_height(row_height);
+        self
+    }
+
+    pub fn set_row_height(&mut self, row_height: u16) {
+        self.row_height = row_height.max(1);
+    }
+
+    pub fn configured_row_height(&self) -> u16 {
+        self.row_height
     }
 
     pub fn action_bar(mut self, action_bar: bool) -> Self {
@@ -241,6 +264,14 @@ where
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    pub fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    pub(crate) fn has_active_interaction(&self) -> bool {
+        !matches!(self.interaction, DataViewInteraction::Grid)
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -351,8 +382,17 @@ where
 
     pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
         let before_id = self.highlighted_id();
+        let visible_ids = self.visible_row_indices.as_ref().map(|indices| {
+            indices
+                .iter()
+                .filter_map(|index| self.rows.get(*index))
+                .map(|row| (self.row_id)(row))
+                .collect::<Vec<_>>()
+        });
         self.rows = rows.into_iter().collect();
-        self.trim_visible_row_indices();
+        if let Some(ids) = visible_ids {
+            self.visible_row_indices = Some(self.row_indices_for_ids(ids));
+        }
         let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
             handled: true,
@@ -360,6 +400,73 @@ where
             active: false,
             activated: update.activated,
         }
+    }
+
+    pub fn rows(&self) -> &[T] {
+        &self.rows
+    }
+
+    pub(crate) fn visible_row_count(&self) -> usize {
+        self.visible_rows().len()
+    }
+
+    pub(crate) fn measurement_chrome_height(&self) -> u16 {
+        u16::from(self.headers).saturating_add(u16::from(self.action_bar))
+    }
+
+    pub fn row_id(&self, row: &T) -> Id {
+        (self.row_id)(row)
+    }
+
+    pub fn push_row(&mut self, row: T) -> DataViewOutcome {
+        let id = (self.row_id)(&row);
+        self.rows.push(row);
+        self.clamp_visible_state();
+        let mut outcome = self.highlight_id(&id);
+        outcome.handled = true;
+        outcome.changed = true;
+        outcome
+    }
+
+    /// Updates a row without changing its position.
+    ///
+    /// The updater must preserve the row ID. Changing it panics because selection,
+    /// expansion, and externally supplied visible-row state are keyed by that ID.
+    pub fn update_row(&mut self, id: &Id, update: impl FnOnce(&mut T)) -> Option<DataViewOutcome> {
+        let before_id = self.highlighted_id();
+        let row = self.rows.iter_mut().find(|row| &(self.row_id)(row) == id)?;
+        update(row);
+        assert!(
+            &(self.row_id)(row) == id,
+            "DataView row update must preserve the row ID"
+        );
+        let (_, highlight) = self.sync_highlight_after_visible_set_change(before_id);
+        Some(DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: highlight.activated,
+        })
+    }
+
+    pub fn remove_row(&mut self, id: &Id) -> Option<T> {
+        let index = self.rows.iter().position(|row| &(self.row_id)(row) == id)?;
+        let highlighted = self.highlighted;
+        let removed = self.rows.remove(index);
+        self.selected.remove(id);
+        self.expanded.remove(id);
+        if let Some(indices) = &mut self.visible_row_indices {
+            indices.retain(|candidate| *candidate != index);
+            for candidate in indices {
+                if *candidate > index {
+                    *candidate -= 1;
+                }
+            }
+        }
+        self.clamp_page();
+        let next = highlighted.min(self.visible_len().saturating_sub(1));
+        self.set_highlighted_index_from(next, Some(id.clone()));
+        Some(removed)
     }
 
     pub fn append_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
@@ -375,6 +482,11 @@ where
     #[cfg(test)]
     pub(crate) fn focused_for_test(&self) -> bool {
         self.focused
+    }
+
+    #[cfg(test)]
+    pub(crate) fn vertical_scroll_offset_for_test(&self) -> usize {
+        self.scroll.offset().y
     }
 
     pub fn pagination(mut self, page_size: usize) -> Self {
@@ -632,6 +744,13 @@ where
     pub fn reveal_highlighted(&mut self) -> DataViewOutcome {
         let mut settings = animation_settings();
         settings.enabled = false;
+        self.reveal_highlighted_with_settings(settings)
+    }
+
+    pub fn reveal_highlighted_with_settings(
+        &mut self,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
         self.ensure_highlight_visible(self.area, settings)
             .into_data_view_outcome(true, false)
     }
@@ -1133,7 +1252,8 @@ where
 
     fn visible_page_step(&self, area: Rect) -> usize {
         let height = self.scroll_geometry(area).viewport.height.max(1);
-        ((height * 3).saturating_add(4)) / 5
+        let rows = (height / self.row_height as usize).max(1);
+        ((rows * 3).saturating_add(4)) / 5
     }
 
     fn handle_g(&mut self, area: Rect, settings: AnimationSettings) -> DataViewOutcome {
@@ -1154,12 +1274,14 @@ where
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
         let current = self.scroll.target_offset().y;
-        let target = if self.highlighted < current {
-            self.highlighted
-        } else if self.highlighted >= current.saturating_add(viewport_height) {
-            self.highlighted
-                .saturating_add(1)
-                .saturating_sub(viewport_height)
+        let row_start = self.highlighted.saturating_mul(self.row_height as usize);
+        let row_end = row_start.saturating_add(self.row_height as usize);
+        let target = if self.row_height as usize >= viewport_height {
+            row_start
+        } else if row_start < current {
+            row_start
+        } else if row_end > current.saturating_add(viewport_height) {
+            row_end.saturating_sub(viewport_height)
         } else {
             current
         };
@@ -1174,7 +1296,9 @@ where
     fn center_highlight(&mut self, area: Rect, settings: AnimationSettings) -> ScrollOutcome {
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
-        let target = self.highlighted.saturating_sub(viewport_height / 2);
+        let row_start = self.highlighted.saturating_mul(self.row_height as usize);
+        let target =
+            row_start.saturating_sub(viewport_height.saturating_sub(self.row_height as usize) / 2);
         self.scroll.scroll_to(
             ScrollOffset::new(self.scroll.target_offset().x, target),
             geometry.viewport,
@@ -1267,13 +1391,6 @@ where
         self.events.push(DataViewTypedEvent::TransformChanged {
             state: self.transform_state.clone(),
         });
-    }
-
-    fn trim_visible_row_indices(&mut self) {
-        if let Some(indices) = &mut self.visible_row_indices {
-            let len = self.rows.len();
-            indices.retain(|index| *index < len);
-        }
     }
 
     fn row_indices_for_ids(&self, ids: impl IntoIterator<Item = Id>) -> Vec<usize> {

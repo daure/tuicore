@@ -225,6 +225,7 @@ pub struct FocusCtx<M> {
     messages: Vec<M>,
     focus_request: Option<FocusRequest>,
     redraw: bool,
+    layout: bool,
     animation: AnimationSettings,
 }
 
@@ -1140,6 +1141,7 @@ impl<M> FocusCtx<M> {
             messages: Vec::new(),
             focus_request: None,
             redraw: false,
+            layout: false,
             animation,
         }
     }
@@ -1156,6 +1158,10 @@ impl<M> FocusCtx<M> {
         self.redraw = true;
     }
 
+    pub fn request_layout(&mut self) {
+        self.layout = true;
+    }
+
     pub fn messages(&self) -> &[M] {
         &self.messages
     }
@@ -1170,6 +1176,10 @@ impl<M> FocusCtx<M> {
 
     pub fn redraw_requested(&self) -> bool {
         self.redraw
+    }
+
+    pub fn layout_requested(&self) -> bool {
+        self.layout
     }
 
     pub fn animation(&self) -> AnimationSettings {

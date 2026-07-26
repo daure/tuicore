@@ -4,6 +4,7 @@ pub(crate) mod dropdowns;
 pub(crate) mod forms;
 pub(crate) mod inputs;
 pub(crate) mod layouts;
+pub(crate) mod list_control;
 pub(crate) mod notifications;
 pub(crate) mod panels;
 pub(crate) mod relative_date;

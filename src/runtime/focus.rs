@@ -713,54 +713,43 @@ mod tests {
     }
 
     #[test]
-    fn control_navigation_does_not_cross_nested_container_forward() {
-        let container_path = TreePath::default().child(ChildKey::new("container"));
-        let targets = [
-            target_with_path(
-                "nested",
-                container_path.clone().child(ChildKey::new("control")),
-                Rect::default(),
-            ),
-            target_with_path("container", container_path, Rect::default()),
-            control_target("outside"),
-        ];
-        let mut targets = targets;
-        targets[0].control = true;
+    fn control_navigation_does_not_wrap() {
+        let targets = [control_target("one"), control_target("two")];
         let mut manager = FocusManager::new();
         manager.validate(&targets);
-
-        assert!(
-            manager
-                .apply_request(&FocusRequest::NextControl, &targets)
-                .is_none()
-        );
-        assert_eq!(manager.current().unwrap().id.as_str(), "nested");
-    }
-
-    #[test]
-    fn control_navigation_does_not_cross_nested_container_backward() {
-        let container_path = TreePath::default().child(ChildKey::new("container"));
-        let targets = [
-            target_with_path(
-                "nested",
-                container_path.clone().child(ChildKey::new("control")),
-                Rect::default(),
-            ),
-            target_with_path("container", container_path, Rect::default()),
-            control_target("outside"),
-        ];
-        let mut targets = targets;
-        targets[0].control = true;
-        let mut manager = FocusManager::new();
-        manager.validate(&targets);
-        manager.apply_request(&FocusRequest::Target(FocusId::new("outside")), &targets);
 
         assert!(
             manager
                 .apply_request(&FocusRequest::PreviousControl, &targets)
                 .is_none()
         );
+        manager.apply_request(&FocusRequest::Target(FocusId::new("two")), &targets);
+        assert!(
+            manager
+                .apply_request(&FocusRequest::NextControl, &targets)
+                .is_none()
+        );
+        assert_eq!(manager.current().unwrap().id.as_str(), "two");
+    }
+
+    #[test]
+    fn control_navigation_ignores_wrapper_depth_for_adjacent_controls() {
+        let nested_path = TreePath::default()
+            .child(ChildKey::new("container"))
+            .child(ChildKey::new("control"));
+        let mut targets = [
+            target_with_path("nested", nested_path, Rect::default()),
+            control_target("outside"),
+        ];
+        targets[0].control = true;
+        let mut manager = FocusManager::new();
+        manager.validate(&targets);
+
+        manager.apply_request(&FocusRequest::NextControl, &targets);
         assert_eq!(manager.current().unwrap().id.as_str(), "outside");
+        manager.apply_request(&FocusRequest::Target(FocusId::new("outside")), &targets);
+        manager.apply_request(&FocusRequest::PreviousControl, &targets);
+        assert_eq!(manager.current().unwrap().id.as_str(), "nested");
     }
 
     #[test]
