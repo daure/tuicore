@@ -1,6 +1,6 @@
 [package]
 name = "tuicore"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 description = "Composable ratatui components and a crossterm tree runtime for terminal UIs"
 repository = "https://github.com/daure/tuicore"
@@ -30,7 +30,7 @@ futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
 unicode-segmentation = "1"
 
 [dev-dependencies]
