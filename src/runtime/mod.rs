@@ -7,7 +7,7 @@ mod renderer;
 mod scheduler;
 mod terminal;
 
-pub use app::{TreeApp, run};
+pub use app::{FocusDimSettings, TerminalFocusEffect, TreeApp, run};
 pub use dispatcher::{DispatchEffects, TreeDispatcher};
 pub use event_source::EventSource;
 pub use focus::{FocusManager, FocusTransition};

@@ -13,6 +13,7 @@ Tuicore is a library-first `ratatui` component runtime. Reusable components live
 - `TuiNode<M>` is the component lifecycle: `measure`, `layout`, `render`, `event`, `focus`, and
   `tick`.
 - `TreeApp` and tree routing connect nodes, focus, overlays, messages, and notifications.
+- `TreeApp` dims the final composed frame on terminal focus loss by default; configure or disable it with `TerminalFocusEffect`.
 - State changes happen in input/update or `tick`; rendering only reads state.
 - Containers use `Children`/`ChildSlot` and explicitly forward layout, render, events, focus, and
   ticks. See existing containers in `src/components/` before writing one.

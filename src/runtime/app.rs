@@ -14,11 +14,11 @@ use base64::Engine;
 use ratatui::layout::Rect;
 
 use crate::{
-    AnimationSettings, EventCtx, EventRoute, FocusKeyBindings, FocusRepair, FocusRequest,
-    FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LifecycleCtx,
-    Notification, OutsideMousePolicy, OverlayLayer, OverlayLayoutEntry, Propagation,
-    RuntimeKeyBindings, TickResult, ToastRack, TreePath, TuiEvent, TuiNode, animation_settings,
-    keybindings,
+    AnimationSettings, AnimationSpec, EventCtx, EventRoute, FocusKeyBindings, FocusRepair,
+    FocusRequest, FocusTarget, HitRegion, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher,
+    LifecycleCtx, Notification, OutsideMousePolicy, OverlayLayer, OverlayLayoutEntry, Propagation,
+    RuntimeKeyBindings, TickResult, ToastRack, TreePath, TuiEvent, TuiNode, Tween,
+    animation_settings, keybindings,
 };
 
 use super::{
@@ -32,12 +32,41 @@ type NotificationHandler<N, M> = dyn FnMut(&mut N, Notification, &mut EventCtx<M
 pub struct TreeApp<N, M = ()> {
     root: N,
     animation_settings: AnimationSettings,
+    terminal_focus_effect: TerminalFocusEffect,
+    terminal_focus_dim: Tween,
     runtime_keybindings: RuntimeKeyBindings,
     runtime_keybindings_overridden: bool,
     initial_focus: Option<FocusRequest>,
     on_message: Option<Box<MessageHandler<N, M>>>,
     on_notification: Option<Box<NotificationHandler<N, M>>>,
     notifications: ToastRack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FocusDimSettings {
+    pub amount: f64,
+    pub animation: AnimationSpec,
+}
+
+impl Default for FocusDimSettings {
+    fn default() -> Self {
+        Self {
+            amount: 0.25,
+            animation: AnimationSpec::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TerminalFocusEffect {
+    Disabled,
+    Dim(FocusDimSettings),
+}
+
+impl Default for TerminalFocusEffect {
+    fn default() -> Self {
+        Self::Dim(FocusDimSettings::default())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +92,8 @@ impl<N, M> TreeApp<N, M> {
         Self {
             root,
             animation_settings: animation_settings(),
+            terminal_focus_effect: TerminalFocusEffect::default(),
+            terminal_focus_dim: Tween::idle(0.0),
             runtime_keybindings: keybindings().runtime().clone(),
             runtime_keybindings_overridden: false,
             initial_focus: None,
@@ -74,6 +105,14 @@ impl<N, M> TreeApp<N, M> {
 
     pub fn animation_settings(mut self, settings: AnimationSettings) -> Self {
         self.animation_settings = settings;
+        self
+    }
+
+    pub fn terminal_focus_effect(mut self, effect: TerminalFocusEffect) -> Self {
+        self.terminal_focus_effect = effect;
+        if matches!(effect, TerminalFocusEffect::Disabled) {
+            self.terminal_focus_dim.snap_to(0.0);
+        }
         self
     }
 
@@ -191,11 +230,12 @@ where
                 if flags.layout || layout_engine.area() != area {
                     self.layout_root(flags, focus_manager, layout_engine, dispatcher, area);
                 }
-                renderer.render_with_toasts(
+                renderer.render_with_toasts_and_fade(
                     terminal.terminal_mut(),
                     &self.root,
                     &self.notifications,
                     area,
+                    self.terminal_focus_dim.value(),
                 )?;
                 flags.redraw = false;
             }
@@ -245,7 +285,9 @@ where
             }
 
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
-                let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
+                let tick = dispatcher
+                    .dispatch_tick(&mut self.root, dt, self.animation_settings)
+                    .merge(self.terminal_focus_dim.tick(dt, self.animation_settings));
                 let notification_tick = self.notifications.tick(dt, self.animation_settings);
                 apply_tick_results(flags, scheduler, tick, notification_tick);
             }
@@ -529,6 +571,7 @@ where
         event: TuiEvent,
     ) {
         let event = event;
+        self.update_terminal_focus(&event, flags);
         if let TuiEvent::Key(key) = &event {
             let live_keybindings;
             let runtime_keybindings = if self.runtime_keybindings_overridden {
@@ -740,6 +783,33 @@ where
         }
     }
 
+    fn update_terminal_focus(&mut self, event: &TuiEvent, flags: &mut RuntimeFlags) {
+        let target = match event {
+            TuiEvent::FocusGained => 0.0,
+            TuiEvent::FocusLost => match self.terminal_focus_effect {
+                TerminalFocusEffect::Disabled => return,
+                TerminalFocusEffect::Dim(settings) => settings.amount.clamp(0.0, 1.0),
+            },
+            _ => return,
+        };
+        let TerminalFocusEffect::Dim(settings) = self.terminal_focus_effect else {
+            return;
+        };
+        let animation = self.animation_settings.resolve(settings.animation);
+        if animation.enabled {
+            self.terminal_focus_dim.start(
+                self.terminal_focus_dim.value(),
+                target,
+                animation.duration,
+                animation.easing,
+            );
+            flags.wake_animations |= self.terminal_focus_dim.is_active();
+        } else {
+            self.terminal_focus_dim.snap_to(target);
+        }
+        flags.redraw = true;
+    }
+
     fn handle_external_editor(
         &mut self,
         flags: &mut RuntimeFlags,
@@ -837,7 +907,9 @@ where
                 flags.wake_animations = false;
             }
             if let Some(dt) = scheduler.tick(self.animation_settings.max_dt) {
-                let tick = dispatcher.dispatch_tick(&mut self.root, dt, self.animation_settings);
+                let tick = dispatcher
+                    .dispatch_tick(&mut self.root, dt, self.animation_settings)
+                    .merge(self.terminal_focus_dim.tick(dt, self.animation_settings));
                 let notification_tick = self.notifications.tick(dt, self.animation_settings);
                 apply_tick_results(&mut flags, &mut scheduler, tick, notification_tick);
             }
@@ -1427,6 +1499,50 @@ mod tests {
         fn destroy(&mut self, _ctx: &mut LifecycleCtx<()>) {
             self.destroyed = true;
         }
+    }
+
+    #[test]
+    fn terminal_focus_dim_is_default_and_focus_events_still_reach_root() {
+        let mut app = TreeApp::new(QuitNode::default());
+        let mut flags = RuntimeFlags::default();
+
+        app.update_terminal_focus(&TuiEvent::FocusLost, &mut flags);
+
+        assert!(app.terminal_focus_dim.is_active());
+        assert!(flags.redraw);
+        assert!(flags.wake_animations);
+
+        let app = TreeApp::new(QuitNode::default())
+            .run_test_events([TuiEvent::FocusLost], Rect::new(0, 0, 20, 5));
+        assert_eq!(app.root.events, 1);
+    }
+
+    #[test]
+    fn terminal_focus_dim_can_be_disabled() {
+        let mut app =
+            TreeApp::new(QuitNode::default()).terminal_focus_effect(TerminalFocusEffect::Disabled);
+        let mut flags = RuntimeFlags::default();
+
+        app.update_terminal_focus(&TuiEvent::FocusLost, &mut flags);
+
+        assert_eq!(app.terminal_focus_dim.value(), 0.0);
+        assert!(!app.terminal_focus_dim.is_active());
+        assert!(!flags.redraw);
+        assert!(!flags.wake_animations);
+    }
+
+    #[test]
+    fn disabled_animations_snap_terminal_focus_dim() {
+        let mut animation = AnimationSettings::default();
+        animation.enabled = false;
+        let mut app = TreeApp::new(QuitNode::default()).animation_settings(animation);
+        let mut flags = RuntimeFlags::default();
+
+        app.update_terminal_focus(&TuiEvent::FocusLost, &mut flags);
+
+        assert_eq!(app.terminal_focus_dim.value(), 0.25);
+        assert!(!app.terminal_focus_dim.is_active());
+        assert!(flags.redraw);
     }
 
     impl TuiNode<()> for TickSizingNode {

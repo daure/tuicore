@@ -2,8 +2,9 @@ use std::io::{self, Stdout};
 
 use crossterm::{
     event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -21,6 +22,7 @@ pub struct TerminalGuard {
     alternate_screen: bool,
     mouse_capture: bool,
     bracketed_paste: bool,
+    focus_change: bool,
     keyboard_enhancement: bool,
 }
 
@@ -30,26 +32,46 @@ impl TerminalGuard {
         let raw_enabled = true;
         let mut stdout = io::stdout();
         if let Err(error) = execute!(stdout, EnterAlternateScreen) {
-            cleanup_setup(raw_enabled, false, false, false, false);
+            cleanup_setup(raw_enabled, false, false, false, false, false);
             return Err(error);
         }
         let alternate_screen = true;
         if let Err(error) = execute!(stdout, EnableMouseCapture) {
-            cleanup_setup(raw_enabled, alternate_screen, false, false, false);
+            cleanup_setup(raw_enabled, alternate_screen, false, false, false, false);
             return Err(error);
         }
         let mouse_capture = true;
         if let Err(error) = execute!(stdout, EnableBracketedPaste) {
-            cleanup_setup(raw_enabled, alternate_screen, mouse_capture, false, false);
+            cleanup_setup(
+                raw_enabled,
+                alternate_screen,
+                mouse_capture,
+                false,
+                false,
+                false,
+            );
             return Err(error);
         }
         let bracketed_paste = true;
+        if let Err(error) = execute!(stdout, EnableFocusChange) {
+            cleanup_setup(
+                raw_enabled,
+                alternate_screen,
+                mouse_capture,
+                bracketed_paste,
+                false,
+                false,
+            );
+            return Err(error);
+        }
+        let focus_change = true;
         if let Err(error) = execute!(stdout, keyboard_enhancement_flags()) {
             cleanup_setup(
                 raw_enabled,
                 alternate_screen,
                 mouse_capture,
                 bracketed_paste,
+                focus_change,
                 false,
             );
             return Err(error);
@@ -64,6 +86,7 @@ impl TerminalGuard {
                     alternate_screen,
                     mouse_capture,
                     bracketed_paste,
+                    focus_change,
                     keyboard_enhancement,
                 );
                 return Err(error);
@@ -75,6 +98,7 @@ impl TerminalGuard {
                 alternate_screen,
                 mouse_capture,
                 bracketed_paste,
+                focus_change,
                 keyboard_enhancement,
             );
             return Err(error);
@@ -87,6 +111,7 @@ impl TerminalGuard {
             alternate_screen,
             mouse_capture,
             bracketed_paste,
+            focus_change,
             keyboard_enhancement,
         })
     }
@@ -123,6 +148,12 @@ impl TerminalGuard {
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
+        if self.focus_change {
+            match execute!(self.terminal.backend_mut(), DisableFocusChange) {
+                Ok(()) => self.focus_change = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
         if self.keyboard_enhancement {
             match execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags) {
                 Ok(()) => self.keyboard_enhancement = false,
@@ -148,6 +179,7 @@ impl TerminalGuard {
             && !self.alternate_screen
             && !self.mouse_capture
             && !self.bracketed_paste
+            && !self.focus_change
             && !self.keyboard_enhancement;
         match first_error {
             Some(error) => Err(error),
@@ -166,6 +198,12 @@ impl TerminalGuard {
         if self.bracketed_paste {
             match execute!(self.terminal.backend_mut(), DisableBracketedPaste) {
                 Ok(()) => self.bracketed_paste = false,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
+        if self.focus_change {
+            match execute!(self.terminal.backend_mut(), DisableFocusChange) {
+                Ok(()) => self.focus_change = false,
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
@@ -221,6 +259,12 @@ impl TerminalGuard {
                 Err(error) => capture_first_error(&mut first_error, error),
             }
         }
+        if !self.focus_change {
+            match execute!(self.terminal.backend_mut(), EnableFocusChange) {
+                Ok(()) => self.focus_change = true,
+                Err(error) => capture_first_error(&mut first_error, error),
+            }
+        }
         if !self.keyboard_enhancement {
             match execute!(self.terminal.backend_mut(), keyboard_enhancement_flags()) {
                 Ok(()) => self.keyboard_enhancement = true,
@@ -241,6 +285,7 @@ fn cleanup_setup(
     alternate_screen: bool,
     mouse_capture: bool,
     bracketed_paste: bool,
+    focus_change: bool,
     keyboard_enhancement: bool,
 ) {
     let mut first_error = None;
@@ -254,6 +299,10 @@ fn cleanup_setup(
     if bracketed_paste {
         let mut stdout = io::stdout();
         capture_first(&mut first_error, execute!(stdout, DisableBracketedPaste));
+    }
+    if focus_change {
+        let mut stdout = io::stdout();
+        capture_first(&mut first_error, execute!(stdout, DisableFocusChange));
     }
     if mouse_capture {
         let mut stdout = io::stdout();

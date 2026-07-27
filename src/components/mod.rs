@@ -61,7 +61,7 @@ pub use dialog::{
     Dialog, DialogAction, DialogCloseReason, DialogHost, DialogKeyBindings, DialogTitlePosition,
 };
 pub use dialog_layer::{
-    DialogBackdrop, DialogLayer, DialogLayerPlacement, DockChrome, DockSide, DockSpec,
+    DialogBackdrop, DialogLayer, DialogLayerPlacement, DockChrome, DockSide, DockSpec, fade_buffer,
 };
 pub use dropdown::{
     Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,

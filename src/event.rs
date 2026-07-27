@@ -8,6 +8,8 @@ pub enum TuiEvent {
     Hotkey(HotkeyEvent),
     Yank,
     ExternalEditor(ExternalEditorResponse),
+    FocusGained,
+    FocusLost,
     Mouse(MouseEvent),
     Resize(u16, u16),
     Paste(String),
@@ -214,9 +216,8 @@ impl TryFrom<crossterm_event::Event> for TuiEvent {
             crossterm_event::Event::Mouse(value) => Ok(Self::Mouse(value.into())),
             crossterm_event::Event::Resize(width, height) => Ok(Self::Resize(width, height)),
             crossterm_event::Event::Paste(value) => Ok(Self::Paste(value)),
-            crossterm_event::Event::FocusGained | crossterm_event::Event::FocusLost => {
-                Err(UnsupportedEvent)
-            }
+            crossterm_event::Event::FocusGained => Ok(Self::FocusGained),
+            crossterm_event::Event::FocusLost => Ok(Self::FocusLost),
         }
     }
 }
@@ -324,6 +325,18 @@ mod tests {
         assert_eq!(
             TuiEvent::try_from(crossterm_event::Event::Key(key)),
             Err(UnsupportedEvent)
+        );
+    }
+
+    #[test]
+    fn crossterm_focus_events_are_supported() {
+        assert_eq!(
+            TuiEvent::try_from(crossterm_event::Event::FocusGained),
+            Ok(TuiEvent::FocusGained)
+        );
+        assert_eq!(
+            TuiEvent::try_from(crossterm_event::Event::FocusLost),
+            Ok(TuiEvent::FocusLost)
         );
     }
 

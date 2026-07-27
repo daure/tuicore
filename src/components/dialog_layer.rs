@@ -662,11 +662,25 @@ pub(crate) fn dim_backdrop_buffer(frame: &mut Frame, area: Rect, amount: f64) {
     dim_backdrop_buffer_except(frame, area, amount, &[]);
 }
 
+pub fn fade_buffer(frame: &mut Frame, area: Rect, amount: f64) {
+    fade_buffer_except(frame, area, amount, &[], false);
+}
+
 pub(crate) fn dim_backdrop_buffer_except(
     frame: &mut Frame,
     area: Rect,
     amount: f64,
     excluded: &[Rect],
+) {
+    fade_buffer_except(frame, area, amount, excluded, true);
+}
+
+fn fade_buffer_except(
+    frame: &mut Frame,
+    area: Rect,
+    amount: f64,
+    excluded: &[Rect],
+    apply_dim_modifier: bool,
 ) {
     let theme = theme();
     let fallback_fg = theme.text_fg();
@@ -708,7 +722,9 @@ pub(crate) fn dim_backdrop_buffer_except(
             if cell.bg != Color::Reset {
                 cell.set_bg(dimmed_bg);
             }
-            cell.modifier.insert(Modifier::DIM);
+            if apply_dim_modifier {
+                cell.modifier.insert(Modifier::DIM);
+            }
         }
     }
 }
@@ -727,10 +743,70 @@ fn blend_cell_color(color: Color, fallback: Color, backdrop: Color, amount: f64)
     } else {
         color
     };
-    if matches!(color, Color::Rgb(_, _, _)) && matches!(backdrop, Color::Rgb(_, _, _)) {
-        lerp_color(color, backdrop, amount)
-    } else {
-        color
+    let color = terminal_color_to_rgb(color).unwrap_or(color);
+    let backdrop = terminal_color_to_rgb(backdrop).unwrap_or(backdrop);
+    lerp_color(color, backdrop, amount)
+}
+
+fn terminal_color_to_rgb(color: Color) -> Option<Color> {
+    let rgb = match color {
+        Color::Reset => return None,
+        Color::Black => (0, 0, 0),
+        Color::Red => (128, 0, 0),
+        Color::Green => (0, 128, 0),
+        Color::Yellow => (128, 128, 0),
+        Color::Blue => (0, 0, 128),
+        Color::Magenta => (128, 0, 128),
+        Color::Cyan => (0, 128, 128),
+        Color::Gray => (192, 192, 192),
+        Color::DarkGray => (128, 128, 128),
+        Color::LightRed => (255, 0, 0),
+        Color::LightGreen => (0, 255, 0),
+        Color::LightYellow => (255, 255, 0),
+        Color::LightBlue => (0, 0, 255),
+        Color::LightMagenta => (255, 0, 255),
+        Color::LightCyan => (0, 255, 255),
+        Color::White => (255, 255, 255),
+        Color::Rgb(red, green, blue) => (red, green, blue),
+        Color::Indexed(index) => indexed_color_to_rgb(index),
+    };
+    Some(Color::Rgb(rgb.0, rgb.1, rgb.2))
+}
+
+fn indexed_color_to_rgb(index: u8) -> (u8, u8, u8) {
+    const ANSI: [(u8, u8, u8); 16] = [
+        (0, 0, 0),
+        (128, 0, 0),
+        (0, 128, 0),
+        (128, 128, 0),
+        (0, 0, 128),
+        (128, 0, 128),
+        (0, 128, 128),
+        (192, 192, 192),
+        (128, 128, 128),
+        (255, 0, 0),
+        (0, 255, 0),
+        (255, 255, 0),
+        (0, 0, 255),
+        (255, 0, 255),
+        (0, 255, 255),
+        (255, 255, 255),
+    ];
+    match index {
+        0..=15 => ANSI[index as usize],
+        16..=231 => {
+            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            let offset = index - 16;
+            (
+                LEVELS[(offset / 36) as usize],
+                LEVELS[((offset % 36) / 6) as usize],
+                LEVELS[(offset % 6) as usize],
+            )
+        }
+        232..=255 => {
+            let level = 8 + (index - 232) * 10;
+            (level, level, level)
+        }
     }
 }
 
@@ -1149,6 +1225,44 @@ mod tests {
         );
         assert_eq!(cell.bg, expected_bg);
         assert_eq!(cell.fg, expected_bg);
+    }
+
+    #[test]
+    fn buffer_fade_blends_colors_without_applying_dim_modifier() {
+        let area = Rect::new(0, 0, 10, 4);
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                render_node(&ColorBody, frame, area);
+                fade_buffer(frame, area, 0.5);
+            })
+            .expect("buffer should render");
+
+        let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+        let expected_bg = lerp_color(
+            Color::Rgb(10, 20, 30),
+            theme().background_bg(),
+            0.5 * BACKDROP_BACKGROUND_DIM_FACTOR,
+        );
+        assert_eq!(
+            cell.fg,
+            lerp_color(Color::Rgb(200, 200, 200), expected_bg, 0.5)
+        );
+        assert_eq!(cell.bg, expected_bg);
+        assert!(!cell.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn buffer_fade_blends_named_and_indexed_terminal_colors() {
+        assert_eq!(
+            blend_cell_color(Color::Red, Color::White, Color::Black, 0.5),
+            Color::Rgb(64, 0, 0)
+        );
+        assert_eq!(
+            blend_cell_color(Color::Indexed(196), Color::White, Color::Black, 0.5),
+            Color::Rgb(128, 0, 0)
+        );
     }
 
     #[test]

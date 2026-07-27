@@ -52,7 +52,7 @@ pub use components::{
     TimePicker, TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome, ToggleStyle,
     TreeAdapter, TreeGlyphs, WeatherFetchError, WeatherForecastDay, WeatherForecastDialog,
     WeatherForecastError, WeatherIndicator, WeatherProviderConfig, WeatherReport, WeatherSummary,
-    weather_condition_icon,
+    fade_buffer, weather_condition_icon,
 };
 pub use components::{AiDock, LlmEvent, LlmEventKind, ToolPolicy};
 
@@ -87,8 +87,8 @@ pub use overlay::{
 };
 pub use preset::{BorderKind, DataViewPreset, DropdownPreset, Preset, TabsPreset, TabsVariant};
 pub use runtime::{
-    DispatchEffects, EventSource, FocusManager, FocusTransition, LayoutEngine, Renderer, Result,
-    Scheduler, TerminalGuard, TreeApp, TreeDispatcher, run,
+    DispatchEffects, EventSource, FocusDimSettings, FocusManager, FocusTransition, LayoutEngine,
+    Renderer, Result, Scheduler, TerminalFocusEffect, TerminalGuard, TreeApp, TreeDispatcher, run,
 };
 pub use scroll::{
     ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset,
