@@ -739,6 +739,61 @@ fn focused_navigation_mode_scrolls_up_one_line_for_k_and_up() {
 }
 
 #[test]
+fn focused_navigation_mode_scrolls_to_top_for_gg_and_home() {
+    for keys in [vec![Key::Char('g'), Key::Char('g')], vec![Key::Home]] {
+        let mut input = TextareaInput::<()>::new()
+            .value("one\ntwo\nthree\nfour")
+            .focused(true);
+        let mut layout = LayoutCtx::new();
+        input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+        let geometry = input.scroll_geometry(input.area);
+        input.scroll.scroll_to(
+            ScrollOffset::new(0, 2),
+            geometry.viewport,
+            geometry.content,
+            disabled_animation_settings(),
+        );
+
+        for (index, key) in keys.into_iter().enumerate() {
+            let mut ctx = EventCtx::default();
+            let outcome = input.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+
+            assert_eq!(outcome, EventOutcome::Handled);
+            assert_eq!(ctx.propagation(), Propagation::Stopped);
+            if index == 0 && key == Key::Char('g') {
+                assert_eq!(input.scroll.target_offset().y, 2);
+            }
+        }
+
+        assert_eq!(input.scroll.target_offset().y, 0);
+    }
+}
+
+#[test]
+fn focused_navigation_mode_scrolls_to_bottom_for_shift_g_and_end() {
+    for key in [
+        KeyEvent {
+            code: Key::Char('g'),
+            modifiers: KeyModifiers::SHIFT,
+        },
+        KeyEvent::from(Key::End),
+    ] {
+        let mut input = TextareaInput::<()>::new()
+            .value("one\ntwo\nthree\nfour")
+            .focused(true);
+        let mut layout = LayoutCtx::new();
+        input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.scroll.target_offset().y, 2);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+}
+
+#[test]
 fn navigation_line_keys_bubble_without_vertical_overflow() {
     for key in [Key::Char('j'), Key::Down, Key::Char('k'), Key::Up] {
         let mut input = TextareaInput::<()>::new().value("one\ntwo").focused(true);
@@ -747,6 +802,30 @@ fn navigation_line_keys_bubble_without_vertical_overflow() {
         let mut ctx = EventCtx::default();
 
         let outcome = input.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert_eq!(input.scroll.target_offset().y, 0);
+        assert_eq!(ctx.propagation(), Propagation::Continue);
+    }
+}
+
+#[test]
+fn navigation_jump_keys_bubble_without_vertical_overflow() {
+    for key in [
+        KeyEvent::from(Key::Char('g')),
+        KeyEvent {
+            code: Key::Char('g'),
+            modifiers: KeyModifiers::SHIFT,
+        },
+        KeyEvent::from(Key::Home),
+        KeyEvent::from(Key::End),
+    ] {
+        let mut input = TextareaInput::<()>::new().value("one\ntwo").focused(true);
+        let mut layout = LayoutCtx::new();
+        input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Ignored);
         assert_eq!(input.scroll.target_offset().y, 0);
@@ -773,6 +852,33 @@ fn insert_mode_enters_j_and_k_without_scrolling() {
     assert_eq!(k_outcome, EventOutcome::Handled);
     assert_eq!(input.current_value(), "one\ntwo\nthree\nfourjk");
     assert_eq!(input.scroll.target_offset().y, initial_offset);
+}
+
+#[test]
+fn insert_mode_keeps_g_shift_g_home_and_end_as_editor_keys() {
+    let mut input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .focused(true);
+    input.cursor = input.len_chars();
+    input.insert_mode = true;
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('g'))), &mut ctx);
+    input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('G'),
+            modifiers: KeyModifiers::SHIFT,
+        }),
+        &mut ctx,
+    );
+    assert_eq!(input.current_value(), "one\ntwo\nthree\nfourgG");
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Home)), &mut ctx);
+    assert_eq!(input.cursor, 14);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::End)), &mut ctx);
+    assert_eq!(input.cursor, input.len_chars());
 }
 
 #[test]

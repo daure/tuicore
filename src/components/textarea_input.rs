@@ -1329,17 +1329,22 @@ impl<M> TextareaInput<M> {
         bindings.page_up_matches(key) || bindings.page_down_matches(key)
     }
 
-    fn scroll_line_key(&self, key: KeyEvent) -> bool {
+    fn scroll_navigation_key(&self, key: KeyEvent) -> bool {
         let bindings = keybindings();
         self.focused
             && !self.insert_mode
-            && (bindings.line_up_matches(key) || bindings.line_down_matches(key))
+            && (bindings.line_up_matches(key)
+                || bindings.line_down_matches(key)
+                || bindings.top_prefix_matches(key)
+                || bindings.bottom_matches(key)
+                || bindings.home_matches(key)
+                || bindings.end_matches(key))
     }
 
     fn handle_scroll_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
         if self.area.is_empty()
             || !self.has_vertical_overflow()
-            || !(Self::scroll_page_key(key) || self.scroll_line_key(key))
+            || !(Self::scroll_page_key(key) || self.scroll_navigation_key(key))
         {
             return false;
         }
@@ -1610,7 +1615,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
-        if self.scroll_line_key(*key) && self.handle_scroll_key(*key, ctx) {
+        if self.scroll_navigation_key(*key) && self.handle_scroll_key(*key, ctx) {
             return EventOutcome::Handled;
         }
         if !self.insert_mode {
