@@ -1,4 +1,5 @@
 /target/
+/tools/release-command/Cargo.lock
 /workbench/
 /.rig-chatgpt/
 *.log
