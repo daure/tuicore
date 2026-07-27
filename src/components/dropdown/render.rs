@@ -9,7 +9,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use super::super::text_input::placeholder_line;
 use super::util::{bounded_title, connected_popup_border_set};
 use super::{
-    DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownLabelPosition, DropdownVariant,
+    DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownLabelPosition,
+    DropdownPopupDirection, DropdownVariant,
 };
 use crate::{
     BorderKind, HotkeyLabelMode, OverlayLayer, border_set, hotkey_badge_width, hotkey_edge_spans,
@@ -46,6 +47,10 @@ where
         let popup_area = self.popup_overlay_area(bounds);
         if !popup_area.is_empty() {
             let field_area = self.effective_field_area(bounds);
+            let desired_height = self
+                .popup_content_height(field_area.width)
+                .min(self.effective_max_popup_height());
+            let popup_direction = self.resolved_popup_direction(field_area, bounds, desired_height);
             let backdrop = self.backdrop_tween.value();
             if backdrop > 0.0 {
                 super::super::dialog_layer::dim_backdrop_buffer_except(
@@ -58,9 +63,10 @@ where
             if self.show_field_when_open {
                 self.render_field(frame, field_area);
             }
-            self.render_popup(frame, popup_area);
+            self.render_popup(frame, popup_area, popup_direction);
             if self.show_field_when_open
-                && self.popup_direction == super::DropdownPopupDirection::Up
+                && !self.centered
+                && popup_direction == DropdownPopupDirection::Up
                 && let Some(label) = &self.label
             {
                 self.render_title(frame, field_area, label, Alignment::Left, field_area.y);
@@ -293,13 +299,18 @@ where
         }
     }
 
-    pub(super) fn render_popup(&self, frame: &mut Frame, area: Rect) {
+    pub(super) fn render_popup(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        popup_direction: DropdownPopupDirection,
+    ) {
         let theme = theme();
         frame.render_widget(Clear, area);
         let popup_content_style = self.popup_content_style();
         let inner = if self.popup_has_border() {
             let border = if self.variant == DropdownVariant::Bordered && !self.centered {
-                connected_popup_border_set(preset().border(), self.popup_direction)
+                connected_popup_border_set(preset().border(), popup_direction)
             } else {
                 border_set(preset().border())
             };

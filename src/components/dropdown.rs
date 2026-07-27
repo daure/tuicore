@@ -116,7 +116,7 @@ pub struct Dropdown<T, Id> {
     auto_focus_search: bool,
     placeholder: String,
     variant: DropdownVariant,
-    popup_direction: DropdownPopupDirection,
+    popup_direction: Option<DropdownPopupDirection>,
     centered: bool,
     show_field_when_open: bool,
     field_area: Rect,
@@ -218,7 +218,7 @@ where
             auto_focus_search: true,
             placeholder: String::from("Select..."),
             variant: DropdownVariant::Bordered,
-            popup_direction: DropdownPopupDirection::Down,
+            popup_direction: None,
             centered: false,
             show_field_when_open: true,
             field_area: Rect::default(),
@@ -383,12 +383,16 @@ where
     }
 
     pub fn popup_direction(mut self, direction: DropdownPopupDirection) -> Self {
-        self.popup_direction = direction;
+        self.popup_direction = Some(direction);
         self
     }
 
     pub fn set_popup_direction(&mut self, direction: DropdownPopupDirection) {
-        self.popup_direction = direction;
+        self.popup_direction = Some(direction);
+    }
+
+    pub fn clear_popup_direction(&mut self) {
+        self.popup_direction = None;
     }
 
     pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
@@ -1083,7 +1087,8 @@ where
         let desired_height = self
             .popup_content_height(field_area.width)
             .min(self.effective_max_popup_height());
-        let (popup_y, available_height) = match self.popup_direction {
+        let direction = self.resolved_popup_direction(field_area, bounds, desired_height);
+        let (popup_y, available_height) = match direction {
             DropdownPopupDirection::Down => {
                 let y = field_area
                     .y
@@ -1103,6 +1108,29 @@ where
         let popup_area = Rect::new(field_area.x, popup_y, field_area.width, popup_height);
 
         clip_rect(popup_area, bounds)
+    }
+
+    fn resolved_popup_direction(
+        &self,
+        field_area: Rect,
+        bounds: Rect,
+        desired_height: u16,
+    ) -> DropdownPopupDirection {
+        self.popup_direction.unwrap_or_else(|| {
+            let popup_y = field_area
+                .y
+                .saturating_add(field_area.height)
+                .saturating_sub(self.popup_overlap());
+            let available_below = bounds
+                .y
+                .saturating_add(bounds.height)
+                .saturating_sub(popup_y);
+            if desired_height <= available_below {
+                DropdownPopupDirection::Down
+            } else {
+                DropdownPopupDirection::Up
+            }
+        })
     }
 
     fn field_height(&self, area: Rect) -> u16 {
@@ -1322,6 +1350,8 @@ where
                 self.backdrop_tween.snap_to(0.0);
             }
             self.start_backdrop_tween(outcome.opened, ctx.animation());
+        }
+        if outcome.opened || outcome.closed || (self.open && outcome.changed) {
             ctx.request_layout();
         }
         if outcome.handled || outcome.changed {

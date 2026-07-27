@@ -10,7 +10,7 @@ use time::{OffsetDateTime, UtcOffset};
 use super::status_action::{StatusAction, measured_line, register_status_focus};
 use crate::{
     Animated, AnimationSettings, EventCtx, EventOutcome, FocusCtx, FocusId, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, TickResult, TuiNode,
+    LayoutProposal, LayoutResult, LayoutSizeHint, Spinner, TickResult, TuiNode,
 };
 
 const WEATHER_FOCUS: &str = "weather-indicator";
@@ -50,6 +50,7 @@ pub struct WeatherIndicator<M = ()> {
     use_ascii_icon: bool,
     tab_stop: bool,
     action: StatusAction<M>,
+    spinner: Spinner,
 }
 
 impl WeatherSummary {
@@ -113,10 +114,19 @@ impl WeatherReport {
     }
 
     pub(crate) fn refresh_summary(&mut self) -> bool {
+        let now = self
+            .hourly
+            .as_ref()
+            .map(HourlyWeather::now)
+            .unwrap_or_else(OffsetDateTime::now_utc);
+        self.refresh_summary_at(now)
+    }
+
+    fn refresh_summary_at(&mut self, now: OffsetDateTime) -> bool {
         let Some(hourly) = &self.hourly else {
             return false;
         };
-        let Some(summary) = hourly.current_summary(self.summary.location.clone()) else {
+        let Some(summary) = hourly.current_summary_at(self.summary.location.clone(), now) else {
             return false;
         };
         if summary == self.summary {
@@ -127,9 +137,18 @@ impl WeatherReport {
     }
 
     pub(crate) fn hourly_data_expired(&self) -> bool {
+        let now = self
+            .hourly
+            .as_ref()
+            .map(HourlyWeather::now)
+            .unwrap_or_else(OffsetDateTime::now_utc);
+        self.hourly_data_expired_at(now)
+    }
+
+    fn hourly_data_expired_at(&self, now: OffsetDateTime) -> bool {
         self.hourly
             .as_ref()
-            .is_some_and(HourlyWeather::expired_for_current_hour)
+            .is_some_and(|hourly| hourly.current_hour_index_at(now).is_none())
     }
 
     pub fn with_raw(mut self, raw: impl Into<String>) -> Self {
@@ -174,10 +193,6 @@ impl HourlyWeather {
         self
     }
 
-    fn current_summary(&self, location: Option<String>) -> Option<WeatherSummary> {
-        self.current_summary_at(location, self.now())
-    }
-
     fn current_summary_at(
         &self,
         location: Option<String>,
@@ -188,14 +203,6 @@ impl HourlyWeather {
         let mut summary = WeatherSummary::new(hour.temperature.clone(), hour.condition.clone());
         summary.location = location;
         Some(summary)
-    }
-
-    fn expired_for_current_hour(&self) -> bool {
-        self.current_hour_index().is_none()
-    }
-
-    fn current_hour_index(&self) -> Option<usize> {
-        self.current_hour_index_at(self.now())
     }
 
     fn current_hour_index_at(&self, now: OffsetDateTime) -> Option<usize> {
@@ -245,6 +252,7 @@ impl<M> WeatherIndicator<M> {
             use_ascii_icon: false,
             tab_stop: true,
             action: StatusAction::new(),
+            spinner: Spinner::new(),
         }
     }
 
@@ -323,10 +331,7 @@ impl<M> WeatherIndicator<M> {
 
     pub(crate) fn label(&self) -> String {
         if self.loading {
-            return format!(
-                "{} Loading…",
-                weather_condition_icon("loading", self.use_ascii_icon)
-            );
+            return format!("{} Loading…", self.spinner.glyph());
         }
         let Some(report) = &self.report else {
             return format!(
@@ -394,18 +399,23 @@ where
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        let action_tick = self.action.tick(dt, settings);
+        let spinner_tick = if self.loading {
+            Animated::tick(&mut self.spinner, dt, settings)
+        } else {
+            TickResult::IDLE
+        };
+        let component_tick = self.action.tick(dt, settings).merge(spinner_tick);
         let Some(report) = &mut self.report else {
-            return action_tick;
+            return component_tick;
         };
         let changed = report.refresh_summary();
         let expired = report.hourly_data_expired();
         let refresh_changed = self.refresh_needed != expired;
         self.refresh_needed = expired;
         if changed || refresh_changed {
-            TickResult::CHANGED.merge(action_tick)
+            TickResult::CHANGED.merge(component_tick)
         } else {
-            action_tick
+            component_tick
         }
     }
 }
@@ -543,41 +553,69 @@ mod tests {
     }
 
     #[test]
-    fn indicator_refreshes_summary_from_hourly_weather_on_tick() {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let current_time = format!("{}T{:02}:00", now.date(), now.time().hour());
+    fn loading_label_uses_spinner_glyph() {
+        let indicator = WeatherIndicator::<()>::new()
+            .loading(true)
+            .use_ascii_icon(true);
+
+        assert_eq!(indicator.label(), "⠋ Loading…");
+    }
+
+    #[test]
+    fn spinner_advances_only_while_loading() {
+        let settings = AnimationSettings::default();
+        let mut indicator = WeatherIndicator::<()>::new().loading(true);
+
+        let loading_tick = indicator.tick(Duration::from_millis(80), settings);
+
+        assert!(loading_tick.changed);
+        assert!(loading_tick.active);
+        assert_eq!(indicator.label(), "⠙ Loading…");
+
+        indicator.set_loading(false);
+        let idle_tick = indicator.tick(Duration::from_millis(160), settings);
+        indicator.set_loading(true);
+
+        assert!(!idle_tick.changed);
+        assert!(!idle_tick.active);
+        assert_eq!(indicator.label(), "⠙ Loading…");
+    }
+
+    #[test]
+    fn report_refreshes_summary_for_supplied_time() {
+        let now = time::Date::from_calendar_date(2026, time::Month::July, 27)
+            .unwrap()
+            .with_hms(14, 0, 0)
+            .unwrap()
+            .assume_utc();
+        let current_time = "2026-07-27T14:00".to_string();
         let hourly = HourlyWeather::new([(current_time, "14 °C".to_string(), "Rain".to_string())]);
-        let report = WeatherReport {
+        let mut report = WeatherReport {
             raw: "raw".to_string(),
             summary: WeatherSummary::new("30 °C", "Sunny"),
             hourly: Some(hourly),
         };
-        let mut indicator = WeatherIndicator::<()>::new().report(report);
+        let changed = report.refresh_summary_at(now);
 
-        let tick = indicator.tick(Duration::from_secs(60), AnimationSettings::default());
-
-        assert!(tick.changed);
-        assert_eq!(indicator.report.unwrap().summary().temperature(), "14 °C");
+        assert!(changed);
+        assert_eq!(report.summary().temperature(), "14 °C");
     }
 
     #[test]
-    fn indicator_marks_refresh_needed_when_hourly_weather_expires() {
-        let yesterday = OffsetDateTime::now_local()
-            .unwrap_or_else(|_| OffsetDateTime::now_utc())
-            .saturating_sub(time::Duration::days(1));
-        let expired_time = format!("{}T23:00", yesterday.date());
+    fn report_marks_hourly_weather_expired_for_supplied_time() {
+        let now = time::Date::from_calendar_date(2026, time::Month::July, 27)
+            .unwrap()
+            .with_hms(14, 0, 0)
+            .unwrap()
+            .assume_utc();
+        let expired_time = "2026-07-26T23:00".to_string();
         let hourly = HourlyWeather::new([(expired_time, "14 °C".to_string(), "Rain".to_string())]);
         let report = WeatherReport {
             raw: "raw".to_string(),
             summary: WeatherSummary::new("14 °C", "Rain"),
             hourly: Some(hourly),
         };
-        let mut indicator = WeatherIndicator::<()>::new().report(report);
-
-        let tick = indicator.tick(Duration::from_secs(60), AnimationSettings::default());
-
-        assert!(tick.changed);
-        assert!(indicator.refresh_needed());
+        assert!(report.hourly_data_expired_at(now));
     }
 
     #[test]

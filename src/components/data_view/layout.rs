@@ -17,12 +17,22 @@ where
     Id: Clone + Eq + Hash,
 {
     pub(crate) fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
+        let rendered_widths = self.rendered_column_widths();
+        self.scroll_geometry_with_rendered_widths(area, &rendered_widths)
+    }
+
+    pub(super) fn scroll_geometry_with_rendered_widths(
+        &self,
+        area: Rect,
+        rendered_widths: &[usize],
+    ) -> ScrollGeometry {
         let body_area = self.body_area(area);
-        let mut content = self.content_size(body_area.width as usize);
+        let mut content = self.content_size(body_area.width as usize, rendered_widths);
         let mut geometry = self.scroll.geometry(body_area, content);
 
         for _ in 0..3 {
-            let next_content = self.content_size(geometry.layout.viewport.width as usize);
+            let next_content =
+                self.content_size(geometry.layout.viewport.width as usize, rendered_widths);
             if next_content == content {
                 return geometry;
             }
@@ -89,8 +99,11 @@ where
         }
     }
 
-    fn content_size(&self, viewport_width: usize) -> ScrollSize {
-        let width = self.column_widths(viewport_width).into_iter().sum();
+    fn content_size(&self, viewport_width: usize, rendered_widths: &[usize]) -> ScrollSize {
+        let width = self
+            .column_widths_with_rendered(viewport_width, rendered_widths)
+            .into_iter()
+            .sum();
         ScrollSize::new(
             width,
             self.visible_len().saturating_mul(self.row_height as usize),
@@ -105,14 +118,23 @@ where
         )
     }
 
+    #[cfg(test)]
     pub(super) fn column_widths(&self, viewport_width: usize) -> Vec<usize> {
+        let rendered = self.rendered_column_widths();
+        self.column_widths_with_rendered(viewport_width, &rendered)
+    }
+
+    pub(super) fn column_widths_with_rendered(
+        &self,
+        viewport_width: usize,
+        rendered: &[usize],
+    ) -> Vec<usize> {
         let columns = self.visible_columns().collect::<Vec<_>>();
         let configured = self.configured_column_widths(viewport_width);
-        let rendered = self.rendered_column_widths();
 
         configured
             .into_iter()
-            .zip(rendered)
+            .zip(rendered.iter().copied())
             .enumerate()
             .map(|(index, (configured, rendered))| {
                 let padding = if index + 1 == columns.len() {
@@ -186,7 +208,7 @@ where
             .collect()
     }
 
-    fn rendered_column_widths(&self) -> Vec<usize> {
+    pub(super) fn rendered_column_widths(&self) -> Vec<usize> {
         let columns = self.visible_columns().collect::<Vec<_>>();
         let mut widths = vec![0; columns.len()];
 

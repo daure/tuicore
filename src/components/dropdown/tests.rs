@@ -569,7 +569,7 @@ fn open_popup_highlights_matching_search_characters() {
     let mut terminal = Terminal::new(TestBackend::new(16, 6)).expect("terminal should build");
 
     terminal
-        .draw(|frame| dropdown.render_popup(frame, frame.area()))
+        .draw(|frame| dropdown.render_popup(frame, frame.area(), DropdownPopupDirection::Down))
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
@@ -1650,7 +1650,7 @@ fn bordered_popup_area_overlaps_field_bottom_row() {
 }
 
 #[test]
-fn overlay_popup_extends_beyond_trigger_field_when_bounds_allow() {
+fn dynamic_popup_opens_down_when_desired_height_fits() {
     let mut dropdown = single_dropdown();
     dropdown.open();
     layout_dropdown(
@@ -1663,6 +1663,74 @@ fn overlay_popup_extends_beyond_trigger_field_when_bounds_allow() {
 
     assert_eq!(popup_area, Rect::new(0, 2, 24, 6));
     assert!(popup_area.y + popup_area.height > 3);
+}
+
+#[test]
+fn dynamic_popup_opens_down_when_desired_height_exactly_fits() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    let field_area = Rect::new(0, 4, 24, 3);
+    let bounds = Rect::new(0, 0, 24, 12);
+    layout_dropdown(&mut dropdown, field_area, bounds);
+
+    let popup_area = dropdown.popup_overlay_area(bounds);
+
+    assert_eq!(popup_area, Rect::new(0, 6, 24, 6));
+}
+
+#[test]
+fn dynamic_popup_opens_up_when_desired_height_would_clip_below() {
+    let mut dropdown = single_dropdown().label("Size");
+    dropdown.open();
+    let field_area = Rect::new(0, 8, 24, 3);
+    let bounds = Rect::new(0, 0, 24, 12);
+    layout_dropdown(&mut dropdown, field_area, bounds);
+
+    let popup_area = dropdown.popup_overlay_area(bounds);
+
+    assert_eq!(popup_area, Rect::new(0, 3, 24, 6));
+
+    let mut terminal = Terminal::new(TestBackend::new(bounds.width, bounds.height)).unwrap();
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, field_area))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let chars = border_chars(preset().border());
+    assert_eq!(
+        buffer.cell((0, field_area.y)).unwrap().symbol(),
+        chars.left_join
+    );
+    assert_eq!(
+        buffer.cell((23, field_area.y)).unwrap().symbol(),
+        chars.right_join
+    );
+}
+
+#[test]
+fn explicit_down_popup_stays_down_and_clips() {
+    let mut dropdown = single_dropdown().popup_direction(DropdownPopupDirection::Down);
+    dropdown.open();
+    let field_area = Rect::new(0, 8, 24, 3);
+    let bounds = Rect::new(0, 0, 24, 12);
+    layout_dropdown(&mut dropdown, field_area, bounds);
+
+    let popup_area = dropdown.popup_overlay_area(bounds);
+
+    assert_eq!(popup_area, Rect::new(0, 10, 24, 2));
+}
+
+#[test]
+fn explicit_up_popup_stays_up_and_clips_when_below_has_room() {
+    let mut dropdown = single_dropdown().popup_direction(DropdownPopupDirection::Up);
+    dropdown.open();
+    let field_area = Rect::new(0, 1, 24, 3);
+    let bounds = Rect::new(0, 0, 24, 12);
+    layout_dropdown(&mut dropdown, field_area, bounds);
+
+    let popup_area = dropdown.popup_overlay_area(bounds);
+
+    assert_eq!(popup_area, Rect::new(0, 0, 24, 2));
 }
 
 #[test]
@@ -1822,6 +1890,24 @@ fn node_event_opens_and_requests_layout() {
     assert!(dropdown.is_open());
     assert!(event.layout_requested());
     assert_eq!(event.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn search_event_requests_layout_when_popup_height_and_direction_change() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    let field_area = Rect::new(0, 4, 24, 3);
+    let bounds = Rect::new(0, 0, 24, 10);
+    layout_dropdown(&mut dropdown, field_area, bounds);
+    assert_eq!(dropdown.popup_overlay_area(bounds), Rect::new(0, 0, 24, 5));
+    let mut event = EventCtx::<()>::default();
+
+    let outcome = dropdown.event(&TuiEvent::Key(char_key('z')), &mut event);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(dropdown.popup_overlay_area(bounds), Rect::new(0, 6, 24, 4));
+    assert!(event.layout_requested());
+    assert!(event.redraw_requested());
 }
 
 #[test]

@@ -195,7 +195,6 @@ impl<M> TextareaInput<M> {
     pub fn value(mut self, value: impl Into<String>) -> Self {
         self.value = value.into();
         self.clamp_lines();
-        self.cursor = self.len_chars();
         self
     }
 
@@ -357,7 +356,7 @@ impl<M> TextareaInput<M> {
                     if let Some(on_submit) = &self.on_submit {
                         ctx.emit(on_submit(self.value.clone()));
                     }
-                    self.insert_mode = true;
+                    self.begin_insert_mode();
                     ctx.request_layout();
                     ctx.request_redraw();
                 }
@@ -368,7 +367,7 @@ impl<M> TextareaInput<M> {
             return true;
         }
 
-        self.insert_mode = true;
+        self.begin_insert_mode();
         self.scroll_cursor_into_view(disabled_animation_settings());
         self.cursor_fade.reset();
         ctx.request_layout();
@@ -398,6 +397,11 @@ impl<M> TextareaInput<M> {
     pub fn set_insert_mode(&mut self, insert_mode: bool) {
         self.insert_mode = insert_mode;
         self.cursor_fade.reset();
+    }
+
+    fn begin_insert_mode(&mut self) {
+        self.cursor = self.len_chars();
+        self.insert_mode = true;
     }
 
     pub fn on_submit(mut self, handler: impl Fn(String) -> M + 'static) -> Self {
@@ -1325,8 +1329,18 @@ impl<M> TextareaInput<M> {
         bindings.page_up_matches(key) || bindings.page_down_matches(key)
     }
 
+    fn scroll_line_key(&self, key: KeyEvent) -> bool {
+        let bindings = keybindings();
+        self.focused
+            && !self.insert_mode
+            && (bindings.line_up_matches(key) || bindings.line_down_matches(key))
+    }
+
     fn handle_scroll_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
-        if self.area.is_empty() || !self.has_vertical_overflow() || !Self::scroll_page_key(key) {
+        if self.area.is_empty()
+            || !self.has_vertical_overflow()
+            || !(Self::scroll_page_key(key) || self.scroll_line_key(key))
+        {
             return false;
         }
 
@@ -1596,6 +1610,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.scroll_line_key(*key) && self.handle_scroll_key(*key, ctx) {
+            return EventOutcome::Handled;
+        }
         if !self.insert_mode {
             let bindings = keybindings();
             let focus = bindings.focus();
@@ -1648,7 +1665,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 if let Some(on_submit) = &self.on_submit {
                     ctx.emit(on_submit(self.value.clone()));
                 }
-                self.insert_mode = true;
+                self.begin_insert_mode();
                 ctx.request_layout();
                 ctx.request_redraw();
             }
@@ -1682,7 +1699,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 {
                     ctx.emit(on_submit(self.value.clone()));
                 }
-                self.insert_mode = true;
+                self.begin_insert_mode();
                 self.scroll_cursor_into_view(disabled_animation_settings());
                 self.cursor_fade.reset();
                 ctx.request_layout();

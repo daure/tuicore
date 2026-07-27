@@ -1131,6 +1131,37 @@ fn focused_date_event_markers_use_selection_foreground() {
     }
 }
 
+#[test]
+fn focused_week_timed_entry_uses_selection_foreground_for_time() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [DemoEntry {
+            id: "timed",
+            title: "Call",
+            span: CalendarSpan::timed(
+                datetime(2026, Month::June, 22, 10, 0),
+                datetime(2026, Month::June, 22, 11, 0),
+            ),
+        }],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day);
+    calendar.set_focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(20, 4)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render_week_column(frame, frame.area(), day))
+        .unwrap();
+
+    for x in 3..8 {
+        let time = terminal.backend().buffer().cell((x, 2)).unwrap();
+        assert_eq!(time.fg, crate::theme().highlight_fg());
+        assert_eq!(time.bg, crate::theme().highlight_bg());
+    }
+}
+
 fn demo_calendar() -> Calendar<DemoEntry, &'static str> {
     Calendar::new(
         [

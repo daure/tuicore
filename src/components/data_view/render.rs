@@ -24,7 +24,8 @@ where
         row_y: u16,
         row_height: u16,
     ) -> Vec<Rect> {
-        let geometry = self.scroll_geometry(area);
+        let rendered_widths = self.rendered_column_widths();
+        let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
         let offset = self.visible_offset(geometry.viewport, geometry.content);
         let viewport = Rect::new(
             geometry.layout.viewport.x,
@@ -32,7 +33,8 @@ where
             geometry.layout.viewport.width,
             row_height,
         );
-        let column_widths = self.column_widths(geometry.layout.viewport.width as usize);
+        let column_widths = self
+            .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
         self.column_areas(viewport, &column_widths, offset.x)
             .into_iter()
             .map(|cell| {
@@ -64,7 +66,7 @@ where
         base_row_style: Option<Style>,
         ctx: &mut RenderCtx<'a>,
     ) {
-        if area.is_empty() || self.visible_column_count() == 0 {
+        if area.is_empty() {
             return;
         }
 
@@ -78,15 +80,22 @@ where
                 Constraint::Fill(1),
             ])
             .areas(area);
-        let geometry = self.scroll_geometry(area);
-        let visible = self.visible_rows();
-        let offset = self.visible_offset(geometry.viewport, geometry.content);
-        let column_widths = self.column_widths(geometry.layout.viewport.width as usize);
-        let selection_descendants = self.selection_descendants_by_id();
-
         if self.action_bar {
             self.render_action_bar(frame, action_area);
         }
+
+        if self.visible_column_count() == 0 {
+            self.render_popup(frame, area, ctx);
+            return;
+        }
+
+        let rendered_widths = self.rendered_column_widths();
+        let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
+        let visible = self.visible_rows();
+        let offset = self.visible_offset(geometry.viewport, geometry.content);
+        let column_widths = self
+            .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
+        let selection_descendants = self.selection_descendants_by_id();
 
         if self.shows_headers() {
             let header_viewport = Rect::new(

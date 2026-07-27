@@ -38,7 +38,7 @@ pub use model::{
 pub(crate) use model::{ReorderSnapshot, ReorderUnavailableReason};
 use model::{RowIdFn, VisibleRow};
 
-const HORIZONTAL_JUMP: isize = 8;
+const HORIZONTAL_JUMP_PERCENT: usize = 70;
 const CELL_RIGHT_PADDING: usize = 1;
 const DATA_VIEW_FOCUS: &str = "data-view";
 const SEARCH_SLOT: &str = "search";
@@ -1007,9 +1007,9 @@ where
             self.interaction = DataViewInteraction::HeaderFilter;
             self.header_pick_elapsed = Duration::ZERO;
             DataViewOutcome::CHANGED
-        } else if let Some(delta) = horizontal_jump(keys, key) {
+        } else if let Some(direction) = horizontal_jump_direction(keys, key) {
             self.pending_g = false;
-            self.scroll_horizontal_by(delta, area, settings)
+            self.scroll_horizontal_by(direction, area, settings)
         } else if keys.line_up_matches(key) {
             self.pending_g = false;
             self.highlight_line_with_settings(self.highlighted.saturating_sub(1), area, settings)
@@ -1382,14 +1382,20 @@ where
 
     fn scroll_horizontal_by(
         &mut self,
-        delta: isize,
+        direction: isize,
         area: Rect,
         settings: AnimationSettings,
     ) -> DataViewOutcome {
         let geometry = self.scroll_geometry(area);
+        let assigned_width = area.width;
+        let step = if assigned_width == 0 {
+            0
+        } else {
+            (usize::from(assigned_width) * HORIZONTAL_JUMP_PERCENT / 100).max(1) as isize
+        };
         self.scroll
             .scroll_by(
-                ScrollDelta::new(delta, 0),
+                ScrollDelta::new(direction.saturating_mul(step), 0),
                 geometry.viewport,
                 geometry.content,
                 settings,
@@ -1722,7 +1728,7 @@ where
     }
 }
 
-fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
+fn horizontal_jump_direction(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
     let plain_shift = key.modifiers.contains(KeyModifiers::SHIFT)
         && !key
             .modifiers
@@ -1734,9 +1740,9 @@ fn horizontal_jump(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
 
     let base_key = unshift_key(key);
     if keys.line_left_matches(base_key) {
-        Some(-HORIZONTAL_JUMP)
+        Some(-1)
     } else if keys.line_right_matches(base_key) {
-        Some(HORIZONTAL_JUMP)
+        Some(1)
     } else {
         None
     }

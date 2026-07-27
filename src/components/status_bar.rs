@@ -1,19 +1,22 @@
-use std::hash::Hash;
-use std::path::PathBuf;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
-use std::{env, thread};
-
-use futures::StreamExt;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use rig::agent::{MultiTurnStreamItem, Text as RigText};
-use rig::client::CompletionClient;
-use rig::providers::chatgpt;
-use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+use std::hash::Hash;
+use std::time::{Duration, Instant};
+
+#[path = "status_bar_ai.rs"]
+mod status_bar_ai;
+#[path = "status_bar_keybindings.rs"]
+mod status_bar_keybindings;
+#[path = "status_bar_style.rs"]
+mod status_bar_style;
+
+use status_bar_ai::default_ai_runner;
+pub use status_bar_keybindings::StatusBarKeyBindings;
+use status_bar_style::{
+    STATUS_ACTION_TAIL_WIDTH, centered_field_area, measured_width, status_action_tail,
+    status_segment_line, status_segment_text_style, status_segment_width,
+};
 
 pub use super::date_time_indicator::{DateTimeIndicator, DateTimeIndicatorFormat};
 use super::dropdown::{
@@ -28,13 +31,13 @@ pub use super::weather_indicator::{
 pub use super::weather_provider::WeatherProviderConfig;
 use super::weather_provider::{WeatherFetchReceiver, spawn_weather_fetch};
 use super::{AiDock, Button, Dropdown, LlmEvent, Menu, MenuItem, MenuPopupDirection};
+use crate::KeySpec;
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
     FocusRequest, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
     LifecycleCtx, Theme, ThemeName, TickResult, TreePath, TuiEvent, TuiNode,
-    hotkey_underline_style, keybindings, line_width, set_theme_and_persist, theme,
+    hotkey_underline_style, keybindings, set_theme_and_persist, theme,
 };
-use crate::{KeyEvent, KeySpec};
 
 const MENU_ICON: &str = "󰍜";
 const AI_ICON: &str = "";
@@ -77,91 +80,6 @@ struct StatusBarAreas {
     weather: Rect,
     time: Rect,
     theme: Rect,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StatusBarKeyBindings {
-    menu_toggle: Vec<KeySpec>,
-    ai_open: Vec<KeySpec>,
-    menu_hotkey: String,
-    ai_hotkey: String,
-}
-
-impl Default for StatusBarKeyBindings {
-    fn default() -> Self {
-        Self {
-            menu_toggle: vec![KeySpec::plain(';')],
-            ai_open: vec![KeySpec::plain('\'')],
-            menu_hotkey: DEFAULT_MENU_HOTKEY.to_string(),
-            ai_hotkey: DEFAULT_AI_HOTKEY.to_string(),
-        }
-    }
-}
-
-impl StatusBarKeyBindings {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set_menu_toggle(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
-        self.menu_toggle = keys.into_iter().collect();
-    }
-
-    pub fn with_menu_toggle(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
-        self.set_menu_toggle(keys);
-        self
-    }
-
-    pub fn set_ai_open(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
-        self.ai_open = keys.into_iter().collect();
-    }
-
-    pub fn with_ai_open(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
-        self.set_ai_open(keys);
-        self
-    }
-
-    pub fn set_menu_hotkey(&mut self, hotkey: impl Into<String>) {
-        self.menu_hotkey = hotkey.into();
-    }
-
-    pub fn with_menu_hotkey(mut self, hotkey: impl Into<String>) -> Self {
-        self.set_menu_hotkey(hotkey);
-        self
-    }
-
-    pub fn set_ai_hotkey(&mut self, hotkey: impl Into<String>) {
-        self.ai_hotkey = hotkey.into();
-    }
-
-    pub fn with_ai_hotkey(mut self, hotkey: impl Into<String>) -> Self {
-        self.set_ai_hotkey(hotkey);
-        self
-    }
-
-    pub fn menu_toggle_matches(&self, key: impl Into<KeyEvent>) -> bool {
-        let key = key.into();
-        self.menu_toggle
-            .iter()
-            .copied()
-            .any(|binding| binding.matches(key))
-    }
-
-    pub fn ai_open_matches(&self, key: impl Into<KeyEvent>) -> bool {
-        let key = key.into();
-        self.ai_open
-            .iter()
-            .copied()
-            .any(|binding| binding.matches(key))
-    }
-
-    pub fn menu_hotkey(&self) -> &str {
-        &self.menu_hotkey
-    }
-
-    pub fn ai_hotkey(&self) -> &str {
-        &self.ai_hotkey
-    }
 }
 
 pub struct StatusBar<M = ()> {
@@ -264,6 +182,13 @@ where
     }
 
     pub fn set_weather_report(&mut self, report: WeatherReport) {
+        self.weather_provider = self.weather_provider.clone().enabled(false);
+        self.weather_fetch = None;
+        self.weather_last_fetch = None;
+        self.apply_weather_report(report);
+    }
+
+    fn apply_weather_report(&mut self, report: WeatherReport) {
         self.weather_dialog.set_report(report.clone());
         self.weather.set_report(report);
     }
@@ -566,7 +491,10 @@ where
             "",
             "Status bar weather is fetching the latest Open-Meteo report.",
         ]);
-        TickResult::ACTIVE
+        TickResult {
+            layout: true,
+            ..TickResult::ACTIVE
+        }
     }
 
     fn drain_weather_fetch(&mut self) -> TickResult {
@@ -575,8 +503,11 @@ where
         };
         match fetch.try_recv() {
             Ok(Ok(report)) => {
-                self.set_weather_report(report);
-                TickResult::CHANGED
+                self.apply_weather_report(report);
+                TickResult {
+                    layout: true,
+                    ..TickResult::CHANGED
+                }
             }
             Ok(Err(error)) => {
                 self.weather.set_loading(false);
@@ -588,7 +519,10 @@ where
                     "",
                     "Status bar weather will retry automatically.",
                 ]);
-                TickResult::CHANGED
+                TickResult {
+                    layout: true,
+                    ..TickResult::CHANGED
+                }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.weather_fetch = Some(fetch);
@@ -604,7 +538,10 @@ where
                     "",
                     "Status bar weather will retry automatically.",
                 ]);
-                TickResult::CHANGED
+                TickResult {
+                    layout: true,
+                    ..TickResult::CHANGED
+                }
             }
         }
     }
@@ -943,161 +880,6 @@ where
     AiDock::new(default_ai_runner)
 }
 
-fn default_ai_runner(
-    prompt: String,
-    history: Vec<rig::message::Message>,
-    sender: mpsc::Sender<LlmEvent>,
-    request_id: u64,
-    provider: String,
-    model: String,
-) {
-    thread::spawn(move || {
-        let runtime = match tokio::runtime::Runtime::new() {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                let _ = sender.send(LlmEvent::error(
-                    request_id,
-                    format!("Tokio runtime error: {error}"),
-                ));
-                return;
-            }
-        };
-
-        runtime.block_on(async move {
-            if !provider.is_empty() && provider != "openai" {
-                let _ = sender.send(LlmEvent::error(
-                    request_id,
-                    format!("Unsupported default AI provider: {provider}"),
-                ));
-                return;
-            }
-
-            let model = resolve_chatgpt_model(model);
-            let status_sender = sender.clone();
-            let token_dir = chatgpt_token_dir();
-            let client = match chatgpt::Client::builder()
-                .oauth()
-                .token_dir(token_dir.clone())
-                .on_device_code(move |code| {
-                    let _ = status_sender.send(LlmEvent::status(
-                        request_id,
-                        format!(
-                            "OAuth: Open {} and enter code {}",
-                            code.verification_uri, code.user_code
-                        ),
-                    ));
-                })
-                .build()
-            {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = sender.send(LlmEvent::error(
-                        request_id,
-                        format!("Failed to build ChatGPT client: {error}"),
-                    ));
-                    return;
-                }
-            };
-
-            let _ = sender.send(LlmEvent::status(request_id, "Authorizing..."));
-            if let Err(error) = client.authorize().await {
-                let _ = sender.send(LlmEvent::error(
-                    request_id,
-                    format!("ChatGPT OAuth failed: {error}"),
-                ));
-                return;
-            }
-
-            let model_name = model.strip_prefix("openai/").unwrap_or(&model).to_string();
-            let agent = client
-                .agent(&model_name)
-                .preamble("You are a concise assistant inside a terminal UI. Help with the current app workflow and keep answers practical.")
-                .build();
-
-            let _ = sender.send(LlmEvent::status(
-                request_id,
-                format!("Calling {model_name}..."),
-            ));
-            let mut stream = agent
-                .stream_prompt(prompt)
-                .with_history(history)
-                .multi_turn(4)
-                .await;
-
-            let mut output = String::new();
-            let mut updated_history = Vec::new();
-            let mut usage = rig::completion::Usage::new();
-
-            while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(
-                        StreamedAssistantContent::Text(RigText { text, .. }),
-                    )) => {
-                        output.push_str(&text);
-                        let _ = sender.send(LlmEvent::chunk(request_id, text));
-                    }
-                    Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                        usage = final_response
-                            .completion_calls()
-                            .last()
-                            .map(|call| call.usage)
-                            .unwrap_or_else(|| final_response.usage());
-                        usage.total_tokens =
-                            usage.input_tokens.saturating_add(usage.output_tokens);
-                        if let Some(history) = final_response.history() {
-                            updated_history = history.to_vec();
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.send(LlmEvent::error(
-                            request_id,
-                            format!("Stream error: {error}"),
-                        ));
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-
-            let _ = sender.send(LlmEvent::complete_with_usage(
-                request_id,
-                updated_history,
-                output,
-                usage,
-            ));
-        });
-    });
-}
-
-fn resolve_chatgpt_model(model: String) -> String {
-    if model.is_empty() {
-        env::var("LLM_MODEL").unwrap_or_else(|_| "openai/gpt-5.5".to_string())
-    } else if model.contains('/') {
-        model
-    } else {
-        format!("openai/{model}")
-    }
-}
-
-fn chatgpt_token_dir() -> PathBuf {
-    if let Ok(dir) = env::var("TUICORE_CHATGPT_TOKEN_DIR") {
-        return PathBuf::from(dir);
-    }
-    if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(dir).join("tuicore").join("rig-chatgpt");
-    }
-    if let Ok(dir) = env::var("APPDATA") {
-        return PathBuf::from(dir).join("tuicore").join("rig-chatgpt");
-    }
-    if let Ok(home) = env::var("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("tuicore")
-            .join("rig-chatgpt");
-    }
-    env::temp_dir().join("tuicore").join("rig-chatgpt")
-}
-
 fn bottom_dock_area(area: Rect, height_percent: u16, width_percent: u16) -> Rect {
     let width = area.width.saturating_mul(width_percent.min(100)) / 100;
     let height = area.height.saturating_mul(height_percent.min(100)) / 100;
@@ -1165,73 +947,6 @@ fn theme_dropdown() -> Dropdown<ThemeChoice, ThemeName> {
     })
 }
 
-fn measured_width<M, N>(node: &N) -> u16
-where
-    N: TuiNode<M>,
-{
-    node.measure(LayoutProposal::unbounded()).preferred.width
-}
-
-fn status_segment_width(label: &str) -> u16 {
-    line_width(&Line::from(format!(" {label} "))).min(u16::MAX as usize) as u16
-}
-
-const STATUS_ACTION_TAIL_WIDTH: u16 = 1;
-
-fn status_action_tail() -> Line<'static> {
-    Line::from(Span::styled("", Style::default().fg(theme().surface_bg())))
-}
-
-fn status_segment_line(
-    label_spans: Vec<Span<'static>>,
-    focused: bool,
-    segment_bg: Color,
-    separator_bg: Option<Color>,
-) -> Line<'static> {
-    let theme = theme();
-    let background = if focused {
-        theme.highlight_bg()
-    } else {
-        segment_bg
-    };
-    let mut separator_style = Style::default().fg(background);
-    if let Some(separator_bg) = separator_bg {
-        separator_style = separator_style.bg(separator_bg);
-    }
-    let mut spans = vec![
-        Span::styled("", separator_style),
-        Span::styled(" ", status_segment_text_style(focused, segment_bg)),
-    ];
-    spans.extend(label_spans);
-    spans.push(Span::styled(
-        " ",
-        status_segment_text_style(focused, segment_bg),
-    ));
-    Line::from(spans)
-}
-
-fn status_segment_text_style(focused: bool, segment_bg: Color) -> Style {
-    let theme = theme();
-    if focused {
-        Style::default()
-            .fg(theme.highlight_fg())
-            .bg(theme.highlight_bg())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.background_bg()).bg(segment_bg)
-    }
-}
-
-fn centered_field_area(area: Rect, width: u16) -> Rect {
-    let width = width.min(area.width);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(1) / 2,
-        width,
-        1,
-    )
-}
-
 fn status_bar_menu_trigger_key() -> ChildKey {
     ChildKey::new("status-menu-trigger")
 }
@@ -1270,13 +985,13 @@ mod tests {
         Terminal,
         backend::TestBackend,
         layout::Rect,
-        style::{Modifier, Style},
+        style::{Color, Modifier, Style},
         widgets::Paragraph,
     };
 
     use super::*;
     use crate::components::weather_provider::WeatherFetchError;
-    use crate::{FocusId, FocusRequest, Key, Propagation, TreePath, TuiEvent};
+    use crate::{FocusId, FocusRequest, Key, KeyEvent, Propagation, TreePath, TuiEvent};
 
     #[test]
     fn action_segments_use_surface_background_role() {
@@ -1639,6 +1354,18 @@ mod tests {
     }
 
     #[test]
+    fn explicit_weather_report_prevents_default_fetch_on_mount() {
+        let mut status =
+            StatusBar::<()>::new().weather_report(WeatherReport::custom("21 °C", "Sunny"));
+        let mut lifecycle = LifecycleCtx::default();
+
+        status.mount(&mut lifecycle);
+
+        assert!(!status.weather_provider.is_enabled());
+        assert!(status.weather_fetch.is_none());
+    }
+
+    #[test]
     #[allow(deprecated)]
     fn weather_forecast_callback_is_emitted_when_dialog_opens() {
         let mut status = StatusBar::new().on_weather_open(|| "weather");
@@ -1731,63 +1458,17 @@ mod tests {
             StatusBar::<()>::new().weather_provider(WeatherProviderConfig::new().enabled(false));
         let (tx, rx) = std::sync::mpsc::channel();
         status.weather_fetch = Some(rx);
-        let report = open_meteo_test_report();
-        assert_eq!(
-            report
-                .raw()
-                .lines()
-                .filter(|line| line.starts_with('┌'))
-                .count(),
-            7
-        );
+        let report = WeatherReport::custom("21(23) °C", "Sunny");
         tx.send(Ok(report)).expect("test receiver should be alive");
 
         let result = status.tick(Duration::from_millis(16), AnimationSettings::default());
 
         assert!(result.changed);
+        assert!(result.layout);
         assert!(!result.active);
         assert!(status.weather_fetch.is_none());
         assert!(status.weather.label().contains("21(23) °C"));
         assert!(status.weather.label().contains("Sunny"));
-    }
-
-    fn open_meteo_test_report() -> WeatherReport {
-        let now =
-            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-        let dates = (0..7)
-            .map(|offset| {
-                now.date()
-                    .saturating_add(time::Duration::days(offset))
-                    .to_string()
-            })
-            .collect::<Vec<_>>();
-        let hourly_times = dates
-            .iter()
-            .flat_map(|date| {
-                ["00:00", "06:00", "12:00", "18:00"].map(move |hour| format!("{date}T{hour}"))
-            })
-            .collect::<Vec<_>>();
-        let hourly_len = hourly_times.len();
-        let json = serde_json::json!({
-            "hourly": {
-                "time": hourly_times,
-                "temperature_2m": vec![21.0; hourly_len],
-                "apparent_temperature": vec![23.0; hourly_len],
-                "weather_code": vec![0; hourly_len],
-                "wind_speed_10m": vec![8.0; hourly_len],
-                "precipitation": vec![0.0; hourly_len],
-                "precipitation_probability": vec![1.0; hourly_len],
-                "visibility": vec![10000.0; hourly_len]
-            },
-            "daily": {
-                "time": dates,
-                "weather_code": [0, 0, 0, 0, 0, 0, 0],
-                "temperature_2m_max": [24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0],
-                "temperature_2m_min": [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
-            }
-        });
-        WeatherReport::from_open_meteo_json("Here", json.to_string())
-            .expect("test report should parse")
     }
 
     #[test]
@@ -1802,6 +1483,7 @@ mod tests {
         let result = status.tick(Duration::from_millis(16), AnimationSettings::default());
 
         assert!(result.changed);
+        assert!(result.layout);
         assert!(!result.active);
         assert!(status.weather_fetch.is_none());
         assert!(status.weather.label().contains("Weather unavailable"));

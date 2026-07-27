@@ -107,6 +107,7 @@ fn textarea_emits_one_change_only_for_each_actual_mutation() {
         .value("a")
         .focused(true)
         .on_change(|value| format!("change:{value}"));
+    input.cursor = input.len_chars();
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
@@ -143,6 +144,7 @@ fn focused_textarea_submit_emits_once_and_enters_insert_mode() {
 #[test]
 fn enter_inserts_newline() {
     let mut input = TextareaInput::<()>::new().value("first");
+    input.cursor = input.len_chars();
     input.insert_mode = true;
 
     let outcome = input.on_key(KeyEvent::from(Key::Enter));
@@ -154,6 +156,7 @@ fn enter_inserts_newline() {
 #[test]
 fn control_j_inserts_newline() {
     let mut input = TextareaInput::<()>::new().value("first");
+    input.cursor = input.len_chars();
     input.insert_mode = true;
     let mut ctx = EventCtx::<()>::default();
 
@@ -184,6 +187,18 @@ fn enter_switches_focused_textarea_into_insert_mode() {
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
     assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn entering_insert_mode_moves_cursor_after_existing_text() {
+    let mut input = TextareaInput::<()>::new().value("abcd").focused(true);
+    input.cursor = 3;
+    let mut ctx = EventCtx::<()>::default();
+
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Backspace)), &mut ctx);
+
+    assert_eq!(input.current_value(), "abc");
 }
 
 #[test]
@@ -296,6 +311,7 @@ fn control_c_clears_value_and_stops_propagation() {
 #[test]
 fn tab_inserts_tab_character_and_stops_propagation() {
     let mut input = TextareaInput::<()>::new().value("left");
+    input.cursor = input.len_chars();
     input.insert_mode = true;
     let mut ctx = EventCtx::<()>::default();
 
@@ -354,6 +370,7 @@ fn pending_hotkey_underlines_textarea_hotkey() {
 #[test]
 fn control_i_inserts_tab_character_and_stops_propagation() {
     let mut input = TextareaInput::<()>::new().value("left");
+    input.cursor = input.len_chars();
     input.insert_mode = true;
     let mut ctx = EventCtx::<()>::default();
     let key = KeyEvent {
@@ -414,6 +431,7 @@ fn wrapping_moves_word_as_soon_as_next_typed_char_overflows() {
 #[test]
 fn insert_mode_wraps_when_cursor_would_overflow_full_row() {
     let mut input = TextareaInput::<()>::new().value("aaa beeeee").focused(true);
+    input.cursor = input.len_chars();
     input.insert_mode = true;
 
     let lines = input.visible_lines(10, 2);
@@ -428,6 +446,7 @@ fn disabled_wrap_preserves_horizontal_cursor_scrolling() {
         .wrap(false)
         .value("abcdef")
         .focused(true);
+    input.cursor = input.len_chars();
     input.insert_mode = true;
 
     let lines = input.visible_lines(3, 1);
@@ -503,6 +522,7 @@ fn insert_mode_value_hotkey_is_hidden() {
         .value("First\nSecond")
         .hotkey("t")
         .focused(true);
+    input.cursor = input.len_chars();
     input.insert_mode = true;
 
     let lines = input.visible_lines(20, 2);
@@ -649,14 +669,15 @@ fn textarea_panel_click_requests_input_focus() {
 }
 
 #[test]
-fn visible_lines_scroll_to_cursor_when_content_exceeds_viewport() {
+fn overflowing_builder_value_starts_at_top() {
     let input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour");
 
     let visible = input.visible_lines(20, 2);
 
-    assert_eq!(visible.first_line, 2);
-    assert_eq!(line_text(&visible.lines[0]), "three");
-    assert_eq!(line_text(&visible.lines[1]), "four");
+    assert_eq!(input.cursor, 0);
+    assert_eq!(visible.first_line, 0);
+    assert_eq!(line_text(&visible.lines[0]), "one");
+    assert_eq!(line_text(&visible.lines[1]), "two");
 }
 
 #[test]
@@ -675,8 +696,89 @@ fn page_down_uses_scroll_state_when_content_overflows() {
 }
 
 #[test]
+fn focused_navigation_mode_scrolls_down_one_line_for_j_and_down() {
+    for key in [Key::Char('j'), Key::Down] {
+        let mut input = TextareaInput::<()>::new()
+            .value("one\ntwo\nthree\nfour")
+            .focused(true);
+        let mut layout = LayoutCtx::new();
+        input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.scroll.target_offset().y, 1);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+}
+
+#[test]
+fn focused_navigation_mode_scrolls_up_one_line_for_k_and_up() {
+    for key in [Key::Char('k'), Key::Up] {
+        let mut input = TextareaInput::<()>::new()
+            .value("one\ntwo\nthree\nfour")
+            .focused(true);
+        let mut layout = LayoutCtx::new();
+        input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+        let geometry = input.scroll_geometry(input.area);
+        input.scroll.scroll_to(
+            ScrollOffset::new(0, 1),
+            geometry.viewport,
+            geometry.content,
+            disabled_animation_settings(),
+        );
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(input.scroll.target_offset().y, 0);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+}
+
+#[test]
+fn navigation_line_keys_bubble_without_vertical_overflow() {
+    for key in [Key::Char('j'), Key::Down, Key::Char('k'), Key::Up] {
+        let mut input = TextareaInput::<()>::new().value("one\ntwo").focused(true);
+        let mut layout = LayoutCtx::new();
+        input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert_eq!(input.scroll.target_offset().y, 0);
+        assert_eq!(ctx.propagation(), Propagation::Continue);
+    }
+}
+
+#[test]
+fn insert_mode_enters_j_and_k_without_scrolling() {
+    let mut input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .focused(true);
+    input.cursor = input.len_chars();
+    input.insert_mode = true;
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    let initial_offset = input.scroll.target_offset().y;
+    let mut ctx = EventCtx::default();
+
+    let j_outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('j'))), &mut ctx);
+    let k_outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('k'))), &mut ctx);
+
+    assert_eq!(j_outcome, EventOutcome::Handled);
+    assert_eq!(k_outcome, EventOutcome::Handled);
+    assert_eq!(input.current_value(), "one\ntwo\nthree\nfourjk");
+    assert_eq!(input.scroll.target_offset().y, initial_offset);
+}
+
+#[test]
 fn wrapped_cursor_row_scrolls_into_view_after_layout() {
     let mut input = TextareaInput::<()>::new().value("abcdefghi");
+    input.cursor = input.len_chars();
     input.insert_mode = true;
     let mut layout = LayoutCtx::new();
 
@@ -752,8 +854,7 @@ fn control_left_bracket_leaves_insert_mode_without_bubbling() {
 #[test]
 fn word_navigation_and_deletion() {
     let mut input = TextareaInput::<()>::new().value("hello world example");
-    // Start cursor is at the end (19)
-    assert_eq!(input.cursor, 19);
+    input.cursor = input.len_chars();
 
     // Ctrl+Left jumps to the start of "example" (12)
     input.on_key(KeyEvent {
@@ -849,6 +950,7 @@ fn deleting_previous_word_only_preserves_separator_when_text_follows_textarea_cu
 #[test]
 fn ctrl_o_requests_external_editor() {
     let mut input = TextareaInput::<()>::new().value("initial");
+    input.cursor = input.len_chars();
     let mut ctx = EventCtx::default();
     let key = KeyEvent {
         code: Key::Char('o'),
@@ -887,6 +989,7 @@ fn textarea_editor_hotkey_requests_editor_directly() {
         .value("first\nsecond")
         .hotkey("pa")
         .editor_hotkey("pb");
+    input.cursor = input.len_chars();
     let mut ctx = EventCtx::default();
 
     let outcome = input.event(
@@ -1027,6 +1130,7 @@ fn textarea_external_editor_emits_change_only_when_value_differs() {
 #[test]
 fn paste_inserts_multiline_text() {
     let mut input = TextareaInput::<()>::new().value("hello");
+    input.cursor = input.len_chars();
     input.insert_mode = true;
     let mut ctx = EventCtx::default();
 
@@ -1062,6 +1166,7 @@ fn entering_insert_mode_scrolls_to_cursor() {
     let mut input = TextareaInput::<()>::new()
         .value("one\ntwo\nthree\nfour")
         .max_rows(2);
+    input.cursor = input.len_chars();
     let mut layout = LayoutCtx::new();
     input.layout(Rect::new(0, 0, 20, 2), &mut layout);
     let mut ctx = EventCtx::default();
@@ -1115,6 +1220,7 @@ fn disabled_textarea_blocks_all_text_mutation() {
 #[test]
 fn disabled_textarea_allows_horizontal_vertical_and_shortcut_navigation() {
     let mut input = TextareaInput::<()>::new().value("one\ntwo").disabled(true);
+    input.cursor = input.len_chars();
 
     assert_eq!(input.on_key(Key::Left), InputOutcome::HANDLED);
     assert_eq!(input.cursor, 6);
@@ -1197,11 +1303,12 @@ fn disabled_textarea_dims_content_and_panel_border() {
 
 #[test]
 fn focused_disabled_textarea_uses_local_cursor_focus() {
-    let input = TextareaInput::<()>::new()
+    let mut input = TextareaInput::<()>::new()
         .value("locked")
         .panel("Notes")
         .focused(true)
         .disabled(true);
+    input.cursor = input.len_chars();
     let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("terminal should build");
 
     terminal

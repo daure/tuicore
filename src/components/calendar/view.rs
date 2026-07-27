@@ -378,7 +378,7 @@ where
         if week_timed {
             body_spans.push(Span::styled(
                 format!("{} ", format_time(span.start.time())),
-                Style::default().fg(theme().accent_fg()),
+                marker_style,
             ));
         }
         body_spans.extend(entry.spans);

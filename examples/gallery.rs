@@ -85,6 +85,7 @@ use tuicore::{
     SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem, StoreLogEntry,
     StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput, TickResult, TimePicker,
     TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent, TuiNode,
+    WeatherProviderConfig,
 };
 
 #[derive(Debug, PartialEq)]
@@ -378,6 +379,7 @@ impl Gallery {
         let footer = StatusBar::new()
             .menu_items([StatusBarMenuItem::Theme, StatusBarMenuItem::WeatherForecast])
             .weather_report(demo_weather_report())
+            .weather_provider(WeatherProviderConfig::new().enabled(false))
             .on_ai_open(|| Msg::OpenAiDock)
             .on_store_view_open(|| Msg::StoreViewOpened);
 
@@ -891,6 +893,7 @@ impl PreviewState {
                     StatusBarMenuItem::WeatherForecast,
                 ])
                 .weather_report(demo_weather_report())
+                .weather_provider(WeatherProviderConfig::new().enabled(false))
                 .on_ai_open(|| Msg::OpenAiDock)
                 .on_store_view_open(|| Msg::StoreViewOpened),
             button: Button::new("button").hotkey("b"),

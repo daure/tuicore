@@ -555,7 +555,7 @@ fn hidden_columns_are_excluded_from_presentation_search_filters_and_measurement(
 }
 
 #[test]
-fn all_hidden_columns_render_empty_content_without_panicking() {
+fn all_hidden_columns_still_render_action_bar_without_panicking() {
     let view = DataView::new([Row::new(1, "secret")], |row| row.id)
         .column(
             Column::text("hidden", "Hidden", Constraint::Length(40), |row: &Row| {
@@ -563,9 +563,10 @@ fn all_hidden_columns_render_empty_content_without_panicking() {
             })
             .hidden(),
         )
-        .headers(true);
+        .headers(true)
+        .action_bar(true);
     assert!(view.column_widths(20).is_empty());
-    assert_eq!(view.measurement_chrome_height(), 0);
+    assert_eq!(view.measurement_chrome_height(), 1);
 
     let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal should build");
     terminal
@@ -577,8 +578,31 @@ fn all_hidden_columns_render_empty_content_without_panicking() {
             .buffer()
             .content()
             .iter()
-            .all(|cell| cell.symbol() == " ")
+            .any(|cell| cell.symbol() != " ")
     );
+    let action_bar = (0..20)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert!(action_bar.contains("Search..."));
+}
+
+#[test]
+fn render_measures_each_visible_cell_once_per_pass() {
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let view = DataView::new([Row::new(1, "A"), Row::new(2, "B")], |row| row.id).column(
+        Column::rich("name", "Name", Constraint::Fill(1), move |row: &Row, _| {
+            renderer_calls.set(renderer_calls.get() + 1);
+            Line::from(row.name)
+        }),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+
+    assert_eq!(calls.get(), 4);
 }
 
 #[test]
@@ -864,7 +888,7 @@ fn filter_header_label_includes_active_filter_icon() {
 }
 
 #[test]
-fn default_data_view_transform_keys_match_oracle_plan() {
+fn default_transform_keys_open_search_and_filters() {
     let bindings = KeyBindings::default();
 
     assert!(
@@ -1051,48 +1075,65 @@ fn cells_have_right_padding_except_for_the_last_column() {
 }
 
 #[test]
-fn shifted_horizontal_keys_jump_eight_columns() {
-    let mut view = DataView::new([Row::new(1, "ABCDEFGHIJKLMNOPQRST")], |row| row.id).column(
-        Column::text("name", "Name", Constraint::Length(20), |row: &Row| {
-            row.name.to_string()
-        }),
-    );
+fn shifted_horizontal_keys_scroll_by_seventy_percent_of_assigned_width() {
+    let new_view = |content_width| {
+        DataView::new([Row::new(1, "A"), Row::new(2, "B")], |row| row.id).column(Column::text(
+            "name",
+            "Name",
+            Constraint::Length(content_width),
+            |row: &Row| row.name.to_string(),
+        ))
+    };
     let mut settings = AnimationSettings::default();
     settings.enabled = false;
-    let area = Rect::new(0, 0, 10, 2);
+    let jump_right = KeyEvent {
+        code: Key::Char('l'),
+        modifiers: KeyModifiers::SHIFT,
+    };
+    let jump_left = KeyEvent {
+        code: Key::Char('h'),
+        modifiers: KeyModifiers::SHIFT,
+    };
+    let mut wide = new_view(100);
 
-    let right = view.on_key_with_settings(
-        KeyEvent {
-            code: Key::Char('l'),
-            modifiers: KeyModifiers::SHIFT,
-        },
-        area,
-        settings,
-    );
+    let right = wide.on_key_with_settings(jump_right, Rect::new(0, 0, 50, 2), settings);
     assert!(right.handled);
-    assert_eq!(view.scroll.offset().x, 8);
+    assert_eq!(wide.scroll.offset().x, 35);
 
-    let left = view.on_key_with_settings(
-        KeyEvent {
-            code: Key::Char('h'),
-            modifiers: KeyModifiers::SHIFT,
-        },
-        area,
+    let mut wider_content = new_view(140);
+    let _ = wider_content.on_key_with_settings(jump_right, Rect::new(0, 0, 50, 2), settings);
+    assert_eq!(wider_content.scroll.offset().x, 35);
+
+    let left = wide.on_key_with_settings(jump_left, Rect::new(0, 0, 50, 2), settings);
+    assert!(left.handled);
+    assert_eq!(wide.scroll.offset().x, 0);
+
+    let mut reserved_scrollbar_gutter = new_view(100);
+    let _ = reserved_scrollbar_gutter.on_key_with_settings(
+        jump_right,
+        Rect::new(0, 0, 10, 2),
         settings,
     );
-    assert!(left.handled);
-    assert_eq!(view.scroll.offset().x, 0);
+    assert_eq!(reserved_scrollbar_gutter.scroll.offset().x, 7);
 
-    let old_right = view.on_key_with_settings(
+    let mut minimum = new_view(100);
+    let _ = minimum.on_key_with_settings(jump_right, Rect::new(0, 0, 1, 2), settings);
+    assert_eq!(minimum.scroll.offset().x, 1);
+
+    let mut zero = new_view(100);
+    let _ = zero.on_key_with_settings(jump_right, Rect::new(0, 0, 0, 2), settings);
+    assert_eq!(zero.scroll.offset().x, 0);
+
+    let old_right = wide.on_key_with_settings(
         KeyEvent {
             code: Key::Char('l'),
             modifiers: KeyModifiers::CONTROL,
         },
-        area,
+        Rect::new(0, 0, 50, 2),
         settings,
     );
     assert!(!old_right.handled);
-    assert_eq!(view.scroll.offset().x, 0);
+    assert_eq!(wide.scroll.offset().x, 0);
 }
 
 #[test]
@@ -1118,7 +1159,7 @@ fn width_change_resets_horizontal_scroll_to_start() {
         settings,
     );
     assert!(outcome.handled);
-    assert_eq!(view.scroll.offset().x, 8);
+    assert_eq!(view.scroll.offset().x, 7);
 
     <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, wide, &mut layout);
 
@@ -1350,7 +1391,7 @@ fn cleared_hotkey_is_not_registered_on_focus_target() {
 }
 
 #[test]
-fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
+fn shifted_horizontal_navigation_scrolls_tree_without_expanding() {
     let mut view = DataView::new(
         [
             Row {
@@ -1387,11 +1428,11 @@ fn shifted_horizontal_keys_scroll_tree_instead_of_expanding() {
 
     assert!(outcome.handled);
     assert!(!view.expanded.contains(&1));
-    assert_eq!(view.scroll.offset().x, 8);
+    assert_eq!(view.scroll.offset().x, 5);
 }
 
 #[test]
-fn shifted_horizontal_keys_follow_configured_navigation_keys() {
+fn shifted_horizontal_scrolling_uses_configured_navigation_keys() {
     let bindings = KeyBindings::new()
         .with_nav_line_left([
             KeySpec::key(Key::Left),
@@ -1422,7 +1463,7 @@ fn shifted_horizontal_keys_follow_configured_navigation_keys() {
         &bindings,
     );
     assert!(right.handled);
-    assert_eq!(view.scroll.offset().x, 8);
+    assert_eq!(view.scroll.offset().x, 7);
 
     let left = view.on_key_with_settings_and_bindings(
         KeyEvent {
