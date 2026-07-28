@@ -86,6 +86,81 @@ pub(crate) fn entity_table() -> ListControlShowcase {
     showcase(entity_controls())
 }
 
+pub(crate) fn reorder_mode() -> ListControlShowcase {
+    Flex::column()
+        .gap(1)
+        .child(FIRST, reorder_control(), FlexItem::fit_content())
+        .child(SECOND, short_reorder_control(), FlexItem::fixed(12))
+}
+
+pub(crate) fn reorder_control() -> ListControl<ListDemoRow, usize, Msg> {
+    reorder_list(
+        rows([
+            "Plan",
+            "Build",
+            "Review",
+            "Ship",
+            "Research",
+            "Design",
+            "Prototype",
+            "Validate",
+            "Document",
+            "Test",
+            "Package",
+            "Release",
+            "Monitor",
+            "Measure",
+            "Refine",
+            "Secure",
+            "Optimize",
+            "Integrate",
+            "Deploy",
+            "Observe",
+            "Support",
+            "Audit",
+            "Archive",
+            "Retrospect",
+        ]),
+        "Ctrl+M move · ↑↓/gg/G/Home/End/Pg/Ctrl+U,D · Enter commit · Esc cancel",
+        "lr",
+    )
+}
+
+fn short_reorder_control() -> ListControl<ListDemoRow, usize, Msg> {
+    reorder_list(
+        rows([
+            "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf",
+        ]),
+        "7 items in a 10-row viewport · PageDown from Alpha",
+        "ls",
+    )
+}
+
+fn reorder_list(
+    reorder_rows: Vec<ListDemoRow>,
+    title: &str,
+    hotkey: &str,
+) -> ListControl<ListDemoRow, usize, Msg> {
+    let mut reorder_id = next_id(&reorder_rows);
+    ListControl::list(
+        reorder_rows,
+        |row| row.id,
+        |row| row.name.clone(),
+        move |name, _| new_row(&mut reorder_id, name),
+    )
+    .column(
+        Column::text("rank", "", Constraint::Length(0), |row: &ListDemoRow| {
+            row.rank.to_string()
+        })
+        .reorderable(|row| row.rank, |row, rank| row.rank = rank)
+        .hidden(),
+    )
+    .reorderable_by("rank")
+    .title(title)
+    .hotkey(hotkey)
+    .max_rows(10)
+}
+
 pub(crate) fn entity_controls() -> [ListControl<ListDemoRow, usize, Msg>; 3] {
     [
         entity_control(false, "All-text fields · x confirms delete", "le"),

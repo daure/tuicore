@@ -38,19 +38,32 @@ where
         let horizontal_scrollbar_height = match proposal.width {
             AxisProposal::Unbounded => 0,
             AxisProposal::AtMost(width) | AxisProposal::Exact(width) => {
+                let panel_width = if self.panel_visible { 2 } else { 0 };
                 let layout = self
                     .data_view
-                    .scroll_geometry(Rect::new(0, 0, width.saturating_sub(2), data_height))
+                    .scroll_geometry(Rect::new(
+                        0,
+                        0,
+                        width.saturating_sub(panel_width),
+                        data_height,
+                    ))
                     .layout;
                 u16::from(layout.viewport.height < layout.outer.height)
             }
         };
+        let panel_height = if self.panel_visible { 2 } else { 0 };
         let height = chrome_height
             .saturating_add(visible_rows.saturating_mul(row_height))
             .saturating_add(horizontal_scrollbar_height)
-            .saturating_add(2);
-        LayoutSizeHint::content(child.preferred.width.saturating_add(2), height)
-            .normalized(proposal)
+            .saturating_add(panel_height);
+        LayoutSizeHint::content(
+            child
+                .preferred
+                .width
+                .saturating_add(if self.panel_visible { 2 } else { 0 }),
+            height,
+        )
+        .normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
@@ -61,7 +74,11 @@ where
         } else {
             overlay_bounds
         };
-        let inner = Panel::inner_area(area);
+        let inner = if self.panel_visible {
+            Panel::inner_area(area)
+        } else {
+            area
+        };
         let input_height = if self.editor_active() {
             self.data_view.configured_row_height().min(inner.height)
         } else {
@@ -145,8 +162,19 @@ where
     }
 
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
-        self.panel.render(frame, area);
-        <DataView<T, Id> as TuiNode<M>>::render(&self.data_view, frame, self.data_area, ctx);
+        if self.panel_visible {
+            self.panel.render(frame, area);
+        }
+        let data_area = if self.data_area.is_empty() && !area.is_empty() {
+            if self.panel_visible {
+                Panel::inner_area(area)
+            } else {
+                area
+            }
+        } else {
+            self.data_area
+        };
+        <DataView<T, Id> as TuiNode<M>>::render(&self.data_view, frame, data_area, ctx);
         if self.editor_active() {
             match &self.inputs[self.active_field] {
                 ListControlInput::Text(input) => {
@@ -354,7 +382,7 @@ where
             self.panel.set_focused(focused, ctx.animation());
             self.data_view.dispatch_focus(&target, focused, ctx);
             if !focused && self.is_reordering() {
-                self.cancel_reorder();
+                self.cancel_reorder_for_focus_loss(ctx.animation());
                 ctx.request_redraw();
             }
         }

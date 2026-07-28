@@ -316,36 +316,34 @@ fn routed_reorder_entry_movement_commit_cancel_and_active_blocking() {
 }
 
 #[test]
-fn reorder_status_restores_custom_and_empty_panel_titles_on_key_exits() {
-    for prior in [Some("Caller help"), None] {
-        for exit in [Key::Enter, Key::Esc, Key::Char('[')] {
-            let panel = prior.map_or_else(Panel::new, |title| Panel::new().bottom_left(title));
-            let mut control = ranked_control(ranked_rows()).panel(panel);
-            control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-            assert_eq!(
-                control
-                    .panel_ref()
-                    .title_text(tuicore::PanelTitlePosition::BottomLeft),
-                Some("Moving")
-            );
+fn reorder_key_exits_leave_consumer_panel_titles_untouched() {
+    for exit in [Key::Enter, Key::Esc, Key::Char('[')] {
+        let mut control = ranked_control(ranked_rows()).panel(Panel::new().bottom_left("Before"));
+        control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+        assert_eq!(
+            control
+                .panel_ref()
+                .title_text(tuicore::PanelTitlePosition::BottomLeft),
+            Some("Before")
+        );
+        control.panel_mut().set_bottom_left("Consumer update");
 
-            let modifiers = if exit == Key::Char('[') {
-                KeyModifiers::CONTROL
-            } else {
-                KeyModifiers::NONE
-            };
-            control.dispatch_event(
-                &data_route(),
-                &key(exit, modifiers),
-                &mut EventCtx::default(),
-            );
-            assert_eq!(
-                control
-                    .panel_ref()
-                    .title_text(tuicore::PanelTitlePosition::BottomLeft),
-                prior
-            );
-        }
+        let modifiers = if exit == Key::Char('[') {
+            KeyModifiers::CONTROL
+        } else {
+            KeyModifiers::NONE
+        };
+        control.dispatch_event(
+            &data_route(),
+            &key(exit, modifiers),
+            &mut EventCtx::default(),
+        );
+        assert_eq!(
+            control
+                .panel_ref()
+                .title_text(tuicore::PanelTitlePosition::BottomLeft),
+            Some("Consumer update")
+        );
     }
 }
 

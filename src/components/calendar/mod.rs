@@ -203,6 +203,16 @@ where
         self
     }
 
+    pub fn set_today(&mut self, today: Date) {
+        let cursor_followed_today = self.cursor == self.today;
+        self.today = today;
+        if cursor_followed_today {
+            self.cursor = today;
+            self.normalize_hidden_weekend_cursor();
+            self.highlighted_entry = self.first_entry_on_cursor();
+        }
+    }
+
     pub fn cursor(mut self, cursor: Date) -> Self {
         self.cursor = cursor;
         self.normalize_hidden_weekend_cursor();

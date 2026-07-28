@@ -3,12 +3,12 @@ use crate::{KeyBindings, KeySpec};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::{
-    ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key, KeyEvent, KeyModifiers,
-    LayoutCtx, Propagation, TreePath, TuiEvent, TuiNode,
+    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key,
+    KeyEvent, KeyModifiers, LayoutCtx, Propagation, TreePath, TuiEvent, TuiNode, lerp_color,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -353,6 +353,27 @@ fn row_height_uses_physical_lines_for_page_visibility() {
 
     assert_eq!(view.highlighted_id(), Some(3));
     assert_eq!(view.scroll.target_offset().y, 3);
+}
+
+#[test]
+fn page_step_uses_visible_items_when_viewport_is_underfilled() {
+    let area = Rect::new(0, 0, 20, 10);
+
+    let underfilled = DataView::list(0..7, |row| *row, |row| row.to_string());
+    let filled = DataView::list(0..10, |row| *row, |row| row.to_string());
+
+    assert_eq!(underfilled.visible_page_step(area), 5);
+    assert_eq!(filled.visible_page_step(area), 6);
+}
+
+#[test]
+fn page_step_uses_item_capacity_and_visible_page_size_for_tall_rows() {
+    let area = Rect::new(0, 0, 20, 10);
+    let view = DataView::list(0..20, |row| *row, |row| row.to_string())
+        .pagination(3)
+        .row_height(2);
+
+    assert_eq!(view.visible_page_step(area), 2);
 }
 
 #[test]
@@ -1628,6 +1649,107 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
 }
 
 #[test]
+fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_clears() {
+    let mut view = DataView::list(
+        [Row::new(1, "moving"), Row::new(2, "other")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let settings = AnimationSettings::default();
+    view.start_reorder_highlight(1, settings);
+    Animated::tick(&mut view, Duration::from_millis(100), settings);
+    Animated::tick(&mut view, Duration::from_millis(25), settings);
+    assert_eq!(view.reorder_highlight_progress_for_test(), 0.5);
+    let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 2)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(
+        cell.fg,
+        lerp_color(theme.highlight_fg(), theme.highlight_bg(), 0.5)
+    );
+    assert_eq!(
+        cell.bg,
+        lerp_color(theme.highlight_bg(), theme.highlight_fg(), 0.5)
+    );
+    assert!(cell.modifier.contains(Modifier::BOLD));
+    assert!(!cell.modifier.contains(Modifier::REVERSED));
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+    let other = terminal.backend().buffer().cell((0, 1)).unwrap();
+    assert_eq!(other.fg, Color::Reset);
+    assert_eq!(other.bg, Color::Reset);
+
+    Animated::tick(&mut view, Duration::from_millis(125), settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 2)))
+        .expect("data view should render");
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.fg, theme.highlight_bg());
+    assert_eq!(cell.bg, theme.highlight_fg());
+
+    view.clear_reorder_highlight(settings);
+    Animated::tick(&mut view, Duration::from_millis(100), settings);
+    Animated::tick(&mut view, Duration::from_millis(25), settings);
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 2)))
+        .expect("data view should render");
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().fg,
+        lerp_color(theme.highlight_fg(), theme.highlight_bg(), 0.5)
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().bg,
+        lerp_color(theme.highlight_bg(), theme.highlight_fg(), 0.5)
+    );
+
+    Animated::tick(&mut view, Duration::from_millis(100), settings);
+    Animated::tick(&mut view, Duration::from_millis(25), settings);
+    assert_eq!(view.reorder_highlight_progress_for_test(), 0.0);
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 2)))
+        .expect("data view should render");
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.fg, Color::Reset);
+    assert_eq!(cell.bg, Color::Reset);
+}
+
+#[test]
+fn disabled_animation_snaps_reorder_render_to_inverse_and_normal() {
+    let mut view = DataView::list(
+        [Row::new(1, "moving")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+    let theme = crate::theme();
+
+    view.start_reorder_highlight(1, settings);
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("data view should render");
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.fg, theme.highlight_bg());
+    assert_eq!(cell.bg, theme.highlight_fg());
+
+    view.clear_reorder_highlight(settings);
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("data view should render");
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.fg, Color::Reset);
+    assert_eq!(cell.bg, Color::Reset);
+}
+
+#[test]
 fn highlighted_row_forces_readable_foreground_and_preserves_rich_modifiers() {
     let semantic_color = crate::theme().error_fg();
     let view = DataView::new([Row::new(1, "BIG")], |row| row.id)
@@ -1656,6 +1778,189 @@ fn highlighted_row_forces_readable_foreground_and_preserves_rich_modifiers() {
     assert_eq!(cell.bg, crate::theme().highlight_bg());
     assert!(cell.modifier.contains(Modifier::BOLD));
     assert!(cell.modifier.contains(Modifier::UNDERLINED));
+}
+
+#[test]
+fn moving_rich_row_overrides_span_color_and_preserves_modifiers_at_full_inverse() {
+    let semantic_color = crate::theme().error_fg();
+    let settings = AnimationSettings::default();
+    let theme = crate::theme();
+
+    for focused in [false, true] {
+        let mut view = DataView::new([Row::new(1, "moving")], |row| row.id)
+            .column(Column::rich(
+                "name",
+                "Name",
+                Constraint::Length(10),
+                move |row: &Row, _| {
+                    Line::from(Span::styled(
+                        row.name,
+                        Style::default()
+                            .fg(semantic_color)
+                            .add_modifier(Modifier::UNDERLINED),
+                    ))
+                },
+            ))
+            .focused(focused);
+        let mut terminal = Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+
+        view.start_reorder_highlight(1, settings);
+        Animated::tick(&mut view, Duration::from_secs(1), settings);
+        Animated::tick(&mut view, Duration::from_secs(1), settings);
+        Animated::tick(&mut view, Duration::from_secs(1), settings);
+        terminal
+            .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+            .expect("data view should render");
+
+        let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+        assert_eq!(cell.symbol(), "m");
+        assert_eq!(cell.fg, theme.highlight_bg());
+        assert_eq!(cell.bg, theme.highlight_fg());
+        assert!(cell.modifier.contains(Modifier::BOLD));
+        assert!(cell.modifier.contains(Modifier::UNDERLINED));
+    }
+}
+
+#[test]
+fn ansi_and_indexed_reorder_colors_snap_inverse_until_animated_exit_finishes() {
+    let settings = AnimationSettings::default();
+
+    for (foreground, background) in [
+        (Color::White, Color::Blue),
+        (Color::Indexed(231), Color::Indexed(24)),
+    ] {
+        let mut view = DataView::list(
+            [Row::new(1, "moving")],
+            |row| row.id,
+            |row| row.name.to_string(),
+        );
+        view.start_reorder_highlight_with_colors(1, settings, foreground, background);
+        assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
+        let style = view.reorder_highlighted_row_style_with_colors(foreground, background);
+        assert_eq!(style.fg, Some(background));
+        assert_eq!(style.bg, Some(foreground));
+
+        Animated::tick(&mut view, Duration::from_secs(1), settings);
+        assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
+        view.clear_reorder_highlight(settings);
+        Animated::tick(&mut view, Duration::from_millis(100), settings);
+        Animated::tick(&mut view, Duration::from_millis(100), settings);
+        assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
+        let style = view.reorder_highlighted_row_style_with_colors(foreground, background);
+        assert_eq!(style.fg, Some(background));
+        assert_eq!(style.bg, Some(foreground));
+
+        Animated::tick(&mut view, Duration::from_millis(50), settings);
+        assert_eq!(view.reorder_highlight_progress_for_test(), 0.0);
+        assert!(!view.row_has_reorder_highlight(&1));
+    }
+
+    let disabled = AnimationSettings {
+        enabled: false,
+        ..settings
+    };
+    let mut view = DataView::list(
+        [Row::new(1, "moving")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    view.start_reorder_highlight_with_colors(1, disabled, Color::Indexed(231), Color::Indexed(24));
+    assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
+    view.clear_reorder_highlight(disabled);
+    assert_eq!(view.reorder_highlight_progress_for_test(), 0.0);
+    assert!(!view.row_has_reorder_highlight(&1));
+}
+
+#[test]
+fn focused_reorder_exit_clears_at_normal_highlight_without_extra_frame() {
+    let mut view = DataView::list(
+        [Row::new(1, "moving")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .focused(true);
+    let settings = AnimationSettings::default();
+    let mut terminal = Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+    let theme = crate::theme();
+
+    view.start_reorder_highlight(1, settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+    view.clear_reorder_highlight(settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+    Animated::tick(&mut view, Duration::from_secs(1), settings);
+
+    assert!(!view.row_has_reorder_highlight(&1));
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("data view should render");
+    let endpoint = terminal.backend().buffer().cell((0, 0)).unwrap().clone();
+    assert_eq!(endpoint.fg, theme.highlight_fg());
+    assert_eq!(endpoint.bg, theme.highlight_bg());
+
+    Animated::tick(&mut view, Duration::from_millis(1), settings);
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("data view should render");
+    assert_eq!(terminal.backend().buffer().cell((0, 0)).unwrap(), &endpoint);
+}
+
+#[test]
+fn immediate_focus_loss_endpoint_matches_ordinary_unfocused_row() {
+    let mut moving = DataView::list(
+        [Row::new(1, "moving")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .focused(true);
+    let ordinary = DataView::list(
+        [Row::new(1, "moving")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let settings = AnimationSettings::default();
+    moving.start_reorder_highlight(1, settings);
+    Animated::tick(&mut moving, Duration::from_secs(1), settings);
+    moving.set_focused(false);
+
+    let mut moving_terminal =
+        Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+    let mut ordinary_terminal =
+        Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+    moving_terminal
+        .draw(|frame| moving.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("moving data view should render");
+    ordinary_terminal
+        .draw(|frame| ordinary.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("ordinary data view should render");
+
+    assert_eq!(
+        moving_terminal.backend().buffer(),
+        ordinary_terminal.backend().buffer()
+    );
+}
+
+#[test]
+fn changing_reorder_row_starts_new_presentation_from_base() {
+    let mut view = DataView::list(
+        [Row::new(1, "first"), Row::new(2, "second")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    );
+    let settings = AnimationSettings::default();
+
+    view.start_reorder_highlight(1, settings);
+    Animated::tick(&mut view, Duration::from_millis(100), settings);
+    Animated::tick(&mut view, Duration::from_millis(25), settings);
+    assert_eq!(view.reorder_highlight_progress_for_test(), 0.5);
+
+    view.start_reorder_highlight(2, settings);
+
+    assert_eq!(view.reorder_highlight_progress_for_test(), 0.0);
+    assert!(!view.row_has_reorder_highlight(&1));
+    assert!(view.row_has_reorder_highlight(&2));
 }
 
 #[test]

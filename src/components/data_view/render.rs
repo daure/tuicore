@@ -12,7 +12,7 @@ use super::{
     SortDirection, VisibleRow,
 };
 use crate::search::{MatchSpan, SearchMode, search_match};
-use crate::{RenderCtx, keybindings, preset, theme};
+use crate::{RenderCtx, keybindings, lerp_color, preset, theme};
 
 impl<T, Id> DataView<T, Id>
 where
@@ -277,10 +277,11 @@ where
                 self.transform_state.search.trim(),
                 self.search_mode,
             );
-            if highlighted && self.focused {
-                let foreground = theme().highlight_fg();
-                for span in &mut line.spans {
-                    span.style = span.style.fg(foreground);
+            if self.row_has_reorder_highlight(&row.id) || highlighted && self.focused {
+                if let Some(foreground) = row_style.and_then(|style| style.fg) {
+                    for span in &mut line.spans {
+                        span.style = span.style.fg(foreground);
+                    }
                 }
             }
             let mut paragraph = Paragraph::new(line).scroll((0, cell_area.scroll_x));
@@ -347,7 +348,9 @@ where
         selection_descendants: &HashMap<Id, Vec<Id>>,
         base_row_style: Option<Style>,
     ) -> Option<Style> {
-        if highlighted && self.focused {
+        if self.row_has_reorder_highlight(&row.id) {
+            Some(self.reorder_highlighted_row_style())
+        } else if highlighted && self.focused {
             Some(self.highlighted_row_style())
         } else if self.row_is_visually_selected(&row.id, selection_descendants) {
             Some(self.selected_row_style())
@@ -374,6 +377,25 @@ where
         Style::default()
             .fg(theme.highlight_fg())
             .bg(theme.highlight_bg())
+            .add_modifier(Modifier::BOLD)
+    }
+
+    fn reorder_highlighted_row_style(&self) -> Style {
+        let theme = theme();
+        self.reorder_highlighted_row_style_with_colors(theme.highlight_fg(), theme.highlight_bg())
+    }
+
+    pub(super) fn reorder_highlighted_row_style_with_colors(
+        &self,
+        base_foreground: ratatui::style::Color,
+        base_background: ratatui::style::Color,
+    ) -> Style {
+        let progress = self.reorder_highlight_progress();
+        let foreground = lerp_color(base_foreground, base_background, progress);
+        let background = lerp_color(base_background, base_foreground, progress);
+        Style::default()
+            .fg(foreground)
+            .bg(background)
             .add_modifier(Modifier::BOLD)
     }
 

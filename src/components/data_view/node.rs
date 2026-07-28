@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 
 use super::{
     ChoiceDropdown, DATA_VIEW_FOCUS, DataView, DataViewInteraction, FILTER_DROPDOWN_SLOT,
-    HEADER_PICK_TIMEOUT, SEARCH_SLOT, TEXT_INPUT_FOCUS,
+    HEADER_PICK_TIMEOUT, ReorderHighlightPhase, SEARCH_SLOT, TEXT_INPUT_FOCUS,
 };
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
@@ -19,11 +19,17 @@ where
     Id: Clone + Eq + Hash,
 {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        let mut result = self.scroll.tick(dt, settings).merge(Animated::tick(
-            &mut self.search_input,
-            dt,
-            settings,
-        ));
+        let mut result = self.scroll.tick(dt, settings);
+        result = result.merge(self.advance_scroll_restoration(self.area, settings));
+        let reorder_result = self.reorder_highlight.tick(dt, settings);
+        result = result.merge(reorder_result);
+        if self.reorder_highlight_phase == ReorderHighlightPhase::Exiting
+            && !self.reorder_highlight.is_active()
+        {
+            self.clear_reorder_highlight_immediately();
+            result = result.merge(TickResult::CHANGED);
+        }
+        result = result.merge(Animated::tick(&mut self.search_input, dt, settings));
         if matches!(self.interaction, DataViewInteraction::HeaderFilter) {
             self.header_pick_elapsed = self.header_pick_elapsed.saturating_add(dt);
             if self.header_pick_elapsed >= HEADER_PICK_TIMEOUT {
@@ -225,7 +231,7 @@ where
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
-        self.focused = focused;
+        self.set_focused(focused);
         ctx.request_redraw();
     }
 
@@ -235,7 +241,7 @@ where
             .without_first_if(&ChildKey::new(SEARCH_SLOT))
             .is_some()
         {
-            self.focused = focused;
+            self.set_focused(focused);
             self.search_input.set_focused(focused);
             if focused {
                 self.interaction = DataViewInteraction::Search;
@@ -247,7 +253,7 @@ where
             return;
         }
         if let Some(child_target) = target.for_child(&ChildKey::new(FILTER_DROPDOWN_SLOT)) {
-            self.focused = focused;
+            self.set_focused(focused);
             if let Some(dropdown) = self.filter_dropdown.as_mut() {
                 <Box<ChoiceDropdown> as TuiNode<M>>::dispatch_focus(
                     dropdown,

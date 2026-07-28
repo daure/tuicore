@@ -10,10 +10,13 @@ mod tests;
 
 use ratatui::layout::{Constraint, Rect};
 
-use super::data_view::ReorderSnapshot;
+#[cfg(test)]
+use super::PanelTitlePosition;
+use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
 use super::{
-    Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView, Dropdown,
-    DropdownSearchMode, DropdownVariant, Panel, PanelTitlePosition, SortDirection, TextInput,
+    ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView, Dropdown,
+    DropdownSearchMode, DropdownVariant, Panel, SelectionMode, SelectionTrigger, SortDirection,
+    TextInput,
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
@@ -192,14 +195,16 @@ impl ListControlKeyBindings {
 
 struct ReorderState<Id> {
     snapshot: ReorderSnapshot<Id>,
+    scroll_snapshot: DataViewScrollSnapshot,
     staged: Vec<Id>,
     moving_id: Id,
-    previous_bottom_left: Option<String>,
+    pending_g: bool,
 }
 
 pub struct ListControl<T, Id, M = ()> {
     data_view: DataView<T, Id>,
     panel: Panel,
+    panel_visible: bool,
     inputs: Vec<ListControlInput<M>>,
     required_fields: Vec<bool>,
     creator: Box<Creator<T>>,
@@ -286,6 +291,7 @@ where
         Self {
             data_view: DataView::new(rows, row_id),
             panel: Panel::new(),
+            panel_visible: true,
             inputs,
             required_fields,
             creator: Box::new(creator),
@@ -354,6 +360,31 @@ where
         self
     }
 
+    pub fn filter_controls(mut self, enabled: bool) -> Self {
+        self.data_view = self.data_view.filter_controls(enabled);
+        self
+    }
+
+    pub fn focused_events_before_global_hotkeys(mut self, enabled: bool) -> Self {
+        self.data_view = self.data_view.focused_events_before_global_hotkeys(enabled);
+        self
+    }
+
+    pub fn activation_mode(mut self, mode: ActivationMode) -> Self {
+        self.data_view = self.data_view.activation_mode(mode);
+        self
+    }
+
+    pub fn selection_mode(mut self, mode: SelectionMode) -> Self {
+        self.data_view = self.data_view.selection_mode(mode);
+        self
+    }
+
+    pub fn selection_trigger(mut self, trigger: SelectionTrigger) -> Self {
+        self.data_view = self.data_view.selection_trigger(trigger);
+        self
+    }
+
     pub fn row_height(mut self, row_height: u16) -> Self {
         self.data_view.set_row_height(row_height);
         self
@@ -399,6 +430,11 @@ where
         self.panel.set_hotkey_badge(self.hotkey.clone());
         self.panel
             .set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
+        self
+    }
+
+    pub fn panel_visible(mut self, visible: bool) -> Self {
+        self.panel_visible = visible;
         self
     }
 

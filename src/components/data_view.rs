@@ -14,14 +14,12 @@ mod selection;
 mod tests;
 mod tree_rows;
 
-#[cfg(test)]
-use crate::Animated;
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::search::SearchMode;
 use crate::{
-    AnimationSettings, ChildKey, EventCtx, FocusId, FocusRequest, KeyBindings, ScrollAxes,
-    ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome, ScrollState, ScrollbarConfig,
-    animation_settings, keybindings, preset,
+    AnimationSettings, AnimationSpec, ChildKey, Easing, EventCtx, FocusId, FocusRequest,
+    KeyBindings, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome, ScrollState,
+    ScrollbarConfig, TickResult, Tween, animation_settings, keybindings, preset,
 };
 
 use super::{
@@ -47,6 +45,7 @@ const TEXT_INPUT_FOCUS: &str = "input";
 const DROPDOWN_SEARCH_FOCUS: &str = "input";
 const EMPTY_CHOICE_ID: &str = "";
 const HEADER_PICK_TIMEOUT: Duration = Duration::from_secs(1);
+const REORDER_HIGHLIGHT_DURATION: Duration = Duration::from_millis(250);
 
 type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
@@ -100,6 +99,30 @@ pub struct DataView<T, Id> {
     search_input: TextInput<()>,
     filter_dropdown: Option<Box<ChoiceDropdown>>,
     header_pick_elapsed: Duration,
+    reorder_highlight: Tween,
+    reorder_highlight_id: Option<Id>,
+    reorder_highlight_phase: ReorderHighlightPhase,
+    reorder_highlight_crossfades: bool,
+    scroll_restoration: Option<DataViewScrollRestoration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DataViewScrollSnapshot {
+    rendered: ScrollOffset,
+    target: ScrollOffset,
+    active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DataViewScrollRestoration {
+    resume_target: Option<ScrollOffset>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReorderHighlightPhase {
+    Inactive,
+    Active,
+    Exiting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +187,11 @@ where
                 .hotkey_focus_enabled(false),
             filter_dropdown: None,
             header_pick_elapsed: Duration::ZERO,
+            reorder_highlight: Tween::idle(0.0),
+            reorder_highlight_id: None,
+            reorder_highlight_phase: ReorderHighlightPhase::Inactive,
+            reorder_highlight_crossfades: false,
+            scroll_restoration: None,
         }
     }
 
@@ -284,6 +312,9 @@ where
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        if !focused {
+            self.clear_reorder_highlight_immediately();
+        }
     }
 
     pub fn is_focused(&self) -> bool {
@@ -526,6 +557,15 @@ where
         self.scroll.offset().x
     }
 
+    #[cfg(test)]
+    pub(crate) fn scroll_animation_state_for_test(&self) -> (ScrollOffset, ScrollOffset, bool) {
+        (
+            self.scroll.offset(),
+            self.scroll.target_offset(),
+            self.scroll.is_active(),
+        )
+    }
+
     pub fn pagination(mut self, page_size: usize) -> Self {
         self.pagination = (page_size > 0).then_some(DataViewPagination { page_size, page: 0 });
         self
@@ -638,6 +678,71 @@ where
         self.reorder_sort = Some(column_id.to_string());
     }
 
+    pub(crate) fn scroll_snapshot(&mut self) -> DataViewScrollSnapshot {
+        self.scroll_restoration = None;
+        DataViewScrollSnapshot {
+            rendered: self.scroll.offset(),
+            target: self.scroll.target_offset(),
+            active: self.scroll.is_active(),
+        }
+    }
+
+    pub(crate) fn restore_scroll(
+        &mut self,
+        snapshot: DataViewScrollSnapshot,
+        area: Rect,
+        settings: AnimationSettings,
+    ) {
+        self.scroll_restoration = None;
+        let target = if settings.enabled {
+            snapshot.rendered
+        } else {
+            snapshot.target
+        };
+        let geometry = self.scroll_geometry(area);
+        self.scroll
+            .scroll_to(target, geometry.viewport, geometry.content, settings);
+        if !settings.enabled {
+            return;
+        }
+        self.scroll_restoration = Some(DataViewScrollRestoration {
+            resume_target: (snapshot.active && snapshot.target != snapshot.rendered)
+                .then_some(snapshot.target),
+        });
+        self.advance_scroll_restoration(area, settings);
+    }
+
+    fn advance_scroll_restoration(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> TickResult {
+        if self.scroll.is_active() {
+            return TickResult::IDLE;
+        }
+        let Some(restoration) = self.scroll_restoration.take() else {
+            return TickResult::IDLE;
+        };
+        let Some(target) = restoration.resume_target else {
+            return TickResult::CHANGED;
+        };
+        let geometry = self.scroll_geometry(area);
+        let outcome = self
+            .scroll
+            .scroll_to(target, geometry.viewport, geometry.content, settings);
+        if outcome.active {
+            self.scroll_restoration = Some(DataViewScrollRestoration {
+                resume_target: None,
+            });
+        }
+        TickResult {
+            changed: outcome.changed,
+            layout: false,
+            active: outcome.active,
+            next_tick: None,
+        }
+    }
+
     pub(crate) fn reorder_snapshot(
         &self,
         column_id: &str,
@@ -686,6 +791,109 @@ where
 
     pub(crate) fn set_derived_row_order(&mut self, ids: Option<Vec<Id>>) {
         self.derived_row_order = ids;
+    }
+
+    pub(crate) fn reposition_highlight_silently(&mut self, id: &Id) -> bool {
+        let Some(index) = self.visible_rows().iter().position(|row| &row.id == id) else {
+            return false;
+        };
+        self.highlighted = index;
+        true
+    }
+
+    pub(crate) fn start_reorder_highlight(&mut self, id: Id, settings: AnimationSettings) {
+        let theme = crate::theme();
+        self.start_reorder_highlight_with_colors(
+            id,
+            settings,
+            theme.highlight_fg(),
+            theme.highlight_bg(),
+        );
+    }
+
+    fn start_reorder_highlight_with_colors(
+        &mut self,
+        id: Id,
+        settings: AnimationSettings,
+        foreground: ratatui::style::Color,
+        background: ratatui::style::Color,
+    ) {
+        let same_row = self.reorder_highlight_id.as_ref() == Some(&id);
+        if !same_row {
+            self.reorder_highlight.snap_to(0.0);
+        }
+        self.reorder_highlight_id = Some(id);
+        self.reorder_highlight_phase = ReorderHighlightPhase::Active;
+        self.reorder_highlight_crossfades = matches!(
+            (foreground, background),
+            (
+                ratatui::style::Color::Rgb(_, _, _),
+                ratatui::style::Color::Rgb(_, _, _)
+            )
+        );
+        let animation = settings.resolve(AnimationSpec {
+            enabled: None,
+            duration: Some(REORDER_HIGHLIGHT_DURATION),
+            easing: Some(Easing::EaseInOut),
+        });
+        if animation.enabled && self.reorder_highlight_crossfades {
+            self.reorder_highlight.start(
+                self.reorder_highlight.value(),
+                1.0,
+                animation.duration,
+                animation.easing,
+            );
+        } else {
+            self.reorder_highlight.snap_to(1.0);
+        }
+    }
+
+    pub(crate) fn clear_reorder_highlight(&mut self, settings: AnimationSettings) {
+        let animation = settings.resolve(AnimationSpec {
+            enabled: None,
+            duration: Some(REORDER_HIGHLIGHT_DURATION),
+            easing: Some(Easing::EaseInOut),
+        });
+        if animation.enabled {
+            self.reorder_highlight_phase = ReorderHighlightPhase::Exiting;
+            self.reorder_highlight.start(
+                self.reorder_highlight.value(),
+                0.0,
+                animation.duration,
+                animation.easing,
+            );
+        } else {
+            self.reorder_highlight.snap_to(0.0);
+            self.reorder_highlight_id = None;
+            self.reorder_highlight_phase = ReorderHighlightPhase::Inactive;
+            self.reorder_highlight_crossfades = false;
+        }
+    }
+
+    pub(crate) fn clear_reorder_highlight_immediately(&mut self) {
+        self.reorder_highlight.snap_to(0.0);
+        self.reorder_highlight_id = None;
+        self.reorder_highlight_phase = ReorderHighlightPhase::Inactive;
+        self.reorder_highlight_crossfades = false;
+    }
+
+    pub(crate) fn row_has_reorder_highlight(&self, id: &Id) -> bool {
+        self.reorder_highlight_id.as_ref() == Some(id)
+    }
+
+    fn reorder_highlight_progress(&self) -> f64 {
+        if self.reorder_highlight_id.is_none() {
+            0.0
+        } else if self.reorder_highlight_crossfades {
+            self.reorder_highlight.value().clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reorder_highlight_progress_for_test(&self) -> f64 {
+        self.reorder_highlight_progress()
     }
 
     pub(crate) fn reorder_snapshot_matches(
@@ -1452,10 +1660,11 @@ where
         outcome
     }
 
-    fn visible_page_step(&self, area: Rect) -> usize {
+    pub(crate) fn visible_page_step(&self, area: Rect) -> usize {
         let height = self.scroll_geometry(area).viewport.height.max(1);
-        let rows = (height / self.row_height as usize).max(1);
-        ((rows * 3).saturating_add(4)) / 5
+        let viewport_capacity = (height / self.row_height as usize).max(1);
+        let basis = self.visible_len().min(viewport_capacity);
+        ((basis.saturating_mul(3)).saturating_add(4) / 5).max(1)
     }
 
     fn handle_g(&mut self, area: Rect, settings: AnimationSettings) -> DataViewOutcome {
@@ -1468,7 +1677,7 @@ where
         }
     }
 
-    fn ensure_highlight_visible(
+    pub(crate) fn ensure_highlight_visible(
         &mut self,
         area: Rect,
         settings: AnimationSettings,
@@ -1495,7 +1704,11 @@ where
         )
     }
 
-    fn center_highlight(&mut self, area: Rect, settings: AnimationSettings) -> ScrollOutcome {
+    pub(crate) fn center_highlight(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> ScrollOutcome {
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
         let row_start = self.highlighted.saturating_mul(self.row_height as usize);

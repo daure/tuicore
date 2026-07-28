@@ -24,9 +24,9 @@ use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
     layout_split_demo, layout_stack_demo, render_layout_intro,
 };
-use gallery_demo::list_control::{ListControlShowcase, compact_names, entity_table};
+use gallery_demo::list_control::{ListControlShowcase, compact_names, entity_table, reorder_mode};
 #[cfg(test)]
-use gallery_demo::list_control::{compact_name_controls, entity_controls};
+use gallery_demo::list_control::{compact_name_controls, entity_controls, reorder_control};
 use gallery_demo::notifications::{
     notification_button_areas, notification_button_child_key, notification_button_child_route,
     notification_button_index, notification_buttons, notification_for_index,
@@ -55,7 +55,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 #[cfg(test)]
-use tuicore::CalendarView;
+use tuicore::{CalendarView, LayoutProposal};
 
 use futures::StreamExt;
 use ratatui::widgets::{Borders, Paragraph};
@@ -767,6 +767,7 @@ struct PreviewState {
     data_status: String,
     list_compact: ListControlShowcase,
     list_entity_table: ListControlShowcase,
+    list_reorder: ListControlShowcase,
     panel_top_left: Dropdown<PanelTitleChoice, &'static str>,
     panel_top_right: Dropdown<PanelTitleChoice, &'static str>,
     panel_bottom_left: Dropdown<PanelTitleChoice, &'static str>,
@@ -960,6 +961,7 @@ impl PreviewState {
             data_status: String::from("No event yet"),
             list_compact: compact_names(),
             list_entity_table: entity_table(),
+            list_reorder: reorder_mode(),
             panel_top_left: panel_title_dropdown(PanelTitlePosition::TopLeft),
             panel_top_right: panel_title_dropdown(PanelTitlePosition::TopRight),
             panel_bottom_left: panel_title_dropdown(PanelTitlePosition::BottomLeft),
@@ -1246,6 +1248,9 @@ impl PreviewState {
             | PreviewKind::DataChecklistTree
             | PreviewKind::DataActivateOnNavigate => self.render_data_view(preview, frame, area),
             preview @ (PreviewKind::ListCompact | PreviewKind::ListEntityTable) => {
+                self.active_list_control(preview).render(frame, area, ctx);
+            }
+            PreviewKind::ListReorder => {
                 self.active_list_control(preview).render(frame, area, ctx);
             }
             PreviewKind::Dropdown => self.render_dropdown_preview(frame, area, ctx),
@@ -1880,6 +1885,7 @@ impl PreviewState {
             ))
             .merge(self.list_compact.tick(dt, settings))
             .merge(self.list_entity_table.tick(dt, settings))
+            .merge(self.list_reorder.tick(dt, settings))
             .merge(Animated::tick(&mut self.panel_demo, dt, settings))
             .merge(self.panel_join_demo.tick(dt, settings))
             .merge(self.panel_tabs_join_demo.tick(dt, settings))
@@ -1936,6 +1942,7 @@ impl PreviewState {
         self.validated_form.init(ctx);
         self.list_compact.init(ctx);
         self.list_entity_table.init(ctx);
+        self.list_reorder.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -1943,6 +1950,7 @@ impl PreviewState {
         self.validated_form.mount(ctx);
         self.list_compact.mount(ctx);
         self.list_entity_table.mount(ctx);
+        self.list_reorder.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -1950,6 +1958,7 @@ impl PreviewState {
         self.validated_form.unmount(ctx);
         self.list_compact.unmount(ctx);
         self.list_entity_table.unmount(ctx);
+        self.list_reorder.unmount(ctx);
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -1957,6 +1966,7 @@ impl PreviewState {
         self.validated_form.destroy(ctx);
         self.list_compact.destroy(ctx);
         self.list_entity_table.destroy(ctx);
+        self.list_reorder.destroy(ctx);
     }
 
     fn panel_title_dropdown_mut(
@@ -2034,6 +2044,7 @@ impl PreviewState {
     fn active_list_control(&self, preview: PreviewKind) -> &ListControlShowcase {
         match preview {
             PreviewKind::ListEntityTable => &self.list_entity_table,
+            PreviewKind::ListReorder => &self.list_reorder,
             _ => &self.list_compact,
         }
     }
@@ -2041,6 +2052,7 @@ impl PreviewState {
     fn active_list_control_mut(&mut self, preview: PreviewKind) -> &mut ListControlShowcase {
         match preview {
             PreviewKind::ListEntityTable => &mut self.list_entity_table,
+            PreviewKind::ListReorder => &mut self.list_reorder,
             _ => &mut self.list_compact,
         }
     }
@@ -3600,10 +3612,11 @@ enum ComponentKind {
     ListControl,
     ListCompact,
     ListEntityTable,
+    ListReorder,
 }
 
 impl ComponentKind {
-    const ALL: [Self; 43] = [
+    const ALL: [Self; 44] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3647,6 +3660,7 @@ impl ComponentKind {
         Self::ListControl,
         Self::ListCompact,
         Self::ListEntityTable,
+        Self::ListReorder,
     ];
 
     fn title(self) -> &'static str {
@@ -3694,6 +3708,7 @@ impl ComponentKind {
             Self::ListControl => "List Control",
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
+            Self::ListReorder => "Reorder mode",
         }
     }
 
@@ -3707,7 +3722,9 @@ impl ComponentKind {
             | Self::DataViewMultiSelect
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate => Some(Self::DataView),
-            Self::ListCompact | Self::ListEntityTable => Some(Self::ListControl),
+            Self::ListCompact | Self::ListEntityTable | Self::ListReorder => {
+                Some(Self::ListControl)
+            }
             Self::Button
             | Self::Chip
             | Self::TagInput
@@ -3773,6 +3790,7 @@ impl ComponentKind {
             Self::DataViewActivateOnNavigate => PreviewKind::DataActivateOnNavigate,
             Self::ListControl | Self::ListCompact => PreviewKind::ListCompact,
             Self::ListEntityTable => PreviewKind::ListEntityTable,
+            Self::ListReorder => PreviewKind::ListReorder,
         }
     }
 }
@@ -3817,6 +3835,7 @@ enum PreviewKind {
     DataActivateOnNavigate,
     ListCompact,
     ListEntityTable,
+    ListReorder,
 }
 
 impl PreviewKind {
@@ -3860,6 +3879,7 @@ impl PreviewKind {
             Self::DataActivateOnNavigate => "Activate On Navigate",
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
+            Self::ListReorder => "Reorder mode",
         }
     }
 
@@ -3878,7 +3898,10 @@ impl PreviewKind {
     }
 
     fn is_list_control(self) -> bool {
-        matches!(self, Self::ListCompact | Self::ListEntityTable)
+        matches!(
+            self,
+            Self::ListCompact | Self::ListEntityTable | Self::ListReorder
+        )
     }
 }
 
@@ -3922,8 +3945,12 @@ mod tests {
     }
 
     #[test]
-    fn both_list_control_variants_are_registered() {
-        let variants = [ComponentKind::ListCompact, ComponentKind::ListEntityTable];
+    fn all_list_control_variants_are_registered() {
+        let variants = [
+            ComponentKind::ListCompact,
+            ComponentKind::ListEntityTable,
+            ComponentKind::ListReorder,
+        ];
         for variant in variants {
             assert!(ComponentKind::ALL.contains(&variant));
             assert_eq!(variant.parent(), Some(ComponentKind::ListControl));
@@ -3940,6 +3967,43 @@ mod tests {
         assert!(entities.iter().all(|control| !control.items().is_empty()));
         assert_eq!(compact.len(), 2);
         assert_eq!(entities.len(), 3);
+    }
+
+    #[test]
+    fn reorder_gallery_has_24_rows_and_ten_row_visible_cap() {
+        let control = reorder_control();
+
+        assert_eq!(control.items().len(), 24);
+        assert_eq!(
+            control
+                .measure(LayoutProposal::unbounded())
+                .preferred
+                .height,
+            12
+        );
+    }
+
+    #[test]
+    fn reorder_gallery_control_enters_reorder_mode() {
+        let mut control = reorder_control();
+        let guidance = "Ctrl+M move · ↑↓/gg/G/Home/End/Pg/Ctrl+U,D · Enter commit · Esc cancel";
+        assert_eq!(
+            control.panel_ref().title_text(PanelTitlePosition::TopLeft),
+            Some(guidance)
+        );
+        let route = EventRoute::new(TreePath::from_keys([ChildKey::new("data")]));
+        let key = KeyEvent {
+            code: Key::Char('m'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+
+        control.dispatch_event(&route, &TuiEvent::Key(key), &mut EventCtx::default());
+
+        assert!(control.is_reordering());
+        assert_eq!(
+            control.panel_ref().title_text(PanelTitlePosition::TopLeft),
+            Some(guidance)
+        );
     }
 
     #[test]

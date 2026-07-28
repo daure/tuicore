@@ -51,9 +51,9 @@ pub struct FocusDimSettings {
 impl Default for FocusDimSettings {
     fn default() -> Self {
         Self {
-            amount: 0.15,
+            amount: 0.20,
             animation: AnimationSpec {
-                duration: Some(Duration::from_millis(150)),
+                duration: Some(Duration::from_millis(175)),
                 ..AnimationSpec::default()
             },
         }
@@ -1512,10 +1512,10 @@ mod tests {
         let TerminalFocusEffect::Dim(settings) = app.terminal_focus_effect else {
             panic!("terminal focus dim should be enabled by default");
         };
-        assert_eq!(settings.amount, 0.15);
+        assert_eq!(settings.amount, 0.20);
         assert_eq!(
             settings.animation.duration,
-            Some(Duration::from_millis(150))
+            Some(Duration::from_millis(175))
         );
         assert_eq!(settings.animation.enabled, None);
         assert_eq!(settings.animation.easing, None);
@@ -1554,7 +1554,7 @@ mod tests {
 
         app.update_terminal_focus(&TuiEvent::FocusLost, &mut flags);
 
-        assert_eq!(app.terminal_focus_dim.value(), 0.15);
+        assert_eq!(app.terminal_focus_dim.value(), 0.20);
         assert!(!app.terminal_focus_dim.is_active());
         assert!(flags.redraw);
     }
