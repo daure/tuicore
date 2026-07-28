@@ -6,7 +6,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
 use time::{PrimitiveDateTime, Weekday};
 
-use crate::event::{KeyEvent, TuiEvent};
+use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TreePath, TuiNode, border_set, keybindings, preset,
@@ -164,8 +164,20 @@ impl<M> DateTimePicker<M> {
             DateTimePart::Date => self.date.on_key(key),
             DateTimePart::Time => self.time.on_key(key),
         };
+        if self.active == DateTimePart::Date && self.date.take_quick_jump_selection() {
+            self.time.focus_hour();
+            self.active = DateTimePart::Time;
+            self.sync_focus(true);
+            return PickerOutcome::handled(true);
+        }
         if self.layout == DateTimePickerLayout::Stepped {
             if outcome.selected {
+                if self.active == DateTimePart::Date
+                    && key.code == Key::Enter
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    return outcome;
+                }
                 return match self.active {
                     DateTimePart::Date => {
                         self.active = DateTimePart::Time;
@@ -372,8 +384,10 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
         ctx.request_redraw();
     }
 
-    fn tick(&mut self, _dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
-        TickResult::IDLE
+    fn tick(&mut self, dt: StdDuration, settings: crate::AnimationSettings) -> TickResult {
+        self.date
+            .tick(dt, settings)
+            .merge(self.time.tick(dt, settings))
     }
 }
 

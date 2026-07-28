@@ -3,13 +3,13 @@ use std::time::Duration as StdDuration;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use time::{Date, Duration, Month, Weekday};
 
 use crate::border_set;
 use crate::components::calendar::date_math::week_range;
-use crate::event::{ExternalEditorResponse, KeyEvent, TuiEvent};
+use crate::event::{ExternalEditorResponse, Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_badge_width, hotkey_edge_spans,
@@ -19,8 +19,10 @@ use crate::{
 use super::{
     DATE_PICKER_FOCUS, PickerOutcome, add_months, centered_grid, choice_style, date_in_month,
     finish_event, first_of_month, last_of_month, month_abbr, parse_editor_date, picker_size_hint,
-    request_unfocus_if_canceled, today, year_page_start,
+    plain_digit, request_unfocus_if_canceled, today, year_page_start,
 };
+
+const QUICK_JUMP_TIMEOUT: StdDuration = StdDuration::from_secs(1);
 
 pub struct DatePicker<M = ()> {
     value: Option<Date>,
@@ -36,6 +38,10 @@ pub struct DatePicker<M = ()> {
     hotkey: Option<String>,
     pending_hotkey_prefix: Option<String>,
     pending_top_prefix: bool,
+    quick_jump_digit: Option<u8>,
+    quick_jump_text: String,
+    quick_jump_elapsed: StdDuration,
+    quick_jump_selected: bool,
     on_select: Option<Box<dyn Fn(Date) -> M>>,
 }
 
@@ -63,6 +69,10 @@ impl<M> DatePicker<M> {
             hotkey: None,
             pending_hotkey_prefix: None,
             pending_top_prefix: false,
+            quick_jump_digit: None,
+            quick_jump_text: String::new(),
+            quick_jump_elapsed: StdDuration::ZERO,
+            quick_jump_selected: false,
             on_select: None,
         }
     }
@@ -148,6 +158,9 @@ impl<M> DatePicker<M> {
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        if !focused {
+            self.clear_quick_jump();
+        }
     }
 
     #[cfg(test)]
@@ -157,8 +170,12 @@ impl<M> DatePicker<M> {
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> PickerOutcome {
         let key = key.into();
+        self.quick_jump_selected = false;
         let bindings = keybindings();
         let date_keys = bindings.date_time_picker();
+        if let Some(outcome) = self.handle_quick_jump(key) {
+            return outcome;
+        }
         if date_keys.top_prefix_matches(key) {
             if self.pending_top_prefix {
                 self.pending_top_prefix = false;
@@ -212,6 +229,10 @@ impl<M> DatePicker<M> {
         if bindings.end_matches(key) {
             return self.set_cursor(self.view_end_date());
         }
+        if key.code == Key::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.value = Some(self.cursor);
+            return PickerOutcome::selected(true);
+        }
         if bindings.button().press_matches(key) {
             if self.view == DatePickerView::Year {
                 self.view = DatePickerView::Month;
@@ -264,6 +285,8 @@ impl<M> DatePicker<M> {
             focused: self.focused,
             min: self.min,
             max: self.max,
+            display_month: self.display_month,
+            quick_jump_digit: self.quick_jump_digit,
         };
         let block = self.block("");
         let inner = block.inner(area);
@@ -306,8 +329,7 @@ impl<M> DatePicker<M> {
             }
             let column = offset % 7;
             frame.render_widget(
-                Paragraph::new(format!("{:>2} ", date.day()))
-                    .style(styles.style(date, date.month() != self.display_month.month())),
+                Paragraph::new(styles.day_line(date, date.month() != self.display_month.month())),
                 Rect::new(inner.x + column as u16 * 3, inner.y + row as u16 + 2, 3, 1),
             );
         }
@@ -341,8 +363,9 @@ impl<M> DatePicker<M> {
                 let month_number = row * 4 + col + 1;
                 let month = Month::try_from(month_number as u8).expect("month in grid");
                 let selected = month == self.cursor.month();
+                let style = choice_style(selected, self.focused);
                 frame.render_widget(
-                    Paragraph::new(month_abbr(month)).style(choice_style(selected, self.focused)),
+                    Paragraph::new(self.quick_jump_line(month_abbr(month), style)),
                     cols[col],
                 );
             }
@@ -381,9 +404,9 @@ impl<M> DatePicker<M> {
                 .split(rows[row]);
             for col in 0..4 {
                 let year = self.year_page_start + (row * 4 + col) as i32;
+                let style = choice_style(year == self.cursor.year(), self.focused);
                 frame.render_widget(
-                    Paragraph::new(year.to_string())
-                        .style(choice_style(year == self.cursor.year(), self.focused)),
+                    Paragraph::new(self.quick_jump_line(&year.to_string(), style)),
                     cols[col],
                 );
             }
@@ -540,6 +563,154 @@ impl<M> DatePicker<M> {
         PickerOutcome::handled(true)
     }
 
+    fn handle_quick_jump(&mut self, key: KeyEvent) -> Option<PickerOutcome> {
+        match self.view {
+            DatePickerView::Day => self.handle_day_quick_jump(key),
+            DatePickerView::Month => self.handle_month_quick_jump(key),
+            DatePickerView::Year => self.handle_year_quick_jump(key),
+        }
+    }
+
+    fn handle_day_quick_jump(&mut self, key: KeyEvent) -> Option<PickerOutcome> {
+        if let Some(first) = self.quick_jump_digit {
+            if quick_jump_accepts(key) {
+                self.clear_quick_jump();
+                return Some(self.select_quick_jump_day(first));
+            }
+            if let Some(second) = plain_digit(key) {
+                self.clear_quick_jump();
+                let day = first * 10 + second;
+                return Some(if day <= self.days_in_display_month() {
+                    self.select_quick_jump_day(day)
+                } else {
+                    PickerOutcome::handled(false)
+                });
+            }
+            self.clear_quick_jump();
+        }
+        let digit = plain_digit(key)?;
+        if digit == 0 {
+            return Some(PickerOutcome::handled(false));
+        }
+        if digit <= 3 && digit * 10 <= self.days_in_display_month() {
+            self.quick_jump_digit = Some(digit);
+            self.quick_jump_elapsed = StdDuration::ZERO;
+            return Some(PickerOutcome::handled(true));
+        }
+        Some(self.select_quick_jump_day(digit))
+    }
+
+    fn handle_month_quick_jump(&mut self, key: KeyEvent) -> Option<PickerOutcome> {
+        self.quick_jump_digit = None;
+        if !self.quick_jump_text.is_empty() && quick_jump_accepts(key) {
+            self.clear_quick_jump();
+            return Some(PickerOutcome::handled(true));
+        }
+        let Some(character) = plain_letter(key) else {
+            if !self.quick_jump_text.is_empty() {
+                self.clear_quick_jump();
+            }
+            return None;
+        };
+        let had_pending_prefix = !self.quick_jump_text.is_empty();
+        let mut prefix = self.quick_jump_text.clone();
+        prefix.push(character);
+        let matches = months_matching_prefix(&prefix);
+        if matches.is_empty() {
+            self.clear_quick_jump();
+            return had_pending_prefix.then(|| PickerOutcome::handled(true));
+        }
+        if matches.len() == 1 {
+            self.clear_quick_jump();
+            return Some(self.complete_month_quick_jump(matches[0]));
+        }
+        self.quick_jump_text = prefix;
+        self.quick_jump_elapsed = StdDuration::ZERO;
+        Some(PickerOutcome::handled(true))
+    }
+
+    fn handle_year_quick_jump(&mut self, key: KeyEvent) -> Option<PickerOutcome> {
+        self.quick_jump_digit = None;
+        if !self.quick_jump_text.is_empty() && quick_jump_accepts(key) {
+            self.clear_quick_jump();
+            return Some(PickerOutcome::handled(true));
+        }
+        let Some(digit) = plain_digit(key) else {
+            if !self.quick_jump_text.is_empty() {
+                self.clear_quick_jump();
+            }
+            return None;
+        };
+        self.quick_jump_text.push(char::from(b'0' + digit));
+        self.quick_jump_elapsed = StdDuration::ZERO;
+        if self.quick_jump_text.len() < 4 {
+            return Some(PickerOutcome::handled(true));
+        }
+        let year = self
+            .quick_jump_text
+            .parse::<i32>()
+            .expect("four ASCII digits form a valid year");
+        self.clear_quick_jump();
+        Some(self.complete_year_quick_jump(year))
+    }
+
+    fn select_quick_jump_day(&mut self, day: u8) -> PickerOutcome {
+        let previous = self.value;
+        let changed = self
+            .set_cursor(date_in_month(
+                self.display_month.year(),
+                self.display_month.month(),
+                day,
+            ))
+            .changed;
+        self.value = Some(self.cursor);
+        self.quick_jump_selected = true;
+        PickerOutcome::selected(changed || previous != self.value)
+    }
+
+    fn complete_month_quick_jump(&mut self, month: Month) -> PickerOutcome {
+        self.set_cursor(date_in_month(self.cursor.year(), month, self.cursor.day()));
+        self.view = DatePickerView::Day;
+        PickerOutcome::handled(true)
+    }
+
+    fn complete_year_quick_jump(&mut self, year: i32) -> PickerOutcome {
+        self.set_cursor(date_in_month(year, self.cursor.month(), self.cursor.day()));
+        self.view = DatePickerView::Month;
+        PickerOutcome::handled(true)
+    }
+
+    pub(super) fn take_quick_jump_selection(&mut self) -> bool {
+        std::mem::take(&mut self.quick_jump_selected)
+    }
+
+    fn days_in_display_month(&self) -> u8 {
+        self.display_month.month().length(self.display_month.year())
+    }
+
+    fn clear_quick_jump(&mut self) {
+        self.quick_jump_digit = None;
+        self.quick_jump_text.clear();
+        self.quick_jump_elapsed = StdDuration::ZERO;
+    }
+
+    fn quick_jump_line(&self, label: &str, style: Style) -> Line<'static> {
+        let prefix_len = self.quick_jump_text.len();
+        if prefix_len == 0
+            || label.len() < prefix_len
+            || !label[..prefix_len].eq_ignore_ascii_case(&self.quick_jump_text)
+        {
+            return Line::from(Span::styled(label.to_owned(), style));
+        }
+        Line::from(vec![
+            Span::styled(
+                label[..prefix_len].to_owned(),
+                style.add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled(label[prefix_len..].to_owned(), style),
+        ])
+    }
+
     fn clamp(&self, date: Date) -> Date {
         if let Some(min) = self.min
             && date < min
@@ -659,9 +830,41 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
         ctx.request_redraw();
     }
 
-    fn tick(&mut self, _dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
-        TickResult::IDLE
+    fn tick(&mut self, dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
+        if self.quick_jump_digit.is_none() && self.quick_jump_text.is_empty() {
+            return TickResult::IDLE;
+        }
+        self.quick_jump_elapsed = self.quick_jump_elapsed.saturating_add(dt);
+        if self.quick_jump_elapsed >= QUICK_JUMP_TIMEOUT {
+            self.clear_quick_jump();
+            TickResult::CHANGED
+        } else {
+            TickResult::scheduled_after(QUICK_JUMP_TIMEOUT - self.quick_jump_elapsed)
+        }
     }
+}
+
+fn quick_jump_accepts(key: KeyEvent) -> bool {
+    matches!(key.code, Key::Enter | Key::Char(' ')) && key.modifiers.is_empty()
+}
+
+fn plain_letter(key: KeyEvent) -> Option<char> {
+    if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
+        return None;
+    }
+    let Key::Char(character) = key.code else {
+        return None;
+    };
+    character
+        .is_ascii_alphabetic()
+        .then(|| character.to_ascii_lowercase())
+}
+
+fn months_matching_prefix(prefix: &str) -> Vec<Month> {
+    (1_u8..=12)
+        .filter_map(|number| Month::try_from(number).ok())
+        .filter(|month| month_abbr(*month).to_ascii_lowercase().starts_with(prefix))
+        .collect()
 }
 
 fn narrow_weekday_labels(first_day_of_week: Weekday) -> [&'static str; 7] {
@@ -678,33 +881,65 @@ struct DateStyles {
     focused: bool,
     min: Option<Date>,
     max: Option<Date>,
+    display_month: Date,
+    quick_jump_digit: Option<u8>,
 }
 
 impl DateStyles {
     fn style(&self, date: Date, surrounding: bool) -> Style {
         let t = theme();
-        if self.min.is_some_and(|min| date < min) || self.max.is_some_and(|max| date > max) {
-            return Style::default().fg(t.subtle_fg());
+        let style =
+            if self.min.is_some_and(|min| date < min) || self.max.is_some_and(|max| date > max) {
+                Style::default().fg(t.subtle_fg())
+            } else if self.focused && date == self.cursor {
+                Style::default()
+                    .fg(t.highlight_fg())
+                    .bg(t.highlight_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else if Some(date) == self.selected {
+                Style::default().fg(t.selected_fg()).bg(t.selected_bg())
+            } else if date == self.today {
+                Style::default()
+                    .fg(t.accent_fg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(if surrounding {
+                    t.subtle_fg()
+                } else {
+                    t.text_fg()
+                })
+            };
+        style
+    }
+
+    fn day_line(&self, date: Date, surrounding: bool) -> Line<'static> {
+        let style = self.style(date, surrounding);
+        if !self.quick_jump_matches(date) {
+            return Line::from(Span::styled(format!("{:>2} ", date.day()), style));
         }
-        if self.focused && date == self.cursor {
-            return Style::default()
-                .fg(t.highlight_fg())
-                .bg(t.highlight_bg())
-                .add_modifier(Modifier::BOLD);
-        }
-        if Some(date) == self.selected {
-            return Style::default().fg(t.selected_fg()).bg(t.selected_bg());
-        }
-        if date == self.today {
-            return Style::default()
-                .fg(t.accent_fg())
-                .add_modifier(Modifier::BOLD);
-        }
-        Style::default().fg(if surrounding {
-            t.subtle_fg()
+        let day = date.day();
+        let leading = if day < 10 { " " } else { "" };
+        let prefix = if day < 10 { day } else { day / 10 };
+        let suffix = if day < 10 {
+            String::new()
         } else {
-            t.text_fg()
-        })
+            (day % 10).to_string()
+        };
+        Line::from(vec![
+            Span::styled(leading.to_owned(), style),
+            Span::styled(prefix.to_string(), style.add_modifier(Modifier::UNDERLINED)),
+            Span::styled(suffix, style),
+            Span::styled(" ", style),
+        ])
+    }
+
+    fn quick_jump_matches(&self, date: Date) -> bool {
+        let Some(digit) = self.quick_jump_digit else {
+            return false;
+        };
+        date.year() == self.display_month.year()
+            && date.month() == self.display_month.month()
+            && (date.day() == digit || date.day() / 10 == digit)
     }
 }
 

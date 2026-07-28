@@ -1,7 +1,9 @@
 use super::super::KeyBindingsGuard;
 use super::*;
 use crate::{Key, KeyBindings, KeyModifiers, KeySpec};
+use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
+use std::time::Duration as StdDuration;
 
 fn rendered_rows(picker: &DatePicker<()>) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(23, 10)).expect("terminal should build");
@@ -82,6 +84,296 @@ fn date_picker_selects_cursor() {
 }
 
 #[test]
+fn date_picker_quick_jump_waits_for_two_digit_days() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+
+    let pending = picker.on_key(Key::Char('1'));
+    assert!(pending.handled);
+    assert_eq!(picker.cursor(), june_15);
+
+    let jumped = picker.on_key(Key::Char('8'));
+    assert!(jumped.changed);
+    assert!(jumped.selected);
+    assert_eq!(
+        picker.cursor(),
+        Date::from_calendar_date(2026, Month::June, 18).unwrap()
+    );
+    assert_eq!(picker.current_value(), Some(picker.cursor()));
+}
+
+#[test]
+fn date_picker_quick_jump_handles_three_based_on_month_length() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut june = DatePicker::<()>::new().today(june_15);
+
+    june.on_key(Key::Char('3'));
+    assert_eq!(june.cursor(), june_15);
+    june.on_key(Key::Char('0'));
+    assert_eq!(
+        june.cursor(),
+        Date::from_calendar_date(2026, Month::June, 30).unwrap()
+    );
+
+    let february_15 = Date::from_calendar_date(2026, Month::February, 15).unwrap();
+    let mut february = DatePicker::<()>::new().today(february_15);
+    february.on_key(Key::Char('3'));
+    assert_eq!(
+        february.cursor(),
+        Date::from_calendar_date(2026, Month::February, 3).unwrap()
+    );
+}
+
+#[test]
+fn date_picker_quick_jump_clears_invalid_day_without_moving() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+
+    picker.on_key(Key::Char('3'));
+    let invalid = picker.on_key(Key::Char('1'));
+
+    assert!(invalid.handled);
+    assert!(!invalid.changed);
+    assert_eq!(picker.cursor(), june_15);
+    picker.on_key(Key::Char('8'));
+    assert_eq!(
+        picker.cursor(),
+        Date::from_calendar_date(2026, Month::June, 8).unwrap()
+    );
+}
+
+#[test]
+fn date_picker_quick_jump_enter_and_space_submit_pending_single_digit() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+
+    for accept_key in [Key::Enter, Key::Char(' ')] {
+        let mut picker = DatePicker::<()>::new().today(june_15);
+        picker.on_key(Key::Char('1'));
+
+        let outcome = picker.on_key(accept_key);
+
+        assert!(outcome.handled);
+        assert!(outcome.selected);
+        assert_eq!(
+            picker.cursor(),
+            Date::from_calendar_date(2026, Month::June, 1).unwrap()
+        );
+        assert_eq!(picker.current_value(), Some(picker.cursor()));
+    }
+}
+
+#[test]
+fn date_picker_quick_jump_expires_after_one_second() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.on_key(Key::Char('1'));
+
+    let tick = picker.tick(StdDuration::from_millis(1_001), crate::animation_settings());
+    assert!(tick.changed);
+    assert_eq!(picker.cursor(), june_15);
+
+    picker.on_key(Key::Char('8'));
+    assert_eq!(
+        picker.cursor(),
+        Date::from_calendar_date(2026, Month::June, 8).unwrap()
+    );
+}
+
+#[test]
+fn date_picker_quick_jump_underlines_only_matching_days_in_current_month() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.on_key(Key::Char('1'));
+    let mut terminal = Terminal::new(TestBackend::new(23, 10)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+
+    let buffer = terminal.backend().buffer();
+    for day in 1..=19 {
+        if day != 1 && day < 10 {
+            continue;
+        }
+        let offset = day - 1;
+        let cell_x = 1 + (offset % 7) * 3;
+        let cell_y = 3 + offset / 7;
+        let prefix_x = cell_x + u16::from(day < 10);
+        assert!(
+            buffer
+                .cell((prefix_x, cell_y))
+                .unwrap()
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "day {day} prefix should be underlined"
+        );
+        for x in cell_x..cell_x + 3 {
+            if x != prefix_x {
+                assert!(
+                    !buffer
+                        .cell((x, cell_y))
+                        .unwrap()
+                        .modifier
+                        .contains(Modifier::UNDERLINED),
+                    "only day {day} prefix should be underlined"
+                );
+            }
+        }
+    }
+    assert!(
+        !buffer
+            .cell((7, 7))
+            .unwrap()
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+}
+
+#[test]
+fn date_picker_month_quick_jump_uses_shortest_unique_prefix() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let ambiguous = [
+        ("ap", Month::April),
+        ("au", Month::August),
+        ("ja", Month::January),
+        ("jun", Month::June),
+        ("jul", Month::July),
+        ("mar", Month::March),
+        ("may", Month::May),
+    ];
+    for (input, expected) in ambiguous {
+        let mut picker = DatePicker::<()>::new().today(june_15);
+        picker.view = DatePickerView::Month;
+        for character in input.chars() {
+            picker.on_key(Key::Char(character));
+        }
+        assert_eq!(picker.cursor().month(), expected, "input {input}");
+        assert_eq!(picker.view, DatePickerView::Day, "input {input}");
+    }
+
+    for (character, expected) in [
+        ('f', Month::February),
+        ('s', Month::September),
+        ('o', Month::October),
+        ('n', Month::November),
+        ('d', Month::December),
+    ] {
+        let mut picker = DatePicker::<()>::new().today(june_15);
+        picker.view = DatePickerView::Month;
+        picker.on_key(Key::Char(character));
+        assert_eq!(picker.cursor().month(), expected, "input {character}");
+        assert_eq!(picker.view, DatePickerView::Day, "input {character}");
+    }
+}
+
+#[test]
+fn date_picker_month_quick_jump_underlines_only_typed_prefix() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.view = DatePickerView::Month;
+    picker.on_key(Key::Char('a'));
+    let mut terminal = Terminal::new(TestBackend::new(23, 10)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+
+    let underlined = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .filter(|cell| cell.modifier.contains(Modifier::UNDERLINED))
+        .map(|cell| cell.symbol())
+        .collect::<Vec<_>>();
+    assert_eq!(underlined, ["A", "A"]);
+}
+
+#[test]
+fn date_picker_month_quick_jump_expires_after_one_second() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.view = DatePickerView::Month;
+    picker.on_key(Key::Char('a'));
+
+    assert!(
+        picker
+            .tick(StdDuration::from_millis(1_001), crate::animation_settings())
+            .changed
+    );
+    picker.on_key(Key::Char('p'));
+
+    assert_eq!(picker.cursor(), june_15);
+}
+
+#[test]
+fn date_picker_year_quick_jump_accepts_any_four_digit_year() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.view = DatePickerView::Year;
+
+    for character in "1984".chars() {
+        picker.on_key(Key::Char(character));
+    }
+
+    assert_eq!(
+        picker.cursor(),
+        Date::from_calendar_date(1984, Month::June, 15).unwrap()
+    );
+    assert_eq!(picker.view, DatePickerView::Month);
+    assert!((picker.year_page_start..=picker.year_page_start + 23).contains(&1984));
+}
+
+#[test]
+fn date_picker_year_quick_jump_underlines_typed_prefix_on_visible_years() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.view = DatePickerView::Year;
+    picker.on_key(Key::Char('2'));
+    picker.on_key(Key::Char('0'));
+    let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+
+    let underlined = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .filter(|cell| cell.modifier.contains(Modifier::UNDERLINED))
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert_eq!(underlined, "20".repeat(24));
+}
+
+#[test]
+fn date_picker_year_quick_jump_expires_and_partial_confirm_does_not_move() {
+    let june_15 = Date::from_calendar_date(2026, Month::June, 15).unwrap();
+    for accept_key in [Key::Enter, Key::Char(' ')] {
+        let mut picker = DatePicker::<()>::new().today(june_15);
+        picker.view = DatePickerView::Year;
+        for character in "202".chars() {
+            picker.on_key(Key::Char(character));
+        }
+        let outcome = picker.on_key(accept_key);
+        assert!(outcome.handled);
+        assert!(!outcome.selected);
+        assert_eq!(picker.cursor(), june_15);
+    }
+
+    let mut picker = DatePicker::<()>::new().today(june_15);
+    picker.view = DatePickerView::Year;
+    picker.on_key(Key::Char('1'));
+    picker.tick(StdDuration::from_millis(1_001), crate::animation_settings());
+    for character in "984".chars() {
+        picker.on_key(Key::Char(character));
+    }
+    assert_eq!(picker.cursor(), june_15);
+}
+
+#[test]
 fn date_picker_switches_month_and_year_views() {
     let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
     let mut picker = DatePicker::<()>::new().today(date);
@@ -97,15 +389,11 @@ fn date_picker_switches_month_and_year_views() {
 }
 
 #[test]
-fn date_picker_d_switches_every_view_to_day_without_changing_cursor_or_value() {
+fn date_picker_d_switches_day_and_year_views_to_day_without_changing_selection() {
     let _guard = KeyBindingsGuard::replace(KeyBindings::default());
     let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
 
-    for view in [
-        DatePickerView::Day,
-        DatePickerView::Month,
-        DatePickerView::Year,
-    ] {
+    for view in [DatePickerView::Day, DatePickerView::Year] {
         let mut picker = DatePicker::<()>::new().today(date).value(Some(date));
         picker.view = view;
         picker.on_key(Key::Right);
@@ -168,8 +456,14 @@ fn date_picker_uses_arrows_and_plain_hjkl_in_every_view() {
 
             let mut plain_picker = DatePicker::<()>::new().today(date);
             plain_picker.view = view;
-            assert!(plain_picker.on_key(Key::Char(character)).changed);
-            assert_eq!(plain_picker.cursor(), arrow_picker.cursor());
+            let plain_outcome = plain_picker.on_key(Key::Char(character));
+            if view == DatePickerView::Month && character == 'j' {
+                assert!(plain_outcome.handled);
+                assert_eq!(plain_picker.cursor(), date);
+            } else {
+                assert!(plain_outcome.changed);
+                assert_eq!(plain_picker.cursor(), arrow_picker.cursor());
+            }
 
             let mut controlled_picker = DatePicker::<()>::new().today(date);
             controlled_picker.view = view;
@@ -245,7 +539,7 @@ fn date_picker_day_view_binding_can_be_overridden_with_toml() {
 
     assert!(picker.on_key(Key::Char('v')).handled);
     assert_eq!(picker.view, DatePickerView::Day);
-    picker.view = DatePickerView::Month;
+    picker.view = DatePickerView::Year;
     assert_eq!(picker.on_key(Key::Char('d')), PickerOutcome::IGNORED);
 }
 

@@ -113,6 +113,32 @@ fn time_picker_accepts_typed_minutes_and_navigation_keys() {
 }
 
 #[test]
+fn time_picker_submits_when_two_digits_complete_last_field() {
+    let mut picker = TimePicker::<()>::new();
+    picker.active_field = TimeField::Minute;
+
+    let pending = picker.on_key(Key::Char('3'));
+    let selected = picker.on_key(Key::Char('0'));
+
+    assert!(!pending.selected);
+    assert!(selected.selected);
+    assert_eq!(picker.current_value().minute(), 30);
+}
+
+#[test]
+fn time_picker_single_digit_still_requires_enter_to_submit_last_field() {
+    let mut picker = TimePicker::<()>::new();
+    picker.active_field = TimeField::Minute;
+
+    let pending = picker.on_key(Key::Char('3'));
+    let selected = picker.on_key(Key::Enter);
+
+    assert!(!pending.selected);
+    assert!(selected.selected);
+    assert_eq!(picker.current_value().minute(), 3);
+}
+
+#[test]
 fn time_picker_registers_and_handles_hotkey() {
     let mut picker = TimePicker::<()>::new().hotkey("t");
     let mut layout = LayoutCtx::new();

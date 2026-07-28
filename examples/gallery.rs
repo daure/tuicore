@@ -1789,6 +1789,16 @@ impl PreviewState {
             ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
+            .merge(<DatePicker<Msg> as TuiNode<Msg>>::tick(
+                &mut self.date_picker,
+                dt,
+                settings,
+            ))
+            .merge(<DateTimePicker<Msg> as TuiNode<Msg>>::tick(
+                &mut self.date_time_picker,
+                dt,
+                settings,
+            ))
             .merge(<DatePickerDropdown<Msg> as TuiNode<Msg>>::tick(
                 &mut self.date_dropdown,
                 dt,
@@ -3909,6 +3919,17 @@ impl PreviewKind {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn preview_date_picker_ticks_quick_jump_timeout() {
+        let mut state = PreviewState::new();
+        state.date_picker.on_key(Key::Char('1'));
+
+        state.tick(Duration::from_millis(1_001), AnimationSettings::default());
+        state.date_picker.on_key(Key::Char('8'));
+
+        assert_eq!(state.date_picker.cursor().day(), 8);
+    }
 
     #[test]
     fn panel_preview_layout_keeps_panel_focus_state() {

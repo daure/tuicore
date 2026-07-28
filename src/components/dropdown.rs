@@ -132,6 +132,7 @@ pub struct Dropdown<T, Id> {
     label_position: DropdownLabelPosition,
     no_selection_text: Option<String>,
     no_selection_highlighted: bool,
+    backdrop_amount: f64,
     backdrop_tween: Tween,
     pending_hotkey_prefix: Option<String>,
     scroll_highlight_on_next_layout: bool,
@@ -234,6 +235,7 @@ where
             label_position: DropdownLabelPosition::Top,
             no_selection_text: None,
             no_selection_highlighted: false,
+            backdrop_amount: DROPDOWN_BACKDROP_AMOUNT,
             backdrop_tween: Tween::idle(0.0),
             pending_hotkey_prefix: None,
             scroll_highlight_on_next_layout: false,
@@ -298,6 +300,13 @@ where
 
     pub fn centered(mut self, centered: bool) -> Self {
         self.centered = centered;
+        self
+    }
+
+    pub fn backdrop_amount(mut self, amount: f64) -> Self {
+        self.backdrop_amount = amount.clamp(0.0, 1.0);
+        self.backdrop_tween
+            .snap_to(if self.open { self.backdrop_amount } else { 0.0 });
         self
     }
 
@@ -452,7 +461,7 @@ where
         }
 
         self.open = true;
-        self.backdrop_tween.snap_to(DROPDOWN_BACKDROP_AMOUNT);
+        self.backdrop_tween.snap_to(self.backdrop_amount);
         self.opened_committed = self.committed.clone();
         self.draft = self.committed.clone();
         self.highlight_committed();
@@ -499,11 +508,7 @@ where
     }
 
     fn start_backdrop_tween(&mut self, active: bool, settings: AnimationSettings) {
-        let target = if active {
-            DROPDOWN_BACKDROP_AMOUNT
-        } else {
-            0.0
-        };
+        let target = if active { self.backdrop_amount } else { 0.0 };
         let resolved = settings.resolve(AnimationSpec::default());
         if !resolved.enabled {
             self.backdrop_tween.snap_to(target);

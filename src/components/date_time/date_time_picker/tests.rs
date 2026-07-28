@@ -251,6 +251,49 @@ fn date_time_picker_backtab_moves_backward_once_then_allows_focus_to_leave() {
 }
 
 #[test]
+fn control_enter_submits_stepped_date_time_picker_from_date_part() {
+    let value = Date::from_calendar_date(2026, Month::June, 22)
+        .unwrap()
+        .with_time(Time::from_hms(9, 30, 0).unwrap());
+    let mut picker = DateTimePicker::new()
+        .value(Some(value))
+        .layout(DateTimePickerLayout::Stepped)
+        .on_select(|selected| selected);
+    let mut ctx = EventCtx::default();
+
+    let outcome = picker.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(picker.active, DateTimePart::Date);
+    assert_eq!(ctx.messages(), &[value]);
+}
+
+#[test]
+fn day_quick_match_advances_side_by_side_date_time_picker_to_hour() {
+    let value = Date::from_calendar_date(2026, Month::June, 22)
+        .unwrap()
+        .with_time(Time::from_hms(9, 30, 0).unwrap());
+    let mut picker = DateTimePicker::new()
+        .value(Some(value))
+        .on_select(|selected| selected);
+    picker.time.on_key(Key::Enter);
+    let mut ctx = EventCtx::default();
+
+    let outcome = picker.event(&TuiEvent::Key(Key::Char('4').into()), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(picker.active, DateTimePart::Time);
+    assert_eq!(picker.time.active_field(), TimeField::Hour);
+    assert!(ctx.messages().is_empty());
+}
+
+#[test]
 fn date_time_picker_focus_restarts_at_date_part() {
     let mut picker = DateTimePicker::<()>::new();
     picker.active = DateTimePart::Time;

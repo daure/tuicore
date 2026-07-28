@@ -1,6 +1,7 @@
 use super::*;
 use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
+use std::time::Duration as StdDuration;
 
 #[test]
 fn focused_field_is_bold_and_unfocused_field_is_not() {
@@ -31,6 +32,96 @@ fn date_time_picker_dropdown_switches_to_time_after_date_selection() {
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(dropdown.is_open());
     assert_eq!(dropdown.step, DateTimeDropdownStep::Time);
+}
+
+#[test]
+fn control_enter_submits_highlighted_date_without_opening_time_picker() {
+    let initial = Date::from_calendar_date(2026, time::Month::June, 25)
+        .unwrap()
+        .with_time(time::Time::from_hms(10, 20, 0).unwrap());
+    let expected = Date::from_calendar_date(2026, time::Month::June, 26)
+        .unwrap()
+        .with_time(initial.time());
+    let mut dropdown = DateTimePickerDropdown::new()
+        .value(Some(initial))
+        .on_select(|selected| selected);
+    dropdown.set_open(true);
+    let mut ctx = EventCtx::default();
+    dropdown.event(&TuiEvent::Key(crate::Key::Right.into()), &mut ctx);
+
+    let outcome = dropdown.event(
+        &TuiEvent::Key(crate::KeyEvent {
+            code: crate::Key::Enter,
+            modifiers: crate::KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!dropdown.is_open());
+    assert_eq!(dropdown.current_value(), Some(expected));
+    assert_eq!(ctx.messages(), &[expected]);
+}
+
+#[test]
+fn date_time_picker_dropdown_day_quick_match_advances_to_hour() {
+    let value = Date::from_calendar_date(2026, time::Month::June, 22)
+        .unwrap()
+        .with_time(time::Time::from_hms(9, 30, 0).unwrap());
+    let mut dropdown = DateTimePickerDropdown::<()>::new().value(Some(value));
+    dropdown.time.on_key(crate::Key::Enter);
+    dropdown.set_open(true);
+    let mut ctx = EventCtx::default();
+
+    let outcome = dropdown.event(&TuiEvent::Key(crate::Key::Char('4').into()), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(dropdown.is_open());
+    assert_eq!(dropdown.step, DateTimeDropdownStep::Time);
+    assert_eq!(dropdown.time.active_field(), TimeField::Hour);
+}
+
+#[test]
+fn date_time_picker_dropdown_closes_when_two_digits_complete_minutes() {
+    let initial = Date::from_calendar_date(2026, time::Month::June, 18)
+        .unwrap()
+        .with_time(time::Time::from_hms(9, 5, 0).unwrap());
+    let expected = initial.replace_time(time::Time::from_hms(9, 30, 0).unwrap());
+    let mut dropdown = DateTimePickerDropdown::new()
+        .value(Some(initial))
+        .on_select(|selected| selected);
+    dropdown.set_open(true);
+    let mut ctx = EventCtx::default();
+    dropdown.event(&TuiEvent::Key(crate::Key::Enter.into()), &mut ctx);
+    dropdown.event(&TuiEvent::Key(crate::Key::Enter.into()), &mut ctx);
+
+    dropdown.event(&TuiEvent::Key(crate::Key::Char('3').into()), &mut ctx);
+    let outcome = dropdown.event(&TuiEvent::Key(crate::Key::Char('0').into()), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!dropdown.is_open());
+    assert_eq!(dropdown.current_value(), Some(expected));
+    assert_eq!(ctx.messages(), &[expected]);
+}
+
+#[test]
+fn date_time_picker_dropdown_expires_pending_quick_jump_digit() {
+    let initial = Date::from_calendar_date(2026, time::Month::June, 15)
+        .unwrap()
+        .with_time(time::Time::from_hms(9, 30, 0).unwrap());
+    let mut dropdown = DateTimePickerDropdown::<()>::new().value(Some(initial));
+    dropdown.set_open(true);
+    let mut ctx = EventCtx::default();
+    dropdown.event(&TuiEvent::Key(crate::Key::Char('1').into()), &mut ctx);
+
+    let tick = dropdown.tick(StdDuration::from_millis(1_001), crate::animation_settings());
+    assert!(tick.changed);
+    dropdown.event(&TuiEvent::Key(crate::Key::Char('8').into()), &mut ctx);
+
+    assert_eq!(
+        dropdown.date.cursor(),
+        Date::from_calendar_date(2026, time::Month::June, 8).unwrap()
+    );
 }
 
 #[test]

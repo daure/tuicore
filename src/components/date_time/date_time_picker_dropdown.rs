@@ -593,13 +593,28 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        let submit_from_date = self.step == DateTimeDropdownStep::Date
+            && key.code == crate::Key::Enter
+            && key.modifiers.contains(crate::KeyModifiers::CONTROL);
         let outcome = match self.step {
             DateTimeDropdownStep::Date => self.date.on_key(*key),
             DateTimeDropdownStep::Time => self.time.on_key(*key),
         };
+        let quick_day_match =
+            self.step == DateTimeDropdownStep::Date && self.date.take_quick_jump_selection();
         if outcome.selected {
             match self.step {
-                DateTimeDropdownStep::Date => self.open_time_step(),
+                DateTimeDropdownStep::Date if submit_from_date => {
+                    self.close();
+                    self.emit_selection(ctx);
+                    ctx.request_layout();
+                }
+                DateTimeDropdownStep::Date => {
+                    if quick_day_match {
+                        self.time.focus_hour();
+                    }
+                    self.open_time_step();
+                }
                 DateTimeDropdownStep::Time => {
                     self.close();
                     self.emit_selection(ctx);
@@ -625,13 +640,16 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
         ctx.request_redraw();
     }
 
-    fn tick(&mut self, dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
-        if self.hotkey_matcher.tick(dt) {
+    fn tick(&mut self, dt: StdDuration, settings: crate::AnimationSettings) -> TickResult {
+        let hotkey_tick = if self.hotkey_matcher.tick(dt) {
             self.sync_pending_hotkey_prefix_from_matcher();
             TickResult::CHANGED
         } else {
             TickResult::IDLE
-        }
+        };
+        hotkey_tick
+            .merge(self.date.tick(dt, settings))
+            .merge(self.time.tick(dt, settings))
     }
 }
 

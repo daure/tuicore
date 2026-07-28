@@ -154,6 +154,11 @@ impl<M> TimePicker<M> {
         self.active_field
     }
 
+    pub(super) fn focus_hour(&mut self) {
+        self.active_field = TimeField::Hour;
+        self.typed_digits.clear();
+    }
+
     pub fn set_value(&mut self, value: Time) {
         self.value = value;
         self.draft = value;
@@ -406,6 +411,10 @@ impl<M> TimePicker<M> {
             self.typed_digits.clear();
             if self.should_advance_after_typing() {
                 self.active_field = self.next_field();
+            } else {
+                let committed_changed = self.value != self.draft;
+                self.value = self.draft;
+                return PickerOutcome::selected(changed || committed_changed);
             }
         }
         PickerOutcome::handled(changed)

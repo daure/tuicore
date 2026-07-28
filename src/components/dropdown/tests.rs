@@ -205,6 +205,37 @@ fn open_popup_dims_backdrop_but_not_trigger() {
 }
 
 #[test]
+fn disabled_backdrop_leaves_host_undimmed_and_renders_popup() {
+    let mut dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .backdrop_amount(0.0);
+    dropdown.open();
+    layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
+    let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
+    let host_style = Style::default()
+        .fg(Color::Rgb(200, 200, 200))
+        .bg(Color::Rgb(10, 20, 30));
+
+    terminal
+        .draw(|frame| {
+            frame.buffer_mut().set_string(0, 9, "X", host_style);
+            render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 1));
+        })
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    let host_cell = buffer.cell((0, 9)).unwrap();
+    assert_eq!(host_cell.fg, Color::Rgb(200, 200, 200));
+    assert_eq!(host_cell.bg, Color::Rgb(10, 20, 30));
+    assert!(!host_cell.modifier.contains(Modifier::DIM));
+
+    let popup_row = (0..12)
+        .map(|x| buffer.cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert!(popup_row.contains("Alpha"), "{popup_row}");
+}
+
+#[test]
 fn normal_render_plus_overlay_dims_backdrop_once() {
     let mut baseline = single_dropdown()
         .selected_one("Beta")

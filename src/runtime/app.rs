@@ -498,7 +498,10 @@ where
         dispatcher: &mut TreeDispatcher,
         target: &FocusTarget,
         hotkey: HotkeyEvent,
-    ) -> Option<(EventRoute, crate::ExternalEditorRequest)> {
+    ) -> (
+        Option<(EventRoute, crate::ExternalEditorRequest)>,
+        Option<String>,
+    ) {
         let route = EventRoute::new(target.path.clone());
         let effects = dispatcher.dispatch_event(
             &mut self.root,
@@ -507,8 +510,30 @@ where
             self.animation_settings,
         );
         let external_editor = effects.external_editor.clone();
+        let clipboard = effects.clipboard.clone();
         flags.merge(self.handle_effects(effects));
-        external_editor.map(|request| (route, request))
+        (external_editor.map(|request| (route, request)), clipboard)
+    }
+
+    fn dispatch_yank_event(
+        &mut self,
+        terminal: Option<&mut TerminalGuard>,
+        flags: &mut RuntimeFlags,
+        focus_manager: &FocusManager,
+        dispatcher: &mut TreeDispatcher,
+    ) {
+        let route = EventRoute::new(focus_manager.current_path());
+        let effects = dispatcher.dispatch_event(
+            &mut self.root,
+            &route,
+            &TuiEvent::Yank,
+            self.animation_settings,
+        );
+        let clipboard = effects.clipboard.clone();
+        flags.merge(self.handle_effects(effects));
+        if let (Some(terminal), Some(value)) = (terminal, clipboard) {
+            let _ = write_clipboard_osc52(terminal, &value);
+        }
     }
 
     fn dispatch_global_hotkey_tick(
@@ -641,6 +666,13 @@ where
             } else {
                 let sequence_targets = hotkey_sequence_targets(layout_engine.focus_targets());
                 global_hotkeys.set_hotkeys(sequence_targets.iter().map(|(hotkey, _)| hotkey));
+                clipboard_hotkeys.set_hotkeys(
+                    keybindings()
+                        .clipboard()
+                        .yank_sequences()
+                        .iter()
+                        .map(String::as_str),
+                );
                 match global_hotkeys.on_key(*key) {
                     HotkeyMatch::Matched(index) => {
                         clipboard_hotkeys.cancel();
@@ -651,18 +683,24 @@ where
                             HotkeyEvent::Canceled,
                         );
                         if let Some((sequence, target)) = sequence_targets.get(index) {
-                            let external_editor = self.dispatch_hotkey_event_to_target(
-                                flags,
-                                dispatcher,
-                                target,
-                                HotkeyEvent::Commit(sequence.clone()),
-                            );
+                            let (external_editor, clipboard) = self
+                                .dispatch_hotkey_event_to_target(
+                                    flags,
+                                    dispatcher,
+                                    target,
+                                    HotkeyEvent::Commit(sequence.clone()),
+                                );
                             if let (Some(terminal), Some((route, request))) =
                                 (terminal.as_deref_mut(), external_editor)
                             {
                                 self.handle_external_editor(
                                     flags, dispatcher, terminal, route, request,
                                 );
+                            }
+                            if let (Some(terminal), Some(value)) =
+                                (terminal.as_deref_mut(), clipboard)
+                            {
+                                let _ = write_clipboard_osc52(terminal, &value);
                             }
                             if flags.focus_request == Some(FocusRequest::FirstChild) {
                                 flags.focus_request = Some(FocusRequest::FirstChildOf {
@@ -688,7 +726,7 @@ where
                         return;
                     }
                     HotkeyMatch::Pending => {
-                        clipboard_hotkeys.cancel();
+                        let _ = clipboard_hotkeys.on_key(*key);
                         self.dispatch_hotkey_event_to_targets(
                             flags,
                             dispatcher,
@@ -707,7 +745,6 @@ where
                         return;
                     }
                     HotkeyMatch::Canceled => {
-                        clipboard_hotkeys.cancel();
                         self.dispatch_hotkey_event_to_targets(
                             flags,
                             dispatcher,
@@ -715,6 +752,14 @@ where
                             HotkeyEvent::Canceled,
                         );
                         flags.redraw = true;
+                        if matches!(clipboard_hotkeys.on_key(*key), HotkeyMatch::Matched(_)) {
+                            self.dispatch_yank_event(
+                                terminal.as_deref_mut(),
+                                flags,
+                                focus_manager,
+                                dispatcher,
+                            );
+                        }
                         return;
                     }
                     HotkeyMatch::Ignored => {
@@ -724,28 +769,14 @@ where
                         }
                     }
                 }
-                clipboard_hotkeys.set_hotkeys(
-                    keybindings()
-                        .clipboard()
-                        .yank_sequences()
-                        .iter()
-                        .map(String::as_str),
-                );
                 match clipboard_hotkeys.on_key(*key) {
                     HotkeyMatch::Matched(_) => {
-                        let route = EventRoute::new(focus_manager.current_path());
-                        let effects = dispatcher.dispatch_event(
-                            &mut self.root,
-                            &route,
-                            &TuiEvent::Yank,
-                            self.animation_settings,
+                        self.dispatch_yank_event(
+                            terminal.as_deref_mut(),
+                            flags,
+                            focus_manager,
+                            dispatcher,
                         );
-                        let clipboard = effects.clipboard.clone();
-                        flags.merge(self.handle_effects(effects));
-                        if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard)
-                        {
-                            let _ = write_clipboard_osc52(terminal, &value);
-                        }
                         return;
                     }
                     HotkeyMatch::Pending | HotkeyMatch::Canceled => return,
@@ -1475,6 +1506,7 @@ mod tests {
         focused_first: bool,
         consume_char: Option<char>,
         consume_enter: bool,
+        copy_on_hotkey: Option<&'static str>,
         key_events: usize,
         key_chars: String,
         hotkey_commits: usize,
@@ -2149,7 +2181,7 @@ mod tests {
 
         fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
 
-        fn event(&mut self, event: &TuiEvent, _ctx: &mut EventCtx<()>) -> EventOutcome {
+        fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
             match event {
                 TuiEvent::Key(key) => {
                     self.key_events += 1;
@@ -2166,6 +2198,9 @@ mod tests {
                 TuiEvent::Hotkey(HotkeyEvent::Commit(sequence)) => {
                     self.hotkey_commits += 1;
                     self.last_hotkey_commit = Some(sequence.clone());
+                    if let Some(value) = self.copy_on_hotkey {
+                        ctx.copy_to_clipboard(value);
+                    }
                     return EventOutcome::Handled;
                 }
                 TuiEvent::Yank => {
@@ -3104,6 +3139,41 @@ mod tests {
     }
 
     #[test]
+    fn global_hotkey_dispatch_returns_clipboard_request() {
+        let mut app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["ya"],
+            copy_on_hotkey: Some("agent command"),
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let mut layout_engine = LayoutEngine::new();
+        let mut focus_manager = FocusManager::new();
+        let mut dispatcher = TreeDispatcher::new();
+        let mut flags = app.mount_root();
+        app.layout_root(
+            &mut flags,
+            &mut focus_manager,
+            &mut layout_engine,
+            &mut dispatcher,
+            Rect::new(0, 0, 10, 1),
+        );
+        let target = layout_engine
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == "action")
+            .expect("hotkey action should be registered")
+            .clone();
+
+        let (_, clipboard) = app.dispatch_hotkey_event_to_target(
+            &mut flags,
+            &mut dispatcher,
+            &target,
+            HotkeyEvent::Commit("ya".into()),
+        );
+
+        assert_eq!(clipboard.as_deref(), Some("agent command"));
+    }
+
+    #[test]
     fn clipboard_yy_yanks_without_conflicting_global_hotkey() {
         let app = TreeApp::new(HotkeyPrecedenceProbe::default());
         let y = TuiEvent::Key(KeyEvent::from(Key::Char('y')));
@@ -3111,6 +3181,37 @@ mod tests {
         let app = app.run_test_events([y.clone(), y], Rect::new(0, 0, 10, 1));
 
         assert_eq!(app.root.yank_events, 1);
+    }
+
+    #[test]
+    fn global_ya_hotkey_does_not_block_clipboard_yy() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["ya"],
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let y = TuiEvent::Key(KeyEvent::from(Key::Char('y')));
+
+        let app = app.run_test_events([y.clone(), y], Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.hotkey_commits, 0);
+        assert_eq!(app.root.yank_events, 1);
+    }
+
+    #[test]
+    fn global_ya_hotkey_still_commits_with_clipboard_yy_registered() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["ya"],
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('y'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('a'))),
+        ];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.hotkey_commits, 1);
+        assert_eq!(app.root.yank_events, 0);
     }
 
     #[test]

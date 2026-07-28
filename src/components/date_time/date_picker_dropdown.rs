@@ -480,13 +480,14 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
         ctx.request_redraw();
     }
 
-    fn tick(&mut self, dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
-        if self.hotkey_matcher.tick(dt) {
+    fn tick(&mut self, dt: StdDuration, settings: crate::AnimationSettings) -> TickResult {
+        let hotkey_tick = if self.hotkey_matcher.tick(dt) {
             self.sync_pending_hotkey_prefix_from_matcher();
             TickResult::CHANGED
         } else {
             TickResult::IDLE
-        }
+        };
+        hotkey_tick.merge(self.picker.tick(dt, settings))
     }
 }
 
