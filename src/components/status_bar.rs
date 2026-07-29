@@ -60,9 +60,9 @@ impl StatusBarMenuItem {
     fn label(self) -> &'static str {
         match self {
             Self::Custom { label, .. } => label,
-            Self::Theme => "Theme",
-            Self::WeatherForecast => "Weather forecast",
-            Self::StoreView => "Store view",
+            Self::Theme => " Theme",
+            Self::WeatherForecast => " Weather forecast",
+            Self::StoreView => " Store view",
         }
     }
 }
@@ -992,6 +992,16 @@ mod tests {
     use super::*;
     use crate::components::weather_provider::WeatherFetchError;
     use crate::{FocusId, FocusRequest, Key, KeyEvent, Propagation, TreePath, TuiEvent};
+
+    #[test]
+    fn built_in_menu_items_include_nerd_font_icons() {
+        assert_eq!(StatusBarMenuItem::Theme.label(), " Theme");
+        assert_eq!(
+            StatusBarMenuItem::WeatherForecast.label(),
+            " Weather forecast"
+        );
+        assert_eq!(StatusBarMenuItem::StoreView.label(), " Store view");
+    }
 
     #[test]
     fn action_segments_use_surface_background_role() {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
 use ratatui::style::Modifier;
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{Terminal, backend::TestBackend};
 
 struct KeyBindingsGuard {
     previous: crate::KeyBindings,
@@ -1064,24 +1064,30 @@ fn disabled_textarea_dims_content_and_panel_border() {
         .expect("textarea should render");
 
     let buffer = terminal.backend().buffer();
-    assert!(buffer
-        .cell((0, 0))
-        .unwrap()
-        .modifier
-        .contains(Modifier::DIM));
-    assert!(buffer
-        .cell((1, 1))
-        .unwrap()
-        .modifier
-        .contains(Modifier::DIM));
+    assert!(
+        buffer
+            .cell((0, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert!(
+        buffer
+            .cell((1, 1))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
     assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
     assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
     assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
-    assert!(!buffer
-        .cell((3, 0))
-        .unwrap()
-        .modifier
-        .contains(Modifier::DIM));
+    assert!(
+        !buffer
+            .cell((3, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
     assert_ne!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
 }
 

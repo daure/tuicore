@@ -24,7 +24,7 @@ use crate::{
 
 use super::{
     Dropdown, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome, DropdownSearchMode,
-    DropdownVariant, text_input::TextInput,
+    DropdownVariant, SeasonalEmptyState, text_input::TextInput,
 };
 
 pub use model::{
@@ -66,6 +66,7 @@ pub struct DataView<T, Id> {
     columns: Vec<Column<T, Id>>,
     row_id: Box<RowIdFn<T, Id>>,
     copy_formatter: Option<Box<CopyFormatter<T>>>,
+    empty_state: Option<SeasonalEmptyState>,
     tree: Option<TreeAdapter<T, Id>>,
     expanded: HashSet<Id>,
     highlighted: usize,
@@ -151,6 +152,7 @@ where
             columns: Vec::new(),
             row_id: Box::new(row_id),
             copy_formatter: None,
+            empty_state: None,
             tree: None,
             expanded: HashSet::new(),
             highlighted: 0,
@@ -229,6 +231,15 @@ where
     pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
         self.copy_formatter = Some(Box::new(formatter));
         self
+    }
+
+    pub fn empty_state(mut self, empty_state: SeasonalEmptyState) -> Self {
+        self.empty_state = Some(empty_state);
+        self
+    }
+
+    pub fn set_empty_state(&mut self, empty_state: SeasonalEmptyState) {
+        self.empty_state = Some(empty_state);
     }
 
     pub fn headers(mut self, headers: bool) -> Self {

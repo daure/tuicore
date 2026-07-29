@@ -108,10 +108,7 @@ where
         }
 
         if visible.is_empty() {
-            frame.render_widget(
-                Paragraph::new("No results found.").style(Style::default().fg(theme().subtle_fg())),
-                body_area,
-            );
+            self.render_empty_state(frame, body_area);
             self.scroll
                 .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
             self.render_popup(frame, area, ctx);
@@ -161,6 +158,15 @@ where
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
 
         self.render_popup(frame, area, ctx);
+    }
+
+    fn render_empty_state(&self, frame: &mut Frame, body_area: Rect) {
+        let style = Style::default().fg(theme().subtle_fg());
+        let Some(empty_state) = self.empty_state.as_ref() else {
+            frame.render_widget(Paragraph::new("No results found.").style(style), body_area);
+            return;
+        };
+        empty_state.render_state(frame, body_area);
     }
 
     fn render_action_bar(&self, frame: &mut Frame, area: Rect) {

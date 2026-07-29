@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 
+use crate::animation::Easing;
 use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::{Key, KeyEvent};
 use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
@@ -32,6 +33,7 @@ pub use types::{
 use util::{bounded_title, clip_rect, hotkey_matches_sequence, keys_match, matches_any};
 
 const DROPDOWN_BACKDROP_AMOUNT: f64 = 0.55;
+const PRESS_FEEDBACK: Duration = Duration::from_millis(180);
 
 const FIELD_FOCUS: &str = "field";
 const SEARCH_FOCUS: &str = "input";
@@ -134,6 +136,7 @@ pub struct Dropdown<T, Id> {
     no_selection_highlighted: bool,
     backdrop_amount: f64,
     backdrop_tween: Tween,
+    press_feedback: Tween,
     pending_hotkey_prefix: Option<String>,
     scroll_highlight_on_next_layout: bool,
     action_keys: DropdownActionKeys,
@@ -237,6 +240,7 @@ where
             no_selection_highlighted: false,
             backdrop_amount: DROPDOWN_BACKDROP_AMOUNT,
             backdrop_tween: Tween::idle(0.0),
+            press_feedback: Tween::idle(0.0),
             pending_hotkey_prefix: None,
             scroll_highlight_on_next_layout: false,
             action_keys: DropdownActionKeys::default(),
@@ -484,6 +488,7 @@ where
     pub fn open_with_context<M>(&mut self, ctx: &mut EventCtx<M>) -> DropdownOutcome {
         let outcome = self.open();
         if outcome.opened {
+            self.start_press_feedback(ctx.animation());
             self.backdrop_tween.snap_to(0.0);
             self.start_backdrop_tween(true, ctx.animation());
             ctx.request_layout();
@@ -498,6 +503,7 @@ where
     pub fn open_immediate_with_context<M>(&mut self, ctx: &mut EventCtx<M>) -> DropdownOutcome {
         let outcome = self.open();
         if outcome.opened {
+            self.start_press_feedback(ctx.animation());
             ctx.request_layout();
             self.request_open_focus(ctx);
         }
@@ -520,6 +526,19 @@ where
             resolved.duration,
             resolved.easing,
         );
+    }
+
+    fn start_press_feedback(&mut self, settings: AnimationSettings) {
+        if settings.enabled {
+            self.press_feedback
+                .start(1.0, 0.0, PRESS_FEEDBACK, Easing::EaseOutCubic);
+        } else {
+            self.press_feedback.snap_to(0.0);
+        }
+    }
+
+    pub(super) fn is_showing_press_feedback(&self) -> bool {
+        self.press_feedback.is_active() || self.press_feedback.value() > 0.0
     }
 
     pub fn close(&mut self) -> DropdownOutcome {
@@ -1208,7 +1227,9 @@ where
                 line_width(&self.inline_filled_line(Style::default())).saturating_add(2)
             }
             DropdownVariant::Filled if self.alt_style => summary_width.saturating_add(2),
-            DropdownVariant::Filled => summary_width.saturating_add(3),
+            DropdownVariant::Filled => {
+                line_width(&self.filled_summary_line(Style::default())).saturating_add(3)
+            }
         };
 
         if self.variant == DropdownVariant::Bordered && !self.alt_style {
@@ -1352,6 +1373,7 @@ where
     ) -> EventOutcome {
         if outcome.opened || outcome.closed {
             if outcome.opened {
+                self.start_press_feedback(ctx.animation());
                 self.backdrop_tween.snap_to(0.0);
             }
             self.start_backdrop_tween(outcome.opened, ctx.animation());
@@ -1473,6 +1495,7 @@ where
         Animated::tick(&mut self.data_view, dt, settings)
             .merge(Animated::tick(&mut self.search_input, dt, settings))
             .merge(self.backdrop_tween.tick(dt, settings))
+            .merge(self.press_feedback.tick(dt, settings))
             .merge(hotkey_tick)
     }
 }

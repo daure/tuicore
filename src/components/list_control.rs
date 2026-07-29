@@ -15,8 +15,8 @@ use super::PanelTitlePosition;
 use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView, Dropdown,
-    DropdownSearchMode, DropdownVariant, Panel, SelectionMode, SelectionTrigger, SortDirection,
-    TextInput,
+    DropdownSearchMode, DropdownVariant, Panel, SeasonalEmptyState, SelectionMode,
+    SelectionTrigger, SortDirection, TextInput,
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
@@ -348,6 +348,15 @@ where
     pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
         self.data_view = self.data_view.copy_with(formatter);
         self
+    }
+
+    pub fn empty_state(mut self, empty_state: SeasonalEmptyState) -> Self {
+        self.data_view = self.data_view.empty_state(empty_state);
+        self
+    }
+
+    pub fn set_empty_state(&mut self, empty_state: SeasonalEmptyState) {
+        self.data_view.set_empty_state(empty_state);
     }
 
     pub fn headers(mut self, headers: bool) -> Self {

@@ -230,15 +230,27 @@ where
 
     fn render_filled_field(&self, frame: &mut Frame, area: Rect) {
         let theme = theme();
-        let base_style = if self.is_focused() {
+        let active = !self.open && self.field_is_focused();
+        let base_style = if self.is_showing_press_feedback() {
+            Style::default()
+                .fg(if active {
+                    theme.highlight_fg()
+                } else {
+                    theme.text_fg()
+                })
+                .bg(theme.success_fg())
+                .add_modifier(if active {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                })
+        } else if active {
             Style::default()
                 .fg(theme.highlight_fg())
                 .bg(theme.highlight_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(theme.selected_fg())
-                .bg(theme.selected_bg())
+            Style::default().fg(theme.text_fg()).bg(theme.surface_bg())
         };
         let text_style = if self.committed.is_empty() {
             base_style.add_modifier(Modifier::DIM)
@@ -264,6 +276,8 @@ where
         if !text_area.is_empty() {
             let text = if inline_trigger {
                 self.inline_filled_line(text_style)
+            } else if self.hotkey.is_some() {
+                self.filled_summary_line(base_style)
             } else if self.committed.is_empty() && self.no_selection_text.is_some() {
                 Line::from(Span::styled(self.empty_summary(), text_style))
             } else if self.committed.is_empty() {
@@ -413,6 +427,26 @@ where
             ));
         }
 
+        Line::from(spans)
+    }
+
+    pub(super) fn filled_summary_line(&self, base_style: Style) -> Line<'static> {
+        let value_style = if self.committed.is_empty() {
+            base_style.add_modifier(Modifier::DIM)
+        } else {
+            base_style
+        };
+        let mut spans = vec![Span::styled(self.selected_summary(), value_style)];
+        if let Some(hotkey) = &self.hotkey {
+            spans.extend(hotkey_label_spans(
+                "",
+                Some(hotkey.as_str()),
+                HotkeyLabelMode::Inline,
+                self.pending_hotkey_prefix.as_deref(),
+                base_style,
+                hotkey_underline_style(base_style),
+            ));
+        }
         Line::from(spans)
     }
 

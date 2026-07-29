@@ -80,12 +80,12 @@ use tuicore::{
     DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
     Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusRequest,
     FocusTarget, Grid, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent,
-    KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, Menu, MenuItem, ModalCloseReason, Overlay,
-    Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx, SelectionMode,
-    SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem, StoreLogEntry,
-    StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput, TickResult, TimePicker,
-    TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent, TuiNode,
-    WeatherProviderConfig,
+    KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, MenuButton, MenuItem, ModalCloseReason,
+    Overlay, Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx, SeasonalEmptyState,
+    SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem,
+    StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput,
+    TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent,
+    TuiNode, WeatherProviderConfig,
 };
 
 #[derive(Debug, PartialEq)]
@@ -747,6 +747,7 @@ struct PreviewState {
     dock_right: Button<Msg>,
     dock_snackbar: Button<Msg>,
     spinner: Spinner,
+    seasonal_empty_state: SeasonalEmptyState,
     notification_triggers: ToastRack,
     notification_buttons: [Button<Msg>; 4],
     panel_demo: Panel,
@@ -778,8 +779,7 @@ struct PreviewState {
     dropdown_filled_fuzzy_single: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_multi_contains: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_no_search_immediate: Dropdown<DropdownDemoItem, &'static str>,
-    menu_trigger: Button<Msg>,
-    menu: Menu<&'static str>,
+    menu_button: MenuButton<&'static str, Msg>,
     menu_status: String,
     layout_flex: Flex<Msg>,
     layout_split: Split<DemoBox, DemoBox>,
@@ -932,6 +932,7 @@ impl PreviewState {
             dock_right: dock_overlay_button(DockOverlayExample::Right),
             dock_snackbar: dock_overlay_button(DockOverlayExample::BottomSnackbar),
             spinner: Spinner::new(),
+            seasonal_empty_state: SeasonalEmptyState::new("No records for this filter"),
             notification_triggers: ToastRack::new(),
             notification_buttons: notification_buttons(),
             panel_demo: panel_demo(),
@@ -972,10 +973,7 @@ impl PreviewState {
             dropdown_filled_fuzzy_single: dropdown_filled_fuzzy_single(),
             dropdown_filled_multi_contains: dropdown_filled_multi_contains(),
             dropdown_filled_no_search_immediate: dropdown_filled_no_search_immediate(),
-            menu_trigger: Button::new("Open menu")
-                .hotkey("m")
-                .hotkey_label_mode(HotkeyLabelMode::Inline),
-            menu: demo_menu(),
+            menu_button: demo_menu_button(),
             menu_status: String::from("No menu action yet"),
             layout_flex: layout_flex_demo(),
             layout_split: layout_split_demo(),
@@ -1046,6 +1044,13 @@ impl PreviewState {
                 self.validated_form.layout(area, ctx);
             }
             PreviewKind::Calendar => self.layout_calendar(area, ctx),
+            PreviewKind::SeasonalEmptyState => {
+                <SeasonalEmptyState as TuiNode<Msg>>::layout(
+                    &mut self.seasonal_empty_state,
+                    area,
+                    ctx,
+                );
+            }
             PreviewKind::TagInput => self.layout_tag_input(area, ctx),
             PreviewKind::StatusBar => self.layout_status_bar(area, overlay_bounds, ctx),
             PreviewKind::DataList
@@ -1224,6 +1229,12 @@ impl PreviewState {
             }
             PreviewKind::Dialog => self.render_dialog(frame, area),
             PreviewKind::Spinner => self.render_spinner(frame, area),
+            PreviewKind::SeasonalEmptyState => <SeasonalEmptyState as TuiNode<Msg>>::render(
+                &self.seasonal_empty_state,
+                frame,
+                area,
+                ctx,
+            ),
             PreviewKind::NotificationTriggers => self.render_notification_triggers(frame, area),
             PreviewKind::TextInput => self.render_text_input(frame, area),
             PreviewKind::PasswordInput => self.render_password_input(frame, area),
@@ -1761,6 +1772,11 @@ impl PreviewState {
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         Animated::tick(&mut self.spinner, dt, settings)
+            .merge(<SeasonalEmptyState as TuiNode<Msg>>::tick(
+                &mut self.seasonal_empty_state,
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(
                 &mut self.notification_triggers,
                 dt,
@@ -1933,8 +1949,7 @@ impl PreviewState {
                 dt,
                 settings,
             ))
-            .merge(Animated::tick(&mut self.menu_trigger, dt, settings))
-            .merge(Animated::tick(&mut self.menu, dt, settings))
+            .merge(self.menu_button.tick(dt, settings))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
             .merge(Animated::tick(&mut self.text_input_panel, dt, settings))
             .merge(Animated::tick(&mut self.text_input_disabled, dt, settings))
@@ -1953,6 +1968,7 @@ impl PreviewState {
         self.list_compact.init(ctx);
         self.list_entity_table.init(ctx);
         self.list_reorder.init(ctx);
+        self.menu_button.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -1961,22 +1977,25 @@ impl PreviewState {
         self.list_compact.mount(ctx);
         self.list_entity_table.mount(ctx);
         self.list_reorder.mount(ctx);
+        self.menu_button.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.relative_date.unmount(ctx);
-        self.validated_form.unmount(ctx);
-        self.list_compact.unmount(ctx);
-        self.list_entity_table.unmount(ctx);
+        self.menu_button.unmount(ctx);
         self.list_reorder.unmount(ctx);
+        self.list_entity_table.unmount(ctx);
+        self.list_compact.unmount(ctx);
+        self.validated_form.unmount(ctx);
+        self.relative_date.unmount(ctx);
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.relative_date.destroy(ctx);
-        self.validated_form.destroy(ctx);
-        self.list_compact.destroy(ctx);
-        self.list_entity_table.destroy(ctx);
+        self.menu_button.destroy(ctx);
         self.list_reorder.destroy(ctx);
+        self.list_entity_table.destroy(ctx);
+        self.list_compact.destroy(ctx);
+        self.validated_form.destroy(ctx);
+        self.relative_date.destroy(ctx);
     }
 
     fn panel_title_dropdown_mut(
@@ -2912,13 +2931,8 @@ impl PreviewState {
     fn layout_menu(&mut self, area: Rect, overlay_bounds: Rect, ctx: &mut LayoutCtx) {
         let [_, trigger_row, _] = menu_preview_layout(area);
         let trigger_area = Rect::new(trigger_row.x, trigger_row.y, trigger_row.width.min(15), 1);
-        ctx.push_slot(menu_trigger_child_key(), trigger_area, |ctx| {
-            self.menu_trigger.layout(trigger_area, ctx);
-        });
-        ctx.push_slot(menu_panel_child_key(), trigger_area, |ctx| {
-            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
-                <Menu<&'static str> as TuiNode<Msg>>::layout(&mut self.menu, trigger_area, ctx);
-            });
+        ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+            self.menu_button.layout(trigger_area, ctx);
         });
     }
 
@@ -2927,12 +2941,11 @@ impl PreviewState {
         let trigger_area = Rect::new(trigger_row.x, trigger_row.y, trigger_row.width.min(15), 1);
         frame.render_widget(
             Paragraph::new(
-                "Menu uses external trigger + overlay panel. Open focuses search; fuzzy search is default. Enter activates, Esc closes, Ctrl+j/k/d/u navigate like Dropdown.",
+                "MenuButton owns its trigger + popup; Menu remains available for custom triggers. Open focuses search; Enter activates, Esc closes, Ctrl+j/k/d/u navigate.",
             ),
             help,
         );
-        self.menu_trigger.render(frame, trigger_area);
-        self.menu.render(frame, trigger_area, ctx);
+        self.menu_button.render(frame, trigger_area, ctx);
         frame.render_widget(Paragraph::new(self.menu_status.clone()), status);
     }
 
@@ -2942,33 +2955,8 @@ impl PreviewState {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
-        if !self.menu.is_open() && menu_trigger_hotkey(event) {
-            self.menu.open_with_context(ctx);
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
-        }
-
-        if let Some(route) = route
-            .path
-            .without_first_if(&menu_trigger_child_key())
-            .map(EventRoute::new)
-        {
-            let outcome = self.menu_trigger.dispatch_event(&route, event, ctx);
-            if outcome.handled() {
-                self.menu.toggle_with_context(ctx);
-            }
-            return outcome;
-        }
-
-        let Some(route) = route
-            .path
-            .without_first_if(&menu_panel_child_key())
-            .map(EventRoute::new)
-        else {
-            return EventOutcome::Ignored;
-        };
-        let outcome = self.menu.dispatch_event(&route, event, ctx);
-        for id in self.menu.take_activated() {
+        let outcome = self.menu_button.dispatch_event(route, event, ctx);
+        for id in self.menu_button.take_activated() {
             self.menu_status = format!("Activated {id}");
         }
         outcome
@@ -2980,11 +2968,7 @@ impl PreviewState {
         focused: bool,
         ctx: &mut FocusCtx<Msg>,
     ) {
-        if let Some(target) = target.for_child(&menu_trigger_child_key()) {
-            self.menu_trigger.dispatch_focus(&target, focused, ctx);
-        } else if let Some(target) = target.for_child(&menu_panel_child_key()) {
-            self.menu.dispatch_focus(&target, focused, ctx);
-        }
+        self.menu_button.dispatch_focus(target, focused, ctx);
     }
 
     fn layout_toggle(&mut self, area: Rect, ctx: &mut LayoutCtx) {
@@ -3221,21 +3205,21 @@ impl PreviewState {
     }
 }
 
-fn demo_menu() -> Menu<&'static str> {
-    Menu::new([
-        MenuItem::new("new", "New file"),
-        MenuItem::new("open", "Open recent"),
-        MenuItem::new("rename", "Rename symbol"),
-        MenuItem::new("format", "Format document"),
-        MenuItem::new("command", "Run command"),
-        MenuItem::new("settings", "Project settings"),
-    ])
-    .visible_items(10)
-    .trigger_hotkey("m")
-    .return_focus_to(
-        TreePath::from_keys([gallery_preview_child_key(), menu_trigger_child_key()]),
-        FocusId::new("button"),
+fn demo_menu_button() -> MenuButton<&'static str, Msg> {
+    MenuButton::new(
+        "Open menu",
+        [
+            MenuItem::new("new", "New file"),
+            MenuItem::new("open", "Open recent"),
+            MenuItem::new("rename", "Rename symbol"),
+            MenuItem::new("format", "Format document"),
+            MenuItem::new("command", "Run command"),
+            MenuItem::new("settings", "Project settings"),
+        ],
     )
+    .visible_items(10)
+    .hotkey("m")
+    .hotkey_label_mode(HotkeyLabelMode::Inline)
 }
 
 fn menu_preview_layout(area: Rect) -> [Rect; 3] {
@@ -3247,16 +3231,6 @@ fn menu_preview_layout(area: Rect) -> [Rect; 3] {
             Constraint::Fill(1),
         ])
         .areas(area)
-}
-
-fn menu_trigger_hotkey(event: &TuiEvent) -> bool {
-    matches!(
-        event,
-        TuiEvent::Key(KeyEvent {
-            code: Key::Char('m'),
-            modifiers: KeyModifiers::NONE,
-        })
-    )
 }
 
 fn gallery_list_child_key() -> ChildKey {
@@ -3333,14 +3307,6 @@ fn date_time_dropdown_child_key() -> ChildKey {
 
 fn calendar_child_key() -> ChildKey {
     ChildKey::new("calendar")
-}
-
-fn menu_trigger_child_key() -> ChildKey {
-    ChildKey::new("menu-trigger")
-}
-
-fn menu_panel_child_key() -> ChildKey {
-    ChildKey::new("menu-panel")
 }
 
 fn status_bar_preview_layout(area: Rect) -> [Rect; 3] {
@@ -3585,6 +3551,7 @@ enum ComponentKind {
     PanelTabSeparators,
     Dialog,
     Spinner,
+    SeasonalEmptyState,
     Notifications,
     NotificationTriggers,
     Typography,
@@ -3626,13 +3593,14 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 44] = [
+    const ALL: [Self; 45] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
         Self::PanelTabSeparators,
         Self::Dialog,
         Self::Spinner,
+        Self::SeasonalEmptyState,
         Self::Notifications,
         Self::NotificationTriggers,
         Self::Typography,
@@ -3681,6 +3649,7 @@ impl ComponentKind {
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
             Self::Spinner => "Spinner",
+            Self::SeasonalEmptyState => "Seasonal Empty State",
             Self::Notifications => "Notifications",
             Self::NotificationTriggers => "Triggers",
             Self::Typography => "Typography",
@@ -3767,6 +3736,7 @@ impl ComponentKind {
             Self::PanelTabSeparators => PreviewKind::PanelTabSeparators,
             Self::Dialog => PreviewKind::Dialog,
             Self::Spinner => PreviewKind::Spinner,
+            Self::SeasonalEmptyState => PreviewKind::SeasonalEmptyState,
             Self::Notifications => PreviewKind::NotificationTriggers,
             Self::NotificationTriggers => PreviewKind::NotificationTriggers,
             Self::Typography => PreviewKind::Typography,
@@ -3813,6 +3783,7 @@ enum PreviewKind {
     PanelTabSeparators,
     Dialog,
     Spinner,
+    SeasonalEmptyState,
     NotificationTriggers,
     Typography,
     Colors,
@@ -3857,6 +3828,7 @@ impl PreviewKind {
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
             Self::Spinner => "Spinner",
+            Self::SeasonalEmptyState => "Seasonal Empty State",
             Self::NotificationTriggers => "Notification Triggers",
             Self::Typography => "Typography",
             Self::Colors => "Colors",

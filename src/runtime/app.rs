@@ -1393,12 +1393,15 @@ mod tests {
     use ratatui::{Frame, layout::Rect};
 
     use super::*;
-    use crate::{Button, Dialog, DialogLayer, Dropdown, ListControl, Tab, Tabs, TextInput};
+    use crate::{
+        Button, Dialog, DialogLayer, Dropdown, ListControl, MenuButton, MenuItem, Tab, Tabs,
+        TextInput,
+    };
     use crate::{
         ChildKey, EventOutcome, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Key, KeyEvent,
         KeyModifiers, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
         MouseButton, MouseEvent, MouseEventKind, OverlayId, OverlayLayer, OverlayPolicy,
-        OverlaySpec, Preset, RuntimeKeyBindings, TreePath, preset, set_preset,
+        OverlaySpec, Preset, RenderCtx, RuntimeKeyBindings, TreePath, preset, set_preset,
     };
 
     #[derive(Default)]
@@ -2420,6 +2423,172 @@ mod tests {
         let app = app.run_test_events(events, Rect::new(0, 0, 20, 5));
 
         assert!(app.root.active);
+    }
+
+    #[test]
+    fn menu_button_global_multikey_hotkey_moves_focus_to_popup_and_escape_restores_trigger() {
+        #[derive(Default)]
+        struct Observations {
+            other_focused: bool,
+            pending_was_open: Option<bool>,
+            commit_was_open: Option<bool>,
+            popup_focused: bool,
+            trigger_refocused: bool,
+            closed_after_escape: Option<bool>,
+        }
+
+        struct FocusedButton {
+            button: Button,
+            observations: std::rc::Rc<std::cell::RefCell<Observations>>,
+        }
+
+        impl TuiNode for FocusedButton {
+            fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+                self.button.measure(proposal)
+            }
+
+            fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+                self.button.layout(area, ctx)
+            }
+
+            fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+                TuiNode::<()>::render(&self.button, frame, area, ctx);
+            }
+
+            fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<()>) -> EventOutcome {
+                self.button.event(event, ctx)
+            }
+
+            fn dispatch_focus(
+                &mut self,
+                target: &FocusTarget,
+                focused: bool,
+                ctx: &mut FocusCtx<()>,
+            ) {
+                if focused {
+                    self.observations.borrow_mut().other_focused = true;
+                }
+                self.button.dispatch_focus(target, focused, ctx);
+            }
+        }
+
+        struct ObservedMenuButton {
+            menu_button: MenuButton<&'static str>,
+            observations: std::rc::Rc<std::cell::RefCell<Observations>>,
+        }
+
+        impl TuiNode for ObservedMenuButton {
+            fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+                self.menu_button.measure(proposal)
+            }
+
+            fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+                ctx.with_overlay_bounds(Rect::new(0, 0, 30, 8), |ctx| {
+                    self.menu_button.layout(area, ctx)
+                })
+            }
+
+            fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+                self.menu_button.render(frame, area, ctx);
+            }
+
+            fn dispatch_event(
+                &mut self,
+                route: &EventRoute,
+                event: &TuiEvent,
+                ctx: &mut EventCtx<()>,
+            ) -> EventOutcome {
+                let outcome = self.menu_button.dispatch_event(route, event, ctx);
+                let mut observations = self.observations.borrow_mut();
+                match event {
+                    TuiEvent::Hotkey(HotkeyEvent::Pending(prefix)) if prefix == "o" => {
+                        observations.pending_was_open = Some(self.menu_button.is_open());
+                    }
+                    TuiEvent::Hotkey(HotkeyEvent::Commit(sequence)) if sequence == "op" => {
+                        observations.commit_was_open = Some(self.menu_button.is_open());
+                    }
+                    TuiEvent::Key(KeyEvent { code: Key::Esc, .. }) => {
+                        observations.closed_after_escape = Some(!self.menu_button.is_open());
+                    }
+                    _ => {}
+                }
+                outcome
+            }
+
+            fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+                self.menu_button.tick(dt, settings)
+            }
+
+            fn dispatch_focus(
+                &mut self,
+                target: &FocusTarget,
+                focused: bool,
+                ctx: &mut FocusCtx<()>,
+            ) {
+                if focused {
+                    let mut observations = self.observations.borrow_mut();
+                    observations.popup_focused |= target.id.as_str() == "search";
+                    observations.trigger_refocused |= target.id.as_str() == "button";
+                }
+                self.menu_button.dispatch_focus(target, focused, ctx);
+            }
+
+            fn init(&mut self, ctx: &mut LifecycleCtx<()>) {
+                self.menu_button.init(ctx);
+            }
+
+            fn mount(&mut self, ctx: &mut LifecycleCtx<()>) {
+                self.menu_button.mount(ctx);
+            }
+
+            fn unmount(&mut self, ctx: &mut LifecycleCtx<()>) {
+                self.menu_button.unmount(ctx);
+            }
+
+            fn destroy(&mut self, ctx: &mut LifecycleCtx<()>) {
+                self.menu_button.destroy(ctx);
+            }
+        }
+
+        let observations = std::rc::Rc::new(std::cell::RefCell::new(Observations::default()));
+        let root = Flex::row()
+            .child(
+                "other",
+                FocusedButton {
+                    button: Button::new("Other"),
+                    observations: observations.clone(),
+                },
+                FlexItem::fit_content(),
+            )
+            .child(
+                "menu-button",
+                ObservedMenuButton {
+                    menu_button: MenuButton::new("Open", [MenuItem::new("new", "New")])
+                        .hotkey("op"),
+                    observations: observations.clone(),
+                },
+                FlexItem::fit_content(),
+            );
+        let app = TreeApp::new(root).initial_focus(FocusRequest::TargetAt {
+            path: TreePath::from_keys([ChildKey::new("other")]),
+            id: FocusId::new("button"),
+        });
+        let events = [
+            TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
+            TuiEvent::Key(KeyEvent::from(Key::Char('p'))),
+            TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            TuiEvent::Key(KeyEvent::from(Key::Null)),
+        ];
+
+        let _app = app.run_test_events(events, Rect::new(0, 0, 30, 8));
+        let observations = observations.borrow();
+
+        assert!(observations.other_focused);
+        assert_eq!(observations.pending_was_open, Some(false));
+        assert_eq!(observations.commit_was_open, Some(true));
+        assert!(observations.popup_focused);
+        assert_eq!(observations.closed_after_escape, Some(true));
+        assert!(observations.trigger_refocused);
     }
 
     #[test]

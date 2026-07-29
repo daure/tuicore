@@ -43,6 +43,9 @@ Tuicore is a library-first `ratatui` component runtime. Reusable components live
 - `DataView` handles read-oriented rows, transforms, selection, and scrolling.
 - `ListControl` composes mutable rows over `DataView`; use its rustdocs and gallery demo for
   add/edit/remove/reorder configuration.
+- Prefer `MenuButton` for normal menus: it owns the `Button` trigger, `Menu` popup, overlay anchor,
+  synchronized hotkey, event/focus routing, ticks, lifecycle, and focus return. Use standalone
+  `Menu` only when a custom or non-button trigger must own opening and routing.
 - Popup owners register geometry during `layout()` and enqueue portal draws during `render()`;
   root `RenderCtx` flushes overlays.
 - Reactive form types live in `src/form.rs`; controls expose validation through `FormField` chrome.

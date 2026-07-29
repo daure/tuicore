@@ -901,8 +901,8 @@ fn filled_variant_renders_filled_trigger_with_nerd_font_chevron() {
         .expect("dropdown should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().selected_fg());
-    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().selected_bg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().text_fg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().surface_bg());
     assert!(
         !buffer
             .cell((1, 0))
@@ -912,6 +912,27 @@ fn filled_variant_renders_filled_trigger_with_nerd_font_chevron() {
     );
     assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "B");
     assert_eq!(buffer.cell((10, 0)).unwrap().symbol(), "");
+}
+
+#[test]
+fn filled_variant_renders_hotkey_and_reserves_its_width() {
+    let dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .placeholder("Labels")
+        .hotkey("ab");
+    let measured =
+        <Dropdown<_, _> as TuiNode<()>>::measure(&dropdown, LayoutProposal::at_most(40, 1));
+    let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let row = (0..20)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("Labels |ab|"));
+    assert!(measured.preferred.width >= 14);
 }
 
 #[test]
@@ -953,6 +974,36 @@ fn open_filled_variant_renders_up_chevron() {
 
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer.cell((10, 0)).unwrap().symbol(), "");
+    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().surface_bg());
+}
+
+#[test]
+fn pressed_filled_trigger_pulses_success_then_returns_to_surface() {
+    let mut dropdown = single_dropdown().variant(DropdownVariant::Filled);
+    let mut event = EventCtx::<()>::default();
+
+    assert_eq!(
+        dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut event),
+        EventOutcome::Handled
+    );
+
+    let render_background = |dropdown: &Dropdown<&'static str, &'static str>| {
+        let mut terminal = Terminal::new(TestBackend::new(12, 1)).expect("terminal should build");
+        terminal
+            .draw(|frame| render_dropdown(dropdown, frame, frame.area()))
+            .expect("dropdown should render");
+        terminal.backend().buffer().cell((0, 0)).unwrap().bg
+    };
+    assert_eq!(render_background(&dropdown), theme().success_fg());
+
+    for _ in 0..2 {
+        Animated::tick(
+            &mut dropdown,
+            Duration::from_millis(100),
+            AnimationSettings::default(),
+        );
+    }
+    assert_eq!(render_background(&dropdown), theme().surface_bg());
 }
 
 #[test]

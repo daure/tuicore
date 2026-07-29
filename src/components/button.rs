@@ -15,7 +15,7 @@ use crate::{
     hotkey_sequence_to_event, keybindings, line_width, theme,
 };
 
-const BUTTON_FOCUS: &str = "button";
+pub(super) const BUTTON_FOCUS: &str = "button";
 const PRESS_FEEDBACK: Duration = Duration::from_millis(180);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,6 +270,61 @@ impl<M> Button<M> {
             theme().text_fg()
         }
     }
+
+    pub(super) fn dispatch_event_with_press(
+        &mut self,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> (EventOutcome, bool) {
+        if let TuiEvent::Hotkey(hotkey) = event {
+            match hotkey {
+                HotkeyEvent::Pending(prefix) => {
+                    self.pending_hotkey_prefix = Some(prefix.clone());
+                    ctx.request_redraw();
+                    return (EventOutcome::Ignored, false);
+                }
+                HotkeyEvent::Canceled => {
+                    if self.pending_hotkey_prefix.take().is_some() {
+                        ctx.request_redraw();
+                    }
+                    return (EventOutcome::Ignored, false);
+                }
+                HotkeyEvent::Commit(sequence) => {
+                    self.pending_hotkey_prefix = None;
+                    if self
+                        .hotkey
+                        .as_deref()
+                        .is_some_and(|hotkey| hotkey_matches_sequence(hotkey, sequence))
+                    {
+                        self.press(ctx.animation());
+                        if let Some(on_press) = &self.on_press {
+                            ctx.emit(on_press());
+                        }
+                        ctx.request_redraw();
+                        ctx.stop_propagation();
+                        return (EventOutcome::Handled, true);
+                    }
+                    return (EventOutcome::Ignored, false);
+                }
+            }
+        }
+        let TuiEvent::Key(key) = event else {
+            return (EventOutcome::Ignored, false);
+        };
+        let outcome = self.on_key_with_settings(*key, ctx.animation());
+        if outcome.pressed {
+            if let Some(on_press) = &self.on_press {
+                ctx.emit(on_press());
+            }
+            ctx.request_redraw();
+        }
+        if outcome.handled {
+            ctx.stop_propagation();
+            (EventOutcome::Handled, outcome.pressed)
+        } else {
+            (EventOutcome::Ignored, false)
+        }
+    }
 }
 
 impl<M> Default for Button<M> {
@@ -317,54 +372,7 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
-        if let TuiEvent::Hotkey(hotkey) = event {
-            match hotkey {
-                HotkeyEvent::Pending(prefix) => {
-                    self.pending_hotkey_prefix = Some(prefix.clone());
-                    ctx.request_redraw();
-                    return EventOutcome::Ignored;
-                }
-                HotkeyEvent::Canceled => {
-                    if self.pending_hotkey_prefix.take().is_some() {
-                        ctx.request_redraw();
-                    }
-                    return EventOutcome::Ignored;
-                }
-                HotkeyEvent::Commit(sequence) => {
-                    self.pending_hotkey_prefix = None;
-                    if self
-                        .hotkey
-                        .as_deref()
-                        .is_some_and(|hotkey| hotkey_matches_sequence(hotkey, sequence))
-                    {
-                        self.press(ctx.animation());
-                        if let Some(on_press) = &self.on_press {
-                            ctx.emit(on_press());
-                        }
-                        ctx.request_redraw();
-                        ctx.stop_propagation();
-                        return EventOutcome::Handled;
-                    }
-                    return EventOutcome::Ignored;
-                }
-            }
-        }
-        let TuiEvent::Key(key) = event else {
-            return EventOutcome::Ignored;
-        };
-        let outcome = self.on_key_with_settings(*key, ctx.animation());
-        if outcome.pressed {
-            if let Some(on_press) = &self.on_press {
-                ctx.emit(on_press());
-            }
-            ctx.request_redraw();
-        }
-        if outcome.handled {
-            ctx.stop_propagation();
-            EventOutcome::Handled
-        } else {
-            EventOutcome::Ignored
-        }
+        self.dispatch_event_with_press(event, ctx).0
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {

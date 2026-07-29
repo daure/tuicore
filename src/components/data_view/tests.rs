@@ -794,6 +794,33 @@ fn empty_transform_result_renders_no_results_message() {
 }
 
 #[test]
+fn seasonal_empty_state_is_centered_and_clipped_in_small_areas() {
+    let view = DataView::list(Vec::<usize>::new(), |row| *row, |row| row.to_string()).empty_state(
+        crate::SeasonalEmptyState::new("Nothing here")
+            .date(time::Date::from_calendar_date(2026, time::Month::December, 1).unwrap()),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(20, 7)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("custom empty content should render");
+
+    let buffer = terminal.backend().buffer();
+    let line = |y| {
+        (0..20)
+            .map(|x| buffer.cell((x, y)).unwrap().symbol())
+            .collect::<String>()
+    };
+    assert_eq!(line(2), "    Nothing here    ");
+    assert_eq!(line(3), "                    ");
+    assert_eq!(line(4).trim(), "╶┄ ✧ ·  · ✧ ┄╴");
+    assert_eq!(buffer.cell((4, 2)).unwrap().fg, crate::theme().subtle_fg());
+
+    let mut tiny = Terminal::new(TestBackend::new(4, 1)).expect("terminal should build");
+    tiny.draw(|frame| view.render(frame, frame.area()))
+        .expect("custom empty content should clip without panicking");
+}
+
+#[test]
 fn visible_row_ids_remain_base_subset_when_local_filter_changes() {
     let mut view = transform_view().visible_row_ids([1, 2, 3]);
 

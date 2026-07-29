@@ -47,6 +47,9 @@ where
         if let Some(dropdown) = self.filter_dropdown.as_mut() {
             result = result.merge(Animated::tick(dropdown.as_mut(), dt, settings));
         }
+        if let Some(empty_state) = self.empty_state.as_mut() {
+            result = result.merge(Animated::tick(empty_state, dt, settings));
+        }
         result
     }
 }

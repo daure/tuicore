@@ -1,6 +1,6 @@
 use super::*;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn plain_character_bubbles_before_insert_mode_for_text_and_password() {
@@ -206,14 +206,16 @@ fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
     let input = TextInput::<()>::new().value("search").focused(true);
     let line = input.line(20);
 
-    assert!(line
-        .spans
-        .iter()
-        .all(|span| span.style.bg == Some(theme().highlight_bg())));
-    assert!(line
-        .spans
-        .iter()
-        .all(|span| span.style.fg == Some(theme().highlight_fg())));
+    assert!(
+        line.spans
+            .iter()
+            .all(|span| span.style.bg == Some(theme().highlight_bg()))
+    );
+    assert!(
+        line.spans
+            .iter()
+            .all(|span| span.style.fg == Some(theme().highlight_fg()))
+    );
 }
 
 #[test]
@@ -1025,24 +1027,30 @@ fn disabled_text_input_dims_content_and_panel_border() {
         .expect("input should render");
 
     let buffer = terminal.backend().buffer();
-    assert!(buffer
-        .cell((0, 0))
-        .unwrap()
-        .modifier
-        .contains(Modifier::DIM));
-    assert!(buffer
-        .cell((1, 1))
-        .unwrap()
-        .modifier
-        .contains(Modifier::DIM));
+    assert!(
+        buffer
+            .cell((0, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert!(
+        buffer
+            .cell((1, 1))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
     assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
     assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
     assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
-    assert!(!buffer
-        .cell((3, 0))
-        .unwrap()
-        .modifier
-        .contains(Modifier::DIM));
+    assert!(
+        !buffer
+            .cell((3, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::DIM)
+    );
     assert_ne!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
 }
 
