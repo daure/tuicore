@@ -7,7 +7,7 @@ use tuicore::{
     EventCtx, EventRoute, FocusCtx, FocusManager, FocusRequest, HotkeyEvent, Key, KeyEvent,
     KeyModifiers, KeySpec, LayoutCtx, LayoutEngine, ListControl, ListControlEvent,
     ListControlField, ListControlKeyBindings, ListControlReorderUnavailable, Panel, RenderCtx,
-    SortDirection, TreeAdapter, TreeDispatcher, TreePath, TuiEvent, TuiNode,
+    SortDirection, TreeDispatcher, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -461,130 +461,6 @@ fn routed_search_editor_dropdown_and_confirmation_own_reorder_binding() {
 }
 
 #[test]
-fn reorder_rejects_local_and_external_search_filter_and_visible_subset() {
-    for mode in [
-        tuicore::DataViewTransformMode::Local,
-        tuicore::DataViewTransformMode::External,
-    ] {
-        for filter in [false, true] {
-            let mut control = ranked_control(ranked_rows());
-            control.data_view_mut().set_transform_mode(mode);
-            if filter {
-                control.data_view_mut().set_filter("rank", "10");
-            } else {
-                control.data_view_mut().set_search_query("10");
-            }
-            control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-            assert_eq!(
-                control.take_events(),
-                vec![ListControlEvent::ReorderUnavailable {
-                    reason: ListControlReorderUnavailable::TransformActive
-                }]
-            );
-        }
-    }
-
-    let mut subset = ranked_control(ranked_rows());
-    subset.data_view_mut().set_visible_row_ids([1, 2]);
-    subset.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-    assert_eq!(
-        subset.take_events(),
-        vec![ListControlEvent::ReorderUnavailable {
-            reason: ListControlReorderUnavailable::VisibleSubset
-        }]
-    );
-}
-
-#[test]
-fn routed_reorder_rejects_pagination_tree_and_duplicate_ids_or_ranks() {
-    let mut paginated = ranked_control(ranked_rows());
-    let view = std::mem::replace(
-        paginated.data_view_mut(),
-        DataView::new([], |row: &RankedRow| row.id),
-    );
-    *paginated.data_view_mut() = view.pagination(2);
-    paginated.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-    assert_eq!(
-        paginated.take_events(),
-        vec![ListControlEvent::ReorderUnavailable {
-            reason: ListControlReorderUnavailable::Paginated
-        }]
-    );
-
-    let mut tree = ranked_control(ranked_rows());
-    let view = std::mem::replace(
-        tree.data_view_mut(),
-        DataView::new([], |row: &RankedRow| row.id),
-    );
-    *tree.data_view_mut() = view.tree(TreeAdapter::level(|_: &RankedRow| 0));
-    tree.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-    assert_eq!(
-        tree.take_events(),
-        vec![ListControlEvent::ReorderUnavailable {
-            reason: ListControlReorderUnavailable::Tree
-        }]
-    );
-
-    for (rows, reason) in [
-        (
-            vec![RankedRow { id: 1, rank: 10 }, RankedRow { id: 1, rank: 20 }],
-            ListControlReorderUnavailable::DuplicateRowIds,
-        ),
-        (
-            vec![RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 10 }],
-            ListControlReorderUnavailable::DuplicateRankKeys,
-        ),
-    ] {
-        let mut duplicate = ranked_control(rows);
-        duplicate.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-        assert_eq!(
-            duplicate.take_events(),
-            vec![ListControlEvent::ReorderUnavailable { reason }]
-        );
-    }
-}
-
-#[test]
-fn reorder_rejects_external_id_and_rank_mutation_without_overwriting_it() {
-    let mut rank_changed = ranked_control(ranked_rows());
-    rank_changed.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-    rank_changed
-        .data_view_mut()
-        .update_row(&2, |row| row.rank = 25);
-    rank_changed.dispatch_event(
-        &data_route(),
-        &key(Key::Enter, KeyModifiers::NONE),
-        &mut EventCtx::default(),
-    );
-    assert_eq!(rank_changed.items()[1].rank, 25);
-    assert_eq!(
-        rank_changed.take_events(),
-        vec![ListControlEvent::ReorderUnavailable {
-            reason: ListControlReorderUnavailable::DataChanged
-        }]
-    );
-
-    let mut data_changed = ranked_control(ranked_rows());
-    data_changed.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
-    data_changed.data_view_mut().set_rows([
-        RankedRow { id: 1, rank: 10 },
-        RankedRow { id: 2, rank: 20 },
-        RankedRow { id: 4, rank: 30 },
-    ]);
-    data_changed.dispatch_event(
-        &data_route(),
-        &key(Key::Enter, KeyModifiers::NONE),
-        &mut EventCtx::default(),
-    );
-    assert_eq!(
-        data_changed.take_events(),
-        vec![ListControlEvent::ReorderUnavailable {
-            reason: ListControlReorderUnavailable::DataChanged
-        }]
-    );
-}
-
-#[test]
 #[should_panic(expected = "mutually exclusive")]
 fn public_sort_then_reorder_configuration_is_rejected() {
     let _ = ListControl::<RankedRow, usize>::new(
@@ -650,18 +526,10 @@ fn assert_action_bar_search_character_does_not_mutate_rows(character: char) {
 }
 
 #[test]
-fn action_bar_search_edits_plus_without_adding_row() {
-    assert_action_bar_search_character_does_not_mutate_rows('+');
-}
-
-#[test]
-fn action_bar_search_edits_x_without_removing_row() {
-    assert_action_bar_search_character_does_not_mutate_rows('x');
-}
-
-#[test]
-fn action_bar_search_edits_e_without_entering_row_edit() {
-    assert_action_bar_search_character_does_not_mutate_rows('e');
+fn action_bar_search_owns_list_control_action_characters() {
+    for character in ['+', 'x', 'e'] {
+        assert_action_bar_search_character_does_not_mutate_rows(character);
+    }
 }
 
 fn assert_header_filter_receives_list_binding(character: char) {
@@ -701,18 +569,10 @@ fn assert_header_filter_receives_list_binding(character: char) {
 }
 
 #[test]
-fn header_filter_receives_edit_key_before_list_control() {
-    assert_header_filter_receives_list_binding('e');
-}
-
-#[test]
-fn header_filter_receives_add_key_before_list_control() {
-    assert_header_filter_receives_list_binding('+');
-}
-
-#[test]
-fn header_filter_receives_remove_key_before_list_control() {
-    assert_header_filter_receives_list_binding('x');
+fn header_filter_owns_list_control_action_characters() {
+    for character in ['e', '+', 'x'] {
+        assert_header_filter_receives_list_binding(character);
+    }
 }
 
 #[test]

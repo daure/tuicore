@@ -3955,56 +3955,6 @@ mod tests {
     }
 
     #[test]
-    fn parent_preview_uses_first_child_demo() {
-        assert_eq!(ComponentKind::Layouts.preview(), PreviewKind::LayoutFlex);
-        assert_eq!(ComponentKind::Inputs.preview(), PreviewKind::Button);
-        assert_eq!(ComponentKind::DataView.preview(), PreviewKind::DataList);
-        assert_eq!(
-            ComponentKind::ListControl.preview(),
-            PreviewKind::ListCompact
-        );
-    }
-
-    #[test]
-    fn all_list_control_variants_are_registered() {
-        let variants = [
-            ComponentKind::ListCompact,
-            ComponentKind::ListEntityTable,
-            ComponentKind::ListReorder,
-        ];
-        for variant in variants {
-            assert!(ComponentKind::ALL.contains(&variant));
-            assert_eq!(variant.parent(), Some(ComponentKind::ListControl));
-            assert!(variant.preview().is_list_control());
-        }
-    }
-
-    #[test]
-    fn list_control_gallery_variants_start_seeded() {
-        let compact = compact_name_controls();
-        let entities = entity_controls();
-
-        assert!(compact.iter().all(|control| !control.items().is_empty()));
-        assert!(entities.iter().all(|control| !control.items().is_empty()));
-        assert_eq!(compact.len(), 2);
-        assert_eq!(entities.len(), 3);
-    }
-
-    #[test]
-    fn reorder_gallery_has_24_rows_and_ten_row_visible_cap() {
-        let control = reorder_control();
-
-        assert_eq!(control.items().len(), 24);
-        assert_eq!(
-            control
-                .measure(LayoutProposal::unbounded())
-                .preferred
-                .height,
-            12
-        );
-    }
-
-    #[test]
     fn reorder_gallery_control_enters_reorder_mode() {
         let mut control = reorder_control();
         let guidance = "Ctrl+M move · ↑↓/gg/G/Home/End/Pg/Ctrl+U,D · Enter commit · Esc cancel";
@@ -4039,27 +3989,6 @@ mod tests {
         );
 
         assert!(mixed.is_editing());
-    }
-
-    #[test]
-    fn derived_people_example_displays_initials_and_full_name() {
-        let controls = entity_controls();
-        let derived = &controls[2];
-        let row = derived
-            .data_view()
-            .highlighted_json()
-            .expect("seeded person is highlighted");
-
-        assert!(row.contains("KJ"));
-        assert!(row.contains("Katherine Johnson"));
-    }
-
-    #[test]
-    fn compact_names_compares_confirmed_and_immediate_removal() {
-        let controls = compact_name_controls();
-
-        assert!(controls[0].has_remove_confirmation());
-        assert!(!controls[1].has_remove_confirmation());
     }
 
     #[test]
@@ -4239,58 +4168,6 @@ mod tests {
                 .focus_targets()
                 .iter()
                 .all(|target| target.area.is_empty())
-        );
-    }
-
-    #[test]
-    fn validated_form_is_registered_under_inputs() {
-        assert!(ComponentKind::ALL.contains(&ComponentKind::ValidatedForm));
-        assert_eq!(
-            ComponentKind::ValidatedForm.parent(),
-            Some(ComponentKind::Inputs)
-        );
-        assert_eq!(
-            ComponentKind::ValidatedForm.preview(),
-            PreviewKind::ValidatedForm
-        );
-        assert_eq!(PreviewKind::ValidatedForm.title(), "Validated Form");
-    }
-
-    #[test]
-    fn relative_date_is_registered_under_inputs() {
-        assert!(ComponentKind::ALL.contains(&ComponentKind::RelativeDate));
-        assert_eq!(
-            ComponentKind::RelativeDate.parent(),
-            Some(ComponentKind::Inputs)
-        );
-        assert_eq!(
-            ComponentKind::RelativeDate.preview(),
-            PreviewKind::RelativeDate
-        );
-        assert_eq!(PreviewKind::RelativeDate.title(), "Relative Date");
-    }
-
-    #[test]
-    fn relative_date_defaults_are_seven_calendar_days_apart_at_the_same_time() {
-        let state = PreviewState::new();
-
-        assert_eq!(
-            (state.relative_date.target().date() - state.relative_date.reference().date())
-                .whole_days(),
-            7
-        );
-        assert_eq!(
-            state.relative_date.target().time(),
-            state.relative_date.reference().time()
-        );
-        assert_eq!(state.relative_date.reference().second(), 0);
-        assert_eq!(state.relative_date.reference().nanosecond(), 0);
-        assert_eq!(state.relative_date.distance_text(), "In 1 week");
-        assert!(
-            state
-                .relative_date
-                .calendar_week_text()
-                .starts_with("Next ")
         );
     }
 

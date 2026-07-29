@@ -134,17 +134,28 @@ fn reorder_view(rows: impl IntoIterator<Item = ReorderRow>) -> DataView<ReorderR
     view
 }
 
+fn reorder_rows() -> [ReorderRow; 2] {
+    [
+        ReorderRow {
+            id: 1,
+            rank: 10,
+            group: "a",
+        },
+        ReorderRow {
+            id: 2,
+            rank: 20,
+            group: "b",
+        },
+    ]
+}
+
 #[test]
 fn reorder_rejects_search_and_filters_in_local_and_external_modes() {
     for mode in [
         DataViewTransformMode::Local,
         DataViewTransformMode::External,
     ] {
-        let mut searched = reorder_view([ReorderRow {
-            id: 1,
-            rank: 10,
-            group: "a",
-        }]);
+        let mut searched = reorder_view(reorder_rows());
         searched.set_transform_mode(mode);
         searched.set_search_query("1");
         assert_eq!(
@@ -152,11 +163,7 @@ fn reorder_rejects_search_and_filters_in_local_and_external_modes() {
             Some(ReorderUnavailableReason::TransformActive)
         );
 
-        let mut filtered = reorder_view([ReorderRow {
-            id: 1,
-            rank: 10,
-            group: "a",
-        }]);
+        let mut filtered = reorder_view(reorder_rows());
         filtered.set_transform_mode(mode);
         filtered.set_filter("rank", "a");
         assert_eq!(
@@ -168,36 +175,22 @@ fn reorder_rejects_search_and_filters_in_local_and_external_modes() {
 
 #[test]
 fn reorder_rejects_paginated_tree_subset_and_duplicate_data() {
-    let rows = || {
-        [
-            ReorderRow {
-                id: 1,
-                rank: 10,
-                group: "a",
-            },
-            ReorderRow {
-                id: 2,
-                rank: 20,
-                group: "b",
-            },
-        ]
-    };
     assert_eq!(
-        reorder_view(rows())
+        reorder_view(reorder_rows())
             .pagination(1)
             .reorder_snapshot("rank")
             .err(),
         Some(ReorderUnavailableReason::Paginated)
     );
     assert_eq!(
-        reorder_view(rows())
+        reorder_view(reorder_rows())
             .tree(TreeAdapter::level(|_: &ReorderRow| 0))
             .reorder_snapshot("rank")
             .err(),
         Some(ReorderUnavailableReason::Tree)
     );
     assert_eq!(
-        reorder_view(rows())
+        reorder_view(reorder_rows())
             .visible_row_ids([1])
             .reorder_snapshot("rank")
             .err(),
@@ -205,16 +198,11 @@ fn reorder_rejects_paginated_tree_subset_and_duplicate_data() {
     );
     assert_eq!(
         reorder_view([
+            reorder_rows()[0].clone(),
             ReorderRow {
                 id: 1,
-                rank: 10,
-                group: "a",
-            },
-            ReorderRow {
-                id: 1,
-                rank: 20,
-                group: "b",
-            },
+                ..reorder_rows()[1].clone()
+            }
         ])
         .reorder_snapshot("rank")
         .err(),
@@ -222,16 +210,11 @@ fn reorder_rejects_paginated_tree_subset_and_duplicate_data() {
     );
     assert_eq!(
         reorder_view([
+            reorder_rows()[0].clone(),
             ReorderRow {
-                id: 1,
                 rank: 10,
-                group: "a",
-            },
-            ReorderRow {
-                id: 2,
-                rank: 10,
-                group: "b",
-            },
+                ..reorder_rows()[1].clone()
+            }
         ])
         .reorder_snapshot("rank")
         .err(),
@@ -240,71 +223,28 @@ fn reorder_rejects_paginated_tree_subset_and_duplicate_data() {
 }
 
 #[test]
-fn reorder_commit_rejects_setter_that_does_not_assign_rank_keys() {
-    let mut view = DataView::new(
-        [
-            ReorderRow {
-                id: 1,
-                rank: 10,
-                group: "a",
-            },
-            ReorderRow {
-                id: 2,
-                rank: 20,
-                group: "b",
-            },
-        ],
-        |row| row.id,
-    )
-    .column(
-        Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
-            row.rank.to_string()
-        })
-        .reorderable(|row| row.rank, |_row, _rank| {}),
-    );
-    view.configure_reorder_sort("rank");
-    let snapshot = view.reorder_snapshot("rank").unwrap();
-    let before = view.rows().to_vec();
+fn reorder_commit_rejects_invalid_rank_setters_without_mutating_rows() {
+    let setters: [fn(&mut ReorderRow, usize); 2] = [
+        |_, _| {},
+        |row, rank| {
+            row.rank = rank;
+            row.id += 100;
+        },
+    ];
+    for setter in setters {
+        let mut view = DataView::new(reorder_rows(), |row| row.id).column(
+            Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
+                row.rank.to_string()
+            })
+            .reorderable(|row| row.rank, setter),
+        );
+        view.configure_reorder_sort("rank");
+        let snapshot = view.reorder_snapshot("rank").unwrap();
+        let before = view.rows().to_vec();
 
-    assert!(!view.commit_reorder("rank", &[2, 1], &snapshot));
-    assert_eq!(view.rows(), before);
-}
-
-#[test]
-fn reorder_commit_rejects_setter_that_mutates_row_ids() {
-    let mut view = DataView::new(
-        [
-            ReorderRow {
-                id: 1,
-                rank: 10,
-                group: "a",
-            },
-            ReorderRow {
-                id: 2,
-                rank: 20,
-                group: "b",
-            },
-        ],
-        |row| row.id,
-    )
-    .column(
-        Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
-            row.rank.to_string()
-        })
-        .reorderable(
-            |row| row.rank,
-            |row, rank| {
-                row.rank = rank;
-                row.id += 100;
-            },
-        ),
-    );
-    view.configure_reorder_sort("rank");
-    let snapshot = view.reorder_snapshot("rank").unwrap();
-    let before = view.rows().to_vec();
-
-    assert!(!view.commit_reorder("rank", &[2, 1], &snapshot));
-    assert_eq!(view.rows(), before);
+        assert!(!view.commit_reorder("rank", &[2, 1], &snapshot));
+        assert_eq!(view.rows(), before);
+    }
 }
 
 #[test]
@@ -640,31 +580,16 @@ fn plain_hidden_column_remains_invalid_for_automatic_sorting() {
 }
 
 #[test]
-fn local_search_filters_rows_using_search_key_columns() {
-    let mut view = transform_view();
-
-    let outcome = view.set_search_query("api");
-
-    assert!(outcome.changed);
-    assert_eq!(visible_ids(&view), vec![1, 3]);
-}
-
-#[test]
-fn fuzzy_search_is_the_default() {
-    let mut view = transform_view();
-
-    view.set_search_query("cp");
-
-    assert_eq!(visible_ids(&view), vec![2]);
-}
-
-#[test]
-fn contains_search_can_be_selected() {
-    let mut view = transform_view().search_mode(SearchMode::Contains);
-
-    view.set_search_query("cp");
-
-    assert!(visible_ids(&view).is_empty());
+fn local_search_supports_default_fuzzy_and_explicit_contains_modes() {
+    for (mode, query, expected) in [
+        (SearchMode::Fuzzy, "api", vec![1, 3]),
+        (SearchMode::Fuzzy, "cp", vec![2]),
+        (SearchMode::Contains, "cp", vec![]),
+    ] {
+        let mut view = transform_view().search_mode(mode);
+        assert!(view.set_search_query(query).changed);
+        assert_eq!(visible_ids(&view), expected);
+    }
 }
 
 #[test]
@@ -1341,24 +1266,15 @@ fn filter_picker_uses_dropdown_state() {
 }
 
 #[test]
-fn disabled_filter_controls_ignore_filter_hotkey() {
+fn disabled_filter_controls_ignore_hotkey_and_hide_action_bar_hint() {
     let mut view = transform_view()
         .headers(true)
         .action_bar(true)
         .filter_controls(false);
-
     let outcome = view.on_key(KeyEvent::from(Key::Char('f')), Rect::new(0, 0, 60, 6));
-
     assert_eq!(outcome, DataViewOutcome::IDLE);
     assert_eq!(view.interaction, DataViewInteraction::Grid);
-}
 
-#[test]
-fn disabled_filter_controls_hide_filter_hint_from_action_bar() {
-    let view = transform_view()
-        .headers(true)
-        .action_bar(true)
-        .filter_controls(false);
     let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal should build");
 
     terminal
@@ -1373,42 +1289,31 @@ fn disabled_filter_controls_hide_filter_hint_from_action_bar() {
 }
 
 #[test]
-fn configured_hotkey_is_registered_on_focus_target() {
-    let mut view =
-        DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string()).hotkey("c");
-    let mut layout = LayoutCtx::new();
+fn focus_target_registers_single_multiletter_and_cleared_hotkeys() {
+    for (configured, clear, expected_key, expected_sequences) in [
+        ("c", false, Some(KeyEvent::from(Key::Char('c'))), vec!["c"]),
+        ("G G", false, None, vec!["gg"]),
+        ("c", true, None, vec![]),
+    ] {
+        let mut view = DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string())
+            .hotkey(configured);
+        if clear {
+            view.clear_hotkey();
+        }
+        let mut layout = LayoutCtx::new();
 
-    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
+        <DataView<Row, usize> as TuiNode<()>>::layout(
+            &mut view,
+            Rect::new(0, 0, 10, 2),
+            &mut layout,
+        );
 
-    assert_eq!(
-        layout.focus_targets()[0].hotkey,
-        Some(KeyEvent::from(Key::Char('c')))
-    );
-    assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["c"]);
-}
-
-#[test]
-fn multiletter_hotkey_is_registered_as_sequence() {
-    let mut view =
-        DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string()).hotkey("G G");
-    let mut layout = LayoutCtx::new();
-
-    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
-
-    assert_eq!(layout.focus_targets()[0].hotkey, None);
-    assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["gg"]);
-}
-
-#[test]
-fn cleared_hotkey_is_not_registered_on_focus_target() {
-    let mut view =
-        DataView::list([Row::new(1, "A")], |row| row.id, |row| row.name.to_string()).hotkey("c");
-    view.clear_hotkey();
-    let mut layout = LayoutCtx::new();
-
-    <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, Rect::new(0, 0, 10, 2), &mut layout);
-
-    assert_eq!(layout.focus_targets()[0].hotkey, None);
+        assert_eq!(layout.focus_targets()[0].hotkey, expected_key);
+        assert_eq!(
+            layout.focus_targets()[0].hotkey_sequences,
+            expected_sequences
+        );
+    }
 }
 
 #[test]

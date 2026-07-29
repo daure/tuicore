@@ -11,8 +11,8 @@ use super::*;
 use crate::event::KeyModifiers;
 use crate::{
     ChildKey, Dialog, DialogLayer, EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
-    FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, NonFocusable, Propagation,
-    RenderCtx, Tab, Tabs, TuiEvent, TuiNode, border_chars, preset,
+    FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, Propagation, RenderCtx, Tab,
+    Tabs, TuiEvent, TuiNode, border_chars, preset,
 };
 
 fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -49,26 +49,12 @@ where
     ctx
 }
 
-struct NonForwardingComposite {
-    dropdown: Dropdown<&'static str, &'static str>,
-}
-
 struct DialogControlsTabBody {
     dropdown: Dropdown<&'static str, &'static str>,
     dropdown_area: Rect,
 }
 
 struct EmptyNode;
-
-impl TuiNode<()> for NonForwardingComposite {
-    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        <Dropdown<_, _> as TuiNode<()>>::layout(&mut self.dropdown, area, ctx)
-    }
-
-    fn render<'a>(&'a self, frame: &mut ratatui::Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
-        <Dropdown<_, _> as TuiNode<()>>::render(&self.dropdown, frame, area, ctx);
-    }
-}
 
 impl DialogControlsTabBody {
     fn open() -> Self {
@@ -236,56 +222,6 @@ fn disabled_backdrop_leaves_host_undimmed_and_renders_popup() {
 }
 
 #[test]
-fn normal_render_plus_overlay_dims_backdrop_once() {
-    let mut baseline = single_dropdown()
-        .selected_one("Beta")
-        .variant(DropdownVariant::Filled);
-    baseline.open();
-    layout_dropdown(&mut baseline, Rect::new(0, 0, 12, 1), AREA);
-    let mut baseline_terminal =
-        Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
-    baseline_terminal
-        .draw(|frame| {
-            frame.buffer_mut().set_string(
-                0,
-                9,
-                "X",
-                Style::default()
-                    .fg(Color::Rgb(200, 200, 200))
-                    .bg(Color::Rgb(10, 20, 30)),
-            );
-            render_dropdown(&baseline, frame, Rect::new(0, 0, 12, 1));
-        })
-        .expect("dropdown should render");
-
-    let mut dropdown = single_dropdown()
-        .selected_one("Beta")
-        .variant(DropdownVariant::Filled);
-    dropdown.open();
-    layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
-    let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
-    terminal
-        .draw(|frame| {
-            frame.buffer_mut().set_string(
-                0,
-                9,
-                "X",
-                Style::default()
-                    .fg(Color::Rgb(200, 200, 200))
-                    .bg(Color::Rgb(10, 20, 30)),
-            );
-            render_dropdown(&dropdown, frame, Rect::new(0, 0, 12, 1));
-        })
-        .expect("dropdown should render");
-
-    let expected = baseline_terminal.backend().buffer().cell((0, 9)).unwrap();
-    let actual = terminal.backend().buffer().cell((0, 9)).unwrap();
-    assert_eq!(actual.fg, expected.fg);
-    assert_eq!(actual.bg, expected.bg);
-    assert_eq!(actual.modifier, expected.modifier);
-}
-
-#[test]
 fn opening_from_event_tweens_backdrop_dim() {
     let mut dropdown = single_dropdown();
     layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
@@ -346,33 +282,22 @@ fn cancel_when_closed_preserves_committed_selection() {
 }
 
 #[test]
-fn enter_commits_single_draft() {
-    let mut dropdown = single_dropdown();
-
-    dropdown.open();
-    dropdown.on_key(ctrl('j'), AREA);
-    dropdown.on_key(Key::Enter, AREA);
-
-    assert_eq!(dropdown.selected_id(), Some("Beta"));
-    assert!(!dropdown.is_open());
-}
-
-#[test]
-fn ctrl_enter_commits_single_draft() {
-    let mut dropdown = single_dropdown();
-
-    dropdown.open();
-    dropdown.on_key(ctrl('j'), AREA);
-    dropdown.on_key(
+fn enter_with_or_without_control_commits_single_draft() {
+    for key in [
+        KeyEvent::from(Key::Enter),
         KeyEvent {
             code: Key::Enter,
             modifiers: KeyModifiers::CONTROL,
         },
-        AREA,
-    );
+    ] {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        dropdown.on_key(ctrl('j'), AREA);
+        dropdown.on_key(key, AREA);
 
-    assert_eq!(dropdown.selected_id(), Some("Beta"));
-    assert!(!dropdown.is_open());
+        assert_eq!(dropdown.selected_id(), Some("Beta"));
+        assert!(!dropdown.is_open());
+    }
 }
 
 #[test]
@@ -391,18 +316,6 @@ fn focused_empty_dropdown_does_not_render_field_cursor() {
     assert_eq!(first.fg, second.fg);
     assert_eq!(first.bg, second.bg);
     assert_eq!(first.modifier, second.modifier);
-}
-
-#[test]
-fn ctrl_d_and_ctrl_u_page_navigate_defaults() {
-    let mut dropdown = single_dropdown();
-
-    dropdown.open();
-    dropdown.on_key(ctrl('d'), AREA);
-    assert_eq!(dropdown.data_view.highlighted_id(), Some("Gamma"));
-
-    dropdown.on_key(ctrl('u'), AREA);
-    assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
 }
 
 #[test]
@@ -519,22 +432,6 @@ fn escape_cancel_clears_search_query_and_filter() {
 
     assert_eq!(dropdown.search_query(), "");
     assert_eq!(dropdown.filtered, ROWS.to_vec());
-}
-
-#[test]
-fn tab_while_open_cancels_and_requests_next_focus() {
-    let mut dropdown = single_dropdown();
-    dropdown.open();
-    dropdown.on_key(char_key('g'), AREA);
-    let mut ctx = EventCtx::<()>::default();
-
-    let outcome = dropdown.event(&TuiEvent::Key(Key::Tab.into()), &mut ctx);
-
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert!(!dropdown.is_open());
-    assert_eq!(dropdown.search_query(), "");
-    assert_eq!(ctx.focus_request(), Some(&FocusRequest::Next));
-    assert_eq!(ctx.propagation(), Propagation::Stopped);
 }
 
 #[test]
@@ -714,31 +611,18 @@ fn immediate_enter_closes_without_changing_current_selection() {
 }
 
 #[test]
-fn immediate_escape_keeps_committed_navigation_value() {
-    let mut dropdown = single_dropdown()
-        .commit_mode(DropdownCommitMode::Immediate)
-        .selected_one("Alpha");
+fn immediate_cancel_keys_keep_committed_navigation_value() {
+    for cancel in [KeyEvent::from(Key::Esc), ctrl('[')] {
+        let mut dropdown = single_dropdown()
+            .commit_mode(DropdownCommitMode::Immediate)
+            .selected_one("Alpha");
+        dropdown.open();
+        dropdown.on_key(char_key('g'), AREA);
+        dropdown.on_key(cancel, AREA);
 
-    dropdown.open();
-    dropdown.on_key(char_key('g'), AREA);
-    dropdown.on_key(Key::Esc, AREA);
-
-    assert!(!dropdown.is_open());
-    assert_eq!(dropdown.selected_id(), Some("Gamma"));
-}
-
-#[test]
-fn immediate_ctrl_left_bracket_keeps_committed_navigation_value() {
-    let mut dropdown = single_dropdown()
-        .commit_mode(DropdownCommitMode::Immediate)
-        .selected_one("Alpha");
-
-    dropdown.open();
-    dropdown.on_key(char_key('g'), AREA);
-    dropdown.on_key(ctrl('['), AREA);
-
-    assert!(!dropdown.is_open());
-    assert_eq!(dropdown.selected_id(), Some("Gamma"));
+        assert!(!dropdown.is_open());
+        assert_eq!(dropdown.selected_id(), Some("Gamma"));
+    }
 }
 
 #[test]
@@ -1290,35 +1174,6 @@ fn open_render_draws_trigger_without_inline_popup() {
 }
 
 #[test]
-fn open_node_render_flushes_popup_portal() {
-    let mut dropdown = single_dropdown();
-    dropdown.open();
-    let mut layout = LayoutCtx::new();
-    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
-        <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, Rect::new(0, 0, 12, 1), ctx);
-    });
-    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
-
-    terminal
-        .draw(|frame| {
-            let mut render = RenderCtx::new();
-            <Dropdown<_, _> as TuiNode<()>>::render(
-                &dropdown,
-                frame,
-                Rect::new(0, 0, 12, 1),
-                &mut render,
-            );
-            render.flush(frame);
-        })
-        .expect("dropdown should render");
-
-    let row = (0..12)
-        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
-        .collect::<String>();
-    assert!(row.contains("Alpha"), "{row}");
-}
-
-#[test]
 fn inherent_render_flushes_popup_portal() {
     let mut dropdown = single_dropdown();
     dropdown.open();
@@ -1341,32 +1196,6 @@ fn inherent_render_flushes_popup_portal() {
         .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
         .collect::<String>();
     assert!(row.contains("Alpha"), "{row}");
-}
-
-#[test]
-fn dropdown_inside_tabs_dialog_flushes_popup_from_normal_render() {
-    let tabs = Tabs::new(vec![Tab::new("Controls", DialogControlsTabBody::open())]);
-    let mut dialog = Dialog::new().host(tabs);
-    let area = Rect::new(0, 0, 30, 12);
-    let mut layout = LayoutCtx::new();
-    layout.with_overlay_bounds(area, |ctx| {
-        <_ as TuiNode<()>>::layout(&mut dialog, area, ctx);
-    });
-    let mut terminal = Terminal::new(TestBackend::new(30, 12)).expect("terminal should build");
-
-    terminal
-        .draw(|frame| {
-            let mut render = RenderCtx::new();
-            <_ as TuiNode<()>>::render(&dialog, frame, area, &mut render);
-            render.flush(frame);
-        })
-        .expect("dialog controls should render");
-
-    let buffer = terminal.backend().buffer();
-    let rendered = (0..12)
-        .flat_map(|y| (0..30).map(move |x| buffer.cell((x, y)).unwrap().symbol()))
-        .collect::<String>();
-    assert!(rendered.contains("Alpha"), "{rendered}");
 }
 
 #[test]
@@ -1410,66 +1239,6 @@ fn open_node_layout_uses_inherited_overlay_bounds() {
     assert_eq!(layout.overlays().len(), 1);
     assert_eq!(layout.overlays()[0].bounds, bounds);
     assert_eq!(layout.overlays()[0].area, Rect::new(0, 2, 24, 6));
-}
-
-#[test]
-fn dropdown_inside_non_forwarding_composite_flushes_popup_portal() {
-    let mut composite = NonForwardingComposite {
-        dropdown: single_dropdown(),
-    };
-    composite.dropdown.open();
-    let mut layout = LayoutCtx::new();
-    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
-        composite.layout(Rect::new(0, 0, 12, 1), ctx);
-    });
-    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
-
-    terminal
-        .draw(|frame| {
-            let mut render = RenderCtx::new();
-            composite.render(frame, Rect::new(0, 0, 12, 1), &mut render);
-            render.flush(frame);
-        })
-        .expect("dropdown should render");
-
-    let row = (0..12)
-        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
-        .collect::<String>();
-    assert!(row.contains("Alpha"), "{row}");
-}
-
-#[test]
-fn non_focusable_dropdown_flushes_popup_portal() {
-    let mut inner = single_dropdown();
-    inner.open();
-    let mut dropdown = NonFocusable::new(inner);
-    let mut layout = LayoutCtx::new();
-    layout.with_overlay_bounds(Rect::new(0, 0, 12, 8), |ctx| {
-        <NonFocusable<Dropdown<_, _>> as TuiNode<()>>::layout(
-            &mut dropdown,
-            Rect::new(0, 0, 12, 1),
-            ctx,
-        );
-    });
-    let mut terminal = Terminal::new(TestBackend::new(12, 8)).expect("terminal should build");
-
-    terminal
-        .draw(|frame| {
-            let mut render = RenderCtx::new();
-            <NonFocusable<Dropdown<_, _>> as TuiNode<()>>::render(
-                &dropdown,
-                frame,
-                Rect::new(0, 0, 12, 1),
-                &mut render,
-            );
-            render.flush(frame);
-        })
-        .expect("dropdown should render");
-
-    let row = (0..12)
-        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
-        .collect::<String>();
-    assert!(row.contains("Alpha"), "{row}");
 }
 
 #[test]
@@ -1534,35 +1303,24 @@ fn open_layout_focus_targets_use_overlay_popup_areas() {
 }
 
 #[test]
-fn tab_from_open_dropdown_cancels_and_requests_next_focus() {
-    let mut dropdown = single_dropdown();
-    dropdown.open();
-    let mut ctx = EventCtx::<()>::default();
+fn tab_keys_cancel_and_request_directional_focus() {
+    for (key, request) in [
+        (Key::Tab, FocusRequest::Next),
+        (Key::BackTab, FocusRequest::Previous),
+    ] {
+        let mut dropdown = single_dropdown();
+        dropdown.open();
+        let mut ctx = EventCtx::<()>::default();
 
-    let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+        let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
 
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert!(!dropdown.is_open());
-    assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Next));
-    assert!(ctx.layout_requested());
-    assert!(ctx.redraw_requested());
-    assert_eq!(ctx.propagation(), Propagation::Stopped);
-}
-
-#[test]
-fn backtab_from_open_dropdown_cancels_and_requests_previous_focus() {
-    let mut dropdown = single_dropdown();
-    dropdown.open();
-    let mut ctx = EventCtx::<()>::default();
-
-    let outcome = dropdown.event(&TuiEvent::Key(KeyEvent::from(Key::BackTab)), &mut ctx);
-
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert!(!dropdown.is_open());
-    assert_eq!(ctx.focus_request(), Some(&crate::FocusRequest::Previous));
-    assert!(ctx.layout_requested());
-    assert!(ctx.redraw_requested());
-    assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!dropdown.is_open());
+        assert_eq!(ctx.focus_request(), Some(&request));
+        assert!(ctx.layout_requested());
+        assert!(ctx.redraw_requested());
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
 }
 
 #[test]

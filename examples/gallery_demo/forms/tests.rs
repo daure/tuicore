@@ -9,7 +9,12 @@ use super::super::super::Msg;
 use super::component::{FormControlId, ValidatedForm, demo_date};
 use super::model::FormError;
 
-fn focus_field(form: &mut ValidatedForm, control: FormControlId, id: &str, focused: bool) {
+fn focus_field(
+    form: &mut ValidatedForm,
+    control: FormControlId,
+    id: &str,
+    focused: bool,
+) -> FocusCtx<Msg> {
     let target = FocusTarget {
         id: FocusId::new(id),
         path: TreePath::from_keys([control.key(), ChildKey::body()]),
@@ -23,7 +28,9 @@ fn focus_field(form: &mut ValidatedForm, control: FormControlId, id: &str, focus
         suppress_global_hotkeys: false,
         focused_events_before_global_hotkeys: false,
     };
-    form.dispatch_focus(&target, focused, &mut FocusCtx::default());
+    let mut ctx = FocusCtx::default();
+    form.dispatch_focus(&target, focused, &mut ctx);
+    ctx
 }
 
 fn dispatch_key(form: &mut ValidatedForm, control: FormControlId, key: KeyEvent) -> EventCtx<Msg> {
@@ -83,6 +90,62 @@ fn model_control_is_editing(form: &ValidatedForm, control: FormControlId) -> boo
     }
 }
 
+fn assert_control_is_pristine(form: &ValidatedForm, control: FormControlId) {
+    let controls = form.model.controls();
+    let (pristine, touched, editing, visible_error) = match control {
+        FormControlId::Name => (
+            controls.name.pristine(),
+            controls.name.touched(),
+            controls.name.editing(),
+            form.name.error(),
+        ),
+        FormControlId::Description => (
+            controls.description.pristine(),
+            controls.description.touched(),
+            controls.description.editing(),
+            form.description.error(),
+        ),
+        FormControlId::Password => (
+            controls.password.pristine(),
+            controls.password.touched(),
+            controls.password.editing(),
+            form.password.error(),
+        ),
+        FormControlId::Start => (
+            controls.start.pristine(),
+            controls.start.touched(),
+            controls.start.editing(),
+            form.start.error(),
+        ),
+        FormControlId::End => (
+            controls.end.pristine(),
+            controls.end.touched(),
+            controls.end.editing(),
+            form.end.error(),
+        ),
+        FormControlId::Environment => (
+            controls.environment.pristine(),
+            controls.environment.touched(),
+            controls.environment.editing(),
+            form.environment.error(),
+        ),
+        FormControlId::Tags => (
+            controls.tags.pristine(),
+            controls.tags.touched(),
+            controls.tags.editing(),
+            form.tags.error(),
+        ),
+    };
+
+    assert!(pristine, "{control:?} should remain pristine");
+    assert!(!touched, "{control:?} should remain untouched");
+    assert!(!editing, "{control:?} should not remain editing");
+    assert_eq!(
+        visible_error, None,
+        "{control:?} should have no visible error"
+    );
+}
+
 fn create_tag(form: &mut ValidatedForm, label: &str) {
     for value in label.chars() {
         dispatch_key(form, FormControlId::Tags, KeyEvent::from(Key::Char(value)));
@@ -114,18 +177,8 @@ fn focus_and_blur_leave_every_field_pristine_without_visible_errors() {
         focus_field(&mut form, control, id, true);
         dispatch_key(&mut form, control, KeyEvent::from(Key::Tab));
         focus_field(&mut form, control, id, false);
+        assert_control_is_pristine(&form, control);
     }
-
-    let controls = form.model.controls();
-    assert!(controls.name.pristine() && !controls.name.touched() && !controls.name.editing());
-    assert!(controls.description.pristine() && !controls.description.touched());
-    assert!(controls.password.pristine() && !controls.password.touched());
-    assert!(controls.start.pristine() && !controls.start.touched());
-    assert!(controls.end.pristine() && !controls.end.touched());
-    assert!(controls.environment.pristine() && !controls.environment.touched());
-    assert!(controls.tags.pristine() && !controls.tags.touched());
-    assert!(form.name.error().is_none());
-    assert!(form.environment.error().is_none());
 }
 
 #[test]
@@ -254,12 +307,23 @@ fn active_enter_never_requests_submit() {
 
         let active_enter = dispatch_key(&mut form, control, KeyEvent::from(Key::Enter));
 
-        assert!(
-            !active_enter
-                .messages()
-                .contains(&Msg::FormSubmitRequested(control)),
-            "{control:?}: {:?}",
-            active_enter.messages()
+        let expected = match control {
+            FormControlId::Description => vec![Msg::FormDescriptionChanged("\n".to_string())],
+            FormControlId::Start => vec![
+                Msg::FormStartSelected(demo_date()),
+                Msg::FormControlEditEnded(control),
+            ],
+            FormControlId::End => vec![
+                Msg::FormEndSelected(demo_date()),
+                Msg::FormControlEditEnded(control),
+            ],
+            FormControlId::Tags => vec![],
+            _ => vec![Msg::FormControlEditEnded(control)],
+        };
+        assert_eq!(
+            active_enter.messages(),
+            expected,
+            "active {control:?} Enter messages"
         );
         apply_messages(&mut form, &active_enter);
     }
@@ -272,11 +336,11 @@ fn ctrl_enter_submits_exactly_once_for_every_field_except_textarea() {
         modifiers: KeyModifiers::CONTROL,
     };
     for control in FormControlId::ALL {
-        let mut form = ValidatedForm::new();
-        focus_field(&mut form, control, focus_id(control), true);
         let expected_submit_count = usize::from(control != FormControlId::Description);
 
-        let inactive = dispatch_key(&mut form, control, shortcut);
+        let mut inactive_form = ValidatedForm::new();
+        focus_field(&mut inactive_form, control, focus_id(control), true);
+        let inactive = dispatch_key(&mut inactive_form, control, shortcut);
         assert_eq!(
             inactive
                 .messages()
@@ -287,11 +351,13 @@ fn ctrl_enter_submits_exactly_once_for_every_field_except_textarea() {
             "inactive {control:?}: {:?}",
             inactive.messages()
         );
-        apply_messages(&mut form, &inactive);
+        apply_messages(&mut inactive_form, &inactive);
 
-        let activation = dispatch_key(&mut form, control, KeyEvent::from(Key::Enter));
-        apply_messages(&mut form, &activation);
-        let active = dispatch_key(&mut form, control, shortcut);
+        let mut active_form = ValidatedForm::new();
+        focus_field(&mut active_form, control, focus_id(control), true);
+        let activation = dispatch_key(&mut active_form, control, KeyEvent::from(Key::Enter));
+        apply_messages(&mut active_form, &activation);
+        let active = dispatch_key(&mut active_form, control, shortcut);
         assert_eq!(
             active
                 .messages()
@@ -302,7 +368,7 @@ fn ctrl_enter_submits_exactly_once_for_every_field_except_textarea() {
             "active {control:?}: {:?}",
             active.messages()
         );
-        apply_messages(&mut form, &active);
+        apply_messages(&mut active_form, &active);
     }
 }
 
@@ -359,21 +425,7 @@ fn external_editor_routes_one_edit_session_for_text_textarea_and_date() {
         apply_messages(&mut form, &response);
         assert!(!model_control_is_editing(&form, control));
 
-        let target = FocusTarget {
-            id: FocusId::new(focus_id(control)),
-            path: TreePath::from_keys([control.key(), ChildKey::body()]),
-            area: Rect::default(),
-            enabled: true,
-            tab_stop: true,
-            control: true,
-            hotkey: None,
-            hotkeys: Vec::new(),
-            hotkey_sequences: Vec::new(),
-            suppress_global_hotkeys: false,
-            focused_events_before_global_hotkeys: false,
-        };
-        let mut focus = FocusCtx::default();
-        form.dispatch_focus(&target, false, &mut focus);
+        let mut focus = focus_field(&mut form, control, focus_id(control), false);
         assert_eq!(focus.drain_messages().count(), 0, "{control:?}");
     }
 }
