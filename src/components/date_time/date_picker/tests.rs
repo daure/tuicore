@@ -68,6 +68,27 @@ fn date_picker_renders_hotkey_on_bottom_right_border() {
 }
 
 #[test]
+fn date_picker_does_not_render_outside_a_narrow_area() {
+    let picker = DatePicker::<()>::new();
+    let mut terminal = Terminal::new(TestBackend::new(30, 12)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let background = vec!["x".repeat(30); 12].join("\n");
+            frame.render_widget(Paragraph::new(background), frame.area());
+            picker.render(frame, Rect::new(1, 1, 10, 10));
+        })
+        .expect("picker should render");
+
+    let buffer = terminal.backend().buffer();
+    for y in 1..11 {
+        for x in 11..30 {
+            assert_eq!(buffer.cell((x, y)).unwrap().symbol(), "x");
+        }
+    }
+}
+
+#[test]
 fn month_navigation_clamps_invalid_days() {
     let jan_31 = Date::from_calendar_date(2024, Month::January, 31).unwrap();
     let feb_29 = Date::from_calendar_date(2024, Month::February, 29).unwrap();

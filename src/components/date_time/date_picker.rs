@@ -17,9 +17,9 @@ use crate::{
 };
 
 use super::{
-    DATE_PICKER_FOCUS, PickerOutcome, add_months, centered_grid, choice_style, date_in_month,
-    finish_event, first_of_month, last_of_month, month_abbr, parse_editor_date, picker_size_hint,
-    plain_digit, request_unfocus_if_canceled, today, year_page_start,
+    DATE_PICKER_FOCUS, DATE_PICKER_WIDTH, PickerOutcome, add_months, centered_grid, choice_style,
+    date_in_month, finish_event, first_of_month, last_of_month, month_abbr, parse_editor_date,
+    picker_size_hint, plain_digit, request_unfocus_if_canceled, today, year_page_start,
 };
 
 const QUICK_JUMP_TIMEOUT: StdDuration = StdDuration::from_secs(1);
@@ -312,9 +312,13 @@ impl<M> DatePicker<M> {
                 .into_iter()
                 .enumerate()
             {
+                let x = inner.x + column as u16 * 3;
+                if x >= inner.right() {
+                    continue;
+                }
                 frame.render_widget(
                     Paragraph::new(label).style(Style::default().fg(theme().muted_fg())),
-                    Rect::new(inner.x + column as u16 * 3, inner.y + 1, 3, 1),
+                    Rect::new(x, inner.y + 1, 3.min(inner.right() - x), 1),
                 );
             }
         }
@@ -328,9 +332,13 @@ impl<M> DatePicker<M> {
                 break;
             }
             let column = offset % 7;
+            let x = inner.x + column as u16 * 3;
+            if x >= inner.right() {
+                continue;
+            }
             frame.render_widget(
                 Paragraph::new(styles.day_line(date, date.month() != self.display_month.month())),
-                Rect::new(inner.x + column as u16 * 3, inner.y + row as u16 + 2, 3, 1),
+                Rect::new(x, inner.y + row as u16 + 2, 3.min(inner.right() - x), 1),
             );
         }
         self.render_hotkey_label(frame, area);
@@ -734,7 +742,7 @@ impl<M> Default for DatePicker<M> {
 
 impl<M: 'static> TuiNode<M> for DatePicker<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        picker_size_hint(23, 10).normalized(proposal)
+        picker_size_hint(DATE_PICKER_WIDTH, 10).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {

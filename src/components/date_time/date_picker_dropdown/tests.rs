@@ -105,6 +105,66 @@ fn date_picker_dropdown_places_popup_inside_overlay_bounds() {
 }
 
 #[test]
+fn date_picker_dropdown_clamps_vertical_popup_for_off_bound_fields() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    let bounds = Rect::new(10, 10, 40, 20);
+
+    for (field, expected) in [
+        (Rect::new(15, 8, 24, 4), Rect::new(15, 12, 24, 10)),
+        (Rect::new(15, 2, 24, 3), Rect::new(15, 10, 24, 10)),
+        (Rect::new(15, 28, 24, 4), Rect::new(15, 18, 24, 10)),
+        (Rect::new(15, 35, 24, 3), Rect::new(15, 20, 24, 10)),
+    ] {
+        dropdown.field_area = field;
+        assert_eq!(dropdown.popup_area(bounds), expected);
+    }
+}
+
+#[test]
+fn date_picker_dropdown_keeps_calendar_width_when_field_shrinks() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    let mut ctx = LayoutCtx::new();
+    let bounds = Rect::new(0, 0, 40, 20);
+
+    dropdown.layout(Rect::new(30, 2, 10, 1), &mut ctx);
+
+    assert_eq!(dropdown.popup_area(bounds), Rect::new(17, 3, 23, 10));
+}
+
+#[test]
+fn date_picker_dropdown_renders_inside_overlay_narrower_than_calendar() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    dropdown.set_open(true);
+    dropdown.layout(Rect::new(12, 1, 8, 1), &mut LayoutCtx::new());
+    let bounds = Rect::new(2, 1, 18, 10);
+    let popup = dropdown.popup_area(bounds);
+    let mut terminal = Terminal::new(TestBackend::new(20, 12)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let background = vec![Line::raw(".".repeat(20)); 12];
+            frame.render_widget(Paragraph::new(background), frame.area());
+            dropdown.render_portal_popup(frame, bounds);
+        })
+        .expect("dropdown should render");
+
+    assert!(popup.x >= bounds.x);
+    assert!(popup.right() <= bounds.right());
+    assert!(popup.y >= bounds.y);
+    assert!(popup.bottom() <= bounds.bottom());
+    for y in 0..12 {
+        for x in 0..20 {
+            if x < popup.x || x >= popup.right() || y < popup.y || y >= popup.bottom() {
+                assert_eq!(
+                    terminal.backend().buffer().cell((x, y)).unwrap().symbol(),
+                    "."
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn focused_closed_enter_requests_submit_once_and_opens() {
     let mut dropdown = DatePickerDropdown::new().on_submit(|| "submit");
     dropdown.focused = true;

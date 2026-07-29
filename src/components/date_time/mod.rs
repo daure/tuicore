@@ -47,6 +47,7 @@ impl Drop for KeyBindingsGuard {
 
 const DATE_PICKER_FOCUS: &str = "date-picker";
 const DATE_PICKER_DROPDOWN_FOCUS: &str = "date-picker-dropdown";
+const DATE_PICKER_WIDTH: u16 = 23;
 const DATE_TIME_PICKER_DROPDOWN_FOCUS: &str = "date-time-picker-dropdown";
 const TIME_PICKER_FOCUS: &str = "time-picker";
 

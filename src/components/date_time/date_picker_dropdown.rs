@@ -16,7 +16,9 @@ use crate::{
 
 use crate::components::{InputChrome, Panel};
 
-use super::{DATE_PICKER_DROPDOWN_FOCUS, DatePicker, finish_event, picker_size_hint};
+use super::{
+    DATE_PICKER_DROPDOWN_FOCUS, DATE_PICKER_WIDTH, DatePicker, finish_event, picker_size_hint,
+};
 
 const DATE_PICKER_DROPDOWN_OVERLAY_NAMESPACE: u64 = 0x4441_5445_5049_434b;
 
@@ -193,12 +195,12 @@ impl<M> DatePickerDropdown<M> {
 
     pub fn popup_area(&self, bounds: Rect) -> Rect {
         let field = self.effective_field_area(bounds);
-        let width = field.width.min(24).min(bounds.width);
-        let below_space = bounds
-            .y
-            .saturating_add(bounds.height)
-            .saturating_sub(field.y.saturating_add(field.height));
-        let above_space = field.y.saturating_sub(bounds.y);
+        let width = field.width.clamp(DATE_PICKER_WIDTH, 24).min(bounds.width);
+        let bounds_bottom = bounds.bottom();
+        let below_y = field.bottom().clamp(bounds.y, bounds_bottom);
+        let above_y = field.y.clamp(bounds.y, bounds_bottom);
+        let below_space = bounds_bottom.saturating_sub(below_y);
+        let above_space = above_y.saturating_sub(bounds.y);
         let place_below = below_space >= 10 || below_space >= above_space;
         let available_height = if place_below {
             below_space
@@ -210,9 +212,9 @@ impl<M> DatePickerDropdown<M> {
             return Rect::default();
         }
         let y = if place_below {
-            field.y.saturating_add(field.height)
+            below_y
         } else {
-            field.y.saturating_sub(height)
+            above_y.saturating_sub(height)
         };
         let max_x = bounds.x.saturating_add(bounds.width.saturating_sub(width));
         let x = field.x.min(max_x).max(bounds.x);

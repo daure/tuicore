@@ -257,6 +257,33 @@ fn open_date_time_picker_dropdown_takes_picker_keys_before_global_hotkeys() {
 }
 
 #[test]
+fn date_time_picker_dropdown_clamps_vertical_popup_for_off_bound_fields() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new();
+    let bounds = Rect::new(10, 10, 40, 20);
+
+    for (field, expected) in [
+        (Rect::new(15, 8, 24, 4), Rect::new(15, 12, 24, 10)),
+        (Rect::new(15, 2, 24, 3), Rect::new(15, 10, 24, 10)),
+        (Rect::new(15, 28, 24, 4), Rect::new(15, 18, 24, 10)),
+        (Rect::new(15, 35, 24, 3), Rect::new(15, 20, 24, 10)),
+    ] {
+        dropdown.field_area = field;
+        assert_eq!(dropdown.popup_area(bounds), expected);
+    }
+}
+
+#[test]
+fn date_time_picker_dropdown_keeps_calendar_width_when_field_shrinks() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new();
+    let mut ctx = LayoutCtx::new();
+    let bounds = Rect::new(0, 0, 40, 20);
+
+    dropdown.layout(Rect::new(30, 2, 10, 1), &mut ctx);
+
+    assert_eq!(dropdown.popup_area(bounds), Rect::new(17, 3, 23, 10));
+}
+
+#[test]
 fn open_date_time_picker_dropdown_cancel_keys_close_without_requesting_unfocus() {
     for key in [
         crate::KeyEvent::from(crate::Key::Esc),
