@@ -725,6 +725,7 @@ struct PreviewState {
     date_time_status: String,
     relative_date: RelativeDateDemo,
     calendar: Calendar<DemoCalendarEntry, &'static str, Msg>,
+    calendar_borderless: Calendar<DemoCalendarEntry, &'static str, Msg>,
     calendar_status: String,
     status_bar: StatusBar<Msg>,
     button: Button<Msg>,
@@ -889,6 +890,7 @@ impl PreviewState {
             date_time_status: String::from("Pickers seeded to 2026-06-22 09:30"),
             relative_date: RelativeDateDemo::new(),
             calendar: demo_calendar(),
+            calendar_borderless: demo_calendar().bordered(false),
             calendar_status: String::from("No calendar event yet"),
             status_bar: StatusBar::new()
                 .menu_items([
@@ -1646,10 +1648,19 @@ impl PreviewState {
                 self.validated_form.dispatch_focus(target, focused, ctx);
             }
             PreviewKind::Calendar => {
-                dispatch_focus_child(
+                if dispatch_focus_child(
                     &mut self.calendar,
                     target,
                     calendar_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.calendar_borderless,
+                    target,
+                    calendar_borderless_child_key(),
                     focused,
                     ctx,
                 );
@@ -2736,28 +2747,41 @@ impl PreviewState {
     }
 
     fn layout_calendar(&mut self, area: Rect, ctx: &mut LayoutCtx) {
-        let [_, calendar_area, _] = calendar_preview_layout(area);
-        ctx.push_slot(calendar_child_key(), calendar_area, |ctx| {
+        let [_, bordered_area, borderless_area, _] = calendar_preview_layout(area);
+        ctx.push_slot(calendar_child_key(), bordered_area, |ctx| {
             <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::layout(
                 &mut self.calendar,
-                calendar_area,
+                bordered_area,
+                ctx,
+            );
+        });
+        ctx.push_slot(calendar_borderless_child_key(), borderless_area, |ctx| {
+            <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::layout(
+                &mut self.calendar_borderless,
+                borderless_area,
                 ctx,
             );
         });
     }
 
     fn render_calendar<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
-        let [help, calendar_area, status] = calendar_preview_layout(area);
+        let [help, bordered_area, borderless_area, status] = calendar_preview_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Calendar: m/w/d switches views, t jumps today, arrows/hjkl navigate, Enter drills Month → Week → Day → Detail, Esc/Ctrl+[ goes back.",
+                "Bordered (top) and borderless (bottom): m/w/d switches views, t jumps today, arrows/hjkl navigate, Enter drills down, Esc/Ctrl+[ goes back.",
             ),
             help,
         );
         <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::render(
             &self.calendar,
             frame,
-            calendar_area,
+            bordered_area,
+            ctx,
+        );
+        <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::render(
+            &self.calendar_borderless,
+            frame,
+            borderless_area,
             ctx,
         );
         frame.render_widget(Paragraph::new(self.calendar_status.clone()), status);
@@ -2769,14 +2793,21 @@ impl PreviewState {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
-        let Some(route) = route
+        let outcome = if let Some(route) = route
             .path
             .without_first_if(&calendar_child_key())
             .map(EventRoute::new)
-        else {
+        {
+            self.calendar.dispatch_event(&route, event, ctx)
+        } else if let Some(route) = route
+            .path
+            .without_first_if(&calendar_borderless_child_key())
+            .map(EventRoute::new)
+        {
+            self.calendar_borderless.dispatch_event(&route, event, ctx)
+        } else {
             return EventOutcome::Ignored;
         };
-        let outcome = self.calendar.dispatch_event(&route, event, ctx);
         self.record_calendar_events();
         outcome
     }
@@ -2786,6 +2817,7 @@ impl PreviewState {
             .calendar
             .take_events()
             .into_iter()
+            .chain(self.calendar_borderless.take_events())
             .map(calendar_event_status)
             .collect::<Vec<_>>();
         if !statuses.is_empty() {
@@ -3327,6 +3359,10 @@ fn calendar_child_key() -> ChildKey {
     ChildKey::new("calendar")
 }
 
+fn calendar_borderless_child_key() -> ChildKey {
+    ChildKey::new("calendar-borderless")
+}
+
 fn status_bar_preview_layout(area: Rect) -> [Rect; 3] {
     Layout::default()
         .direction(Direction::Vertical)
@@ -3338,12 +3374,13 @@ fn status_bar_preview_layout(area: Rect) -> [Rect; 3] {
         .areas(area)
 }
 
-fn calendar_preview_layout(area: Rect) -> [Rect; 3] {
+fn calendar_preview_layout(area: Rect) -> [Rect; 4] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Fill(1),
+            Constraint::Ratio(1, 2),
+            Constraint::Ratio(1, 2),
             Constraint::Length(2),
         ])
         .areas(area)

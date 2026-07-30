@@ -41,6 +41,7 @@ const MONTH_EVENT_LINES: usize = 2;
 const WEEK_EVENT_LINES: usize = 3;
 const DAY_EVENT_LINES: usize = 5;
 const MIN_CALENDAR_CELL_WIDTH: u16 = 11;
+const QUICK_JUMP_TIMEOUT: StdDuration = StdDuration::from_secs(1);
 
 type IdFn<T, Id> = dyn Fn(&T) -> Id;
 type SpanFn<T> = dyn Fn(&T) -> CalendarSpan;
@@ -67,11 +68,14 @@ pub struct Calendar<T, Id = String, M = ()> {
     today: Date,
     first_day_of_week: Weekday,
     show_weekends: bool,
+    bordered: bool,
     highlighted_entry: Option<usize>,
     focused: bool,
     hotkey: Option<String>,
     keybindings: CalendarKeyBindings,
     pending_top_prefix: bool,
+    quick_jump_digit: Option<u8>,
+    quick_jump_elapsed: StdDuration,
     area: Rect,
     events: Vec<CalendarTypedEvent<Id>>,
 }
@@ -189,11 +193,14 @@ where
             today,
             first_day_of_week: Weekday::Monday,
             show_weekends: true,
+            bordered: true,
             highlighted_entry: None,
             focused: false,
             hotkey: None,
             keybindings: CalendarKeyBindings::default(),
             pending_top_prefix: false,
+            quick_jump_digit: None,
+            quick_jump_elapsed: StdDuration::ZERO,
             area: Rect::default(),
             events: Vec::new(),
         }
@@ -236,6 +243,19 @@ where
     pub fn show_weekends(mut self, show: bool) -> Self {
         self.set_show_weekends(show);
         self
+    }
+
+    pub fn bordered(mut self, bordered: bool) -> Self {
+        self.bordered = bordered;
+        self
+    }
+
+    pub fn set_bordered(&mut self, bordered: bool) {
+        self.bordered = bordered;
+    }
+
+    pub fn is_bordered(&self) -> bool {
+        self.bordered
     }
 
     pub fn is_showing_weekends(&self) -> bool {
@@ -337,6 +357,7 @@ where
         self.focused = focused;
         if !focused {
             self.pending_top_prefix = false;
+            self.clear_quick_jump();
         }
     }
 
@@ -371,6 +392,9 @@ where
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
+        if let Some(outcome) = self.handle_month_quick_jump(key) {
+            return outcome;
+        }
         if matches_key_specs(&self.keybindings.top_prefix, key) {
             if self.pending_top_prefix {
                 self.pending_top_prefix = false;
@@ -462,6 +486,52 @@ where
         self.set_view(view, None)
     }
 
+    fn handle_month_quick_jump(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
+        if self.view != CalendarView::Month {
+            return None;
+        }
+        if let Some(first) = self.quick_jump_digit {
+            if quick_jump_accepts(key) {
+                self.clear_quick_jump();
+                return Some(self.complete_month_quick_jump(first));
+            }
+            if let Some(second) = plain_digit(key) {
+                self.clear_quick_jump();
+                let day = first * 10 + second;
+                return Some(if day <= self.cursor.month().length(self.cursor.year()) {
+                    self.complete_month_quick_jump(day)
+                } else {
+                    CalendarOutcome::CHANGED
+                });
+            }
+            self.clear_quick_jump();
+        }
+        let digit = plain_digit(key)?;
+        if digit == 0 {
+            return Some(CalendarOutcome::HANDLED);
+        }
+        if digit <= 3 && digit * 10 <= self.cursor.month().length(self.cursor.year()) {
+            self.quick_jump_digit = Some(digit);
+            self.quick_jump_elapsed = StdDuration::ZERO;
+            return Some(CalendarOutcome::CHANGED);
+        }
+        Some(self.complete_month_quick_jump(digit))
+    }
+
+    fn complete_month_quick_jump(&mut self, day: u8) -> CalendarOutcome {
+        let date = self
+            .cursor
+            .replace_day(day)
+            .expect("quick-jump day is valid in cursor month");
+        self.set_cursor(date);
+        self.drill_to(CalendarView::Week)
+    }
+
+    fn clear_quick_jump(&mut self) {
+        self.quick_jump_digit = None;
+        self.quick_jump_elapsed = StdDuration::ZERO;
+    }
+
     fn activate(&mut self) -> CalendarOutcome {
         match self.view {
             CalendarView::Month => self.drill_to(CalendarView::Week),
@@ -517,6 +587,7 @@ where
         view: CalendarView,
         transition: Option<CalendarTypedEvent<Id>>,
     ) -> CalendarOutcome {
+        self.clear_quick_jump();
         if self.view == view {
             return CalendarOutcome::HANDLED;
         }
@@ -865,9 +936,32 @@ where
         ctx.request_redraw();
     }
 
-    fn tick(&mut self, _dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
-        TickResult::IDLE
+    fn tick(&mut self, dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
+        if self.quick_jump_digit.is_none() {
+            return TickResult::IDLE;
+        }
+        self.quick_jump_elapsed = self.quick_jump_elapsed.saturating_add(dt);
+        if self.quick_jump_elapsed >= QUICK_JUMP_TIMEOUT {
+            self.clear_quick_jump();
+            TickResult::CHANGED
+        } else {
+            TickResult::scheduled_after(QUICK_JUMP_TIMEOUT - self.quick_jump_elapsed)
+        }
     }
+}
+
+fn quick_jump_accepts(key: KeyEvent) -> bool {
+    matches!(key.code, Key::Enter | Key::Char(' ')) && key.modifiers.is_empty()
+}
+
+fn plain_digit(key: KeyEvent) -> Option<u8> {
+    if !key.modifiers.is_empty() {
+        return None;
+    }
+    let Key::Char(character) = key.code else {
+        return None;
+    };
+    character.to_digit(10).map(|digit| digit as u8)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

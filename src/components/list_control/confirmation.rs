@@ -141,7 +141,7 @@ where
     ) {
         if outcome == ConfirmationDialogOutcome::Confirmed
             && let Some(row_id) = self.pending_remove.take()
-            && self.data_view.remove_row(&row_id).is_some()
+            && self.data_view.remove_subtree(&row_id).is_some()
         {
             self.events.push(ListControlEvent::Removed { row_id });
         }

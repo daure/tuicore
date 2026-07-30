@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
@@ -17,7 +17,7 @@ where
     pub(super) fn render_month(&self, frame: &mut Frame, area: Rect) {
         let title = format!("{} {}", self.cursor.month(), self.cursor.year());
         self.render_panel(frame, area, title);
-        let inner = Panel::inner_area(area);
+        let inner = self.content_area(area);
         if inner.height < 2 {
             return;
         }
@@ -39,7 +39,7 @@ where
             ])
             .split(content_area);
         self.render_weekday_header(&mut buffer, rows[0]);
-        self.render_month_grid_lines(&mut buffer, &rows[1..]);
+        self.render_month_grid_lines(&mut buffer, &rows);
         let start = week_range(first_of_month(self.cursor), self.first_day_of_week).0;
         for week in 0..6 {
             let cols = calendar_columns(rows[week + 1], visible_offsets.len());
@@ -84,10 +84,7 @@ where
         if inner.is_empty() {
             return;
         }
-        let mut lines = vec![Line::from(Span::styled(
-            date.day().to_string(),
-            self.date_style(date, date.month() != self.cursor.month()),
-        ))];
+        let mut lines = vec![self.month_day_line(date)];
         let event_capacity = usize::from(inner.height.saturating_sub(1));
         let entries = self.entries_on(date);
         self.append_event_lines(
@@ -106,7 +103,7 @@ where
     pub(super) fn render_week(&self, frame: &mut Frame, area: Rect) {
         let (start, end) = week_range(self.cursor, self.first_day_of_week);
         self.render_panel(frame, area, format!("{start} — {end}"));
-        let inner = Panel::inner_area(area);
+        let inner = self.content_area(area);
         if inner.height == 0 {
             return;
         }
@@ -158,7 +155,7 @@ where
         }
         let mut lines = vec![
             Line::from(Span::styled(
-                weekday_short(date).to_uppercase(),
+                weekday_short(date),
                 Style::default().fg(theme().muted_fg()),
             )),
             Line::from(Span::styled(
@@ -182,14 +179,14 @@ where
     }
 
     fn render_month_grid_lines(&self, buffer: &mut Buffer, rows: &[Rect]) {
-        if rows.is_empty() {
+        if rows.len() < 2 {
             return;
         }
         let grid = rows[0].union(rows[rows.len() - 1]);
         let cols = calendar_columns(grid, self.visible_weekday_offsets().len());
         self.render_grid_vertical_lines(buffer, &cols);
         let join_xs = cols.iter().skip(1).map(|col| col.x).collect::<Vec<_>>();
-        for row in rows.iter().skip(1) {
+        for row in rows.iter().skip(2) {
             self.render_horizontal_line(buffer, row.y, grid.x, grid.width, &join_xs);
         }
     }
@@ -242,7 +239,7 @@ where
 
     pub(super) fn render_day(&self, frame: &mut Frame, area: Rect) {
         self.render_panel(frame, area, self.cursor.to_string());
-        let inner = Panel::inner_area(area);
+        let inner = self.content_area(area);
         let entries = self.entries_on(self.cursor);
         let mut lines = Vec::new();
         self.append_event_lines(
@@ -263,7 +260,7 @@ where
 
     pub(super) fn render_detail_view(&self, frame: &mut Frame, area: Rect) {
         self.render_panel(frame, area, String::new());
-        let inner = Panel::inner_area(area);
+        let inner = self.content_area(area);
         let Some(index) = self.highlighted_entry else {
             frame.render_widget(Paragraph::new("No entry selected"), inner);
             return;
@@ -284,7 +281,7 @@ where
         for (index, label) in labels.into_iter().enumerate() {
             Paragraph::new(label)
                 .style(Style::default().fg(theme().muted_fg()))
-                .render(cols[index], buffer);
+                .render(grid_cell_inner(cols[index], false, index > 0), buffer);
         }
     }
 
@@ -337,14 +334,42 @@ where
         ]);
         let title_width = line_width(&Line::from(title.as_str()));
         let legend_width = line_width(&legend);
-        let mut panel = Panel::new().focused(self.focused);
-        if !title.is_empty() {
-            panel = panel.top_left(title);
+        let show_legend = title_width + legend_width + 4
+            <= usize::from(area.width.saturating_sub(u16::from(self.bordered) * 4));
+        if self.bordered {
+            let mut panel = Panel::new().focused(self.focused);
+            if !title.is_empty() {
+                panel = panel.top_left(title);
+            }
+            if show_legend {
+                panel = panel.top_right_line(legend);
+            }
+            panel.render(frame, area);
+            return;
         }
-        if title_width + legend_width + 4 <= usize::from(area.width.saturating_sub(4)) {
-            panel = panel.top_right_line(legend);
+
+        let title_style = Style::default().fg(if self.focused {
+            theme().accent_fg()
+        } else {
+            theme().muted_fg()
+        });
+        frame.render_widget(Paragraph::new(title).style(title_style), area);
+        if show_legend {
+            frame.render_widget(Paragraph::new(legend).alignment(Alignment::Right), area);
         }
-        panel.render(frame, area);
+    }
+
+    fn content_area(&self, area: Rect) -> Rect {
+        if self.bordered {
+            Panel::inner_area(area)
+        } else {
+            Rect::new(
+                area.x,
+                area.y.saturating_add(1),
+                area.width,
+                area.height.saturating_sub(1),
+            )
+        }
     }
 
     pub(super) fn visible_weekday_offsets(&self) -> Vec<usize> {
@@ -374,6 +399,30 @@ where
         } else {
             Style::default().fg(t.text_fg())
         }
+    }
+
+    fn month_day_line(&self, date: Date) -> Line<'static> {
+        let style = self.date_style(date, date.month() != self.cursor.month());
+        let label = date.day().to_string();
+        if !self.month_quick_jump_matches(date) {
+            return Line::from(Span::styled(label, style));
+        }
+        Line::from(vec![
+            Span::styled(
+                label[..1].to_owned(),
+                style.add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled(label[1..].to_owned(), style),
+        ])
+    }
+
+    fn month_quick_jump_matches(&self, date: Date) -> bool {
+        let Some(digit) = self.quick_jump_digit else {
+            return false;
+        };
+        date.year() == self.cursor.year()
+            && date.month() == self.cursor.month()
+            && (date.day() == digit || date.day() / 10 == digit)
     }
 
     fn date_cell_style(&self, date: Date) -> Style {

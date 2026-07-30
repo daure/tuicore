@@ -608,7 +608,7 @@ where
         let Some(row_id) = self.data_view.highlighted_id() else {
             return false;
         };
-        if self.data_view.remove_row(&row_id).is_none() {
+        if self.data_view.remove_subtree(&row_id).is_none() {
             return false;
         }
         self.events.push(ListControlEvent::Removed { row_id });

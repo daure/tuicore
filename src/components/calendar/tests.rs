@@ -1,7 +1,8 @@
 use super::*;
 use crate::event::{Key, KeyModifiers};
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+use std::time::Duration as StdDuration;
 use time::{Duration, Month, PrimitiveDateTime, Time};
 
 #[derive(Clone)]
@@ -25,8 +26,10 @@ fn rendered_month_header(calendar: &Calendar<DemoEntry, &'static str>) -> Vec<St
     let buffer = terminal.backend().buffer();
     columns
         .into_iter()
-        .map(|column| {
-            (column.x..column.x + 3)
+        .enumerate()
+        .map(|(index, column)| {
+            let x = column.x + u16::from(index > 0);
+            (x..x + 3)
                 .map(|x| buffer.cell((x, inner.y)).unwrap().symbol())
                 .collect()
         })
@@ -105,6 +108,120 @@ fn drilldown_and_back_follow_stack() {
 }
 
 #[test]
+fn month_quick_jump_waits_for_a_second_digit_then_drills_to_week() {
+    let mut calendar = demo_calendar().view(CalendarView::Month);
+
+    assert_eq!(calendar.on_key(Key::Char('1')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 22));
+    assert_eq!(calendar.current_view(), CalendarView::Month);
+
+    assert_eq!(calendar.on_key(Key::Char('8')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 18));
+    assert_eq!(calendar.current_view(), CalendarView::Week);
+    assert!(
+        calendar
+            .take_events()
+            .contains(&CalendarTypedEvent::DrillDown {
+                from: CalendarView::Month,
+                to: CalendarView::Week,
+            })
+    );
+
+    assert_eq!(calendar.on_key(Key::Esc), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.current_view(), CalendarView::Month);
+}
+
+#[test]
+fn month_quick_jump_waits_only_when_a_matching_two_digit_day_exists() {
+    let mut june = demo_calendar().view(CalendarView::Month);
+    assert_eq!(june.on_key(Key::Char('3')), CalendarOutcome::CHANGED);
+    assert_eq!(june.cursor_date(), date(2026, Month::June, 22));
+    assert_eq!(june.current_view(), CalendarView::Month);
+
+    let february_date = date(2026, Month::February, 15);
+    let mut february = demo_calendar()
+        .today(february_date)
+        .view(CalendarView::Month);
+    assert_eq!(february.on_key(Key::Char('3')), CalendarOutcome::CHANGED);
+    assert_eq!(february.cursor_date(), date(2026, Month::February, 3));
+    assert_eq!(february.current_view(), CalendarView::Week);
+}
+
+#[test]
+fn month_quick_jump_enter_and_space_accept_a_pending_single_digit() {
+    for accept_key in [Key::Enter, Key::Char(' ')] {
+        let mut calendar = demo_calendar().view(CalendarView::Month);
+        calendar.on_key(Key::Char('1'));
+
+        assert_eq!(calendar.on_key(accept_key), CalendarOutcome::CHANGED);
+        assert_eq!(calendar.cursor_date(), date(2026, Month::June, 1));
+        assert_eq!(calendar.current_view(), CalendarView::Week);
+    }
+}
+
+#[test]
+fn month_quick_jump_expires_after_one_second() {
+    let mut calendar = demo_calendar().view(CalendarView::Month);
+    calendar.on_key(Key::Char('1'));
+
+    let tick = calendar.tick(StdDuration::from_millis(1_001), crate::animation_settings());
+    assert!(tick.changed);
+
+    calendar.on_key(Key::Char('8'));
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 8));
+    assert_eq!(calendar.current_view(), CalendarView::Week);
+}
+
+#[test]
+fn month_quick_jump_underlines_matching_days_in_current_month() {
+    let mut calendar = demo_calendar().view(CalendarView::Month);
+    calendar.on_key(Key::Char('1'));
+
+    for day in 1..=19 {
+        let mut terminal = Terminal::new(TestBackend::new(11, 3)).expect("terminal should build");
+        terminal
+            .draw(|frame| {
+                calendar.render_month_cell(frame, frame.area(), date(2026, Month::June, day));
+            })
+            .expect("month cell should render");
+        let underlined = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(Modifier::UNDERLINED))
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        let expected = if day == 1 || day >= 10 { "1" } else { "" };
+        assert_eq!(underlined, expected, "day {day}");
+    }
+
+    let mut surrounding = Terminal::new(TestBackend::new(11, 3)).expect("terminal should build");
+    surrounding
+        .draw(|frame| {
+            calendar.render_month_cell(frame, frame.area(), date(2026, Month::July, 1));
+        })
+        .expect("surrounding month cell should render");
+    assert!(
+        surrounding
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .all(|cell| !cell.modifier.contains(Modifier::UNDERLINED))
+    );
+}
+
+#[test]
+fn week_view_does_not_quick_jump_on_digits() {
+    let mut calendar = demo_calendar().view(CalendarView::Week);
+
+    assert_eq!(calendar.on_key(Key::Char('1')), CalendarOutcome::IDLE);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 22));
+    assert_eq!(calendar.current_view(), CalendarView::Week);
+}
+
+#[test]
 fn narrow_month_and_week_views_scroll_horizontally_to_the_cursor() {
     let week = demo_calendar()
         .view(CalendarView::Week)
@@ -116,8 +233,8 @@ fn narrow_month_and_week_views_scroll_horizontally_to_the_cursor() {
     let week_header = rendered_row(&week, 24, 1);
     let month_header = rendered_row(&month, 24, 1);
 
-    assert!(week_header.contains("FRI"), "{week_header}");
-    assert!(!week_header.contains("MON"), "{week_header}");
+    assert!(week_header.contains("Fri"), "{week_header}");
+    assert!(!week_header.contains("Mon"), "{week_header}");
     assert!(month_header.contains("Fri"), "{month_header}");
     assert!(!month_header.contains("Mon"), "{month_header}");
 
@@ -147,8 +264,34 @@ fn first_month_and_week_cells_have_no_left_padding() {
     assert_eq!(month_date_row.chars().nth(1), Some('1'));
     assert_eq!(
         week_header.chars().skip(1).take(3).collect::<String>(),
-        "MON"
+        "Mon"
     );
+}
+
+#[test]
+fn month_column_dividers_extend_through_weekday_header() {
+    let calendar = demo_calendar().view(CalendarView::Month);
+    let area = Rect::new(0, 0, 100, 12);
+    let inner = Panel::inner_area(area);
+    let content_width = calendar_content_width(inner.width, 7);
+    let columns = calendar_columns(Rect::new(0, 0, content_width, inner.height), 7);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .unwrap();
+
+    for column in columns.iter().skip(1) {
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((inner.x + column.x, inner.y))
+                .unwrap()
+                .symbol(),
+            "│"
+        );
+    }
 }
 
 #[test]
@@ -637,13 +780,13 @@ fn week_view_removes_weekend_columns() {
         .first_day_of_week(Weekday::Monday);
     assert_eq!(
         rendered_week_headers(&visible),
-        ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     );
 
     let hidden = visible.show_weekends(false);
     assert_eq!(
         rendered_week_headers(&hidden),
-        ["MON", "TUE", "WED", "THU", "FRI"]
+        ["Mon", "Tue", "Wed", "Thu", "Fri"]
     );
 }
 
@@ -912,6 +1055,23 @@ fn constrained_width_preserves_title_instead_of_overwriting_it() {
     assert!(border.contains(" 2026-06-22 — 2026-06-28 "));
     assert!(!border.contains(" Week •"));
     assert!(!border.contains(" Day |d|"));
+}
+
+#[test]
+fn borderless_calendar_removes_only_outer_border() {
+    let calendar = demo_calendar().bordered(false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert!(!calendar.is_bordered());
+    assert!(buffer_row(buffer, 0, 100).starts_with("June 2026"));
+    assert!(buffer_row(buffer, 0, 100).contains("Day |d| · Week |w| · Month |m|"));
+    assert!(buffer_row(buffer, 1, 100).starts_with("Mon"));
+    assert_ne!(buffer.cell((0, 0)).unwrap().symbol(), "┌");
 }
 
 fn buffer_row(buffer: &Buffer, y: u16, width: u16) -> String {

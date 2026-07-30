@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::{
     Animated, AnimationSettings, FocusCtx, KeyModifiers, LayoutCtx, LayoutProposal, ScrollOffset,
-    TuiNode,
+    TreeAdapter, TuiNode,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -46,6 +46,55 @@ fn table(row_count: usize) -> ListControl<Row, usize> {
         .constrained(),
     ])
     .headers(true)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeRow {
+    id: usize,
+    parent: Option<usize>,
+}
+
+#[test]
+fn removing_tree_row_removes_its_complete_subtree() {
+    let mut control: ListControl<TreeRow, usize> = ListControl::list(
+        [
+            TreeRow {
+                id: 1,
+                parent: None,
+            },
+            TreeRow {
+                id: 2,
+                parent: Some(1),
+            },
+            TreeRow {
+                id: 3,
+                parent: Some(2),
+            },
+            TreeRow {
+                id: 4,
+                parent: None,
+            },
+        ],
+        |row: &TreeRow| row.id,
+        |_| String::new(),
+        |_, _| unreachable!("removal test does not add rows"),
+    )
+    .tree(TreeAdapter::parent_id(|row: &TreeRow| row.parent));
+    control.data_view_mut().highlight_id(&1);
+
+    assert!(control.remove_highlighted());
+
+    assert_eq!(
+        control.items(),
+        &[TreeRow {
+            id: 4,
+            parent: None
+        }]
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Removed { row_id: 1 }]
+    );
 }
 
 fn layout_adding(control: &mut ListControl<Row, usize>, area: Rect) {

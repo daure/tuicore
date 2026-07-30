@@ -553,6 +553,16 @@ where
         Some(removed)
     }
 
+    pub fn remove_subtree(&mut self, id: &Id) -> Option<T> {
+        if !self.rows.iter().any(|row| &(self.row_id)(row) == id) {
+            return None;
+        }
+        for descendant_id in self.descendant_ids(id) {
+            self.remove_row(&descendant_id);
+        }
+        self.remove_row(id)
+    }
+
     pub fn append_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
         self.extend_rows(rows)
     }
