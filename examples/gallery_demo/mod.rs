@@ -1,3 +1,4 @@
+pub(crate) mod checklist;
 pub(crate) mod data;
 pub(crate) mod dialogs;
 pub(crate) mod dropdowns;

@@ -3550,7 +3550,10 @@ mod tests {
             .child("list", list, FlexItem::fixed(6))
             .child("sibling", sibling, FlexItem::fit_content());
         let events = [
-            TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            TuiEvent::Key(KeyEvent {
+                code: Key::Char('x'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
             TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
         ];
 

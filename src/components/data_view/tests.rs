@@ -93,6 +93,92 @@ fn focused_event_precedence_can_be_disabled_for_app_hotkeys() {
 }
 
 #[test]
+fn leaf_only_tree_omits_empty_chevron_gutter() {
+    let view = DataView::list(
+        [
+            Row {
+                id: 1,
+                parent: None,
+                name: "Alpha",
+            },
+            Row {
+                id: 2,
+                parent: None,
+                name: "Beta",
+            },
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .tree_glyphs(TreeGlyphs::ASCII)
+    .selection_mode(SelectionMode::Multi)
+    .selection_glyphs(SelectionGlyphs::ASCII);
+    let mut terminal = Terminal::new(TestBackend::new(20, 2)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "["
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        "["
+    );
+}
+
+#[test]
+fn tree_with_branch_preserves_chevron_gutter_for_leaf_rows() {
+    let view = DataView::list(
+        [
+            Row {
+                id: 1,
+                parent: None,
+                name: "Parent",
+            },
+            Row {
+                id: 2,
+                parent: Some(1),
+                name: "Child",
+            },
+            Row {
+                id: 3,
+                parent: None,
+                name: "Leaf",
+            },
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .tree_glyphs(TreeGlyphs::ASCII)
+    .expanded([1])
+    .selection_mode(SelectionMode::Multi)
+    .selection_glyphs(SelectionGlyphs::ASCII);
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 2)).unwrap().symbol(),
+        " "
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((1, 2)).unwrap().symbol(),
+        " "
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((2, 2)).unwrap().symbol(),
+        "["
+    );
+}
+
+#[test]
 fn row_update_preserves_order_and_resynchronizes_filtered_highlight() {
     let mut view = DataView::new(
         [(1, "Ada".to_string()), (2, "Grace".to_string())],
@@ -790,7 +876,24 @@ fn empty_transform_result_renders_no_results_message() {
         .collect::<String>();
 
     assert_eq!(message, "No results found.");
-    assert_eq!(buffer.cell((0, 0)).unwrap().fg, crate::theme().subtle_fg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, crate::theme().muted_fg());
+}
+
+#[test]
+fn empty_message_can_be_overridden() {
+    let view = DataView::list(Vec::<usize>::new(), |row| *row, |row| row.to_string())
+        .empty_message("Nothing to show.");
+    let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 40, 3)))
+        .expect("data view should render");
+
+    let buffer = terminal.backend().buffer();
+    let message = (0..16)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+
+    assert_eq!(message, "Nothing to show.");
 }
 
 #[test]
@@ -2014,7 +2117,9 @@ fn single_selection_styles_row_without_selection_glyph() {
 #[test]
 fn tree_prefix_preserves_line_style_and_alignment() {
     let accent = crate::theme().accent_fg();
-    let mut view = DataView::new([Row::new(1, "X"), Row::new(2, "Y")], |row| row.id)
+    let mut child = Row::new(2, "Y");
+    child.parent = Some(1);
+    let mut view = DataView::new([Row::new(1, "X"), child], |row| row.id)
         .column(Column::rich(
             "name",
             "Name",
@@ -2025,7 +2130,8 @@ fn tree_prefix_preserves_line_style_and_alignment() {
                     .centered()
             },
         ))
-        .tree(TreeAdapter::parent_id(|row: &Row| row.parent));
+        .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+        .expanded([1]);
     view.highlighted = 1;
     let mut terminal = Terminal::new(TestBackend::new(9, 2)).expect("terminal should build");
 

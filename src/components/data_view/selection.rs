@@ -142,6 +142,23 @@ where
         self.take_events()
     }
 
+    pub(crate) fn drain_selection_changes(&mut self) -> Vec<(Vec<Id>, Vec<Id>, Vec<Id>)> {
+        let mut changes = Vec::new();
+        let mut retained = Vec::new();
+        for event in self.events.drain(..) {
+            match event {
+                DataViewTypedEvent::SelectionChanged {
+                    selected,
+                    added,
+                    removed,
+                } => changes.push((selected, added, removed)),
+                event => retained.push(event),
+            }
+        }
+        self.events = retained;
+        changes
+    }
+
     pub(super) fn activate_highlighted(&mut self) -> DataViewOutcome {
         let Some(row_id) = self.highlighted_id() else {
             return DataViewOutcome::IDLE;

@@ -12,6 +12,7 @@ mod render;
 mod selection;
 #[cfg(test)]
 mod tests;
+mod tree_edit;
 mod tree_rows;
 
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
@@ -35,6 +36,7 @@ pub use model::{
 };
 pub(crate) use model::{ReorderSnapshot, ReorderUnavailableReason};
 use model::{RowIdFn, VisibleRow};
+pub(crate) use tree_edit::TreeEditSnapshot;
 
 const HORIZONTAL_JUMP_PERCENT: usize = 70;
 const CELL_RIGHT_PADDING: usize = 1;
@@ -46,6 +48,7 @@ const DROPDOWN_SEARCH_FOCUS: &str = "input";
 const EMPTY_CHOICE_ID: &str = "";
 const HEADER_PICK_TIMEOUT: Duration = Duration::from_secs(1);
 const REORDER_HIGHLIGHT_DURATION: Duration = Duration::from_millis(250);
+const DEFAULT_EMPTY_MESSAGE: &str = "No results found.";
 
 type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
@@ -67,6 +70,7 @@ pub struct DataView<T, Id> {
     row_id: Box<RowIdFn<T, Id>>,
     copy_formatter: Option<Box<CopyFormatter<T>>>,
     empty_state: Option<SeasonalEmptyState>,
+    empty_message: String,
     tree: Option<TreeAdapter<T, Id>>,
     expanded: HashSet<Id>,
     highlighted: usize,
@@ -153,6 +157,7 @@ where
             row_id: Box::new(row_id),
             copy_formatter: None,
             empty_state: None,
+            empty_message: DEFAULT_EMPTY_MESSAGE.to_string(),
             tree: None,
             expanded: HashSet::new(),
             highlighted: 0,
@@ -235,6 +240,11 @@ where
 
     pub fn empty_state(mut self, empty_state: SeasonalEmptyState) -> Self {
         self.empty_state = Some(empty_state);
+        self
+    }
+
+    pub fn empty_message(mut self, message: impl Into<String>) -> Self {
+        self.empty_message = message.into();
         self
     }
 

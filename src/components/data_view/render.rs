@@ -96,6 +96,7 @@ where
         let column_widths = self
             .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
         let selection_descendants = self.selection_descendants_by_id();
+        let show_tree_gutter = self.shows_tree_gutter();
 
         if self.shows_headers() {
             let header_viewport = Rect::new(
@@ -150,6 +151,7 @@ where
                     highlighted,
                     row_style,
                     &selection_descendants,
+                    show_tree_gutter,
                 );
             }
         }
@@ -161,9 +163,12 @@ where
     }
 
     fn render_empty_state(&self, frame: &mut Frame, body_area: Rect) {
-        let style = Style::default().fg(theme().subtle_fg());
+        let style = Style::default().fg(theme().muted_fg());
         let Some(empty_state) = self.empty_state.as_ref() else {
-            frame.render_widget(Paragraph::new("No results found.").style(style), body_area);
+            frame.render_widget(
+                Paragraph::new(self.empty_message.as_str()).style(style),
+                body_area,
+            );
             return;
         };
         empty_state.render_state(frame, body_area);
@@ -257,6 +262,7 @@ where
         highlighted: bool,
         row_style: Option<Style>,
         selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
     ) {
         let cells = self.column_areas(area, column_widths, offset_x);
         for (column_index, (column, cell_area)) in self.visible_columns().zip(cells).enumerate() {
@@ -275,8 +281,8 @@ where
                     focused: self.focused,
                 },
             );
-            if column_index == 0 && (self.tree.is_some() || self.displays_selection_glyphs()) {
-                line = self.with_row_prefix(line, row, selection_descendants);
+            if column_index == 0 && (show_tree_gutter || self.displays_selection_glyphs()) {
+                line = self.with_row_prefix(line, row, selection_descendants, show_tree_gutter);
             }
             line = underline_search_matches(
                 line,
@@ -303,6 +309,7 @@ where
         line: Line<'static>,
         row: &VisibleRow<'_, T, Id>,
         selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
     ) -> Line<'static> {
         let Line {
             spans: original_spans,
@@ -310,7 +317,7 @@ where
             alignment,
         } = line;
         let mut spans = Vec::new();
-        if self.tree.is_some() {
+        if show_tree_gutter {
             let indent = " ".repeat(
                 row.depth
                     .saturating_mul(preset().data_view().tree_indent_width()),

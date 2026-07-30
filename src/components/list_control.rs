@@ -10,8 +10,6 @@ mod tests;
 
 use ratatui::layout::{Constraint, Rect};
 
-#[cfg(test)]
-use super::PanelTitlePosition;
 use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView, Dropdown,
@@ -101,6 +99,10 @@ pub enum ListControlEvent<Id> {
     Added {
         row_id: Id,
     },
+    AddedChild {
+        row_id: Id,
+        parent_id: Id,
+    },
     Removed {
         row_id: Id,
     },
@@ -114,11 +116,21 @@ pub enum ListControlEvent<Id> {
     Reordered {
         row_ids: Vec<Id>,
     },
+    TreeMoved {
+        row_id: Id,
+        parent_id: Option<Id>,
+        sibling_index: usize,
+    },
     ReorderCancelled {
         row_id: Id,
     },
     ReorderUnavailable {
         reason: ListControlReorderUnavailable,
+    },
+    CheckedChanged {
+        checked: Vec<Id>,
+        added: Vec<Id>,
+        removed: Vec<Id>,
     },
 }
 
@@ -136,6 +148,7 @@ pub enum ListControlReorderUnavailable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListControlKeyBindings {
     pub add: Vec<KeySpec>,
+    pub add_child: Vec<KeySpec>,
     pub remove: Vec<KeySpec>,
     pub edit: Vec<KeySpec>,
     pub reorder: Vec<KeySpec>,
@@ -145,7 +158,11 @@ impl Default for ListControlKeyBindings {
     fn default() -> Self {
         Self {
             add: vec![KeySpec::plain('+')],
-            remove: vec![KeySpec::plain('x')],
+            add_child: vec![KeySpec::plain('\\')],
+            remove: vec![KeySpec::key_with_modifiers(
+                Key::Char('x'),
+                crate::KeyModifiers::CONTROL,
+            )],
             edit: vec![KeySpec::plain('e')],
             reorder: vec![KeySpec::key_with_modifiers(
                 Key::Char('m'),
@@ -163,6 +180,11 @@ impl ListControlKeyBindings {
 
     pub fn remove(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.remove = keys.into_iter().collect();
+        self
+    }
+
+    pub fn add_child(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.add_child = keys.into_iter().collect();
         self
     }
 
@@ -184,6 +206,10 @@ impl ListControlKeyBindings {
         self.remove.iter().any(|binding| binding.matches(key))
     }
 
+    fn add_child_matches(&self, key: KeyEvent) -> bool {
+        self.add_child.iter().any(|binding| binding.matches(key))
+    }
+
     fn edit_matches(&self, key: KeyEvent) -> bool {
         self.edit.iter().any(|binding| binding.matches(key))
     }
@@ -201,6 +227,14 @@ struct ReorderState<Id> {
     pending_g: bool,
 }
 
+struct TreeReorderState<Id> {
+    snapshot: super::data_view::TreeEditSnapshot<Id>,
+    staged_snapshot: super::data_view::TreeEditSnapshot<Id>,
+    scroll_snapshot: DataViewScrollSnapshot,
+    moving_id: Id,
+    changed: bool,
+}
+
 pub struct ListControl<T, Id, M = ()> {
     data_view: DataView<T, Id>,
     panel: Panel,
@@ -211,6 +245,7 @@ pub struct ListControl<T, Id, M = ()> {
     editable: Option<Editable<T>>,
     keys: ListControlKeyBindings,
     adding: bool,
+    adding_parent: Option<Option<Id>>,
     editing: Option<Id>,
     events: Vec<ListControlEvent<Id>>,
     area: Rect,
@@ -228,6 +263,7 @@ pub struct ListControl<T, Id, M = ()> {
     confirmation_bounds: Rect,
     reorder_column: Option<String>,
     reorder: Option<ReorderState<Id>>,
+    tree_reorder: Option<TreeReorderState<Id>>,
 }
 
 impl<T, Id, M: 'static> ListControl<T, Id, M>
@@ -298,6 +334,7 @@ where
             editable: None,
             keys: ListControlKeyBindings::default(),
             adding: false,
+            adding_parent: None,
             editing: None,
             events: Vec::new(),
             area: Rect::default(),
@@ -318,6 +355,7 @@ where
             confirmation_bounds: Rect::default(),
             reorder_column: None,
             reorder: None,
+            tree_reorder: None,
         }
     }
 
@@ -352,6 +390,11 @@ where
 
     pub fn empty_state(mut self, empty_state: SeasonalEmptyState) -> Self {
         self.data_view = self.data_view.empty_state(empty_state);
+        self
+    }
+
+    pub fn empty_message(mut self, message: impl Into<String>) -> Self {
+        self.data_view = self.data_view.empty_message(message);
         self
     }
 
@@ -391,6 +434,31 @@ where
 
     pub fn selection_trigger(mut self, trigger: SelectionTrigger) -> Self {
         self.data_view = self.data_view.selection_trigger(trigger);
+        self
+    }
+
+    pub fn selection_propagation(mut self, propagation: super::SelectionPropagation) -> Self {
+        self.data_view = self.data_view.selection_propagation(propagation);
+        self
+    }
+
+    pub fn selection_glyphs(mut self, glyphs: super::SelectionGlyphs) -> Self {
+        self.data_view = self.data_view.selection_glyphs(glyphs);
+        self
+    }
+
+    pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
+        self.data_view = self.data_view.selected(ids);
+        self
+    }
+
+    pub fn tree(mut self, tree: super::TreeAdapter<T, Id>) -> Self {
+        self.data_view = self.data_view.tree(tree);
+        self
+    }
+
+    pub fn expanded(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
+        self.data_view = self.data_view.expanded(ids);
         self
     }
 
@@ -521,10 +589,18 @@ where
     }
 
     pub fn is_reordering(&self) -> bool {
-        self.reorder.is_some()
+        self.reorder.is_some() || self.tree_reorder.is_some()
     }
 
     pub fn take_events(&mut self) -> Vec<ListControlEvent<Id>> {
+        self.events
+            .extend(self.data_view.drain_selection_changes().into_iter().map(
+                |(checked, added, removed)| ListControlEvent::CheckedChanged {
+                    checked,
+                    added,
+                    removed,
+                },
+            ));
         std::mem::take(&mut self.events)
     }
 
@@ -610,8 +686,20 @@ where
             ctx.focus_next_control();
         } else if crate::keybindings().focus().previous_control_matches(key) {
             ctx.focus_previous_control();
+        } else if let Some(changed) = self.handle_quick_tree_move(key) {
+            if changed {
+                ctx.request_layout();
+            }
+        } else if self.keys.add_child_matches(key) && self.begin_add_child() {
+            Self::focus_child(
+                ctx,
+                route,
+                Self::input_slot(0).as_str(),
+                self.inputs[0].focus_id(),
+            );
+            ctx.request_layout();
         } else if self.keys.add_matches(key) {
-            self.begin_add();
+            self.begin_add_sibling();
             Self::focus_child(
                 ctx,
                 route,

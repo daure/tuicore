@@ -239,10 +239,13 @@ impl<M> DatePickerDropdown<M> {
         } else {
             Style::default().fg(t.text_fg())
         };
-        let value = self
-            .current_value()
-            .map(|date| date.to_string())
-            .unwrap_or_else(|| self.placeholder.clone());
+        let value = self.current_value().map(|date| date.to_string());
+        let text_style = if value.is_none() {
+            style.fg(t.muted_fg())
+        } else {
+            style
+        };
+        let value = value.unwrap_or_else(|| self.placeholder.clone());
         let icon = " ";
         let mut spans = vec![Span::styled(icon.to_string(), style)];
         spans.extend(hotkey_label_spans(
@@ -250,12 +253,12 @@ impl<M> DatePickerDropdown<M> {
             self.inline_hotkey(),
             crate::HotkeyLabelMode::PreferMnemonic,
             self.pending_hotkey_prefix.as_deref(),
-            style,
-            hotkey_underline_style(style),
+            text_style,
+            hotkey_underline_style(text_style),
         ));
         let used = line_width(&Line::from(spans.clone()));
         if width as usize > used {
-            spans.push(Span::styled(" ".repeat(width as usize - used), style));
+            spans.push(Span::styled(" ".repeat(width as usize - used), text_style));
         }
         Line::from(spans)
     }

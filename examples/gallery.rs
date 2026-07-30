@@ -2,6 +2,7 @@ use std::time::Duration;
 
 mod gallery_demo;
 
+use gallery_demo::checklist::{ChecklistShowcase, release_checklist};
 use gallery_demo::data::{DataViewMode, DemoRow, data_event_status, data_view_layout};
 use gallery_demo::dialogs::{
     DialogExample, DockOverlayExample, GalleryDialogContent, GalleryDockOverlayContent,
@@ -769,6 +770,7 @@ struct PreviewState {
     list_compact: ListControlShowcase,
     list_entity_table: ListControlShowcase,
     list_reorder: ListControlShowcase,
+    checklist: ChecklistShowcase,
     panel_top_left: Dropdown<PanelTitleChoice, &'static str>,
     panel_top_right: Dropdown<PanelTitleChoice, &'static str>,
     panel_bottom_left: Dropdown<PanelTitleChoice, &'static str>,
@@ -963,6 +965,7 @@ impl PreviewState {
             list_compact: compact_names(),
             list_entity_table: entity_table(),
             list_reorder: reorder_mode(),
+            checklist: release_checklist(),
             panel_top_left: panel_title_dropdown(PanelTitlePosition::TopLeft),
             panel_top_right: panel_title_dropdown(PanelTitlePosition::TopRight),
             panel_bottom_left: panel_title_dropdown(PanelTitlePosition::BottomLeft),
@@ -1071,6 +1074,11 @@ impl PreviewState {
             preview if preview.is_list_control() => {
                 ctx.with_overlay_bounds(overlay_bounds, |ctx| {
                     self.active_list_control_mut(preview).layout(area, ctx);
+                });
+            }
+            PreviewKind::Checklist => {
+                ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                    self.checklist.layout(area, ctx);
                 });
             }
             PreviewKind::Dropdown => self.layout_dropdowns(area, overlay_bounds, ctx),
@@ -1264,6 +1272,7 @@ impl PreviewState {
             PreviewKind::ListReorder => {
                 self.active_list_control(preview).render(frame, area, ctx);
             }
+            PreviewKind::Checklist => self.checklist.render(frame, area, ctx),
             PreviewKind::Dropdown => self.render_dropdown_preview(frame, area, ctx),
             PreviewKind::Menu => self.render_menu(frame, area, ctx),
             PreviewKind::LayoutFlex => self.render_layout_flex(frame, area, ctx),
@@ -1460,6 +1469,9 @@ impl PreviewState {
             return self
                 .active_list_control_mut(preview)
                 .dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::Checklist {
+            return self.checklist.dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::Panel {
             if let Some(route) = panel_demo_child_route(route) {
@@ -1722,6 +1734,7 @@ impl PreviewState {
             preview if preview.is_list_control() => self
                 .active_list_control_mut(preview)
                 .dispatch_focus(target, focused, ctx),
+            PreviewKind::Checklist => self.checklist.dispatch_focus(target, focused, ctx),
             PreviewKind::Panel => {
                 if !dispatch_focus_child(
                     &mut self.panel_demo,
@@ -1912,6 +1925,7 @@ impl PreviewState {
             .merge(self.list_compact.tick(dt, settings))
             .merge(self.list_entity_table.tick(dt, settings))
             .merge(self.list_reorder.tick(dt, settings))
+            .merge(self.checklist.tick(dt, settings))
             .merge(Animated::tick(&mut self.panel_demo, dt, settings))
             .merge(self.panel_join_demo.tick(dt, settings))
             .merge(self.panel_tabs_join_demo.tick(dt, settings))
@@ -1968,6 +1982,7 @@ impl PreviewState {
         self.list_compact.init(ctx);
         self.list_entity_table.init(ctx);
         self.list_reorder.init(ctx);
+        self.checklist.init(ctx);
         self.menu_button.init(ctx);
     }
 
@@ -1977,12 +1992,14 @@ impl PreviewState {
         self.list_compact.mount(ctx);
         self.list_entity_table.mount(ctx);
         self.list_reorder.mount(ctx);
+        self.checklist.mount(ctx);
         self.menu_button.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.menu_button.unmount(ctx);
         self.list_reorder.unmount(ctx);
+        self.checklist.unmount(ctx);
         self.list_entity_table.unmount(ctx);
         self.list_compact.unmount(ctx);
         self.validated_form.unmount(ctx);
@@ -1992,6 +2009,7 @@ impl PreviewState {
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.menu_button.destroy(ctx);
         self.list_reorder.destroy(ctx);
+        self.checklist.destroy(ctx);
         self.list_entity_table.destroy(ctx);
         self.list_compact.destroy(ctx);
         self.validated_form.destroy(ctx);
@@ -3590,10 +3608,11 @@ enum ComponentKind {
     ListCompact,
     ListEntityTable,
     ListReorder,
+    Checklist,
 }
 
 impl ComponentKind {
-    const ALL: [Self; 45] = [
+    const ALL: [Self; 46] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3639,6 +3658,7 @@ impl ComponentKind {
         Self::ListCompact,
         Self::ListEntityTable,
         Self::ListReorder,
+        Self::Checklist,
     ];
 
     fn title(self) -> &'static str {
@@ -3688,6 +3708,7 @@ impl ComponentKind {
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
             Self::ListReorder => "Reorder mode",
+            Self::Checklist => "Checklist",
         }
     }
 
@@ -3771,6 +3792,7 @@ impl ComponentKind {
             Self::ListControl | Self::ListCompact => PreviewKind::ListCompact,
             Self::ListEntityTable => PreviewKind::ListEntityTable,
             Self::ListReorder => PreviewKind::ListReorder,
+            Self::Checklist => PreviewKind::Checklist,
         }
     }
 }
@@ -3817,6 +3839,7 @@ enum PreviewKind {
     ListCompact,
     ListEntityTable,
     ListReorder,
+    Checklist,
 }
 
 impl PreviewKind {
@@ -3862,6 +3885,7 @@ impl PreviewKind {
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
             Self::ListReorder => "Reorder mode",
+            Self::Checklist => "Checklist",
         }
     }
 
@@ -3973,7 +3997,10 @@ mod tests {
 
         controls[0].dispatch_event(
             &EventRoute::new(TreePath::from_keys([ChildKey::new("data")])),
-            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('x'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
             &mut EventCtx::default(),
         );
 

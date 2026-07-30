@@ -21,6 +21,22 @@ fn focused_field_is_bold_and_unfocused_field_is_not() {
 }
 
 #[test]
+fn empty_date_picker_field_uses_muted_placeholder_foreground() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+
+    for focused in [false, true] {
+        dropdown.focused = focused;
+        let line = dropdown.field_line(24);
+        let placeholder = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("Select date"))
+            .expect("placeholder span should render");
+        assert_eq!(placeholder.style.fg, Some(theme().muted_fg()));
+    }
+}
+
+#[test]
 fn date_picker_dropdown_normalizes_committed_hotkey() {
     let mut dropdown = DatePickerDropdown::<()>::new().hotkey(" D ");
     let mut ctx = EventCtx::new(crate::animation_settings());

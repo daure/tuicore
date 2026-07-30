@@ -7,7 +7,7 @@ use tuicore::{
     EventCtx, EventRoute, FocusCtx, FocusManager, FocusRequest, HotkeyEvent, Key, KeyEvent,
     KeyModifiers, KeySpec, LayoutCtx, LayoutEngine, ListControl, ListControlEvent,
     ListControlField, ListControlKeyBindings, ListControlReorderUnavailable, Panel, RenderCtx,
-    SortDirection, TreeDispatcher, TreePath, TuiEvent, TuiNode,
+    SortDirection, TreeAdapter, TreeDispatcher, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,6 +243,320 @@ fn ranked_rows() -> [RankedRow; 3] {
     ]
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeRow {
+    id: usize,
+    parent: Option<usize>,
+    name: String,
+}
+
+fn tree_control() -> ListControl<TreeRow, usize> {
+    ListControl::list(
+        [
+            TreeRow {
+                id: 1,
+                parent: None,
+                name: "Release".into(),
+            },
+            TreeRow {
+                id: 2,
+                parent: Some(1),
+                name: "Test".into(),
+            },
+            TreeRow {
+                id: 3,
+                parent: Some(1),
+                name: "Package".into(),
+            },
+            TreeRow {
+                id: 4,
+                parent: None,
+                name: "Publish".into(),
+            },
+        ],
+        |row| row.id,
+        |row| row.name.clone(),
+        |name, rows| TreeRow {
+            id: rows.iter().map(|row| row.id).max().unwrap_or(0) + 1,
+            parent: None,
+            name,
+        },
+    )
+    .tree(TreeAdapter::mutable_parent_id(
+        |row: &TreeRow| row.parent,
+        |row, parent| row.parent = parent,
+    ))
+    .expanded([1, 4])
+}
+
+#[test]
+fn backslash_adds_child_to_highlighted_row() {
+    let mut control = tree_control();
+    control.data_view_mut().highlight_id(&1);
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('\\'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert!(control.is_adding());
+    control.dispatch_event(
+        &input_route(),
+        &TuiEvent::Paste("Document".into()),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &input_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(control.items().last().map(|row| row.parent), Some(Some(1)));
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::AddedChild {
+            row_id: 5,
+            parent_id: 1,
+        }]
+    );
+}
+
+#[test]
+fn plus_adds_sibling_with_same_parent_as_highlighted_row() {
+    let mut control = tree_control();
+    control.data_view_mut().highlight_id(&2);
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('+'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &input_route(),
+        &TuiEvent::Paste("Document".into()),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &input_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(control.items().last().map(|row| row.parent), Some(Some(1)));
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::AddedChild {
+            row_id: 5,
+            parent_id: 1,
+        }]
+    );
+}
+
+#[test]
+fn tree_move_mode_supports_arrows_and_hjkl_reparenting() {
+    let mut control = tree_control();
+    control.data_view_mut().highlight_id(&3);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Up, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('j'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('l'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .find(|row| row.id == 3)
+            .unwrap()
+            .parent,
+        Some(2)
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::TreeMoved {
+            row_id: 3,
+            parent_id: Some(2),
+            sibling_index: 0,
+        }]
+    );
+
+    control.data_view_mut().highlight_id(&2);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Left, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('j'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    let moved = control.items().iter().find(|row| row.id == 2).unwrap();
+    assert_eq!(moved.parent, None);
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .find(|row| row.id == 3)
+            .unwrap()
+            .parent,
+        Some(2)
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::TreeMoved {
+            row_id: 2,
+            parent_id: None,
+            sibling_index: 2,
+        }]
+    );
+}
+
+#[test]
+fn angle_keys_immediately_indent_and_outdent_highlighted_subtree() {
+    let mut control = tree_control();
+    control.data_view_mut().highlight_id(&3);
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('>'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .find(|row| row.id == 3)
+            .unwrap()
+            .parent,
+        Some(2)
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::TreeMoved {
+            row_id: 3,
+            parent_id: Some(2),
+            sibling_index: 0,
+        }]
+    );
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('<'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .find(|row| row.id == 3)
+            .unwrap()
+            .parent,
+        Some(1)
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::TreeMoved {
+            row_id: 3,
+            parent_id: Some(1),
+            sibling_index: 1,
+        }]
+    );
+}
+
+#[test]
+fn canceling_tree_move_restores_parent_and_source_order() {
+    let mut control = tree_control();
+    let original = control.items().to_vec();
+    control.data_view_mut().highlight_id(&2);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('h'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Esc, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(control.items(), original);
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::ReorderCancelled { row_id: 2 }]
+    );
+}
+
+#[test]
+fn tree_move_conflict_restores_staged_change_without_overwriting_external_parent_edit() {
+    let mut control = tree_control();
+    control.data_view_mut().highlight_id(&3);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('l'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control
+        .data_view_mut()
+        .update_row(&4, |row| row.parent = Some(1));
+
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Down, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .find(|row| row.id == 3)
+            .unwrap()
+            .parent,
+        Some(1)
+    );
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .find(|row| row.id == 4)
+            .unwrap()
+            .parent,
+        Some(1)
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DataChanged,
+        }]
+    );
+}
+
 #[test]
 fn routed_reorder_entry_movement_commit_cancel_and_active_blocking() {
     for route in [EventRoute::new(TreePath::new()), data_route()] {
@@ -448,7 +762,7 @@ fn routed_search_editor_dropdown_and_confirmation_own_reorder_binding() {
         ranked_control(ranked_rows()).confirm_remove("Remove?", |_| "row".into());
     confirmation.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
         &mut EventCtx::default(),
     );
     confirmation.dispatch_event(
@@ -1052,7 +1366,7 @@ fn remove_selects_nearest_survivor_and_empty_remove_is_noop() {
     ]);
     control.data_view_mut().highlight_id(&2);
     let mut ctx = EventCtx::default();
-    let remove = key(Key::Char('x'), KeyModifiers::NONE);
+    let remove = key(Key::Char('x'), KeyModifiers::CONTROL);
 
     control.dispatch_event(&data_route(), &remove, &mut ctx);
 
@@ -1101,7 +1415,7 @@ fn confirmation_opens_without_removing_and_renders_selected_row_details() {
 
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
         &mut ctx,
     );
     assert!(control.is_confirming_remove());
@@ -1156,7 +1470,7 @@ fn confirmation_centers_and_renders_in_screen_overlay_bounds() {
     let overlay_bounds = Rect::new(0, 0, 80, 24);
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
         &mut EventCtx::default(),
     );
 
@@ -1212,7 +1526,7 @@ fn confirmation_removes_pending_stable_id_once() {
     let mut ctx = EventCtx::default();
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
         &mut ctx,
     );
     control.data_view_mut().highlight_id(&10);
@@ -1257,7 +1571,7 @@ fn confirmation_cancel_keys_keep_item_and_restore_data_focus() {
         let mut ctx = EventCtx::default();
         control.dispatch_event(
             &data_route(),
-            &key(Key::Char('x'), KeyModifiers::NONE),
+            &key(Key::Char('x'), KeyModifiers::CONTROL),
             &mut ctx,
         );
         let mut cancel_ctx = EventCtx::default();
@@ -1294,7 +1608,7 @@ fn custom_confirmation_bindings_confirm_and_cancel_removal() {
         let mut control = confirmed_control().confirmation_keybindings(bindings);
         control.dispatch_event(
             &data_route(),
-            &key(Key::Char('x'), KeyModifiers::NONE),
+            &key(Key::Char('x'), KeyModifiers::CONTROL),
             &mut EventCtx::default(),
         );
 
@@ -1382,7 +1696,7 @@ fn focus_manager_stops_before_non_control_tabbable_between_list_controls() {
 }
 
 #[test]
-fn default_bindings_accept_plain_x_only_for_remove() {
+fn default_bindings_accept_ctrl_x_only_for_remove() {
     let mut control = control([Row {
         id: 1,
         name: "one".into(),
@@ -1396,7 +1710,7 @@ fn default_bindings_accept_plain_x_only_for_remove() {
     );
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::CONTROL),
+        &key(Key::Char('x'), KeyModifiers::NONE),
         &mut ctx,
     );
     control.dispatch_event(
@@ -1412,7 +1726,7 @@ fn default_bindings_accept_plain_x_only_for_remove() {
 
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
         &mut ctx,
     );
     assert!(control.items().is_empty());
@@ -1423,7 +1737,7 @@ fn default_bindings_accept_plain_x_only_for_remove() {
 }
 
 #[test]
-fn custom_minus_remove_binding_replaces_default_x() {
+fn custom_minus_remove_binding_replaces_default_ctrl_x() {
     let mut control = control([Row {
         id: 1,
         name: "one".into(),
@@ -1432,7 +1746,7 @@ fn custom_minus_remove_binding_replaces_default_x() {
 
     control.dispatch_event(
         &data_route(),
-        &key(Key::Char('x'), KeyModifiers::NONE),
+        &key(Key::Char('x'), KeyModifiers::CONTROL),
         &mut EventCtx::default(),
     );
     assert_eq!(control.items().len(), 1);

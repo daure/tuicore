@@ -163,7 +163,7 @@ fn reorder_list(
 
 pub(crate) fn entity_controls() -> [ListControl<ListDemoRow, usize, Msg>; 3] {
     [
-        entity_control(false, "All-text fields · x confirms delete", "le"),
+        entity_control(false, "All-text fields · Ctrl+X confirms delete", "le"),
         entity_control(true, "Mixed fields", "lm"),
         people_control(),
     ]

@@ -49,7 +49,7 @@ fn table(row_count: usize) -> ListControl<Row, usize> {
 }
 
 fn layout_adding(control: &mut ListControl<Row, usize>, area: Rect) {
-    control.begin_add();
+    control.begin_add(None);
     control.layout(area, &mut LayoutCtx::new());
 }
 
@@ -884,7 +884,7 @@ where
     T: 'static,
     Id: Clone + Eq + Hash,
 {
-    control.begin_add();
+    control.begin_add(None);
     control.layout(area, &mut LayoutCtx::new());
 }
 
@@ -910,7 +910,7 @@ fn measure_grows_by_rows_and_caps_with_headers_chrome_and_draft() {
     assert_eq!(empty.measure(proposal).preferred.height, 5);
     assert_eq!(one.measure(proposal).preferred.height, 5);
     assert_eq!(many.measure(proposal).preferred.height, 9);
-    empty.begin_add();
+    empty.begin_add(None);
     assert_eq!(empty.measure(proposal).preferred.height, 7);
 }
 

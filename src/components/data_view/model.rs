@@ -7,6 +7,7 @@ use ratatui::text::Line;
 
 pub(super) type RowIdFn<T, Id> = dyn Fn(&T) -> Id;
 pub(super) type ParentIdFn<T, Id> = dyn Fn(&T) -> Option<Id>;
+pub(super) type ParentIdMutFn<T, Id> = dyn Fn(&mut T, Option<Id>);
 pub(super) type LevelFn<T> = dyn Fn(&T) -> usize;
 type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Line<'static>;
 pub(super) type SortFn<T> = dyn Fn(&T, &T) -> Ordering;
@@ -435,12 +436,26 @@ impl<T, Id> Column<T, Id> {
 
 pub enum TreeAdapter<T, Id> {
     ParentId(Box<ParentIdFn<T, Id>>),
+    MutableParentId {
+        parent_id: Box<ParentIdFn<T, Id>>,
+        set_parent_id: Box<ParentIdMutFn<T, Id>>,
+    },
     Level(Box<LevelFn<T>>),
 }
 
 impl<T, Id> TreeAdapter<T, Id> {
     pub fn parent_id(parent_id: impl Fn(&T) -> Option<Id> + 'static) -> Self {
         Self::ParentId(Box::new(parent_id))
+    }
+
+    pub fn mutable_parent_id(
+        parent_id: impl Fn(&T) -> Option<Id> + 'static,
+        set_parent_id: impl Fn(&mut T, Option<Id>) + 'static,
+    ) -> Self {
+        Self::MutableParentId {
+            parent_id: Box::new(parent_id),
+            set_parent_id: Box::new(set_parent_id),
+        }
     }
 
     pub fn level(level: impl Fn(&T) -> usize + 'static) -> Self {

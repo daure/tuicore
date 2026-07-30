@@ -1,5 +1,6 @@
 mod button;
 mod calendar;
+mod checklist;
 mod chip;
 mod confirmation_dialog;
 mod data_view;
@@ -45,6 +46,7 @@ pub use calendar::{
     Calendar, CalendarEntryRole, CalendarKeyBindings, CalendarOutcome, CalendarSpan,
     CalendarTypedEvent, CalendarView,
 };
+pub use checklist::Checklist;
 pub use chip::{Chip, ChipColorRole};
 pub use confirmation_dialog::{
     ConfirmationDialog, ConfirmationDialogKeyBindings, ConfirmationDialogOutcome,

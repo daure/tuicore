@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::time::Duration as StdDuration;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
+use ratatui::{Frame, buffer::Buffer};
 #[cfg(test)]
 use ratatui::{style::Style, text::Span};
 use time::{Date, Duration, Weekday};
@@ -30,15 +30,17 @@ use date_math::{
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSizeHint, TickResult, TuiNode,
+    LayoutSizeHint, ScrollAxes, ScrollOffset, ScrollSize, ScrollState, TickResult, TuiNode,
+    animation_settings, preset,
 };
 
 use super::Panel;
 
 const CALENDAR_FOCUS: &str = "calendar";
-const MONTH_EVENT_LINES: usize = 1;
+const MONTH_EVENT_LINES: usize = 2;
 const WEEK_EVENT_LINES: usize = 3;
 const DAY_EVENT_LINES: usize = 5;
+const MIN_CALENDAR_CELL_WIDTH: u16 = 11;
 
 type IdFn<T, Id> = dyn Fn(&T) -> Id;
 type SpanFn<T> = dyn Fn(&T) -> CalendarSpan;
@@ -57,6 +59,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     event_marker: Option<Box<EventMarkerFn<T>>>,
     render_entry: Option<Box<EntryRenderFn<T>>>,
     render_detail: Option<Box<DetailRenderFn<T>>>,
+    event_detail_on_activate: bool,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
     view: CalendarView,
     stack: Vec<CalendarView>,
@@ -178,6 +181,7 @@ where
             event_marker: None,
             render_entry: None,
             render_detail: None,
+            event_detail_on_activate: false,
             on_event: None,
             view: CalendarView::Month,
             stack: Vec::new(),
@@ -289,6 +293,19 @@ where
     pub fn render_detail(mut self, render: impl Fn(&T) -> Text<'static> + 'static) -> Self {
         self.render_detail = Some(Box::new(render));
         self
+    }
+
+    pub fn event_detail_on_activate(mut self, enabled: bool) -> Self {
+        self.set_event_detail_on_activate(enabled);
+        self
+    }
+
+    pub fn set_event_detail_on_activate(&mut self, enabled: bool) {
+        self.event_detail_on_activate = enabled;
+    }
+
+    pub fn is_event_detail_on_activate(&self) -> bool {
+        self.event_detail_on_activate
     }
 
     pub fn on_event(mut self, handler: impl Fn(CalendarTypedEvent<Id>) -> M + 'static) -> Self {
@@ -456,7 +473,11 @@ where
                 };
                 let id = (self.id)(&self.entries[index]);
                 self.push_event(CalendarTypedEvent::EntryActivated { entry_id: id });
-                self.drill_to(CalendarView::EventDetail).with_activated()
+                if self.event_detail_on_activate {
+                    self.drill_to(CalendarView::EventDetail).with_activated()
+                } else {
+                    CalendarOutcome::ACTIVATED
+                }
             }
             CalendarView::EventDetail => {
                 let Some(index) = self.highlighted_entry else {
@@ -892,6 +913,31 @@ fn calendar_columns(area: Rect, count: usize) -> Vec<Rect> {
         .collect()
 }
 
+fn calendar_content_width(viewport_width: u16, column_count: usize) -> u16 {
+    viewport_width
+        .max(MIN_CALENDAR_CELL_WIDTH.saturating_mul(column_count.min(u16::MAX as usize) as u16))
+}
+
+fn blit_horizontal_viewport(
+    frame: &mut Frame,
+    source: &Buffer,
+    viewport: Rect,
+    horizontal_offset: u16,
+) {
+    for y_offset in 0..viewport.height {
+        for x_offset in 0..viewport.width {
+            let source_position = (horizontal_offset + x_offset, y_offset);
+            let target_position = (viewport.x + x_offset, viewport.y + y_offset);
+            if let (Some(source_cell), Some(target_cell)) = (
+                source.cell(source_position),
+                frame.buffer_mut().cell_mut(target_position),
+            ) {
+                *target_cell = source_cell.clone();
+            }
+        }
+    }
+}
+
 fn weekday_after(mut weekday: Weekday, offset: usize) -> Weekday {
     for _ in 0..offset {
         weekday = weekday.next();
@@ -915,10 +961,11 @@ fn previous_friday_if_weekend(date: Date) -> Date {
     }
 }
 
-fn grid_cell_inner(area: Rect, reserve_top_line: bool) -> Rect {
-    let x = area.x.saturating_add(1);
+fn grid_cell_inner(area: Rect, reserve_top_line: bool, reserve_left_line: bool) -> Rect {
+    let left = u16::from(reserve_left_line);
+    let x = area.x.saturating_add(left);
     let y = area.y.saturating_add(u16::from(reserve_top_line));
-    let width = area.width.saturating_sub(1);
+    let width = area.width.saturating_sub(left);
     let height = area.height.saturating_sub(u16::from(reserve_top_line));
     Rect::new(x, y, width, height)
 }

@@ -12,10 +12,11 @@ struct DemoEntry {
 }
 
 fn rendered_month_header(calendar: &Calendar<DemoEntry, &'static str>) -> Vec<String> {
-    let area = Rect::new(0, 0, 70, 12);
+    let area = Rect::new(0, 0, 100, 12);
     let inner = Panel::inner_area(area);
     let count = if calendar.is_showing_weekends() { 7 } else { 5 };
-    let columns = calendar_columns(Rect::new(inner.x, inner.y, inner.width, 1), count);
+    let content_width = calendar_content_width(inner.width, count);
+    let columns = calendar_columns(Rect::new(inner.x, inner.y, content_width, 1), count);
     let mut terminal =
         Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal should build");
     terminal
@@ -46,10 +47,14 @@ fn rendered_top_border(calendar: &Calendar<DemoEntry, &'static str>, width: u16)
 }
 
 fn rendered_week_headers(calendar: &Calendar<DemoEntry, &'static str>) -> Vec<String> {
-    let area = Rect::new(0, 0, 70, 12);
+    let area = Rect::new(0, 0, 100, 12);
     let inner = Panel::inner_area(area);
     let count = if calendar.is_showing_weekends() { 7 } else { 5 };
-    let columns = calendar_columns(inner, count);
+    let content_width = calendar_content_width(inner.width, count);
+    let columns = calendar_columns(
+        Rect::new(inner.x, inner.y, content_width, inner.height),
+        count,
+    );
     let mut terminal =
         Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal should build");
     terminal
@@ -58,17 +63,31 @@ fn rendered_week_headers(calendar: &Calendar<DemoEntry, &'static str>) -> Vec<St
     let buffer = terminal.backend().buffer();
     columns
         .into_iter()
-        .map(|column| {
-            (column.x + 1..column.x + 4)
+        .enumerate()
+        .map(|(index, column)| {
+            let x = column.x + u16::from(index > 0);
+            (x..x + 3)
                 .map(|x| buffer.cell((x, inner.y)).unwrap().symbol())
                 .collect()
         })
         .collect()
 }
 
+fn rendered_row(calendar: &Calendar<DemoEntry, &'static str>, width: u16, y: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, 12)).expect("terminal should build");
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .expect("calendar should render");
+    (0..width)
+        .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+        .collect()
+}
+
 #[test]
 fn drilldown_and_back_follow_stack() {
-    let mut calendar = demo_calendar().view(CalendarView::Month);
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Month)
+        .event_detail_on_activate(true);
 
     assert_eq!(calendar.on_key(Key::Enter), CalendarOutcome::CHANGED);
     assert_eq!(calendar.current_view(), CalendarView::Week);
@@ -83,6 +102,53 @@ fn drilldown_and_back_follow_stack() {
     assert_eq!(calendar.current_view(), CalendarView::Week);
     assert_eq!(calendar.on_key(Key::Esc), CalendarOutcome::CHANGED);
     assert_eq!(calendar.current_view(), CalendarView::Month);
+}
+
+#[test]
+fn narrow_month_and_week_views_scroll_horizontally_to_the_cursor() {
+    let week = demo_calendar()
+        .view(CalendarView::Week)
+        .cursor(date(2026, Month::June, 26));
+    let month = demo_calendar()
+        .view(CalendarView::Month)
+        .cursor(date(2026, Month::June, 26));
+
+    let week_header = rendered_row(&week, 24, 1);
+    let month_header = rendered_row(&month, 24, 1);
+
+    assert!(week_header.contains("FRI"), "{week_header}");
+    assert!(!week_header.contains("MON"), "{week_header}");
+    assert!(month_header.contains("Fri"), "{month_header}");
+    assert!(!month_header.contains("Mon"), "{month_header}");
+
+    let scrollbar = rendered_row(&week, 24, 10);
+    assert!(scrollbar.contains('━'), "{scrollbar}");
+    assert!(scrollbar.contains('─'), "{scrollbar}");
+}
+
+#[test]
+fn month_and_week_cells_have_eleven_character_minimum_width() {
+    assert_eq!(calendar_content_width(0, 7), 77);
+    assert_eq!(calendar_content_width(120, 7), 120);
+}
+
+#[test]
+fn first_month_and_week_cells_have_no_left_padding() {
+    let month = demo_calendar()
+        .view(CalendarView::Month)
+        .cursor(date(2026, Month::June, 1));
+    let week = demo_calendar()
+        .view(CalendarView::Week)
+        .cursor(date(2026, Month::June, 1));
+
+    let month_date_row = rendered_row(&month, 100, 3);
+    let week_header = rendered_row(&week, 100, 1);
+
+    assert_eq!(month_date_row.chars().nth(2), Some('1'));
+    assert_eq!(
+        week_header.chars().skip(1).take(3).collect::<String>(),
+        "MON"
+    );
 }
 
 #[test]
@@ -127,8 +193,32 @@ fn day_navigation_highlights_chronological_entries() {
 }
 
 #[test]
-fn event_detail_preserves_highlighted_entry() {
+fn selected_day_entry_highlight_fills_the_view_width() {
     let mut calendar = demo_calendar().view(CalendarView::Day);
+    calendar.set_focused(true);
+    let area = Rect::new(0, 0, 30, 6);
+    let inner = Panel::inner_area(area);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    for x in inner.x..inner.right() {
+        assert_eq!(
+            buffer.cell((x, inner.y)).unwrap().bg,
+            crate::theme().highlight_bg(),
+            "highlight should fill cell at x={x}"
+        );
+    }
+}
+
+#[test]
+fn event_detail_preserves_highlighted_entry() {
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Day)
+        .event_detail_on_activate(true);
 
     calendar.on_key(Key::Down);
     assert_eq!(calendar.highlighted_entry_id(), Some("planning"));
@@ -137,6 +227,33 @@ fn event_detail_preserves_highlighted_entry() {
 
     assert_eq!(calendar.current_view(), CalendarView::EventDetail);
     assert_eq!(calendar.highlighted_entry_id(), Some("planning"));
+}
+
+#[test]
+fn day_entry_activation_stays_in_day_view_by_default() {
+    let mut calendar = demo_calendar().view(CalendarView::Day);
+
+    assert!(!calendar.is_event_detail_on_activate());
+    assert_eq!(calendar.on_key(Key::Enter), CalendarOutcome::ACTIVATED);
+
+    assert_eq!(calendar.current_view(), CalendarView::Day);
+    assert!(
+        calendar
+            .take_events()
+            .contains(&CalendarTypedEvent::EntryActivated {
+                entry_id: "standup"
+            })
+    );
+}
+
+#[test]
+fn event_detail_on_activate_setter_enables_detail_drilldown() {
+    let mut calendar = demo_calendar().view(CalendarView::Day);
+    calendar.set_event_detail_on_activate(true);
+
+    assert!(calendar.is_event_detail_on_activate());
+    assert_eq!(calendar.on_key(Key::Enter), CalendarOutcome::ACTIVATED);
+    assert_eq!(calendar.current_view(), CalendarView::EventDetail);
 }
 
 #[test]
@@ -709,6 +826,63 @@ fn panel_legend_uses_custom_view_binding_labels() {
 }
 
 #[test]
+fn panel_legend_mutes_inactive_views_without_highlighting_the_active_view() {
+    for (view, label) in [
+        (CalendarView::Day, "Day"),
+        (CalendarView::Week, "Week"),
+        (CalendarView::Month, "Month"),
+    ] {
+        let mut calendar = demo_calendar().view(view);
+        calendar.set_focused(true);
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal
+            .draw(|frame| calendar.render(frame, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let symbols = (0..100)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<Vec<_>>();
+        let expected = label
+            .chars()
+            .map(|char| char.to_string())
+            .collect::<Vec<_>>();
+        let x = symbols
+            .windows(expected.len())
+            .position(|window| window == expected)
+            .expect("active view label should render") as u16;
+        let active_cell = buffer.cell((x, 0)).unwrap();
+        let inactive_label = if label == "Day" { "Week" } else { "Day" };
+        let inactive_expected = inactive_label
+            .chars()
+            .map(|char| char.to_string())
+            .collect::<Vec<_>>();
+        let inactive_x = symbols
+            .windows(inactive_expected.len())
+            .position(|window| window == inactive_expected)
+            .expect("inactive view label should render") as u16;
+        let inactive_cell = buffer.cell((inactive_x, 0)).unwrap();
+
+        assert_eq!(active_cell.fg, crate::theme().accent_fg(), "{view:?}");
+        assert_eq!(active_cell.bg, Color::Reset, "{view:?}");
+        assert_eq!(inactive_cell.fg, crate::theme().muted_fg(), "{view:?}");
+        assert_eq!(inactive_cell.bg, Color::Reset, "{view:?}");
+    }
+}
+
+#[test]
+fn panel_top_left_omits_view_names() {
+    for (view, omitted) in [
+        (CalendarView::Day, "Day •"),
+        (CalendarView::Week, "Week •"),
+        (CalendarView::Month, "Month •"),
+        (CalendarView::EventDetail, "Detail"),
+    ] {
+        let border = rendered_top_border(&demo_calendar().view(view), 100);
+        assert!(!border.contains(omitted), "{view:?}: {border}");
+    }
+}
+
+#[test]
 fn preferred_width_fits_week_title_and_exact_legend() {
     let calendar = demo_calendar().view(CalendarView::Week);
     let preferred = calendar
@@ -718,10 +892,8 @@ fn preferred_width_fits_week_title_and_exact_legend() {
     let border = rendered_top_border(&calendar, preferred);
 
     assert_eq!(preferred, 72);
-    assert!(
-        border.contains(" Week • 2026-06-22 — 2026-06-28 "),
-        "{border}"
-    );
+    assert!(border.contains(" 2026-06-22 — 2026-06-28 "), "{border}");
+    assert!(!border.contains(" Week •"), "{border}");
     assert!(border.contains(" Day |d| · Week |w| · Month |m| "));
 }
 
@@ -730,7 +902,8 @@ fn constrained_width_preserves_title_instead_of_overwriting_it() {
     let calendar = demo_calendar().view(CalendarView::Week);
     let border = rendered_top_border(&calendar, 40);
 
-    assert!(border.contains(" Week • 2026-06-22 — 2026-06-28 "));
+    assert!(border.contains(" 2026-06-22 — 2026-06-28 "));
+    assert!(!border.contains(" Week •"));
     assert!(!border.contains(" Day |d|"));
 }
 
@@ -743,7 +916,7 @@ fn buffer_row(buffer: &Buffer, y: u16, width: u16) -> String {
 }
 
 #[test]
-fn month_event_summary_uses_one_line_and_visible_ellipsis() {
+fn month_event_summary_uses_up_to_two_lines() {
     let day = date(2026, Month::June, 22);
     let calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
         [DemoEntry {
@@ -755,13 +928,14 @@ fn month_event_summary_uses_one_line_and_visible_ellipsis() {
         |entry| entry.span,
         |entry| entry.title.to_string(),
     );
-    let mut terminal = Terminal::new(TestBackend::new(10, 3)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
 
     terminal
         .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
         .unwrap();
 
-    assert_eq!(buffer_row(terminal.backend().buffer(), 2, 10), " ■ abcd...");
+    assert_eq!(buffer_row(terminal.backend().buffer(), 2, 10), "■ abcdefgh");
+    assert_eq!(buffer_row(terminal.backend().buffer(), 3, 10), "  ijk");
 }
 
 #[test]
@@ -802,10 +976,10 @@ fn week_event_summary_wraps_to_three_lines_then_shows_more_without_overlap() {
         .unwrap();
     let buffer = terminal.backend().buffer();
 
-    assert_eq!(buffer_row(buffer, 2, 14), " ■ one two");
-    assert_eq!(buffer_row(buffer, 3, 14), "   three four");
+    assert_eq!(buffer_row(buffer, 2, 14), "■ one two");
+    assert_eq!(buffer_row(buffer, 3, 14), "  three four");
     assert!(buffer_row(buffer, 4, 14).ends_with("..."));
-    assert_eq!(buffer_row(buffer, 5, 14), " +2 more");
+    assert_eq!(buffer_row(buffer, 5, 14), "+2 more");
 }
 
 #[test]
@@ -1046,8 +1220,8 @@ fn event_markers_default_by_span_and_callback_supports_per_event_unicode() {
         .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
         .unwrap();
     let buffer = terminal.backend().buffer();
-    assert!(buffer_row(buffer, 2, 20).starts_with(" ■ Holiday"));
-    assert!(buffer_row(buffer, 3, 20).starts_with(" • Call"));
+    assert!(buffer_row(buffer, 2, 20).starts_with("■ Holiday"));
+    assert!(buffer_row(buffer, 3, 20).starts_with("• Call"));
 
     let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
         entries,
@@ -1081,8 +1255,8 @@ fn event_markers_default_by_span_and_callback_supports_per_event_unicode() {
         .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
         .unwrap();
     let buffer = terminal.backend().buffer();
-    assert!(buffer_row(buffer, 2, 20).starts_with(" ■ Holiday"));
-    assert!(buffer_row(buffer, 3, 20).starts_with(" • Call"));
+    assert!(buffer_row(buffer, 2, 20).starts_with("■ Holiday"));
+    assert!(buffer_row(buffer, 3, 20).starts_with("• Call"));
 
     calendar.set_event_marker(|_| '◆');
     calendar.clear_event_marker();
@@ -1090,8 +1264,8 @@ fn event_markers_default_by_span_and_callback_supports_per_event_unicode() {
         .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
         .unwrap();
     let buffer = terminal.backend().buffer();
-    assert!(buffer_row(buffer, 2, 20).starts_with(" ■ Holiday"));
-    assert!(buffer_row(buffer, 3, 20).starts_with(" • Call"));
+    assert!(buffer_row(buffer, 2, 20).starts_with("■ Holiday"));
+    assert!(buffer_row(buffer, 3, 20).starts_with("• Call"));
 }
 
 #[test]
@@ -1124,7 +1298,7 @@ fn focused_date_event_markers_use_selection_foreground() {
         .unwrap();
 
     for y in [2, 3] {
-        let marker = terminal.backend().buffer().cell((1, y)).unwrap();
+        let marker = terminal.backend().buffer().cell((0, y)).unwrap();
         assert_eq!(marker.symbol(), "◆");
         assert_eq!(marker.fg, crate::theme().highlight_fg());
         assert_eq!(marker.bg, crate::theme().highlight_bg());

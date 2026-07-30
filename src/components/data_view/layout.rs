@@ -219,6 +219,7 @@ where
         }
 
         let selection_descendants = self.selection_descendants_by_id();
+        let show_tree_gutter = self.shows_tree_gutter();
         for (row_index, row) in self.visible_rows().into_iter().enumerate() {
             for (index, column) in columns.iter().enumerate() {
                 widths[index] = widths[index].max(self.rendered_cell_width(
@@ -227,6 +228,7 @@ where
                     &row,
                     row_index == self.highlighted,
                     &selection_descendants,
+                    show_tree_gutter,
                 ));
             }
         }
@@ -270,6 +272,7 @@ where
         row: &VisibleRow<'_, T, Id>,
         highlighted: bool,
         selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
     ) -> usize {
         let line = (column.renderer)(
             row.row,
@@ -284,7 +287,7 @@ where
             },
         );
         let prefix_width = if column_index == 0 {
-            self.row_prefix_width(row, selection_descendants)
+            self.row_prefix_width(row, selection_descendants, show_tree_gutter)
         } else {
             0
         };
@@ -295,9 +298,10 @@ where
         &self,
         row: &VisibleRow<'_, T, Id>,
         selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
     ) -> usize {
         let mut width = 0;
-        if self.tree.is_some() {
+        if show_tree_gutter {
             width += row
                 .depth
                 .saturating_mul(preset().data_view().tree_indent_width());

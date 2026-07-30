@@ -15,7 +15,8 @@ where
 
     pub(super) fn all_visible_rows(&self) -> Vec<VisibleRow<'_, T, Id>> {
         match &self.tree {
-            Some(TreeAdapter::ParentId(parent_id)) => {
+            Some(TreeAdapter::ParentId(parent_id))
+            | Some(TreeAdapter::MutableParentId { parent_id, .. }) => {
                 let sorted = self.sorted_rows();
                 self.parent_tree_rows(&sorted, parent_id.as_ref())
             }
@@ -40,7 +41,8 @@ where
 
     pub(super) fn expandable_ids(&self) -> impl Iterator<Item = Id> + '_ {
         let expandable = match &self.tree {
-            Some(TreeAdapter::ParentId(parent_id)) => {
+            Some(TreeAdapter::ParentId(parent_id))
+            | Some(TreeAdapter::MutableParentId { parent_id, .. }) => {
                 let rows = self.sorted_rows();
                 let ids = rows
                     .iter()
@@ -74,6 +76,10 @@ where
         expandable.into_iter()
     }
 
+    pub(super) fn shows_tree_gutter(&self) -> bool {
+        self.tree.is_some() && self.expandable_ids().next().is_some()
+    }
+
     pub(super) fn row_ids(&self) -> Vec<Id> {
         self.rows.iter().map(|row| (self.row_id)(row)).collect()
     }
@@ -84,7 +90,8 @@ where
 
     pub(super) fn descendant_ids_by_id(&self) -> HashMap<Id, Vec<Id>> {
         match &self.tree {
-            Some(TreeAdapter::ParentId(parent_id)) => {
+            Some(TreeAdapter::ParentId(parent_id))
+            | Some(TreeAdapter::MutableParentId { parent_id, .. }) => {
                 self.parent_descendant_ids_by_id(parent_id.as_ref())
             }
             Some(TreeAdapter::Level(level)) => self.level_descendant_ids_by_id(level.as_ref()),
@@ -125,7 +132,8 @@ where
         }
 
         match &self.tree {
-            Some(TreeAdapter::ParentId(parent_id)) => {
+            Some(TreeAdapter::ParentId(parent_id))
+            | Some(TreeAdapter::MutableParentId { parent_id, .. }) => {
                 self.filtered_parent_tree_row_refs(parent_id.as_ref())
             }
             Some(TreeAdapter::Level(level)) => self.filtered_level_tree_row_refs(level.as_ref()),

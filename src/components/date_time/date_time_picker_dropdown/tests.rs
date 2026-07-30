@@ -22,6 +22,22 @@ fn focused_field_is_bold_and_unfocused_field_is_not() {
 }
 
 #[test]
+fn empty_date_time_picker_field_uses_muted_placeholder_foreground() {
+    let mut dropdown = DateTimePickerDropdown::<()>::new();
+
+    for focused in [false, true] {
+        dropdown.focused = focused;
+        let line = dropdown.field_line(31);
+        let placeholder = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("Select date & time"))
+            .expect("placeholder span should render");
+        assert_eq!(placeholder.style.fg, Some(theme().muted_fg()));
+    }
+}
+
+#[test]
 fn date_time_picker_dropdown_switches_to_time_after_date_selection() {
     let mut dropdown = DateTimePickerDropdown::<()>::new();
     dropdown.set_open(true);

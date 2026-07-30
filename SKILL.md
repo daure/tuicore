@@ -29,6 +29,7 @@ Tuicore is a library-first `ratatui` component runtime. Reusable components live
 ## Shared primitives
 
 - Theme supplies semantic colors through `theme()`; components never own raw palette colors.
+  Empty input, dropdown, and picker placeholders use `muted_fg()` rather than value text color.
 - Preset supplies structural defaults through `preset()`: borders, tabs, scrolling, animation.
 - Global `KeyBindings` defines built-in behavior keys; component builders define local overrides.
 - `FocusChain`/`FocusRouter` help composite controls; apps own overall focus topology.
@@ -40,9 +41,14 @@ Tuicore is a library-first `ratatui` component runtime. Reusable components live
 
 - Inputs, forms, pickers, tables, dialogs, menus, tabs, status widgets, and layout containers live
   under `src/components/` and are re-exported from `src/components/mod.rs` and `src/lib.rs`.
-- `DataView` handles read-oriented rows, transforms, selection, and scrolling.
-- `ListControl` composes mutable rows over `DataView`; use its rustdocs and gallery demo for
-  add/edit/remove/reorder configuration.
+- `DataView` handles read-oriented rows, transforms, selection, trees, and scrolling;
+  `TreeAdapter::mutable_parent_id` enables hierarchy edits.
+- `ListControl` composes mutable rows over `DataView` with add/edit/remove, checked-change events,
+  flat reorder, and subtree movement.
+- `Checklist` presets `ListControl` for Enter-to-check selection and optional cascading tree items;
+  Space expands trees, `+` adds a sibling, `\\` adds a child, `Ctrl+X` removes, and mutable parent
+  adapters enable tree moves with arrows, `hjkl`, or `<>` depth changes. Leaf-only trees omit the
+  unused chevron gutter; once any branch exists, rows keep that gutter aligned.
 - Prefer `MenuButton` for normal menus: it owns the `Button` trigger, `Menu` popup, overlay anchor,
   synchronized hotkey, event/focus routing, ticks, lifecycle, and focus return. Use standalone
   `Menu` only when a custom or non-button trigger must own opening and routing.

@@ -39,6 +39,7 @@ pub enum PanelTone {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PanelTitle {
     text: String,
+    line: Option<Line<'static>>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +109,11 @@ impl Panel {
         self
     }
 
+    pub fn top_right_line(mut self, title: Line<'static>) -> Self {
+        self.top_right = Some(PanelTitle::styled(title));
+        self
+    }
+
     pub fn set_top_right(&mut self, title: impl Into<String>) {
         self.top_right = Some(PanelTitle::standard(title));
     }
@@ -136,7 +142,7 @@ impl Panel {
     }
 
     pub fn set_title(&mut self, position: PanelTitlePosition, title: impl Into<String>) {
-        *self.title_slot_mut(position) = Some(PanelTitle { text: title.into() });
+        *self.title_slot_mut(position) = Some(PanelTitle::standard(title));
     }
 
     pub fn clear_title(&mut self, position: PanelTitlePosition) {
@@ -446,8 +452,11 @@ impl Panel {
         }
 
         let max_width = area.width.saturating_sub(4) as usize;
-        let title = bounded_title(&title.text, max_width);
-        let width = line_width(&Line::from(title.as_str())).min(u16::MAX as usize) as u16;
+        let style = Style::default()
+            .fg(self.visible_title_color())
+            .add_modifier(Modifier::BOLD);
+        let line = title.line(max_width, style);
+        let width = line_width(&line).min(u16::MAX as usize) as u16;
         if width == 0 {
             return;
         }
@@ -458,13 +467,7 @@ impl Panel {
             Alignment::Right => area.x + area.width.saturating_sub(width).saturating_sub(2),
         };
         let y = title_y(area, position);
-        let style = Style::default()
-            .fg(self.visible_title_color())
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(title, style))),
-            Rect::new(x, y, width, 1),
-        );
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
     }
 
     fn render_inset_title(
@@ -518,7 +521,35 @@ impl Panel {
 
 impl PanelTitle {
     fn standard(title: impl Into<String>) -> Self {
-        Self { text: title.into() }
+        Self {
+            text: title.into(),
+            line: None,
+        }
+    }
+
+    fn styled(line: Line<'static>) -> Self {
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        Self {
+            text,
+            line: Some(line),
+        }
+    }
+
+    fn line(&self, max_width: usize, style: Style) -> Line<'static> {
+        if let Some(line) = &self.line
+            && line_width(line).saturating_add(2) <= max_width
+        {
+            let mut spans = Vec::with_capacity(line.spans.len() + 2);
+            spans.push(Span::raw(" "));
+            spans.extend(line.spans.iter().cloned());
+            spans.push(Span::raw(" "));
+            return Line::from(spans).style(style);
+        }
+        Line::from(Span::styled(bounded_title(&self.text, max_width), style))
     }
 }
 
