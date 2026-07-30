@@ -15,7 +15,7 @@ where
     Id: Clone + Eq,
 {
     pub(super) fn render_month(&self, frame: &mut Frame, area: Rect) {
-        let title = format!(" {} {} ", self.cursor.month(), self.cursor.year());
+        let title = format!("{} {}", self.cursor.month(), self.cursor.year());
         self.render_panel(frame, area, title);
         let inner = Panel::inner_area(area);
         if inner.height < 2 {
@@ -85,7 +85,7 @@ where
             return;
         }
         let mut lines = vec![Line::from(Span::styled(
-            format!("{:>2}", date.day()),
+            date.day().to_string(),
             self.date_style(date, date.month() != self.cursor.month()),
         ))];
         let event_capacity = usize::from(inner.height.saturating_sub(1));
@@ -105,7 +105,7 @@ where
 
     pub(super) fn render_week(&self, frame: &mut Frame, area: Rect) {
         let (start, end) = week_range(self.cursor, self.first_day_of_week);
-        self.render_panel(frame, area, format!(" {start} — {end} "));
+        self.render_panel(frame, area, format!("{start} — {end}"));
         let inner = Panel::inner_area(area);
         if inner.height == 0 {
             return;
@@ -241,7 +241,7 @@ where
     }
 
     pub(super) fn render_day(&self, frame: &mut Frame, area: Rect) {
-        self.render_panel(frame, area, format!(" {} ", self.cursor));
+        self.render_panel(frame, area, self.cursor.to_string());
         let inner = Panel::inner_area(area);
         let entries = self.entries_on(self.cursor);
         let mut lines = Vec::new();

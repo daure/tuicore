@@ -365,7 +365,9 @@ where
             Some(self.reorder_highlighted_row_style())
         } else if highlighted && self.focused {
             Some(self.highlighted_row_style())
-        } else if self.row_is_visually_selected(&row.id, selection_descendants) {
+        } else if !self.displays_selection_glyphs()
+            && self.row_is_visually_selected(&row.id, selection_descendants)
+        {
             Some(self.selected_row_style())
         } else {
             base_row_style

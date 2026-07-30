@@ -2044,7 +2044,7 @@ fn inactive_highlight_does_not_style_row() {
 }
 
 #[test]
-fn selected_row_style_is_applied_when_row_is_not_highlighted() {
+fn checked_row_uses_checkbox_as_its_only_indicator() {
     let view = DataView::list(
         [Row::new(1, "first"), Row::new(2, "second")],
         |row| row.id,
@@ -2059,11 +2059,11 @@ fn selected_row_style_is_applied_when_row_is_not_highlighted() {
         .draw(|frame| view.render(frame, Rect::new(0, 0, 12, 2)))
         .expect("data view should render");
 
-    let theme = crate::theme();
+    let unchecked_cell = terminal.backend().buffer().cell((4, 0)).unwrap();
     let content_cell = terminal.backend().buffer().cell((4, 1)).unwrap();
-    assert_eq!(content_cell.fg, theme.selected_fg());
-    assert_eq!(content_cell.bg, theme.selected_bg());
-    assert!(!content_cell.modifier.contains(Modifier::BOLD));
+    assert_eq!(content_cell.fg, unchecked_cell.fg);
+    assert_eq!(content_cell.bg, unchecked_cell.bg);
+    assert_eq!(content_cell.modifier, unchecked_cell.modifier);
 }
 
 #[test]

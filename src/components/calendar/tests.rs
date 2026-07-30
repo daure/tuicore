@@ -144,7 +144,7 @@ fn first_month_and_week_cells_have_no_left_padding() {
     let month_date_row = rendered_row(&month, 100, 3);
     let week_header = rendered_row(&week, 100, 1);
 
-    assert_eq!(month_date_row.chars().nth(2), Some('1'));
+    assert_eq!(month_date_row.chars().nth(1), Some('1'));
     assert_eq!(
         week_header.chars().skip(1).take(3).collect::<String>(),
         "MON"
@@ -880,6 +880,13 @@ fn panel_top_left_omits_view_names() {
         let border = rendered_top_border(&demo_calendar().view(view), 100);
         assert!(!border.contains(omitted), "{view:?}: {border}");
     }
+}
+
+#[test]
+fn month_title_has_one_space_on_each_side() {
+    let border = rendered_top_border(&demo_calendar().view(CalendarView::Month), 100);
+
+    assert!(border.starts_with("╭─ June 2026 ─"), "{border}");
 }
 
 #[test]
