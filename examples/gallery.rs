@@ -1829,6 +1829,20 @@ impl PreviewState {
             ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
+            .merge(
+                <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::tick(
+                    &mut self.calendar,
+                    dt,
+                    settings,
+                ),
+            )
+            .merge(
+                <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::tick(
+                    &mut self.calendar_borderless,
+                    dt,
+                    settings,
+                ),
+            )
             .merge(<DatePicker<Msg> as TuiNode<Msg>>::tick(
                 &mut self.date_picker,
                 dt,

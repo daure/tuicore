@@ -1,6 +1,6 @@
-use ratatui::{Terminal, backend::Backend, layout::Rect};
+use ratatui::{Terminal, backend::Backend, layout::Rect, style::Style};
 
-use crate::{RenderCtx, ToastRack, TuiNode, fade_buffer};
+use crate::{RenderCtx, ToastRack, TuiNode, fade_buffer, theme};
 
 use super::Result;
 
@@ -25,9 +25,7 @@ impl Renderer {
     {
         terminal
             .draw(|frame| {
-                let mut ctx = RenderCtx::new();
-                root.render(frame, area, &mut ctx);
-                ctx.flush(frame);
+                render_frame(frame, root, area);
             })
             .map_err(Into::into)?;
         Ok(())
@@ -75,6 +73,18 @@ impl Renderer {
     }
 }
 
+fn render_frame<N, M>(frame: &mut ratatui::Frame<'_>, root: &N, area: Rect)
+where
+    N: TuiNode<M>,
+{
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(theme().background_bg()));
+    let mut ctx = RenderCtx::new();
+    root.render(frame, area, &mut ctx);
+    ctx.flush(frame);
+}
+
 fn render_frame_with_toasts_and_fade<N, M>(
     frame: &mut ratatui::Frame<'_>,
     root: &N,
@@ -84,9 +94,7 @@ fn render_frame_with_toasts_and_fade<N, M>(
 ) where
     N: TuiNode<M>,
 {
-    let mut ctx = RenderCtx::new();
-    root.render(frame, area, &mut ctx);
-    ctx.flush(frame);
+    render_frame(frame, root, area);
     toasts.render(frame, area);
     if fade_amount > 0.0 {
         fade_buffer(frame, area, fade_amount);
@@ -104,6 +112,32 @@ mod tests {
 
     use super::*;
     use crate::{EventCtx, EventOutcome, LayoutCtx, LayoutResult, OverlayLayer, TuiEvent};
+
+    struct EmptyNode;
+
+    impl TuiNode<()> for EmptyNode {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut RenderCtx<'_>) {}
+    }
+
+    #[test]
+    fn runtime_paints_the_theme_background_across_the_app_area() {
+        let area = Rect::new(1, 1, 3, 2);
+        let mut terminal = Terminal::new(TestBackend::new(5, 4)).expect("terminal should build");
+        let expected = theme().background_bg();
+
+        terminal
+            .draw(|frame| render_frame(frame, &EmptyNode, area))
+            .expect("frame should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((1, 1)).unwrap().bg, expected);
+        assert_eq!(buffer.cell((3, 2)).unwrap().bg, expected);
+        assert_eq!(buffer.cell((0, 0)).unwrap().bg, Color::Reset);
+    }
 
     struct PortalColorNode;
 

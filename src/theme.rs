@@ -42,7 +42,6 @@ pub enum ThemeName {
     OsakaJade,
     Palenight,
     RosePine,
-    ShadesOfPurple,
     Solarized,
     Synthwave84,
     TokyoNight,
@@ -52,7 +51,7 @@ pub enum ThemeName {
 }
 
 impl ThemeName {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 36] = [
         Self::Amoled,
         Self::Aura,
         Self::Ayu,
@@ -83,7 +82,6 @@ impl ThemeName {
         Self::OsakaJade,
         Self::Palenight,
         Self::RosePine,
-        Self::ShadesOfPurple,
         Self::Solarized,
         Self::Synthwave84,
         Self::TokyoNight,
@@ -124,7 +122,6 @@ impl ThemeName {
             Self::OsakaJade => "osaka_jade",
             Self::Palenight => "palenight",
             Self::RosePine => "rosepine",
-            Self::ShadesOfPurple => "shadesofpurple",
             Self::Solarized => "solarized",
             Self::Synthwave84 => "synthwave84",
             Self::TokyoNight => "tokyonight",
@@ -166,7 +163,6 @@ impl ThemeName {
             Self::OsakaJade => "Osaka Jade",
             Self::Palenight => "Palenight",
             Self::RosePine => "Rosé Pine",
-            Self::ShadesOfPurple => "Shades of Purple",
             Self::Solarized => "Solarized",
             Self::Synthwave84 => "Synthwave '84",
             Self::TokyoNight => "Tokyo Night",
@@ -218,7 +214,7 @@ impl FromStr for ThemeName {
             "osaka_jade" => Ok(Self::OsakaJade),
             "palenight" | "pale_night" => Ok(Self::Palenight),
             "rose_pine" | "rosepine" => Ok(Self::RosePine),
-            "shadesofpurple" | "shades_of_purple" => Ok(Self::ShadesOfPurple),
+            "shadesofpurple" | "shades_of_purple" => Ok(Self::Synthwave84),
             "solarized" | "solarized_dark" => Ok(Self::Solarized),
             "synthwave84" | "synthwave_84" => Ok(Self::Synthwave84),
             "tokyo_night" | "tokyonight" | "tira_dark" => Ok(Self::TokyoNight),
@@ -1052,19 +1048,6 @@ fn palette_for(name: ThemeName) -> Palette {
             [246, 193, 119],
             [235, 111, 146],
         ),
-        ThemeName::ShadesOfPurple => palette(
-            [43, 18, 68],
-            [62, 32, 93],
-            [104, 74, 137],
-            [255, 255, 255],
-            [199, 187, 255],
-            [149, 131, 214],
-            [130, 170, 255],
-            [94, 236, 255],
-            [173, 255, 47],
-            [255, 183, 77],
-            [255, 99, 132],
-        ),
         ThemeName::Solarized => palette(
             [0, 43, 54],
             [7, 54, 66],
@@ -1386,7 +1369,7 @@ mod tests {
 
     #[test]
     fn built_in_theme_ids_round_trip() {
-        assert_eq!(ThemeName::ALL.len(), 37);
+        assert_eq!(ThemeName::ALL.len(), 36);
 
         for name in ThemeName::ALL {
             assert_eq!(ThemeName::from_str(name.id()).unwrap(), name);
