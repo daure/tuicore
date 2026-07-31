@@ -97,7 +97,7 @@ where
                     .fg(if self.error {
                         theme.error_fg()
                     } else if self.field_is_focused() {
-                        theme.highlight_bg()
+                        theme.accent_fg()
                     } else if self.chrome_is_active() {
                         theme.accent_fg()
                     } else {
@@ -146,7 +146,7 @@ where
             .fg(if self.error {
                 theme.error_fg()
             } else if self.field_is_focused() {
-                theme.highlight_bg()
+                theme.accent_fg()
             } else if self.chrome_is_active() {
                 theme.accent_fg()
             } else {
@@ -194,7 +194,7 @@ where
                     .style(
                         Style::default()
                             .fg(if self.field_is_focused() {
-                                theme.highlight_bg()
+                                theme.accent_fg()
                             } else if self.chrome_is_active() {
                                 theme.accent_fg()
                             } else {
@@ -334,7 +334,7 @@ where
                 .border_style(
                     Style::default()
                         .fg(if self.is_focused() {
-                            theme.highlight_bg()
+                            theme.accent_fg()
                         } else {
                             theme.border_fg()
                         })
@@ -511,7 +511,7 @@ where
             .fg(if self.error {
                 theme.error_fg()
             } else if self.field_is_focused() {
-                theme.highlight_bg()
+                theme.accent_fg()
             } else if self.chrome_is_active() {
                 theme.accent_fg()
             } else {
@@ -541,7 +541,7 @@ where
         let border_style = Style::default().fg(if self.error {
             theme.error_fg()
         } else if self.field_is_focused() {
-            theme.highlight_bg()
+            theme.accent_fg()
         } else if self.chrome_is_active() {
             theme.accent_fg()
         } else {
@@ -550,7 +550,7 @@ where
         let title_style = Style::default().fg(if self.error {
             theme.error_fg()
         } else if self.field_is_focused() {
-            theme.highlight_bg()
+            theme.accent_fg()
         } else if self.chrome_is_active() {
             theme.accent_fg()
         } else {

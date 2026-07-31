@@ -133,6 +133,10 @@ where
         self
     }
 
+    pub fn set_placeholder(&mut self, placeholder: impl Into<String>) {
+        self.placeholder = placeholder.into();
+    }
+
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
         self.hotkey = Some(hotkey.into());
         self.sync_panel();

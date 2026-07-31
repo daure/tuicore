@@ -266,13 +266,26 @@ impl Theme {
         let selected_bg = neutral_selection_background(&palette);
         let highlight_bg = interaction_highlight_background(&palette);
         let highlight_fg = strongest_contrast(palette.base, palette.text, highlight_bg);
+        let transparent_background = name == ThemeName::LucentOrng;
         Self {
             name,
             selected_fg: palette.text,
             selected_bg,
-            background_bg: palette.base,
-            surface_bg: palette.surface,
-            backdrop_bg: palette.base,
+            background_bg: if transparent_background {
+                Color::Reset
+            } else {
+                palette.base
+            },
+            surface_bg: if transparent_background {
+                Color::Reset
+            } else {
+                palette.surface
+            },
+            backdrop_bg: if transparent_background {
+                Color::Reset
+            } else {
+                palette.base
+            },
             text_fg: palette.text,
             muted_fg: palette.muted,
             subtle_fg: palette.subtle,
@@ -854,17 +867,17 @@ fn palette_for(name: ThemeName) -> Palette {
             [224, 105, 99],
         ),
         ThemeName::LucentOrng => palette(
-            [24, 21, 18],
-            [38, 32, 27],
-            [83, 68, 55],
-            [247, 240, 231],
-            [219, 197, 173],
-            [157, 132, 108],
-            [94, 163, 255],
-            [88, 205, 176],
-            [140, 201, 118],
-            [255, 176, 84],
-            [255, 110, 85],
+            [10, 10, 10],
+            [20, 20, 20],
+            [60, 60, 60],
+            [238, 238, 238],
+            [96, 96, 96],
+            [128, 128, 128],
+            [238, 121, 72],
+            [236, 91, 43],
+            [107, 161, 230],
+            [236, 91, 43],
+            [224, 108, 117],
         ),
         ThemeName::Material => palette(
             [38, 50, 56],
@@ -997,17 +1010,17 @@ fn palette_for(name: ThemeName) -> Palette {
             [255, 107, 107],
         ),
         ThemeName::Orng => palette(
-            [25, 22, 19],
-            [39, 33, 29],
-            [82, 67, 59],
-            [244, 236, 229],
-            [221, 188, 161],
-            [160, 129, 108],
-            [92, 159, 255],
-            [99, 205, 177],
-            [153, 205, 102],
-            [255, 183, 77],
-            [255, 101, 84],
+            [10, 10, 10],
+            [20, 20, 20],
+            [60, 60, 60],
+            [238, 238, 238],
+            [96, 96, 96],
+            [128, 128, 128],
+            [238, 121, 72],
+            [236, 91, 43],
+            [107, 161, 230],
+            [236, 91, 43],
+            [224, 108, 117],
         ),
         ThemeName::OsakaJade => palette(
             [22, 29, 27],
@@ -1287,6 +1300,40 @@ mod tests {
     }
 
     #[test]
+    fn orng_uses_the_official_opencode_dark_palette() {
+        let theme = Theme::named(ThemeName::Orng);
+
+        assert_eq!(theme.background_bg(), Color::Rgb(0x0a, 0x0a, 0x0a));
+        assert_eq!(theme.surface_bg(), Color::Rgb(0x14, 0x14, 0x14));
+        assert_eq!(theme.border_fg(), Color::Rgb(0x3c, 0x3c, 0x3c));
+        assert_eq!(theme.text_fg(), Color::Rgb(0xee, 0xee, 0xee));
+        assert_eq!(theme.subtle_fg(), Color::Rgb(0x60, 0x60, 0x60));
+        assert_eq!(theme.muted_fg(), Color::Rgb(0x80, 0x80, 0x80));
+        assert_eq!(theme.key_fg(), Color::Rgb(0xee, 0x79, 0x48));
+        assert_eq!(theme.accent_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
+        assert_eq!(theme.success_fg(), Color::Rgb(0x6b, 0xa1, 0xe6));
+        assert_eq!(theme.warning_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
+        assert_eq!(theme.error_fg(), Color::Rgb(0xe0, 0x6c, 0x75));
+    }
+
+    #[test]
+    fn lucent_orng_uses_the_official_opencode_dark_palette() {
+        let theme = Theme::named(ThemeName::LucentOrng);
+
+        assert_eq!(theme.background_bg(), Color::Reset);
+        assert_eq!(theme.surface_bg(), Color::Reset);
+        assert_eq!(theme.backdrop_bg(), Color::Reset);
+        assert_eq!(theme.border_fg(), Color::Rgb(0x3c, 0x3c, 0x3c));
+        assert_eq!(theme.text_fg(), Color::Rgb(0xee, 0xee, 0xee));
+        assert_eq!(theme.muted_fg(), Color::Rgb(0x80, 0x80, 0x80));
+        assert_eq!(theme.key_fg(), Color::Rgb(0xee, 0x79, 0x48));
+        assert_eq!(theme.accent_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
+        assert_eq!(theme.success_fg(), Color::Rgb(0x6b, 0xa1, 0xe6));
+        assert_eq!(theme.warning_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
+        assert_eq!(theme.error_fg(), Color::Rgb(0xe0, 0x6c, 0x75));
+    }
+
+    #[test]
     fn weather_roles_follow_built_in_theme_palette() {
         let vercel = Theme::named(ThemeName::Vercel);
         let dracula = Theme::named(ThemeName::Dracula);
@@ -1313,6 +1360,11 @@ mod tests {
     fn weather_roles_keep_readable_contrast() {
         for name in ThemeName::ALL {
             let theme = Theme::named(name);
+            let contrast_background = if theme.background_bg() == Color::Reset {
+                palette_for(name).base
+            } else {
+                theme.background_bg()
+            };
             for color in [
                 theme.weather_sun_fg(),
                 theme.weather_cool_fg(),
@@ -1320,7 +1372,7 @@ mod tests {
                 theme.weather_hot_fg(),
                 theme.weather_rain_fg(),
             ] {
-                assert!(contrast_ratio(color, theme.background_bg()) >= 3.0);
+                assert!(contrast_ratio(color, contrast_background) >= 3.0);
             }
         }
     }

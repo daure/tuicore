@@ -1142,7 +1142,7 @@ fn no_selection_highlight_uses_same_style_as_focused_rows() {
 }
 
 #[test]
-fn focused_bordered_dropdown_uses_bold_highlight_border() {
+fn focused_bordered_dropdown_uses_bold_accent_border() {
     let mut dropdown = single_dropdown();
     let mut initial_layout = LayoutCtx::new();
     <Dropdown<_, _> as TuiNode<()>>::layout(&mut dropdown, AREA, &mut initial_layout);
@@ -1163,7 +1163,7 @@ fn focused_bordered_dropdown_uses_bold_highlight_border() {
 
     let buffer = terminal.backend().buffer();
     let border = buffer.cell((0, 2)).unwrap();
-    assert_eq!(border.fg, theme().highlight_bg());
+    assert_eq!(border.fg, theme().accent_fg());
     assert!(border.modifier.contains(Modifier::BOLD));
 }
 

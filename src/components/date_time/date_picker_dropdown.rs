@@ -231,7 +231,8 @@ impl<M> DatePickerDropdown<M> {
 
     fn field_line(&self, width: u16) -> Line<'static> {
         let t = theme();
-        let style = if self.focused {
+        let value = self.current_value().map(|date| date.to_string());
+        let style = if self.focused && value.is_some() {
             Style::default()
                 .fg(t.highlight_fg())
                 .bg(t.highlight_bg())
@@ -239,7 +240,6 @@ impl<M> DatePickerDropdown<M> {
         } else {
             Style::default().fg(t.text_fg())
         };
-        let value = self.current_value().map(|date| date.to_string());
         let text_style = if value.is_none() {
             style.fg(t.muted_fg())
         } else {

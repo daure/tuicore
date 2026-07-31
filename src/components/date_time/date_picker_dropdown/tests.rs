@@ -4,7 +4,8 @@ use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn focused_field_is_bold_and_unfocused_field_is_not() {
-    let mut dropdown = DatePickerDropdown::<()>::new();
+    let date = Date::from_calendar_date(2026, time::Month::August, 1).unwrap();
+    let mut dropdown = DatePickerDropdown::<()>::new().value(Some(date));
     assert!(
         !dropdown.field_line(24).spans[0]
             .style
@@ -33,6 +34,12 @@ fn empty_date_picker_field_uses_muted_placeholder_foreground() {
             .find(|span| span.content.contains("Select date"))
             .expect("placeholder span should render");
         assert_eq!(placeholder.style.fg, Some(theme().muted_fg()));
+        assert!(line.spans.iter().all(|span| span.style.bg.is_none()));
+        assert!(
+            line.spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 }
 

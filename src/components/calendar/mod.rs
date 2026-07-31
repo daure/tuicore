@@ -50,6 +50,7 @@ type RoleFn<T> = dyn Fn(&T) -> Option<CalendarEntryRole>;
 type EventMarkerFn<T> = dyn Fn(&T) -> char;
 type EntryRenderFn<T> = dyn Fn(&T) -> Line<'static>;
 type DetailRenderFn<T> = dyn Fn(&T) -> Text<'static>;
+type EntryOrderFn<T> = dyn Fn(&T, &T) -> Ordering;
 
 pub struct Calendar<T, Id = String, M = ()> {
     entries: Vec<T>,
@@ -60,6 +61,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     event_marker: Option<Box<EventMarkerFn<T>>>,
     render_entry: Option<Box<EntryRenderFn<T>>>,
     render_detail: Option<Box<DetailRenderFn<T>>>,
+    entry_order: Option<Box<EntryOrderFn<T>>>,
     event_detail_on_activate: bool,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
     view: CalendarView,
@@ -185,6 +187,7 @@ where
             event_marker: None,
             render_entry: None,
             render_detail: None,
+            entry_order: None,
             event_detail_on_activate: false,
             on_event: None,
             view: CalendarView::Month,
@@ -315,6 +318,11 @@ where
         self
     }
 
+    pub fn entry_order(mut self, compare: impl Fn(&T, &T) -> Ordering + 'static) -> Self {
+        self.entry_order = Some(Box::new(compare));
+        self
+    }
+
     pub fn event_detail_on_activate(mut self, enabled: bool) -> Self {
         self.set_event_detail_on_activate(enabled);
         self
@@ -349,8 +357,15 @@ where
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
+        let highlighted_id = self.highlighted_entry_id();
         self.entries = entries.into_iter().collect();
-        self.highlight_first_entry_on_cursor();
+        self.highlighted_entry = highlighted_id
+            .and_then(|id| {
+                self.entries.iter().position(|entry| {
+                    (self.id)(entry) == id && (self.span)(entry).covers_date(self.cursor)
+                })
+            })
+            .or_else(|| self.first_entry_on_cursor());
     }
 
     pub fn set_focused(&mut self, focused: bool) {
@@ -842,7 +857,10 @@ where
             .reverse()
             .then_with(|| left_span.start.cmp(&right_span.start))
             .then_with(|| {
-                (self.title)(&self.entries[left]).cmp(&(self.title)(&self.entries[right]))
+                self.entry_order.as_ref().map_or_else(
+                    || (self.title)(&self.entries[left]).cmp(&(self.title)(&self.entries[right])),
+                    |compare| compare(&self.entries[left], &self.entries[right]),
+                )
             })
     }
 

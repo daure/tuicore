@@ -277,14 +277,6 @@ impl<M> DateTimePickerDropdown<M> {
 
     fn field_line(&self, width: u16) -> Line<'static> {
         let t = theme();
-        let style = if self.focused {
-            Style::default()
-                .fg(t.highlight_fg())
-                .bg(t.highlight_bg())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(t.text_fg())
-        };
         let value = self.current_value().map(|value| {
             format!(
                 "{} 󰅐 {}",
@@ -292,6 +284,14 @@ impl<M> DateTimePickerDropdown<M> {
                 format_picker_time_for_precision(value.time(), self.time.configured_precision(),)
             )
         });
+        let style = if self.focused && value.is_some() {
+            Style::default()
+                .fg(t.highlight_fg())
+                .bg(t.highlight_bg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(t.text_fg())
+        };
         let text_style = if value.is_none() {
             style.fg(t.muted_fg())
         } else {

@@ -5,7 +5,10 @@ use std::time::Duration as StdDuration;
 
 #[test]
 fn focused_field_is_bold_and_unfocused_field_is_not() {
-    let mut dropdown = DateTimePickerDropdown::<()>::new();
+    let value = Date::from_calendar_date(2026, time::Month::August, 1)
+        .unwrap()
+        .with_time(time::Time::from_hms(9, 30, 0).unwrap());
+    let mut dropdown = DateTimePickerDropdown::<()>::new().value(Some(value));
     assert!(
         !dropdown.field_line(31).spans[0]
             .style
@@ -34,6 +37,12 @@ fn empty_date_time_picker_field_uses_muted_placeholder_foreground() {
             .find(|span| span.content.contains("Select date & time"))
             .expect("placeholder span should render");
         assert_eq!(placeholder.style.fg, Some(theme().muted_fg()));
+        assert!(line.spans.iter().all(|span| span.style.bg.is_none()));
+        assert!(
+            line.spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 }
 
