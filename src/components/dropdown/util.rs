@@ -62,7 +62,7 @@ pub(super) fn bounded_title(title: &str, max_width: usize) -> String {
     value
 }
 
-fn truncate_cells(value: &str, max_width: usize) -> String {
+pub(super) fn truncate_cells(value: &str, max_width: usize) -> String {
     let mut width = 0;
     let mut truncated = String::new();
 

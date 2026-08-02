@@ -7,10 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use super::super::text_input::placeholder_line;
-use super::util::{bounded_title, connected_popup_border_set};
+use super::util::{bounded_title, connected_popup_border_set, truncate_cells};
 use super::{
     DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownLabelPosition,
-    DropdownPopupDirection, DropdownVariant,
+    DropdownPopupDirection, DropdownVariant, highlighted_label_line,
 };
 use crate::{
     BorderKind, HotkeyLabelMode, OverlayLayer, border_set, hotkey_badge_width, hotkey_edge_spans,
@@ -252,11 +252,7 @@ where
         } else {
             Style::default().fg(theme.text_fg()).bg(theme.surface_bg())
         };
-        let text_style = if self.committed.is_empty() {
-            base_style.add_modifier(Modifier::DIM)
-        } else {
-            base_style
-        };
+        let placeholder_style = base_style.fg(theme.muted_fg());
 
         frame.render_widget(Paragraph::new("").style(base_style), area);
 
@@ -275,11 +271,9 @@ where
         };
         if !text_area.is_empty() {
             let text = if inline_trigger {
-                self.inline_filled_line(text_style)
+                self.inline_filled_line(base_style)
             } else if self.hotkey.is_some() {
                 self.filled_summary_line(base_style)
-            } else if self.committed.is_empty() && self.no_selection_text.is_some() {
-                Line::from(Span::styled(self.empty_summary(), text_style))
             } else if self.committed.is_empty() {
                 placeholder_line(
                     &self.empty_summary(),
@@ -287,11 +281,11 @@ where
                     text_area.width as usize,
                     false,
                     None,
-                    text_style,
-                    text_style,
+                    placeholder_style,
+                    placeholder_style,
                 )
             } else {
-                Line::from(Span::styled(self.selected_summary(), text_style))
+                Line::from(Span::styled(self.selected_summary(), base_style))
             };
             frame.render_widget(Paragraph::new(text), text_area);
         }
@@ -410,7 +404,7 @@ where
         }
 
         let value_style = if self.committed.is_empty() {
-            base_style.add_modifier(Modifier::DIM)
+            base_style.fg(theme().muted_fg())
         } else {
             base_style
         };
@@ -432,7 +426,7 @@ where
 
     pub(super) fn filled_summary_line(&self, base_style: Style) -> Line<'static> {
         let value_style = if self.committed.is_empty() {
-            base_style.add_modifier(Modifier::DIM)
+            base_style.fg(theme().muted_fg())
         } else {
             base_style
         };
@@ -472,10 +466,15 @@ where
         } else {
             popup_content_style.unwrap_or_default().fg(theme.muted_fg())
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(text.clone(), style))).style(style),
-            area,
-        );
+        let text = truncate_cells(text, area.width as usize);
+        let mut line =
+            highlighted_label_line(text, self.search_input.current_value(), self.search_mode);
+        if self.no_selection_highlighted {
+            for span in &mut line.spans {
+                span.style = span.style.fg(theme.highlight_fg());
+            }
+        }
+        frame.render_widget(Paragraph::new(line).style(style), area);
     }
 
     pub(super) fn popup_content_style(&self) -> Option<Style> {

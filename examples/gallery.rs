@@ -14,7 +14,7 @@ use gallery_demo::dialogs::{
 use gallery_demo::dropdowns::{
     DropdownDemoItem, dropdown_area, dropdown_child_key, dropdown_child_route,
     dropdown_column_layout, dropdown_filled_fuzzy_single, dropdown_filled_multi_contains,
-    dropdown_filled_no_search_immediate, dropdown_fuzzy_single, dropdown_grid_areas,
+    dropdown_filled_searchable_none_immediate, dropdown_fuzzy_single, dropdown_grid_areas,
     dropdown_index, dropdown_multi_contains, dropdown_no_search_immediate, dropdown_preview_layout,
 };
 use gallery_demo::forms::{FormControlId, ValidatedForm};
@@ -782,7 +782,7 @@ struct PreviewState {
     dropdown_no_search_immediate: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_fuzzy_single: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_multi_contains: Dropdown<DropdownDemoItem, &'static str>,
-    dropdown_filled_no_search_immediate: Dropdown<DropdownDemoItem, &'static str>,
+    dropdown_filled_searchable_none_immediate: Dropdown<DropdownDemoItem, &'static str>,
     menu_button: MenuButton<&'static str, Msg>,
     menu_status: String,
     layout_flex: Flex<Msg>,
@@ -978,7 +978,7 @@ impl PreviewState {
             dropdown_no_search_immediate: dropdown_no_search_immediate(),
             dropdown_filled_fuzzy_single: dropdown_filled_fuzzy_single(),
             dropdown_filled_multi_contains: dropdown_filled_multi_contains(),
-            dropdown_filled_no_search_immediate: dropdown_filled_no_search_immediate(),
+            dropdown_filled_searchable_none_immediate: dropdown_filled_searchable_none_immediate(),
             menu_button: demo_menu_button(),
             menu_status: String::from("No menu action yet"),
             layout_flex: layout_flex_demo(),
@@ -1985,7 +1985,7 @@ impl PreviewState {
                 settings,
             ))
             .merge(Animated::tick(
-                &mut self.dropdown_filled_no_search_immediate,
+                &mut self.dropdown_filled_searchable_none_immediate,
                 dt,
                 settings,
             ))
@@ -2081,7 +2081,7 @@ impl PreviewState {
             2 => &mut self.dropdown_no_search_immediate,
             3 => &mut self.dropdown_filled_fuzzy_single,
             4 => &mut self.dropdown_filled_multi_contains,
-            5 => &mut self.dropdown_filled_no_search_immediate,
+            5 => &mut self.dropdown_filled_searchable_none_immediate,
             _ => &mut self.dropdown_fuzzy_single,
         }
     }
@@ -2234,9 +2234,10 @@ impl PreviewState {
             5,
             "Filled 6 • No selection text",
             &format!(
-                "selected: {:?}\nquery: {:?}\nShows --None-- before a value is chosen.",
-                self.dropdown_filled_no_search_immediate.selected_id(),
-                self.dropdown_filled_no_search_immediate.search_query()
+                "selected: {:?}\nquery: {:?}\nType `no` to reveal and select --None--.",
+                self.dropdown_filled_searchable_none_immediate.selected_id(),
+                self.dropdown_filled_searchable_none_immediate
+                    .search_query()
             ),
         );
 
@@ -2385,7 +2386,7 @@ impl PreviewState {
         ctx.push_slot(dropdown_child_key(5), areas[5], |ctx| {
             ctx.with_overlay_bounds(overlay_bounds, |ctx| {
                 <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
-                    &mut self.dropdown_filled_no_search_immediate,
+                    &mut self.dropdown_filled_searchable_none_immediate,
                     areas[5],
                     ctx,
                 );
@@ -2399,7 +2400,7 @@ impl PreviewState {
             2 => &self.dropdown_no_search_immediate,
             3 => &self.dropdown_filled_fuzzy_single,
             4 => &self.dropdown_filled_multi_contains,
-            5 => &self.dropdown_filled_no_search_immediate,
+            5 => &self.dropdown_filled_searchable_none_immediate,
             _ => &self.dropdown_fuzzy_single,
         }
     }

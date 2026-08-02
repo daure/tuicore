@@ -614,11 +614,32 @@ where
     }
 
     fn sync_after_search_change(&mut self) -> bool {
+        let highlighted_before = self.data_view.highlighted_id();
         self.refresh_filter();
         if !self.multi {
-            self.set_single_draft_from_highlight();
-            self.sync_view_selection();
-            if self.commit_mode == DropdownCommitMode::Immediate {
+            let has_activation_target = if self.no_selection_highlighted {
+                self.draft.clear();
+                true
+            } else if !self.filtered.is_empty() {
+                if highlighted_before.is_none()
+                    && let Some(id) = self
+                        .draft
+                        .first()
+                        .filter(|id| self.filtered.contains(id))
+                        .cloned()
+                {
+                    self.data_view.highlight_id(&id);
+                    self.data_view.drain_events();
+                }
+                self.set_single_draft_from_highlight();
+                true
+            } else {
+                false
+            };
+            if has_activation_target {
+                self.sync_view_selection();
+            }
+            if has_activation_target && self.commit_mode == DropdownCommitMode::Immediate {
                 self.commit_immediate_draft();
                 return true;
             }
@@ -670,7 +691,15 @@ where
         }
 
         if matches_any(&self.action_keys.commit, key) {
+            let activates_no_selection = self.no_selection_highlighted;
+            if activates_no_selection {
+                self.draft.clear();
+                self.sync_view_selection();
+            }
             if self.commit_mode == DropdownCommitMode::Immediate {
+                if activates_no_selection {
+                    self.commit_immediate_draft();
+                }
                 return self.close();
             }
             return self.commit();
@@ -698,16 +727,12 @@ where
 
         if self.search_enabled() {
             let input = self.search_input.on_key(key);
-            if input.changed {
-                self.sync_after_search_change();
-            }
+            let committed = input.changed && self.sync_after_search_change();
             if input.needs_redraw() {
                 return DropdownOutcome {
                     handled: true,
                     changed: input.changed,
-                    committed: input.changed
-                        && !self.multi
-                        && self.commit_mode == DropdownCommitMode::Immediate,
+                    committed,
                     ..DropdownOutcome::IDLE
                 };
             }
@@ -821,11 +846,13 @@ where
             .data_view
             .on_key(KeyEvent::from(key), self.list_area(area));
         if moved_to_no_selection {
-            self.draft.clear();
-            self.sync_view_selection();
+            if !self.multi {
+                self.draft.clear();
+                self.sync_view_selection();
+            }
             self.set_no_selection_highlighted(true);
-            let committed = self.commit_mode == DropdownCommitMode::Immediate;
-            if self.commit_mode == DropdownCommitMode::Immediate {
+            let committed = !self.multi && self.commit_mode == DropdownCommitMode::Immediate;
+            if committed {
                 self.commit_immediate_draft();
             }
             return DropdownOutcome {
@@ -850,6 +877,9 @@ where
     }
 
     fn toggle_highlighted(&mut self) -> DropdownOutcome {
+        if self.no_selection_highlighted {
+            return self.activate_no_selection();
+        }
         let Some(id) = self.data_view.highlighted_id() else {
             return DropdownOutcome::HANDLED;
         };
@@ -863,9 +893,7 @@ where
 
     fn select_highlighted(&mut self) -> DropdownOutcome {
         if self.no_selection_highlighted {
-            self.draft.clear();
-            self.sync_view_selection();
-            return self.commit();
+            return self.activate_no_selection();
         }
 
         if self.multi {
@@ -875,6 +903,16 @@ where
         self.set_single_draft_from_highlight();
         self.sync_view_selection();
         self.commit()
+    }
+
+    fn activate_no_selection(&mut self) -> DropdownOutcome {
+        self.draft.clear();
+        self.sync_view_selection();
+        if !self.multi || self.close_on_select {
+            self.commit()
+        } else {
+            DropdownOutcome::changed()
+        }
     }
 
     fn refresh_filter(&mut self) {
@@ -892,7 +930,9 @@ where
         };
 
         self.filtered = filtered;
-        if !self.show_no_selection_row() {
+        if self.show_no_selection_row() && self.filtered.is_empty() {
+            self.set_no_selection_highlighted(true);
+        } else if !self.show_no_selection_row() {
             self.set_no_selection_highlighted(false);
         }
         if self.search_mode == DropdownSearchMode::None || query_empty {
@@ -1054,13 +1094,21 @@ where
     }
 
     fn empty_summary(&self) -> String {
-        self.no_selection_text
-            .clone()
-            .unwrap_or_else(|| self.placeholder.clone())
+        self.placeholder.clone()
     }
 
     fn show_no_selection_row(&self) -> bool {
-        self.no_selection_text.is_some() && self.search_input.current_value().is_empty()
+        let Some(text) = &self.no_selection_text else {
+            return false;
+        };
+        let query = self.search_input.current_value();
+        if query.is_empty() {
+            return true;
+        }
+        let Some(mode) = search_mode_for_highlight(self.search_mode) else {
+            return true;
+        };
+        search_match(query, text, mode).is_some()
     }
 
     fn label_for(&self, id: &Id) -> Option<String> {

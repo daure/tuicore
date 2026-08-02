@@ -80,10 +80,11 @@ pub(crate) fn dropdown_filled_multi_contains() -> Dropdown<DropdownDemoItem, &'s
         .alt_style(true)
 }
 
-pub(crate) fn dropdown_filled_no_search_immediate() -> Dropdown<DropdownDemoItem, &'static str> {
+pub(crate) fn dropdown_filled_searchable_none_immediate() -> Dropdown<DropdownDemoItem, &'static str>
+{
     Dropdown::single(dropdown_items(), |row| row.id, |row| row.label.to_string())
-        .placeholder("Pick immediate lane...")
-        .search_mode(DropdownSearchMode::None)
+        .placeholder("Items")
+        .search_mode(DropdownSearchMode::Contains)
         .commit_mode(DropdownCommitMode::Immediate)
         .no_selection_text("--None--")
         .variant(DropdownVariant::Filled)

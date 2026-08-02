@@ -1052,9 +1052,10 @@ fn filled_alt_top_label_trigger_has_no_leading_padding() {
 }
 
 #[test]
-fn no_selection_text_renders_empty_value_and_popup_option() {
+fn placeholder_renders_in_field_while_no_selection_text_renders_in_popup() {
     let mut dropdown = single_dropdown()
         .variant(DropdownVariant::Filled)
+        .placeholder("Items")
         .no_selection_text("--None--");
     dropdown.open();
     layout_dropdown(
@@ -1077,8 +1078,30 @@ fn no_selection_text_renders_empty_value_and_popup_option() {
     let option = (0..16)
         .map(|x| buffer.cell((x, 2)).unwrap().symbol())
         .collect::<String>();
-    assert!(field.contains("--None--"));
+    assert!(field.contains("Items"));
+    assert!(!field.contains("--None--"));
     assert!(option.contains("--None--"));
+}
+
+#[test]
+fn filled_alt_hotkey_placeholder_uses_muted_color() {
+    let dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .placeholder("Items")
+        .no_selection_text("--None--")
+        .label("Immediate")
+        .hotkey("6")
+        .alt_style(true);
+    let mut terminal = Terminal::new(TestBackend::new(16, 2)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let placeholder = terminal.backend().buffer().cell((0, 1)).unwrap();
+    assert_eq!(placeholder.symbol(), "I");
+    assert_eq!(placeholder.fg, theme().muted_fg());
+    assert_eq!(placeholder.bg, theme().surface_bg());
 }
 
 #[test]
@@ -1093,6 +1116,301 @@ fn no_selection_text_can_be_selected_to_clear_value() {
     dropdown.on_key(Key::Enter, AREA);
 
     assert_eq!(dropdown.selected_id(), None);
+}
+
+#[test]
+fn searchable_none_clears_selection_and_restores_placeholder_after_close() {
+    let mut dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .placeholder("Items")
+        .search_mode(DropdownSearchMode::Contains)
+        .commit_mode(DropdownCommitMode::Immediate)
+        .no_selection_text("--None--")
+        .label("Immediate")
+        .hotkey("6")
+        .alt_style(true)
+        .selected_one("Alpha");
+
+    dropdown.open();
+    dropdown.on_key(char_key('n'), AREA);
+    dropdown.on_key(char_key('o'), AREA);
+
+    assert!(dropdown.show_no_selection_row());
+    assert!(dropdown.no_selection_highlighted);
+    assert_eq!(dropdown.selected_id(), None);
+
+    layout_dropdown(
+        &mut dropdown,
+        Rect::new(0, 0, 16, 2),
+        Rect::new(0, 0, 16, 8),
+    );
+    let mut open_terminal = Terminal::new(TestBackend::new(16, 8)).expect("terminal should build");
+    open_terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, Rect::new(0, 0, 16, 2)))
+        .expect("dropdown should render");
+    let option = (0..16)
+        .map(|x| {
+            open_terminal
+                .backend()
+                .buffer()
+                .cell((x, 3))
+                .unwrap()
+                .symbol()
+        })
+        .collect::<String>();
+    assert!(option.contains("--None--"));
+
+    dropdown.on_key(Key::Enter, AREA);
+
+    assert_eq!(dropdown.selected_id(), None);
+    assert!(!dropdown.is_open());
+
+    let mut terminal = Terminal::new(TestBackend::new(16, 2)).expect("terminal should build");
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+    let field = (0..16)
+        .map(|x| terminal.backend().buffer().cell((x, 1)).unwrap().symbol())
+        .collect::<String>();
+    assert!(field.contains("Items"));
+    assert!(!field.contains("--None--"));
+}
+
+#[test]
+fn highlighted_matching_no_selection_row_uses_highlight_colors_for_all_text() {
+    let mut dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::Contains)
+        .no_selection_text("None option");
+    dropdown.open();
+    dropdown.on_key(char_key('o'), AREA);
+    dropdown.on_key(char_key('n'), AREA);
+    let mut terminal = Terminal::new(TestBackend::new(16, 6)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render_popup(frame, frame.area(), DropdownPopupDirection::Down))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    for x in 1..=11 {
+        let cell = buffer.cell((x, 2)).unwrap();
+        assert_eq!(cell.fg, theme().highlight_fg());
+        assert_eq!(cell.bg, theme().highlight_bg());
+    }
+    assert!((1..=11).any(|x| {
+        buffer
+            .cell((x, 2))
+            .unwrap()
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    }));
+    assert!(
+        !buffer
+            .cell((1, 2))
+            .unwrap()
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+}
+
+#[test]
+fn narrow_popup_truncates_no_selection_text_at_unicode_cell_boundary() {
+    let mut dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::Contains)
+        .no_selection_text("ab界cdZ");
+    dropdown.open();
+    dropdown.on_key(char_key('界'), AREA);
+    let mut terminal = Terminal::new(TestBackend::new(8, 5)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| dropdown.render_popup(frame, frame.area(), DropdownPopupDirection::Down))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), "a");
+    assert_eq!(buffer.cell((2, 2)).unwrap().symbol(), "b");
+    assert_eq!(buffer.cell((3, 2)).unwrap().symbol(), "界");
+    assert_eq!(buffer.cell((5, 2)).unwrap().symbol(), "c");
+    assert_eq!(buffer.cell((6, 2)).unwrap().symbol(), "d");
+    assert_eq!(buffer.cell((7, 2)).unwrap().symbol(), "│");
+}
+
+#[test]
+fn nonmatching_search_hides_no_selection_text() {
+    let mut dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::Contains)
+        .no_selection_text("--None--");
+
+    dropdown.open();
+    dropdown.on_key(char_key('z'), AREA);
+
+    assert!(!dropdown.show_no_selection_row());
+    assert!(!dropdown.no_selection_highlighted);
+}
+
+#[test]
+fn explicit_nonmatching_search_preserves_selected_value_on_commit() {
+    let mut dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::Contains)
+        .no_selection_text("--None--")
+        .selected_one("Beta");
+
+    dropdown.open();
+    dropdown.on_key(char_key('z'), AREA);
+
+    assert!(dropdown.filtered.is_empty());
+    assert_eq!(dropdown.draft, vec!["Beta"]);
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+
+    dropdown.on_key(Key::Enter, AREA);
+
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+}
+
+#[test]
+fn immediate_nonmatching_search_preserves_selected_value() {
+    let mut dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::Fuzzy)
+        .commit_mode(DropdownCommitMode::Immediate)
+        .no_selection_text("--None--")
+        .selected_one("Beta");
+
+    dropdown.open();
+    let outcome = dropdown.on_key(char_key('z'), AREA);
+
+    assert!(!outcome.committed);
+    assert!(dropdown.filtered.is_empty());
+    assert_eq!(dropdown.draft, vec!["Beta"]);
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+
+    dropdown.on_key(Key::Enter, AREA);
+
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+}
+
+#[test]
+fn no_selection_search_respects_contains_and_fuzzy_matching() {
+    let mut contains = single_dropdown()
+        .search_mode(DropdownSearchMode::Contains)
+        .no_selection_text("No Selection");
+    let mut fuzzy = single_dropdown()
+        .search_mode(DropdownSearchMode::Fuzzy)
+        .no_selection_text("No Selection");
+
+    contains.open();
+    fuzzy.open();
+    for key in [char_key('n'), char_key('s')] {
+        contains.on_key(key, AREA);
+        fuzzy.on_key(key, AREA);
+    }
+
+    assert!(!contains.show_no_selection_row());
+    assert!(fuzzy.show_no_selection_row());
+}
+
+#[test]
+fn matching_no_selection_and_regular_rows_both_contribute_to_popup_height() {
+    let mut dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::Contains)
+        .no_selection_text("Alpha none")
+        .selected_one("Beta");
+
+    dropdown.open();
+    for key in "alpha".chars().map(char_key) {
+        dropdown.on_key(key, AREA);
+    }
+
+    let [_, popup_area] = dropdown.areas(Rect::new(0, 0, 24, 20));
+    let [_, list_area] = dropdown.popup_inner_areas(popup_area);
+
+    assert_eq!(dropdown.filtered, vec!["Alpha"]);
+    assert!(dropdown.show_no_selection_row());
+    assert!(!dropdown.no_selection_highlighted);
+    assert_eq!(dropdown.visible_popup_rows(), 2);
+    assert_eq!(popup_area.height, 5);
+    assert_eq!(list_area.height, 2);
+}
+
+#[test]
+fn clearing_nonmatching_query_restores_preserved_selection_highlight() {
+    let mut dropdown = single_dropdown()
+        .commit_mode(DropdownCommitMode::Immediate)
+        .no_selection_text("--None--")
+        .selected_one("Beta");
+
+    dropdown.open();
+    dropdown.on_key(char_key('z'), AREA);
+    dropdown.on_key(Key::Backspace, AREA);
+
+    assert_eq!(dropdown.search_query(), "");
+    assert_eq!(dropdown.filtered, ROWS.to_vec());
+    assert!(dropdown.show_no_selection_row());
+    assert!(!dropdown.no_selection_highlighted);
+    assert_eq!(dropdown.data_view.highlighted_id(), Some("Beta"));
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+}
+
+#[test]
+fn multi_navigation_across_no_selection_row_preserves_draft() {
+    let mut dropdown = multi_dropdown()
+        .search_mode(DropdownSearchMode::None)
+        .no_selection_text("--None--")
+        .selected(["Beta"]);
+
+    dropdown.open();
+    dropdown.on_key(ctrl('k'), AREA);
+    assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
+
+    dropdown.on_key(ctrl('k'), AREA);
+    assert!(dropdown.no_selection_highlighted);
+    assert_eq!(dropdown.draft, vec!["Beta"]);
+
+    dropdown.on_key(ctrl('j'), AREA);
+    assert!(!dropdown.no_selection_highlighted);
+    assert_eq!(dropdown.draft, vec!["Beta"]);
+}
+
+#[test]
+fn multi_toggle_on_no_selection_row_clears_draft_before_commit() {
+    let mut dropdown = multi_dropdown()
+        .search_mode(DropdownSearchMode::None)
+        .no_selection_text("--None--")
+        .selected(["Alpha", "Beta"]);
+
+    dropdown.open();
+    dropdown.on_key(ctrl('k'), AREA);
+    assert!(dropdown.no_selection_highlighted);
+
+    let toggle = dropdown.on_key(Key::Char(' '), AREA);
+
+    assert!(toggle.changed);
+    assert!(dropdown.is_open());
+    assert!(dropdown.draft.is_empty());
+
+    let commit = dropdown.on_key(Key::Enter, AREA);
+
+    assert!(commit.committed);
+    assert!(!dropdown.is_open());
+    assert!(dropdown.selected_ids().is_empty());
+}
+
+#[test]
+fn multi_enter_on_no_selection_row_clears_commits_and_closes() {
+    let mut dropdown = multi_dropdown()
+        .search_mode(DropdownSearchMode::None)
+        .no_selection_text("--None--")
+        .selected(["Alpha", "Beta"]);
+
+    dropdown.open();
+    dropdown.on_key(ctrl('k'), AREA);
+    assert!(dropdown.no_selection_highlighted);
+    assert_eq!(dropdown.draft, vec!["Alpha", "Beta"]);
+
+    let outcome = dropdown.on_key(Key::Enter, AREA);
+
+    assert!(outcome.committed);
+    assert!(outcome.closed);
+    assert!(!dropdown.is_open());
+    assert!(dropdown.selected_ids().is_empty());
 }
 
 #[test]
