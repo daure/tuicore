@@ -1,7 +1,15 @@
-use ratatui::layout::Constraint;
-use tuicore::{Column, Flex, FlexItem, ListControl, ListControlField, SortDirection};
+use std::time::Duration;
 
-use crate::Msg;
+use ratatui::{
+    Frame,
+    layout::{Constraint, Rect},
+};
+use tuicore::{
+    AnimationSettings, Column, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx,
+    FocusId, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx,
+    ListControl, ListControlField, RenderCtx, SortDirection, Tab, Tabs, TickResult, TuiEvent,
+    TuiNode,
+};
 
 const FIRST: &str = "first";
 const SECOND: &str = "second";
@@ -16,11 +24,87 @@ pub(crate) struct ListDemoRow {
     pub(crate) rank: usize,
 }
 
-pub(crate) type ListControlShowcase = Flex<Msg>;
+pub(crate) type ListControlShowcase<M> = Flex<M>;
 
-fn showcase<const N: usize>(
-    controls: [ListControl<ListDemoRow, usize, Msg>; N],
-) -> ListControlShowcase {
+struct ShowcaseListControl<M> {
+    control: ListControl<ListDemoRow, usize, M>,
+}
+
+impl<M: 'static> ShowcaseListControl<M> {
+    fn new(control: ListControl<ListDemoRow, usize, M>) -> Self {
+        Self { control }
+    }
+
+    fn discard_events(&mut self) {
+        self.control.take_events();
+    }
+}
+
+impl<M: 'static> TuiNode<M> for ShowcaseListControl<M> {
+    fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+        self.control.measure(proposal)
+    }
+
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.control.layout(area, ctx)
+    }
+
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
+        self.control.render(frame, area, ctx);
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let outcome = self.control.event(event, ctx);
+        self.discard_events();
+        outcome
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        let outcome = self.control.dispatch_event(route, event, ctx);
+        self.discard_events();
+        outcome
+    }
+
+    fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.control.focus(target, focused, ctx);
+    }
+
+    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        self.control.dispatch_focus(target, focused, ctx);
+    }
+
+    fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.control.tick(dt, settings)
+    }
+
+    fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.control.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.control.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.control.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut LifecycleCtx<M>) {
+        self.control.destroy(ctx);
+    }
+}
+
+fn showcase<M, const N: usize>(
+    controls: [ListControl<ListDemoRow, usize, M>; N],
+) -> ListControlShowcase<M>
+where
+    M: 'static,
+{
     controls
         .into_iter()
         .enumerate()
@@ -31,15 +115,19 @@ fn showcase<const N: usize>(
                 2 => THIRD.to_string(),
                 _ => format!("control-{index}"),
             };
-            layout.child(key, control, FlexItem::fit_content())
+            layout.child(
+                key,
+                ShowcaseListControl::new(control),
+                FlexItem::fit_content(),
+            )
         })
 }
 
-pub(crate) fn compact_names() -> ListControlShowcase {
+pub(crate) fn compact_names<M: 'static>() -> ListControlShowcase<M> {
     showcase(compact_name_controls())
 }
 
-pub(crate) fn compact_name_controls() -> [ListControl<ListDemoRow, usize, Msg>; 2] {
+pub(crate) fn compact_name_controls<M: 'static>() -> [ListControl<ListDemoRow, usize, M>; 2] {
     let text_rows = rows(["Ada", "Grace", "Linus", "Mina", "Ken", "Margaret"]);
     let mut text_id = next_id(&text_rows);
     let text = ListControl::list(
@@ -82,18 +170,26 @@ pub(crate) fn compact_name_controls() -> [ListControl<ListDemoRow, usize, Msg>; 
     [text, dropdown]
 }
 
-pub(crate) fn entity_table() -> ListControlShowcase {
+pub(crate) fn entity_table<M: 'static>() -> ListControlShowcase<M> {
     showcase(entity_controls())
 }
 
-pub(crate) fn reorder_mode() -> ListControlShowcase {
+pub(crate) fn reorder_mode<M: 'static>() -> ListControlShowcase<M> {
     Flex::column()
         .gap(1)
-        .child(FIRST, reorder_control(), FlexItem::fit_content())
-        .child(SECOND, short_reorder_control(), FlexItem::fixed(12))
+        .child(
+            FIRST,
+            ShowcaseListControl::new(reorder_control()),
+            FlexItem::fit_content(),
+        )
+        .child(
+            SECOND,
+            ShowcaseListControl::new(short_reorder_control()),
+            FlexItem::fixed(12),
+        )
 }
 
-pub(crate) fn reorder_control() -> ListControl<ListDemoRow, usize, Msg> {
+pub(crate) fn reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
     reorder_list(
         rows([
             "Plan",
@@ -126,7 +222,7 @@ pub(crate) fn reorder_control() -> ListControl<ListDemoRow, usize, Msg> {
     )
 }
 
-fn short_reorder_control() -> ListControl<ListDemoRow, usize, Msg> {
+fn short_reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
     reorder_list(
         rows([
             "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf",
@@ -136,11 +232,11 @@ fn short_reorder_control() -> ListControl<ListDemoRow, usize, Msg> {
     )
 }
 
-fn reorder_list(
+fn reorder_list<M: 'static>(
     reorder_rows: Vec<ListDemoRow>,
     title: &str,
     hotkey: &str,
-) -> ListControl<ListDemoRow, usize, Msg> {
+) -> ListControl<ListDemoRow, usize, M> {
     let mut reorder_id = next_id(&reorder_rows);
     ListControl::list(
         reorder_rows,
@@ -161,7 +257,7 @@ fn reorder_list(
     .max_rows(10)
 }
 
-pub(crate) fn entity_controls() -> [ListControl<ListDemoRow, usize, Msg>; 3] {
+pub(crate) fn entity_controls<M: 'static>() -> [ListControl<ListDemoRow, usize, M>; 3] {
     [
         entity_control(false, "All-text fields · Ctrl+X confirms delete", "le"),
         entity_control(true, "Mixed fields", "lm"),
@@ -169,7 +265,7 @@ pub(crate) fn entity_controls() -> [ListControl<ListDemoRow, usize, Msg>; 3] {
     ]
 }
 
-fn people_control() -> ListControl<ListDemoRow, usize, Msg> {
+fn people_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
     let rows = [
         ("Katherine", "Johnson"),
         ("Alan", "Turing"),
@@ -260,24 +356,42 @@ fn people_control() -> ListControl<ListDemoRow, usize, Msg> {
     .max_rows(3)
 }
 
-fn entity_control(mixed: bool, title: &str, hotkey: &str) -> ListControl<ListDemoRow, usize, Msg> {
-    let rows = rows(["Gateway", "Worker", "Scheduler", "Indexer"]);
+fn entity_control<M: 'static>(
+    mixed: bool,
+    title: &str,
+    hotkey: &str,
+) -> ListControl<ListDemoRow, usize, M> {
+    let mut rows = rows(["Gateway", "Worker", "Scheduler", "Indexer"]);
+    if mixed {
+        for (index, row) in rows.iter_mut().enumerate() {
+            row.name = if index % 2 == 0 { "Person" } else { "Service" }.into();
+            if row.name == "Person" {
+                row.state.clear();
+            } else {
+                row.owner.clear();
+            }
+        }
+    }
     let mut next_id = next_id(&rows);
+    let kind = if mixed {
+        ListControlField::dropdown("Kind", ["Person", "Service"])
+    } else {
+        ListControlField::text("Entity")
+    };
     let owner = if mixed {
-        ListControlField::text("Optional owner").optional()
+        ListControlField::text("Person name").visible_when(0, ["Person"])
     } else {
         ListControlField::text("Owner")
     };
     let state = if mixed {
-        ListControlField::dropdown("Optional state", ["Active", "Ready", "Paused", "Running"])
-            .optional()
+        ListControlField::text("Service URL").visible_when(0, ["Service"])
     } else {
         ListControlField::text("State")
     };
     let control = ListControl::new_fields(
         rows,
         |row| row.id,
-        [ListControlField::text("Entity"), owner, state],
+        [kind, owner, state],
         move |values, _| {
             let mut values = values.into_iter();
             let row = ListDemoRow {
@@ -379,4 +493,17 @@ fn rows<const N: usize>(names: [&str; N]) -> Vec<ListDemoRow> {
 
 fn next_id(rows: &[ListDemoRow]) -> usize {
     rows.iter().map(|row| row.id).max().unwrap_or(0) + 1
+}
+
+#[allow(dead_code)]
+fn main() -> tuicore::Result<()> {
+    tuicore::init();
+
+    let tabs = Tabs::new(vec![
+        Tab::<()>::new("Compact", compact_names()).hotkey("c"),
+        Tab::new("Entities", entity_table()).hotkey("e"),
+        Tab::new("Reorder", reorder_mode()).hotkey("r"),
+    ]);
+
+    tuicore::TreeApp::new(tabs).run()
 }

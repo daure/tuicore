@@ -53,6 +53,13 @@ pub struct ListControlField {
     placeholder: String,
     kind: ListControlFieldKind,
     required: bool,
+    visibility: Option<ListControlFieldVisibility>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListControlFieldVisibility {
+    field_index: usize,
+    allowed_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +74,7 @@ impl ListControlField {
             placeholder: placeholder.into(),
             kind: ListControlFieldKind::Text,
             required: true,
+            visibility: None,
         }
     }
 
@@ -80,6 +88,7 @@ impl ListControlField {
             placeholder: placeholder.into(),
             kind: ListControlFieldKind::Dropdown(options.into_iter().map(Into::into).collect()),
             required: true,
+            visibility: None,
         }
     }
 
@@ -90,6 +99,21 @@ impl ListControlField {
 
     pub fn required(mut self, required: bool) -> Self {
         self.required = required;
+        self
+    }
+
+    /// Shows this field only when an earlier field has one of `allowed_values`.
+    ///
+    /// `ListControl::new_fields` rejects self and later-field references.
+    pub fn visible_when(
+        mut self,
+        field_index: usize,
+        allowed_values: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.visibility = Some(ListControlFieldVisibility {
+            field_index,
+            allowed_values: allowed_values.into_iter().map(Into::into).collect(),
+        });
         self
     }
 }
@@ -241,6 +265,7 @@ pub struct ListControl<T, Id, M = ()> {
     panel_visible: bool,
     inputs: Vec<ListControlInput<M>>,
     required_fields: Vec<bool>,
+    field_visibility: Vec<Option<ListControlFieldVisibility>>,
     creator: Box<Creator<T>>,
     editable: Option<Editable<T>>,
     keys: ListControlKeyBindings,
@@ -304,6 +329,13 @@ where
             }),
             "ListControl dropdown option strings must be non-empty because \"\" represents no selection"
         );
+        assert!(
+            fields.iter().enumerate().all(|(index, field)| field
+                .visibility
+                .as_ref()
+                .is_none_or(|visibility| visibility.field_index < index)),
+            "ListControl field visibility conditions must reference an earlier field"
+        );
         let inputs = fields
             .iter()
             .map(|field| match &field.kind {
@@ -324,12 +356,17 @@ where
             })
             .collect();
         let required_fields = fields.iter().map(|field| field.required).collect();
+        let field_visibility = fields
+            .iter()
+            .map(|field| field.visibility.clone())
+            .collect();
         Self {
             data_view: DataView::new(rows, row_id),
             panel: Panel::new(),
             panel_visible: true,
             inputs,
             required_fields,
+            field_visibility,
             creator: Box::new(creator),
             editable: None,
             keys: ListControlKeyBindings::default(),
@@ -673,7 +710,7 @@ where
                 self.cancel_editor(true);
                 self.restore_data_focus(route, ctx);
             } else if matches!(key.code, Key::Enter) {
-                let final_field = self.active_field + 1 == self.inputs.len();
+                let final_field = self.active_field_is_last_visible();
                 if self.advance_field(route, ctx) {
                     if final_field {
                         self.restore_data_focus(route, ctx);
@@ -691,28 +728,31 @@ where
                 ctx.request_layout();
             }
         } else if self.keys.add_child_matches(key) && self.begin_add_child() {
+            let index = self.active_field;
             Self::focus_child(
                 ctx,
                 route,
-                Self::input_slot(0).as_str(),
-                self.inputs[0].focus_id(),
+                Self::input_slot(index).as_str(),
+                self.inputs[index].focus_id(),
             );
             ctx.request_layout();
         } else if self.keys.add_matches(key) {
             self.begin_add_sibling();
+            let index = self.active_field;
             Self::focus_child(
                 ctx,
                 route,
-                Self::input_slot(0).as_str(),
-                self.inputs[0].focus_id(),
+                Self::input_slot(index).as_str(),
+                self.inputs[index].focus_id(),
             );
             ctx.request_layout();
         } else if self.keys.edit_matches(key) && self.begin_edit() {
+            let index = self.active_field;
             Self::focus_child(
                 ctx,
                 route,
-                Self::input_slot(0).as_str(),
-                self.inputs[0].focus_id(),
+                Self::input_slot(index).as_str(),
+                self.inputs[index].focus_id(),
             );
             ctx.request_layout();
         } else if self.keys.remove_matches(key) {

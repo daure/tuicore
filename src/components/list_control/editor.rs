@@ -12,16 +12,60 @@ where
         self.adding || self.editing.is_some()
     }
 
+    fn visible_fields(&self) -> Vec<bool> {
+        let mut visible = Vec::with_capacity(self.inputs.len());
+        for visibility in &self.field_visibility {
+            visible.push(match visibility {
+                None => true,
+                Some(visibility) => {
+                    visible[visibility.field_index]
+                        && visibility
+                            .allowed_values
+                            .contains(&self.inputs[visibility.field_index].value())
+                }
+            });
+        }
+        visible
+    }
+
+    fn first_visible_field(&self) -> usize {
+        self.visible_fields()
+            .into_iter()
+            .position(|visible| visible)
+            .expect("ListControl has a visible first field")
+    }
+
+    fn next_visible_field(&self, index: usize) -> Option<usize> {
+        self.visible_fields()
+            .into_iter()
+            .enumerate()
+            .skip(index + 1)
+            .find_map(|(index, visible)| visible.then_some(index))
+    }
+
+    fn clear_hidden_fields(&mut self) {
+        let visible = self.visible_fields();
+        for (input, visible) in self.inputs.iter_mut().zip(visible) {
+            if !visible {
+                input.reset();
+            }
+        }
+    }
+
+    pub(super) fn active_field_is_last_visible(&self) -> bool {
+        self.next_visible_field(self.active_field).is_none()
+    }
+
     pub(super) fn begin_add(&mut self, parent_id: Option<Id>) {
         self.adding = true;
         self.adding_parent = Some(parent_id);
         self.editing = None;
-        self.active_field = 0;
-        for (index, input) in self.inputs.iter_mut().enumerate() {
+        for input in &mut self.inputs {
             input.reset();
-            input.set_focused(index == 0);
         }
-        self.inputs[0].open_dropdown();
+        self.active_field = self.first_visible_field();
+        self.inputs[self.active_field].set_focused(true);
+        self.inputs[self.active_field].open_dropdown();
         self.data_view.set_focused(false);
     }
 
@@ -67,13 +111,14 @@ where
         self.adding = false;
         self.adding_parent = None;
         self.editing = Some(row_id);
-        self.active_field = 0;
-        for (index, (input, value)) in self.inputs.iter_mut().zip(values).enumerate() {
+        for (input, value) in self.inputs.iter_mut().zip(values) {
             input.reset();
             input.set_value(value);
-            input.set_focused(index == 0);
         }
-        self.inputs[0].open_dropdown();
+        self.clear_hidden_fields();
+        self.active_field = self.first_visible_field();
+        self.inputs[self.active_field].set_focused(true);
+        self.inputs[self.active_field].open_dropdown();
         self.data_view.set_focused(false);
         true
     }
@@ -99,15 +144,21 @@ where
     }
 
     fn values(&self) -> Vec<String> {
-        self.inputs.iter().map(|input| input.value()).collect()
+        self.inputs
+            .iter()
+            .zip(self.visible_fields())
+            .map(|(input, visible)| visible.then(|| input.value()).unwrap_or_default())
+            .collect()
     }
 
     fn submit(&mut self, settings: AnimationSettings) -> bool {
         let values = self.values();
+        let visible = self.visible_fields();
         if values
             .iter()
             .zip(&self.required_fields)
-            .any(|(value, required)| *required && value.is_empty())
+            .zip(visible)
+            .any(|((value, required), visible)| visible && *required && value.is_empty())
         {
             return false;
         }
@@ -154,11 +205,12 @@ where
         {
             return false;
         }
-        if self.active_field + 1 == self.inputs.len() {
+        self.clear_hidden_fields();
+        let Some(next_field) = self.next_visible_field(self.active_field) else {
             return self.submit(ctx.animation());
-        }
+        };
         self.inputs[self.active_field].set_focused(false);
-        self.active_field += 1;
+        self.active_field = next_field;
         self.inputs[self.active_field].set_focused(true);
         self.inputs[self.active_field].open_dropdown();
         let slot = Self::input_slot(self.active_field);

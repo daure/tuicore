@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 mod gallery_demo;
+mod list_control;
 
 use gallery_demo::checklist::{ChecklistShowcase, release_checklist};
 use gallery_demo::data::{DataViewMode, DemoRow, data_event_status, data_view_layout};
@@ -25,9 +26,6 @@ use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
     layout_split_demo, layout_stack_demo, render_layout_intro,
 };
-use gallery_demo::list_control::{ListControlShowcase, compact_names, entity_table, reorder_mode};
-#[cfg(test)]
-use gallery_demo::list_control::{compact_name_controls, entity_controls, reorder_control};
 use gallery_demo::notifications::{
     notification_button_areas, notification_button_child_key, notification_button_child_route,
     notification_button_index, notification_buttons, notification_for_index,
@@ -51,6 +49,9 @@ use gallery_demo::tabs::{
     modal_tabs_preview_layout, tab_demo_child_key, tab_demo_child_route, tab_demo_index,
     tabs_areas, tabs_demo,
 };
+use list_control::{ListControlShowcase, compact_names, entity_table, reorder_mode};
+#[cfg(test)]
+use list_control::{compact_name_controls, entity_controls, reorder_control};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -768,9 +769,9 @@ struct PreviewState {
     data_checklist_tree: DataView<DemoRow, usize>,
     data_activate_on_navigate: DataView<DemoRow, usize>,
     data_status: String,
-    list_compact: ListControlShowcase,
-    list_entity_table: ListControlShowcase,
-    list_reorder: ListControlShowcase,
+    list_compact: ListControlShowcase<Msg>,
+    list_entity_table: ListControlShowcase<Msg>,
+    list_reorder: ListControlShowcase<Msg>,
     checklist: ChecklistShowcase,
     panel_top_left: Dropdown<PanelTitleChoice, &'static str>,
     panel_top_right: Dropdown<PanelTitleChoice, &'static str>,
@@ -2113,7 +2114,7 @@ impl PreviewState {
         }
     }
 
-    fn active_list_control(&self, preview: PreviewKind) -> &ListControlShowcase {
+    fn active_list_control(&self, preview: PreviewKind) -> &ListControlShowcase<Msg> {
         match preview {
             PreviewKind::ListEntityTable => &self.list_entity_table,
             PreviewKind::ListReorder => &self.list_reorder,
@@ -2121,7 +2122,7 @@ impl PreviewState {
         }
     }
 
-    fn active_list_control_mut(&mut self, preview: PreviewKind) -> &mut ListControlShowcase {
+    fn active_list_control_mut(&mut self, preview: PreviewKind) -> &mut ListControlShowcase<Msg> {
         match preview {
             PreviewKind::ListEntityTable => &mut self.list_entity_table,
             PreviewKind::ListReorder => &mut self.list_reorder,
@@ -4003,7 +4004,7 @@ mod tests {
 
     #[test]
     fn reorder_gallery_control_enters_reorder_mode() {
-        let mut control = reorder_control();
+        let mut control = reorder_control::<Msg>();
         let guidance = "Ctrl+M move · ↑↓/gg/G/Home/End/Pg/Ctrl+U,D · Enter commit · Esc cancel";
         assert_eq!(
             control.panel_ref().title_text(PanelTitlePosition::TopLeft),
@@ -4026,7 +4027,7 @@ mod tests {
 
     #[test]
     fn mixed_list_control_example_supports_editing() {
-        let mut controls = entity_controls();
+        let mut controls = entity_controls::<Msg>();
         let mixed = &mut controls[1];
 
         mixed.dispatch_event(
@@ -4040,7 +4041,7 @@ mod tests {
 
     #[test]
     fn all_text_entity_example_opens_confirmation_with_default_remove_key() {
-        let mut controls = entity_controls();
+        let mut controls = entity_controls::<Msg>();
         assert!(controls[0].has_remove_confirmation());
         assert!(!controls[1].has_remove_confirmation());
         assert!(!controls[2].has_remove_confirmation());
@@ -4061,7 +4062,7 @@ mod tests {
 
     #[test]
     fn derived_people_creator_accepts_only_first_name_and_surname() {
-        let mut controls = entity_controls();
+        let mut controls = entity_controls::<Msg>();
         let derived = &mut controls[2];
         let mut ctx = EventCtx::default();
         derived.dispatch_event(
@@ -4096,7 +4097,7 @@ mod tests {
 
     #[test]
     fn derived_people_editor_recomputes_full_name() {
-        let mut controls = entity_controls();
+        let mut controls = entity_controls::<Msg>();
         let derived = &mut controls[2];
         let mut ctx = EventCtx::default();
         let data = EventRoute::new(TreePath::from_keys([ChildKey::new("data")]));

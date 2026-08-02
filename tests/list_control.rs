@@ -1170,6 +1170,153 @@ fn optional_control(
     )
 }
 
+fn conditional_control(
+    rows: impl IntoIterator<Item = (usize, String, String, String)>,
+) -> ListControl<(usize, String, String, String), usize> {
+    ListControl::new_fields(
+        rows,
+        |row: &(usize, String, String, String)| row.0,
+        [
+            ListControlField::dropdown("Kind", ["Person", "Service"]),
+            ListControlField::text("Person name").visible_when(0, ["Person"]),
+            ListControlField::text("Service URL").visible_when(0, ["Service"]),
+        ],
+        |values, rows| {
+            (
+                rows.len() + 1,
+                values[0].clone(),
+                values[1].clone(),
+                values[2].clone(),
+            )
+        },
+    )
+    .editable(
+        |row| vec![row.1.clone(), row.2.clone(), row.3.clone()],
+        |row, values| {
+            row.1.clone_from(&values[0]);
+            row.2.clone_from(&values[1]);
+            row.3.clone_from(&values[2]);
+        },
+    )
+}
+
+fn filter_dropdown(control: &mut impl TuiNode<()>, query: &str, ctx: &mut EventCtx<()>) {
+    for character in query.chars() {
+        control.dispatch_event(
+            &field_route(0),
+            &key(Key::Char(character), KeyModifiers::NONE),
+            ctx,
+        );
+    }
+    control.dispatch_event(&field_route(0), &key(Key::Enter, KeyModifiers::NONE), ctx);
+}
+
+#[test]
+fn dropdown_kind_selects_required_visible_follow_up_and_preserves_vector_shape() {
+    for (query, kind, field, value, expected) in [
+        (
+            "Pers",
+            "Person",
+            1,
+            "Ada",
+            (1, "Person".into(), "Ada".into(), "".into()),
+        ),
+        (
+            "Serv",
+            "Service",
+            2,
+            "https://api",
+            (1, "Service".into(), "".into(), "https://api".into()),
+        ),
+    ] {
+        let mut control = conditional_control([]);
+        let mut ctx = EventCtx::default();
+        control.dispatch_event(&data_route(), &add_key(), &mut ctx);
+
+        filter_dropdown(&mut control, query, &mut ctx);
+
+        assert!(control.is_adding());
+        assert!(matches!(
+            ctx.focus_request(),
+            Some(FocusRequest::TargetAt { path, .. }) if path == &field_route(field).path
+        ));
+        control.dispatch_event(
+            &field_route(field),
+            &TuiEvent::Paste(value.into()),
+            &mut ctx,
+        );
+        control.dispatch_event(
+            &field_route(field),
+            &key(Key::Enter, KeyModifiers::NONE),
+            &mut ctx,
+        );
+
+        assert_eq!(control.items(), &[expected], "kind={kind}");
+        assert!(!control.is_adding());
+    }
+}
+
+#[test]
+fn edit_prefill_hides_and_clears_values_for_newly_inactive_branch() {
+    let mut control = conditional_control([(7, "Person".into(), "Ada".into(), "stale".into())]);
+    let mut ctx = EventCtx::default();
+    control.dispatch_event(&data_route(), &edit_key(), &mut ctx);
+
+    assert!(matches!(
+        ctx.focus_request(),
+        Some(FocusRequest::TargetAt { path, .. }) if path == &field_route(0).path
+    ));
+    filter_dropdown(&mut control, "Serv", &mut ctx);
+    assert!(matches!(
+        ctx.focus_request(),
+        Some(FocusRequest::TargetAt { path, .. }) if path == &field_route(2).path
+    ));
+    control.dispatch_event(
+        &field_route(2),
+        &TuiEvent::Paste("https://new".into()),
+        &mut ctx,
+    );
+    control.dispatch_event(
+        &field_route(2),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut ctx,
+    );
+
+    assert_eq!(
+        control.items(),
+        &[(7, "Service".into(), "".into(), "https://new".into())]
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Edited { row_id: 7 }]
+    );
+}
+
+#[test]
+#[should_panic(expected = "visibility conditions must reference an earlier field")]
+fn field_visibility_rejects_self_reference_at_construction() {
+    let _ = ListControl::<Row, usize>::new_fields(
+        [],
+        |row| row.id,
+        [ListControlField::text("Name").visible_when(0, ["show"])],
+        |_, _| unreachable!(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "visibility conditions must reference an earlier field")]
+fn field_visibility_rejects_later_reference_at_construction() {
+    let _ = ListControl::<Row, usize>::new_fields(
+        [],
+        |row| row.id,
+        [
+            ListControlField::text("Name").visible_when(1, ["show"]),
+            ListControlField::text("State"),
+        ],
+        |_, _| unreachable!(),
+    );
+}
+
 #[test]
 fn optional_empty_text_and_dropdown_submit_in_add_flow() {
     let mut control = optional_control([]);

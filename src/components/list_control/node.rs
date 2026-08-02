@@ -278,7 +278,7 @@ where
                         self.cancel_editor(true);
                         self.restore_data_focus(route, ctx);
                     } else if committed {
-                        let final_field = self.active_field + 1 == self.inputs.len();
+                        let final_field = self.active_field_is_last_visible();
                         if self.advance_field(route, ctx) && final_field {
                             self.restore_data_focus(route, ctx);
                         }
