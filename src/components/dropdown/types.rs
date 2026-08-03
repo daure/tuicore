@@ -56,7 +56,7 @@ impl Default for DropdownActionKeys {
                 KeySpec::key(Key::Enter),
                 KeySpec::key_with_modifiers(Key::Enter, KeyModifiers::CONTROL),
             ],
-            toggle: vec![KeySpec::plain(' ')],
+            toggle: vec![KeySpec::key(Key::Enter)],
         }
     }
 }

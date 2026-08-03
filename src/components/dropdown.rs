@@ -714,6 +714,10 @@ where
             return self.cancel();
         }
 
+        if self.multi && matches_any(&self.action_keys.toggle, key) {
+            return self.toggle_highlighted();
+        }
+
         if matches_any(&self.action_keys.commit, key) {
             let activates_no_selection = self.no_selection_highlighted;
             if activates_no_selection {
@@ -728,10 +732,6 @@ where
             }
             return self.commit();
         }
-        if self.multi && matches_any(&self.action_keys.toggle, key) {
-            return self.toggle_highlighted();
-        }
-
         let keys = keybindings();
         if keys.dropdown().select_matches(key) {
             return self.select_highlighted();

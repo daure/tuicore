@@ -615,7 +615,7 @@ fn multi_close_on_select_calls_on_select() {
 
     dropdown.open();
     dropdown.on_key(ctrl('j'), AREA);
-    let outcome = dropdown.on_key(Key::Char(' '), AREA);
+    let outcome = dropdown.on_key(Key::Enter, AREA);
 
     assert!(outcome.committed);
     assert_eq!(&*selected.borrow(), &["Beta"]);
@@ -745,7 +745,7 @@ fn multi_toggle_then_escape_rolls_back() {
 
     dropdown.open();
     dropdown.on_key(ctrl('j'), AREA);
-    dropdown.on_key(Key::Char(' '), AREA);
+    dropdown.on_key(Key::Enter, AREA);
     dropdown.on_key(Key::Esc, AREA);
 
     assert_eq!(dropdown.selected_ids(), vec!["Alpha"]);
@@ -760,6 +760,44 @@ fn ctrl_space_toggles_highlighted_multi_row() {
     dropdown.on_key(ctrl(' '), AREA);
 
     assert_eq!(dropdown.draft, vec!["Beta"]);
+}
+
+#[test]
+fn space_is_added_to_multi_dropdown_search_query() {
+    let mut dropdown = multi_dropdown();
+
+    dropdown.open();
+    dropdown.on_key(char_key('a'), AREA);
+    let outcome = dropdown.on_key(Key::Char(' '), AREA);
+
+    assert!(outcome.changed);
+    assert_eq!(dropdown.search_query(), "a ");
+    assert!(dropdown.draft.is_empty());
+}
+
+#[test]
+fn enter_toggles_and_ctrl_enter_commits_multi_selection() {
+    let mut dropdown = multi_dropdown();
+
+    dropdown.open();
+    let toggle = dropdown.on_key(Key::Enter, AREA);
+
+    assert!(toggle.changed);
+    assert!(dropdown.is_open());
+    assert_eq!(dropdown.draft, vec!["Alpha"]);
+    assert!(dropdown.selected_ids().is_empty());
+
+    let commit = dropdown.on_key(
+        KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        },
+        AREA,
+    );
+
+    assert!(commit.committed);
+    assert!(!dropdown.is_open());
+    assert_eq!(dropdown.selected_ids(), vec!["Alpha"]);
 }
 
 #[test]
@@ -1420,13 +1458,13 @@ fn multi_toggle_on_no_selection_row_clears_draft_before_commit() {
     dropdown.on_key(ctrl('k'), AREA);
     assert!(dropdown.no_selection_highlighted);
 
-    let toggle = dropdown.on_key(Key::Char(' '), AREA);
+    let toggle = dropdown.on_key(Key::Enter, AREA);
 
     assert!(toggle.changed);
     assert!(dropdown.is_open());
     assert!(dropdown.draft.is_empty());
 
-    let commit = dropdown.on_key(Key::Enter, AREA);
+    let commit = dropdown.on_key(ctrl_enter(), AREA);
 
     assert!(commit.committed);
     assert!(!dropdown.is_open());
@@ -1434,7 +1472,7 @@ fn multi_toggle_on_no_selection_row_clears_draft_before_commit() {
 }
 
 #[test]
-fn multi_enter_on_no_selection_row_clears_commits_and_closes() {
+fn multi_ctrl_enter_on_no_selection_row_clears_commits_and_closes() {
     let mut dropdown = multi_dropdown()
         .search_mode(DropdownSearchMode::None)
         .no_selection_text("--None--")
@@ -1445,7 +1483,7 @@ fn multi_enter_on_no_selection_row_clears_commits_and_closes() {
     assert!(dropdown.no_selection_highlighted);
     assert_eq!(dropdown.draft, vec!["Alpha", "Beta"]);
 
-    let outcome = dropdown.on_key(Key::Enter, AREA);
+    let outcome = dropdown.on_key(ctrl_enter(), AREA);
 
     assert!(outcome.committed);
     assert!(outcome.closed);
@@ -2255,6 +2293,13 @@ fn char_key(value: char) -> KeyEvent {
 fn ctrl(value: char) -> KeyEvent {
     KeyEvent {
         code: Key::Char(value),
+        modifiers: KeyModifiers::CONTROL,
+    }
+}
+
+fn ctrl_enter() -> KeyEvent {
+    KeyEvent {
+        code: Key::Enter,
         modifiers: KeyModifiers::CONTROL,
     }
 }
