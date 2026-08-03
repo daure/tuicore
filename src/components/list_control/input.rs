@@ -3,7 +3,7 @@ use crate::components::{Dropdown, TextInput};
 
 pub(super) enum ListControlInput<M> {
     Text(TextInput<M>),
-    Dropdown(Option<Dropdown<String, String>>),
+    Dropdown(Option<Dropdown<(String, String), String>>),
 }
 
 impl<M> ListControlInput<M> {

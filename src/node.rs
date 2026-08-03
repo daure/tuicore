@@ -1271,7 +1271,7 @@ impl FocusTarget {
 }
 
 fn add_focus_hotkey_sequence(target: &mut FocusTarget, hotkey: String) {
-    let hotkey = crate::hotkey::normalize_hotkey(&hotkey);
+    let hotkey = registered_hotkey_sequence(&hotkey);
     if hotkey.is_empty() || target.hotkey_sequences.contains(&hotkey) {
         return;
     }
@@ -1288,12 +1288,26 @@ fn add_focus_hotkey_sequence(target: &mut FocusTarget, hotkey: String) {
 fn normalized_hotkey_sequences(hotkey_sequences: Vec<String>) -> Vec<String> {
     let mut normalized = Vec::new();
     for hotkey in hotkey_sequences {
-        let hotkey = crate::hotkey::normalize_hotkey(&hotkey);
+        let hotkey = registered_hotkey_sequence(&hotkey);
         if !hotkey.is_empty() && !normalized.contains(&hotkey) {
             normalized.push(hotkey);
         }
     }
     normalized
+}
+
+fn registered_hotkey_sequence(hotkey: &str) -> String {
+    let compact = hotkey
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if let Some(key) = compact.strip_prefix("shift+")
+        && key.len() == 1
+        && key.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return format!("shift+{}", key.to_ascii_lowercase());
+    }
+    crate::hotkey::normalize_hotkey(&compact)
 }
 
 fn hotkey_sequence_from_event(hotkey: KeyEvent) -> Option<String> {

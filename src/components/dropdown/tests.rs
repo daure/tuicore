@@ -489,6 +489,46 @@ fn contains_search_requires_contiguous_match() {
 }
 
 #[test]
+fn search_can_require_a_minimum_query_and_limit_matches() {
+    let mut dropdown = Dropdown::single(
+        ["Alpha", "Alpine", "Alpaca", "Beta"],
+        |value| value.to_string(),
+        |value| value.to_string(),
+    )
+    .min_search_chars(3)
+    .max_filtered_items(2);
+
+    dropdown.open();
+    dropdown.on_key(char_key('a'), AREA);
+    dropdown.on_key(char_key('l'), AREA);
+    assert!(dropdown.filtered.is_empty());
+
+    dropdown.on_key(char_key('p'), AREA);
+    assert_eq!(dropdown.filtered.len(), 2);
+}
+
+#[test]
+fn dropdown_can_show_a_default_subset_then_search_all_options() {
+    let mut dropdown = Dropdown::single(
+        ["Active one", "Active two", "Resolved match"],
+        |value| value.to_string(),
+        |value| value.to_string(),
+    )
+    .visible_without_search(["Active one".to_string(), "Active two".to_string()])
+    .min_search_chars(1)
+    .max_filtered_items(10);
+
+    dropdown.open();
+    assert_eq!(
+        dropdown.filtered,
+        ["Active one".to_string(), "Active two".to_string()]
+    );
+
+    dropdown.on_key(char_key('R'), AREA);
+    assert_eq!(dropdown.filtered, ["Resolved match".to_string()]);
+}
+
+#[test]
 fn open_popup_highlights_matching_search_characters() {
     let mut dropdown = single_dropdown();
     dropdown.open();

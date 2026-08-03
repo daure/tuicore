@@ -481,7 +481,7 @@ where
             EventSummaryKind::Week if span.all_day => format!("{marker} "),
             EventSummaryKind::Week => format!("{marker} "),
         };
-        let entry = self.entry_line(index);
+        let entry = self.summary_entry_line(index);
         let line_style = self.entry_summary_style(index, entry.style);
         let on_highlight_background = self.highlighted_entry == Some(index)
             || matches!(kind, EventSummaryKind::Month | EventSummaryKind::Week)

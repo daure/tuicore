@@ -65,7 +65,12 @@ struct ListControlFieldVisibility {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ListControlFieldKind {
     Text,
-    Dropdown(Vec<String>),
+    Dropdown {
+        options: Vec<(String, String)>,
+        min_search_chars: usize,
+        max_filtered_items: Option<usize>,
+        visible_without_search: Option<Vec<String>>,
+    },
 }
 
 impl ListControlField {
@@ -86,10 +91,73 @@ impl ListControlField {
     ) -> Self {
         Self {
             placeholder: placeholder.into(),
-            kind: ListControlFieldKind::Dropdown(options.into_iter().map(Into::into).collect()),
+            kind: ListControlFieldKind::Dropdown {
+                options: options
+                    .into_iter()
+                    .map(Into::into)
+                    .map(|option| (option.clone(), option))
+                    .collect(),
+                min_search_chars: 0,
+                max_filtered_items: None,
+                visible_without_search: None,
+            },
             required: true,
             visibility: None,
         }
+    }
+
+    pub fn dropdown_options(
+        placeholder: impl Into<String>,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        Self {
+            placeholder: placeholder.into(),
+            kind: ListControlFieldKind::Dropdown {
+                options: options
+                    .into_iter()
+                    .map(|(id, label)| (id.into(), label.into()))
+                    .collect(),
+                min_search_chars: 0,
+                max_filtered_items: None,
+                visible_without_search: None,
+            },
+            required: true,
+            visibility: None,
+        }
+    }
+
+    pub fn min_search_chars(mut self, count: usize) -> Self {
+        if let ListControlFieldKind::Dropdown {
+            min_search_chars, ..
+        } = &mut self.kind
+        {
+            *min_search_chars = count;
+        }
+        self
+    }
+
+    pub fn max_filtered_items(mut self, count: usize) -> Self {
+        if let ListControlFieldKind::Dropdown {
+            max_filtered_items, ..
+        } = &mut self.kind
+        {
+            *max_filtered_items = Some(count);
+        }
+        self
+    }
+
+    pub fn visible_without_search(
+        mut self,
+        ids: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        if let ListControlFieldKind::Dropdown {
+            visible_without_search,
+            ..
+        } = &mut self.kind
+        {
+            *visible_without_search = Some(ids.into_iter().map(Into::into).collect());
+        }
+        self
     }
 
     pub fn optional(mut self) -> Self {
@@ -323,8 +391,10 @@ where
         assert!(
             fields.iter().all(|field| match &field.kind {
                 ListControlFieldKind::Text => true,
-                ListControlFieldKind::Dropdown(options) => {
-                    options.iter().all(|option| !option.is_empty())
+                ListControlFieldKind::Dropdown { options, .. } => {
+                    options
+                        .iter()
+                        .all(|(id, label)| !id.is_empty() && !label.is_empty())
                 }
             }),
             "ListControl dropdown option strings must be non-empty because \"\" represents no selection"
@@ -342,11 +412,27 @@ where
                 ListControlFieldKind::Text => {
                     ListControlInput::Text(TextInput::new().placeholder(field.placeholder.clone()))
                 }
-                ListControlFieldKind::Dropdown(options) => ListControlInput::Dropdown(Some({
-                    let input = Dropdown::single(options.clone(), Clone::clone, Clone::clone)
-                        .variant(DropdownVariant::Filled)
-                        .search_mode(DropdownSearchMode::Fuzzy)
-                        .placeholder(field.placeholder.clone());
+                ListControlFieldKind::Dropdown {
+                    options,
+                    min_search_chars,
+                    max_filtered_items,
+                    visible_without_search,
+                } => ListControlInput::Dropdown(Some({
+                    let mut input = Dropdown::single(
+                        options.clone(),
+                        |option| option.0.clone(),
+                        |option| option.1.clone(),
+                    )
+                    .variant(DropdownVariant::Filled)
+                    .search_mode(DropdownSearchMode::Fuzzy)
+                    .min_search_chars(*min_search_chars)
+                    .placeholder(field.placeholder.clone());
+                    if let Some(limit) = max_filtered_items {
+                        input = input.max_filtered_items(*limit);
+                    }
+                    if let Some(ids) = visible_without_search {
+                        input = input.visible_without_search(ids.clone());
+                    }
                     if field.required {
                         input
                     } else {

@@ -80,7 +80,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 ### Choice and commands
 
 - `Dropdown<T, Id>`: `single`/`multi`; retained selection, search, commit, popup, label, hotkey, and
-  callbacks. Inspect IDs/query/open state; open/close/cancel/commit return `DropdownOutcome`.
+  callbacks. Search results can require `min_search_chars`, be capped with `max_filtered_items`,
+  and use `visible_without_search` for a default subset before querying all options. Inspect
+  IDs/query/open state; open/close/cancel/commit return `DropdownOutcome`.
   Configure with `DropdownActionKeys`, `DropdownCommitMode`, `DropdownLabelPosition`,
   `DropdownPopupDirection`, `DropdownSearchMode`, and `DropdownVariant`.
 - `Menu<Id>`: transient commands from `MenuItem::new`; configure search/popup/action keys/hotkey,
@@ -103,7 +105,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `SelectionGlyphs`, `TreeGlyphs`, `SortDirection`, `DataViewEvent`, `DataViewSort`,
   `DataViewPagination`, `DataViewTransformMode`, `DataViewTransformState`, `DataViewFilter`.
 - `ListControl<T, Id, M>`: mutable `DataView`; construct `new`, `new_fields`, or `list`. Define
-  `ListControlField::text`/`dropdown`, validation and conditional visibility; configure columns,
+  `ListControlField::text`/`dropdown`/`dropdown_options`, validation and conditional visibility;
+  configure columns,
   edit/remove confirmation/reorder/tree/checking, title/panel/hotkey/row limits, and
   `ListControlKeyBindings`. Always drain `take_events() -> Vec<ListControlEvent<Id>>`; failures use
   `ListControlReorderUnavailable`.
@@ -119,7 +122,7 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   value, placeholder, date/time options, hotkey/chrome/callbacks, and open state.
 - `RelativeDate`: `new(target)`, live/fixed reference and `RelativeDateMode`; live mode must tick.
 - `Calendar<T, Id, M>`: `new(entries, id_fn, span_fn, title_fn)`; configure view/date bounds,
-  renderers, ordering, activation, hotkey, and `CalendarKeyBindings`; drain events. Build
+  `compact_summary_title`, renderers, ordering, activation, hotkey, and `CalendarKeyBindings`; drain events. Build
   `CalendarSpan::timed`/`all_day`/`all_day_range`; types include `CalendarEntryRole`,
   `CalendarOutcome`, `CalendarTypedEvent`, and `CalendarView`.
 

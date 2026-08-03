@@ -104,6 +104,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     id: Box<IdFn<T, Id>>,
     span: Box<SpanFn<T>>,
     title: Box<TitleFn<T>>,
+    compact_summary_title: Option<(u16, Box<TitleFn<T>>)>,
     role: Box<RoleFn<T>>,
     event_marker: Option<Box<EventMarkerFn<T>>>,
     render_entry: Option<Box<EntryRenderFn<T>>>,
@@ -231,6 +232,7 @@ where
             id: Box::new(id),
             span: Box::new(span),
             title: Box::new(title),
+            compact_summary_title: None,
             role: Box::new(|_| None),
             event_marker: None,
             render_entry: None,
@@ -349,6 +351,15 @@ where
     pub fn role(mut self, role: impl Fn(&T) -> Option<CalendarEntryRole> + 'static) -> Self {
         self.role = Box::new(role);
         self.refresh_day_entries();
+        self
+    }
+
+    pub fn compact_summary_title(
+        mut self,
+        breakpoint: u16,
+        title: impl Fn(&T) -> String + 'static,
+    ) -> Self {
+        self.compact_summary_title = Some((breakpoint, Box::new(title)));
         self
     }
 
@@ -1028,6 +1039,16 @@ where
             return render_entry(&self.entries[index]);
         }
         Line::from((self.title)(&self.entries[index]))
+    }
+
+    fn summary_entry_line(&self, index: usize) -> Line<'static> {
+        if self.render_entry.is_none()
+            && let Some((breakpoint, title)) = &self.compact_summary_title
+            && self.area.width < *breakpoint
+        {
+            return Line::from(title(&self.entries[index]));
+        }
+        self.entry_line(index)
     }
 
     fn detail_text(&self, index: usize) -> Text<'static> {

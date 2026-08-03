@@ -100,7 +100,7 @@ impl HotkeySequenceMatcher {
         };
 
         let mut candidate = self.prefix.clone();
-        candidate.push(ch.to_ascii_lowercase());
+        candidate.push(ch);
 
         let exact = self.hotkeys.iter().position(|hotkey| hotkey == &candidate);
         let has_longer = self
@@ -299,9 +299,16 @@ pub fn hotkey_sequence_to_event(hotkey: &str) -> Option<KeyEvent> {
     if chars.next().is_some() {
         return None;
     }
-    Some(KeyEvent {
-        code: Key::Char(c),
-        modifiers: KeyModifiers::NONE,
+    Some(if c.is_ascii_uppercase() {
+        KeyEvent {
+            code: Key::Char(c.to_ascii_lowercase()),
+            modifiers: KeyModifiers::SHIFT,
+        }
+    } else {
+        KeyEvent {
+            code: Key::Char(c),
+            modifiers: KeyModifiers::NONE,
+        }
     })
 }
 
@@ -312,6 +319,16 @@ pub fn hotkey_starts_with_event(hotkey: &str, key: KeyEvent) -> bool {
 }
 
 pub fn normalize_hotkey(hotkey: &str) -> String {
+    let compact = hotkey
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if let Some(key) = compact.strip_prefix("shift+")
+        && key.len() == 1
+        && key.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return key.to_ascii_uppercase();
+    }
     hotkey
         .chars()
         .filter(|ch| !ch.is_whitespace())
@@ -385,19 +402,21 @@ fn badge_contains_prefix(hotkey: &str, prefix: &str) -> bool {
 
 fn find_case_insensitive(value: &str, needle: &str) -> Option<(usize, usize)> {
     let normalized_value = value.to_ascii_lowercase();
-    let start = normalized_value.find(needle)?;
+    let normalized_needle = needle.to_ascii_lowercase();
+    let start = normalized_value.find(&normalized_needle)?;
     let end = start + needle.len();
     Some((start, end))
 }
 
 fn plain_char(key: KeyEvent) -> Option<char> {
-    if key.modifiers != KeyModifiers::NONE {
-        return None;
-    }
     let Key::Char(ch) = key.code else {
         return None;
     };
-    Some(ch)
+    match key.modifiers {
+        KeyModifiers::NONE => Some(ch.to_ascii_lowercase()),
+        KeyModifiers::SHIFT if ch.is_ascii_alphabetic() => Some(ch.to_ascii_uppercase()),
+        _ => None,
+    }
 }
 
 fn is_cancel_key(key: KeyEvent) -> bool {
@@ -675,5 +694,30 @@ mod tests {
             Some(KeyEvent::from(Key::Char('s')))
         );
         assert_eq!(hotkey_sequence_to_event("g g"), None);
+    }
+
+    #[test]
+    fn shifted_hotkeys_require_shift_and_render_as_uppercase() {
+        let mut matcher = HotkeySequenceMatcher::new(["shift+p"]);
+
+        assert_eq!(
+            matcher.on_key(KeyEvent::from(Key::Char('p'))),
+            HotkeyMatch::Ignored
+        );
+        assert_eq!(
+            matcher.on_key(KeyEvent {
+                code: Key::Char('P'),
+                modifiers: KeyModifiers::SHIFT,
+            }),
+            HotkeyMatch::Matched(0)
+        );
+        assert_eq!(normalize_hotkey("shift+p"), "P");
+        assert_eq!(
+            hotkey_sequence_to_event("shift+p"),
+            Some(KeyEvent {
+                code: Key::Char('p'),
+                modifiers: KeyModifiers::SHIFT,
+            })
+        );
     }
 }

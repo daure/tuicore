@@ -112,6 +112,9 @@ pub struct Dropdown<T, Id> {
     multi: bool,
     open: bool,
     search_mode: DropdownSearchMode,
+    min_search_chars: usize,
+    max_filtered_items: Option<usize>,
+    visible_without_search: Option<Vec<Id>>,
     commit_mode: DropdownCommitMode,
     close_on_select: bool,
     max_popup_height: Option<u16>,
@@ -216,6 +219,9 @@ where
             multi,
             open: false,
             search_mode: DropdownSearchMode::Fuzzy,
+            min_search_chars: 0,
+            max_filtered_items: None,
+            visible_without_search: None,
             commit_mode: DropdownCommitMode::Explicit,
             close_on_select: !multi,
             max_popup_height: None,
@@ -251,6 +257,24 @@ where
     pub fn search_mode(mut self, mode: DropdownSearchMode) -> Self {
         self.search_mode = mode;
         self.search_render_mode.set(mode);
+        self.refresh_filter();
+        self
+    }
+
+    pub fn min_search_chars(mut self, count: usize) -> Self {
+        self.min_search_chars = count;
+        self.refresh_filter();
+        self
+    }
+
+    pub fn max_filtered_items(mut self, count: usize) -> Self {
+        self.max_filtered_items = Some(count);
+        self.refresh_filter();
+        self
+    }
+
+    pub fn visible_without_search(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
+        self.visible_without_search = Some(self.known_ids(ids));
         self.refresh_filter();
         self
     }
@@ -920,14 +944,26 @@ where
         let query_empty = query.is_empty();
         self.search_render_query.replace(query.to_string());
         self.search_render_mode.set(self.search_mode);
-        let filtered = match self.search_mode {
-            DropdownSearchMode::None if query_empty => self.ids.clone(),
-            DropdownSearchMode::None => self.ids.clone(),
-            DropdownSearchMode::Contains if query_empty => self.ids.clone(),
-            DropdownSearchMode::Fuzzy if query_empty => self.ids.clone(),
-            DropdownSearchMode::Contains => self.search(SearchMode::Contains),
-            DropdownSearchMode::Fuzzy => self.search(SearchMode::Fuzzy),
+        let query_chars = query.chars().count();
+        let mut filtered = if query_empty {
+            self.visible_without_search
+                .clone()
+                .unwrap_or_else(|| self.ids.clone())
+        } else if query_chars < self.min_search_chars {
+            Vec::new()
+        } else {
+            match self.search_mode {
+                DropdownSearchMode::None if query_empty => self.ids.clone(),
+                DropdownSearchMode::None => self.ids.clone(),
+                DropdownSearchMode::Contains if query_empty => self.ids.clone(),
+                DropdownSearchMode::Fuzzy if query_empty => self.ids.clone(),
+                DropdownSearchMode::Contains => self.search(SearchMode::Contains),
+                DropdownSearchMode::Fuzzy => self.search(SearchMode::Fuzzy),
+            }
         };
+        if !query_empty && let Some(limit) = self.max_filtered_items {
+            filtered.truncate(limit);
+        }
 
         self.filtered = filtered;
         if self.show_no_selection_row() && self.filtered.is_empty() {
@@ -935,7 +971,11 @@ where
         } else if !self.show_no_selection_row() {
             self.set_no_selection_highlighted(false);
         }
-        if self.search_mode == DropdownSearchMode::None || query_empty {
+        if self.visible_without_search.is_none()
+            && self.min_search_chars == 0
+            && (self.search_mode == DropdownSearchMode::None || query_empty)
+            && self.max_filtered_items.is_none()
+        {
             self.data_view.clear_visible_row_ids();
         } else {
             self.data_view.set_visible_row_ids(self.filtered.clone());

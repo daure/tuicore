@@ -118,7 +118,7 @@ where
                         <TextInput<M> as TuiNode<M>>::layout(input, input_area, ctx)
                     }
                     ListControlInput::Dropdown(input) => {
-                        <Dropdown<String, String> as TuiNode<M>>::layout(
+                        <Dropdown<(String, String), String> as TuiNode<M>>::layout(
                             input.as_mut().expect("dropdown input is present"),
                             input_area,
                             ctx,
@@ -181,7 +181,7 @@ where
                     <TextInput<M> as TuiNode<M>>::render(input, frame, self.input_area, ctx)
                 }
                 ListControlInput::Dropdown(input) => {
-                    <Dropdown<String, String> as TuiNode<M>>::render(
+                    <Dropdown<(String, String), String> as TuiNode<M>>::render(
                         input.as_ref().expect("dropdown input is present"),
                         frame,
                         self.input_area,
