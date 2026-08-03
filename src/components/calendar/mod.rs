@@ -1,11 +1,10 @@
 use std::cmp::Ordering;
 use std::time::Duration as StdDuration;
 
-use ratatui::layout::Rect;
-use ratatui::text::{Line, Text};
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span, Text};
 use ratatui::{Frame, buffer::Buffer};
-#[cfg(test)]
-use ratatui::{style::Style, text::Span};
 use time::{Date, Duration, Weekday};
 
 pub(crate) mod date_math;
@@ -29,17 +28,16 @@ use date_math::{
 
 use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
 use crate::{
-    EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSizeHint, ScrollAxes, ScrollOffset, ScrollSize, ScrollState, TickResult, TuiNode,
-    animation_settings, preset,
+    Animated, EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal,
+    LayoutResult, LayoutSizeHint, ScrollAxes, ScrollOffset, ScrollSize, ScrollState, TickResult,
+    TuiNode, animation_settings, preset, theme,
 };
 
-use super::Panel;
+use super::{Column, DataView, Panel};
 
 const CALENDAR_FOCUS: &str = "calendar";
 const MONTH_EVENT_LINES: usize = 2;
 const WEEK_EVENT_LINES: usize = 3;
-const DAY_EVENT_LINES: usize = 5;
 const MIN_CALENDAR_CELL_WIDTH: u16 = 11;
 const QUICK_JUMP_TIMEOUT: StdDuration = StdDuration::from_secs(1);
 
@@ -51,6 +49,55 @@ type EventMarkerFn<T> = dyn Fn(&T) -> char;
 type EntryRenderFn<T> = dyn Fn(&T) -> Line<'static>;
 type DetailRenderFn<T> = dyn Fn(&T) -> Text<'static>;
 type EntryOrderFn<T> = dyn Fn(&T, &T) -> Ordering;
+
+#[derive(Clone)]
+struct CalendarDayRow {
+    entry_index: usize,
+    prefix: String,
+    entry: Line<'static>,
+    role: Option<CalendarEntryRole>,
+}
+
+fn day_entry_data_view() -> DataView<CalendarDayRow, usize> {
+    DataView::new([], |row: &CalendarDayRow| row.entry_index)
+        .column(Column::rich(
+            "entry",
+            "",
+            Constraint::Percentage(100),
+            |row: &CalendarDayRow, _| {
+                let body_style = calendar_entry_style(row.role, false);
+                let marker_style = Style::default().fg(theme().accent_fg());
+                let mut spans = vec![Span::styled(row.prefix.clone(), marker_style)];
+                spans.extend(row.entry.spans.clone());
+                Line {
+                    spans,
+                    style: row.entry.style.patch(body_style),
+                    alignment: row.entry.alignment,
+                }
+            },
+        ))
+        .headers(false)
+        .filter_controls(false)
+        .empty_message("No entries")
+}
+
+fn calendar_entry_style(role: Option<CalendarEntryRole>, selected: bool) -> Style {
+    let t = theme();
+    if selected {
+        return Style::default()
+            .fg(t.highlight_fg())
+            .bg(t.highlight_bg())
+            .add_modifier(ratatui::style::Modifier::BOLD);
+    }
+    match role {
+        Some(CalendarEntryRole::Accent) => Style::default().fg(t.accent_fg()),
+        Some(CalendarEntryRole::Success) => Style::default().fg(t.success_fg()),
+        Some(CalendarEntryRole::Warning) => Style::default().fg(t.warning_fg()),
+        Some(CalendarEntryRole::Error) => Style::default().fg(t.error_fg()),
+        Some(CalendarEntryRole::Muted) => Style::default().fg(t.muted_fg()),
+        None => Style::default().fg(t.text_fg()),
+    }
+}
 
 pub struct Calendar<T, Id = String, M = ()> {
     entries: Vec<T>,
@@ -72,6 +119,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     show_weekends: bool,
     bordered: bool,
     highlighted_entry: Option<usize>,
+    day_entries: DataView<CalendarDayRow, usize>,
     focused: bool,
     hotkey: Option<String>,
     keybindings: CalendarKeyBindings,
@@ -178,7 +226,7 @@ where
         title: impl Fn(&T) -> String + 'static,
     ) -> Self {
         let today = today();
-        Self {
+        let mut calendar = Self {
             entries: entries.into_iter().collect(),
             id: Box::new(id),
             span: Box::new(span),
@@ -198,6 +246,7 @@ where
             show_weekends: true,
             bordered: true,
             highlighted_entry: None,
+            day_entries: day_entry_data_view(),
             focused: false,
             hotkey: None,
             keybindings: CalendarKeyBindings::default(),
@@ -206,7 +255,9 @@ where
             quick_jump_elapsed: StdDuration::ZERO,
             area: Rect::default(),
             events: Vec::new(),
-        }
+        };
+        calendar.refresh_day_entries();
+        calendar
     }
 
     pub fn today(mut self, today: Date) -> Self {
@@ -214,6 +265,7 @@ where
         self.cursor = today;
         self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
+        self.refresh_day_entries();
         self
     }
 
@@ -224,6 +276,7 @@ where
             self.cursor = today;
             self.normalize_hidden_weekend_cursor();
             self.highlighted_entry = self.first_entry_on_cursor();
+            self.refresh_day_entries();
         }
     }
 
@@ -231,6 +284,7 @@ where
         self.cursor = cursor;
         self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
+        self.refresh_day_entries();
         self
     }
 
@@ -272,6 +326,7 @@ where
         self.show_weekends = show;
         self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
+        self.refresh_day_entries();
     }
 
     pub fn toggle_weekends(&mut self) {
@@ -287,11 +342,13 @@ where
         self.stack.clear();
         self.normalize_hidden_weekend_cursor();
         self.highlighted_entry = self.first_entry_on_cursor();
+        self.refresh_day_entries();
         self
     }
 
     pub fn role(mut self, role: impl Fn(&T) -> Option<CalendarEntryRole> + 'static) -> Self {
         self.role = Box::new(role);
+        self.refresh_day_entries();
         self
     }
 
@@ -302,14 +359,17 @@ where
 
     pub fn set_event_marker(&mut self, marker: impl Fn(&T) -> char + 'static) {
         self.event_marker = Some(Box::new(marker));
+        self.refresh_day_entries();
     }
 
     pub fn clear_event_marker(&mut self) {
         self.event_marker = None;
+        self.refresh_day_entries();
     }
 
     pub fn render_entry(mut self, render: impl Fn(&T) -> Line<'static> + 'static) -> Self {
         self.render_entry = Some(Box::new(render));
+        self.refresh_day_entries();
         self
     }
 
@@ -320,6 +380,7 @@ where
 
     pub fn entry_order(mut self, compare: impl Fn(&T, &T) -> Ordering + 'static) -> Self {
         self.entry_order = Some(Box::new(compare));
+        self.refresh_day_entries();
         self
     }
 
@@ -366,10 +427,12 @@ where
                 })
             })
             .or_else(|| self.first_entry_on_cursor());
+        self.refresh_day_entries();
     }
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.day_entries.set_focused(focused);
         if !focused {
             self.pending_top_prefix = false;
             self.clear_quick_jump();
@@ -420,6 +483,11 @@ where
         }
         self.pending_top_prefix = false;
         if let Some(action) = self.key_action(key) {
+            if self.view == CalendarView::Day
+                && let Some(outcome) = self.apply_day_data_view_action(action)
+            {
+                return outcome;
+            }
             return self.apply_key_action(action);
         }
         CalendarOutcome::IDLE
@@ -462,6 +530,61 @@ where
         } else {
             None
         }
+    }
+
+    fn apply_day_data_view_action(&mut self, action: CalendarKeyAction) -> Option<CalendarOutcome> {
+        if !matches!(
+            action,
+            CalendarKeyAction::Up
+                | CalendarKeyAction::Down
+                | CalendarKeyAction::PageUp
+                | CalendarKeyAction::PageDown
+                | CalendarKeyAction::Home
+                | CalendarKeyAction::End
+                | CalendarKeyAction::Activate
+        ) {
+            return None;
+        }
+        if action == CalendarKeyAction::Activate {
+            return Some(self.activate());
+        }
+        let rows = self.day_entries.rows();
+        if rows.is_empty() {
+            return Some(CalendarOutcome::HANDLED);
+        }
+        let current = self
+            .highlighted_entry
+            .and_then(|highlighted| rows.iter().position(|row| row.entry_index == highlighted))
+            .unwrap_or(0);
+        let viewport = self.content_area(self.area);
+        let page = self.day_entries.visible_page_step(viewport);
+        let target = match action {
+            CalendarKeyAction::Up => current.saturating_sub(1),
+            CalendarKeyAction::Down => current.saturating_add(1),
+            CalendarKeyAction::PageUp => current.saturating_sub(page),
+            CalendarKeyAction::PageDown => current.saturating_add(page),
+            CalendarKeyAction::Home => 0,
+            CalendarKeyAction::End => rows.len().saturating_sub(1),
+            _ => unreachable!("filtered to day DataView actions"),
+        };
+        let outcome = if matches!(action, CalendarKeyAction::Up | CalendarKeyAction::Down) {
+            self.day_entries
+                .highlight_line_with_settings(target, viewport, animation_settings())
+        } else {
+            self.day_entries.highlight_centered_with_settings(
+                target,
+                viewport,
+                animation_settings(),
+            )
+        };
+        self.day_entries.take_events();
+        let before = self.highlighted_entry;
+        self.set_highlighted_entry(self.day_entries.highlighted_id());
+        Some(if outcome.changed || self.highlighted_entry != before {
+            CalendarOutcome::CHANGED
+        } else {
+            CalendarOutcome::HANDLED
+        })
     }
 
     fn apply_key_action(&mut self, action: CalendarKeyAction) -> CalendarOutcome {
@@ -611,6 +734,7 @@ where
         if view != CalendarView::EventDetail {
             self.highlight_first_entry_on_cursor();
         }
+        self.refresh_day_entries();
         if let Some(event) = transition {
             self.push_event(event);
         }
@@ -633,6 +757,7 @@ where
             self.emit_range_changed();
         }
         self.highlight_first_entry_on_cursor();
+        self.refresh_day_entries();
         CalendarOutcome::CHANGED
     }
 
@@ -688,7 +813,9 @@ where
                 let offset = self.visible_weekday_offsets().first().copied().unwrap_or(0);
                 self.set_cursor(start + Duration::days(offset as i64))
             }
-            CalendarView::Day => self.highlight_entry_boundary(false),
+            CalendarView::Day => self
+                .apply_day_data_view_action(CalendarKeyAction::Home)
+                .expect("home is a day DataView action"),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
     }
@@ -707,7 +834,9 @@ where
                 let offset = self.visible_weekday_offsets().last().copied().unwrap_or(6);
                 self.set_cursor(start + Duration::days(offset as i64))
             }
-            CalendarView::Day => self.highlight_entry_boundary(true),
+            CalendarView::Day => self
+                .apply_day_data_view_action(CalendarKeyAction::End)
+                .expect("end is a day DataView action"),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
     }
@@ -747,6 +876,7 @@ where
             }
             self.highlight_first_entry_on_cursor();
         }
+        self.refresh_day_entries();
         CalendarOutcome::CHANGED
     }
 
@@ -797,19 +927,6 @@ where
         self.highlight_entry(next)
     }
 
-    fn highlight_entry_boundary(&mut self, last: bool) -> CalendarOutcome {
-        let entries = self.entries_on(self.cursor);
-        let next = if last {
-            entries.last().copied()
-        } else {
-            entries.first().copied()
-        };
-        let Some(next) = next else {
-            return CalendarOutcome::HANDLED;
-        };
-        self.highlight_entry(next)
-    }
-
     fn highlight_entry(&mut self, index: usize) -> CalendarOutcome {
         if self.highlighted_entry == Some(index) {
             return CalendarOutcome::HANDLED;
@@ -823,6 +940,10 @@ where
             return;
         }
         self.highlighted_entry = index;
+        if let Some(index) = index {
+            self.day_entries.highlight_id(&index);
+        }
+        self.day_entries.take_events();
         self.push_event(CalendarTypedEvent::EntryHighlighted {
             entry_id: index.map(|index| (self.id)(&self.entries[index])),
         });
@@ -846,6 +967,44 @@ where
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| self.compare_entries(*left, *right));
         entries
+    }
+
+    fn refresh_day_entries(&mut self) {
+        let rows = self
+            .entries_on(self.cursor)
+            .into_iter()
+            .map(|entry_index| self.day_entry_row(entry_index))
+            .collect::<Vec<_>>();
+        self.day_entries.set_rows(rows);
+        self.day_entries.set_focused(self.focused);
+        if let Some(index) = self.highlighted_entry {
+            self.day_entries.highlight_id(&index);
+        }
+        self.day_entries
+            .snap_highlight_centered(self.content_area(self.area));
+        self.day_entries.take_events();
+    }
+
+    fn day_entry_row(&self, entry_index: usize) -> CalendarDayRow {
+        let entry = &self.entries[entry_index];
+        let span = (self.span)(entry);
+        let marker = self
+            .event_marker
+            .as_ref()
+            .map(|marker| marker(entry))
+            .filter(|marker| !marker.is_control())
+            .unwrap_or(if span.all_day { '■' } else { '•' });
+        let prefix = if span.all_day {
+            format!("{marker} all-day ")
+        } else {
+            format!("{marker} {} ", format_time(span.start.time()))
+        };
+        CalendarDayRow {
+            entry_index,
+            prefix,
+            entry: self.entry_line(entry_index),
+            role: (self.role)(entry),
+        }
     }
 
     fn compare_entries(&self, left: usize, right: usize) -> Ordering {
@@ -954,17 +1113,22 @@ where
         ctx.request_redraw();
     }
 
-    fn tick(&mut self, dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
-        if self.quick_jump_digit.is_none() {
-            return TickResult::IDLE;
-        }
-        self.quick_jump_elapsed = self.quick_jump_elapsed.saturating_add(dt);
-        if self.quick_jump_elapsed >= QUICK_JUMP_TIMEOUT {
-            self.clear_quick_jump();
-            TickResult::CHANGED
+    fn tick(&mut self, dt: StdDuration, settings: crate::AnimationSettings) -> TickResult {
+        let mut result = if self.quick_jump_digit.is_none() {
+            TickResult::IDLE
         } else {
-            TickResult::scheduled_after(QUICK_JUMP_TIMEOUT - self.quick_jump_elapsed)
+            self.quick_jump_elapsed = self.quick_jump_elapsed.saturating_add(dt);
+            if self.quick_jump_elapsed >= QUICK_JUMP_TIMEOUT {
+                self.clear_quick_jump();
+                TickResult::CHANGED
+            } else {
+                TickResult::scheduled_after(QUICK_JUMP_TIMEOUT - self.quick_jump_elapsed)
+            }
+        };
+        if self.view == CalendarView::Day {
+            result = result.merge(Animated::tick(&mut self.day_entries, dt, settings));
         }
+        result
     }
 }
 

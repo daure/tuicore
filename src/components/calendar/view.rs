@@ -1,6 +1,6 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use ratatui::{Frame, buffer::Buffer};
 use time::{Date, Duration};
@@ -238,24 +238,13 @@ where
     }
 
     pub(super) fn render_day(&self, frame: &mut Frame, area: Rect) {
-        self.render_panel(frame, area, self.cursor.to_string());
-        let inner = self.content_area(area);
-        let entries = self.entries_on(self.cursor);
-        let mut lines = Vec::new();
-        self.append_event_lines(
-            &mut lines,
-            &entries,
-            usize::from(inner.height),
-            inner.width,
-            DAY_EVENT_LINES,
-            EventSummaryKind::Day,
+        self.render_panel(
+            frame,
+            area,
+            format!("{} · {}", self.cursor, weekday_short(self.cursor)),
         );
-        let text = if lines.is_empty() {
-            Text::from("No entries")
-        } else {
-            Text::from(lines)
-        };
-        frame.render_widget(Paragraph::new(text), inner);
+        let inner = self.content_area(area);
+        self.day_entries.render(frame, inner);
     }
 
     pub(super) fn render_detail_view(&self, frame: &mut Frame, area: Rect) {
@@ -359,7 +348,7 @@ where
         }
     }
 
-    fn content_area(&self, area: Rect) -> Rect {
+    pub(super) fn content_area(&self, area: Rect) -> Rect {
         if self.bordered {
             Panel::inner_area(area)
         } else {
@@ -434,21 +423,7 @@ where
     }
 
     fn entry_style(&self, index: usize, selected: bool) -> Style {
-        let t = theme();
-        if selected && self.focused {
-            return Style::default()
-                .fg(t.highlight_fg())
-                .bg(t.highlight_bg())
-                .add_modifier(Modifier::BOLD);
-        }
-        match (self.role)(&self.entries[index]) {
-            Some(CalendarEntryRole::Accent) => Style::default().fg(t.accent_fg()),
-            Some(CalendarEntryRole::Success) => Style::default().fg(t.success_fg()),
-            Some(CalendarEntryRole::Warning) => Style::default().fg(t.warning_fg()),
-            Some(CalendarEntryRole::Error) => Style::default().fg(t.error_fg()),
-            Some(CalendarEntryRole::Muted) => Style::default().fg(t.muted_fg()),
-            None => Style::default().fg(t.text_fg()),
-        }
+        calendar_entry_style((self.role)(&self.entries[index]), selected && self.focused)
     }
 
     fn append_event_lines(
@@ -505,14 +480,9 @@ where
             EventSummaryKind::Month => format!("{marker} "),
             EventSummaryKind::Week if span.all_day => format!("{marker} "),
             EventSummaryKind::Week => format!("{marker} "),
-            EventSummaryKind::Day if span.all_day => format!("{marker} all-day "),
-            EventSummaryKind::Day => format!("{marker} {} ", format_time(span.start.time())),
         };
         let entry = self.entry_line(index);
         let line_style = self.entry_summary_style(index, entry.style);
-        let fill_selected_width = matches!(kind, EventSummaryKind::Day)
-            && self.focused
-            && self.highlighted_entry == Some(index);
         let on_highlight_background = self.highlighted_entry == Some(index)
             || matches!(kind, EventSummaryKind::Month | EventSummaryKind::Week)
                 && span.covers_date(self.cursor);
@@ -550,13 +520,7 @@ where
                     marker_style,
                 )];
                 spans.extend(body_spans);
-                let mut line = Line::from(spans).style(line_style);
-                if fill_selected_width {
-                    let remaining = usize::from(width).saturating_sub(line_width(&line));
-                    line.spans
-                        .push(Span::styled(" ".repeat(remaining), line_style));
-                }
-                line
+                Line::from(spans).style(line_style)
             })
             .collect()
     }
@@ -583,5 +547,4 @@ fn disabled_animation_settings() -> crate::AnimationSettings {
 pub(super) enum EventSummaryKind {
     Month,
     Week,
-    Day,
 }

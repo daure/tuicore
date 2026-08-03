@@ -2784,7 +2784,7 @@ impl PreviewState {
         let [help, bordered_area, borderless_area, status] = calendar_preview_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Bordered (top) and borderless (bottom): M/W/D switches views, T jumps today, arrows/hjkl navigate, Enter drills down, Esc/Ctrl+[ goes back.",
+                "Bordered (top) and borderless (bottom): M/W/D switches views, T jumps today, arrows/hjkl navigate, Ctrl+U/D pages day entries, Enter drills down, Esc/Ctrl+[ goes back.",
             ),
             help,
         );

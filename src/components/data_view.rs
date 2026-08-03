@@ -1658,7 +1658,7 @@ where
         outcome
     }
 
-    fn highlight_line_with_settings(
+    pub(crate) fn highlight_line_with_settings(
         &mut self,
         highlighted: usize,
         area: Rect,
@@ -1675,7 +1675,7 @@ where
         outcome
     }
 
-    fn highlight_centered_with_settings(
+    pub(crate) fn highlight_centered_with_settings(
         &mut self,
         highlighted: usize,
         area: Rect,

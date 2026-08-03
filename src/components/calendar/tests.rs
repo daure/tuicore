@@ -368,6 +368,68 @@ fn day_navigation_highlights_chronological_entries() {
 }
 
 #[test]
+fn day_page_keys_page_the_entry_data_view_without_changing_date() {
+    let day = date(2026, Month::June, 22);
+    let entries = [
+        ("one", "One", 8),
+        ("two", "Two", 9),
+        ("three", "Three", 10),
+        ("four", "Four", 11),
+        ("five", "Five", 12),
+        ("six", "Six", 13),
+    ]
+    .map(|(id, title, hour)| DemoEntry {
+        id,
+        title,
+        span: CalendarSpan::timed(
+            PrimitiveDateTime::new(day, Time::from_hms(hour, 0, 0).unwrap()),
+            PrimitiveDateTime::new(day, Time::from_hms(hour, 30, 0).unwrap()),
+        ),
+    });
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        entries,
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day);
+    calendar.area = Rect::new(0, 0, 40, 6);
+
+    assert_eq!(calendar.highlighted_entry_id(), Some("one"));
+    assert_eq!(
+        calendar.on_key(KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        CalendarOutcome::CHANGED
+    );
+    assert_eq!(calendar.highlighted_entry_id(), Some("four"));
+    assert_eq!(calendar.cursor_date(), day);
+
+    assert_eq!(
+        calendar.on_key(KeyEvent {
+            code: Key::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        CalendarOutcome::CHANGED
+    );
+    assert_eq!(calendar.highlighted_entry_id(), Some("one"));
+    assert_eq!(calendar.cursor_date(), day);
+
+    calendar.set_keybindings(CalendarKeyBindings {
+        page_up: vec![KeySpec::plain('z')],
+        page_down: vec![KeySpec::plain('x')],
+        ..CalendarKeyBindings::default()
+    });
+    assert_eq!(calendar.on_key(Key::Char('x')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.highlighted_entry_id(), Some("four"));
+    assert_eq!(calendar.on_key(Key::Char('z')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.highlighted_entry_id(), Some("one"));
+    assert_eq!(calendar.cursor_date(), day);
+}
+
+#[test]
 fn selected_day_entry_highlight_fills_the_view_width() {
     let mut calendar = demo_calendar().view(CalendarView::Day);
     calendar.set_focused(true);
@@ -981,6 +1043,17 @@ fn hiding_weekends_does_not_change_day_cursor_or_navigation() {
 }
 
 #[test]
+fn day_view_title_includes_short_weekday() {
+    let calendar = demo_calendar()
+        .view(CalendarView::Day)
+        .cursor(date(2026, Month::June, 22));
+
+    let border = rendered_top_border(&calendar, 100);
+
+    assert!(border.contains(" 2026-06-22 · Mon "), "{border}");
+}
+
+#[test]
 fn panel_legend_uses_default_view_binding_labels() {
     let border = rendered_top_border(&demo_calendar(), 100);
 
@@ -1228,14 +1301,21 @@ fn week_timed_summary_wraps_time_and_title_as_one_body() {
 }
 
 #[test]
-fn day_event_summary_wraps_to_five_lines_and_short_text_stays_plain() {
+fn day_data_view_renders_one_row_per_entry() {
     let day = date(2026, Month::June, 22);
-    let long: Calendar<DemoEntry, &'static str> = Calendar::new(
-        [DemoEntry {
-            id: "long",
-            title: "one two three four five six seven eight nine ten eleven twelve",
-            span: CalendarSpan::all_day(day),
-        }],
+    let calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span: CalendarSpan::all_day(day),
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span: CalendarSpan::all_day(day),
+            },
+        ],
         |entry| entry.id,
         |entry| entry.span,
         |entry| entry.title.to_string(),
@@ -1244,22 +1324,13 @@ fn day_event_summary_wraps_to_five_lines_and_short_text_stays_plain() {
     .cursor(day);
     let mut terminal = Terminal::new(TestBackend::new(18, 8)).unwrap();
     terminal
-        .draw(|frame| long.render(frame, frame.area()))
+        .draw(|frame| calendar.render(frame, frame.area()))
         .unwrap();
-    let long_rows = (1..6)
-        .map(|y| buffer_row(terminal.backend().buffer(), y, 18))
-        .collect::<Vec<_>>();
+    let first = buffer_row(terminal.backend().buffer(), 1, 18);
+    let second = buffer_row(terminal.backend().buffer(), 2, 18);
 
-    assert_eq!(long_rows.len(), 5);
-    assert!(long_rows[4].contains("..."), "{long_rows:?}");
-
-    let short = demo_calendar().view(CalendarView::Day);
-    terminal
-        .draw(|frame| short.render(frame, frame.area()))
-        .unwrap();
-    let rendered = buffer_row(terminal.backend().buffer(), 1, 18);
-    assert!(rendered.contains("Standup"), "{rendered}");
-    assert!(!rendered.contains("..."), "{rendered}");
+    assert!(first.contains("First"), "{first}");
+    assert!(second.contains("Second"), "{second}");
 }
 
 #[test]
@@ -1299,7 +1370,7 @@ fn event_body_wrapping_retains_single_space_at_exact_boundary() {
 }
 
 #[test]
-fn render_entry_preserves_styles_spaces_and_graphemes_when_wrapping() {
+fn day_data_view_preserves_render_entry_styles_and_graphemes() {
     let day = date(2026, Month::June, 22);
     let calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
         [DemoEntry {
@@ -1330,12 +1401,8 @@ fn render_entry_preserves_styles_spaces_and_graphemes_when_wrapping() {
     assert_eq!(buffer.cell((12, 1)).unwrap().symbol(), "b");
     assert_eq!(buffer.cell((13, 1)).unwrap().symbol(), " ");
     assert_eq!(buffer.cell((13, 1)).unwrap().fg, Color::Red);
-    assert_eq!(buffer.cell((11, 2)).unwrap().symbol(), "c");
-    assert_eq!(buffer.cell((12, 2)).unwrap().symbol(), "d");
-    assert_eq!(buffer.cell((13, 2)).unwrap().symbol(), "🇺🇸");
-    assert_eq!(buffer.cell((13, 2)).unwrap().fg, Color::Blue);
-    assert_eq!(buffer.cell((11, 3)).unwrap().symbol(), "e\u{301}");
-    assert_eq!(buffer.cell((11, 3)).unwrap().fg, Color::Blue);
+    assert_eq!(buffer.cell((14, 1)).unwrap().symbol(), "c");
+    assert_eq!(buffer.cell((14, 1)).unwrap().fg, Color::Blue);
 }
 
 #[test]
