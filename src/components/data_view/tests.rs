@@ -8,7 +8,8 @@ use ratatui::text::{Line, Span};
 
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key,
-    KeyEvent, KeyModifiers, LayoutCtx, Propagation, TreePath, TuiEvent, TuiNode, lerp_color,
+    KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation, TreePath, TuiEvent, TuiNode,
+    lerp_color,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -708,6 +709,32 @@ fn active_tree_transform_still_allows_node_toggle() {
     view.toggle_highlighted_expansion(Rect::new(0, 0, 40, 5), AnimationSettings::default());
 
     assert_eq!(visible_ids(&view), vec![1, 3]);
+}
+
+#[test]
+fn collapsing_tree_requests_layout_when_visible_row_count_changes() {
+    let mut view = tree_view().expanded([1]);
+    view.highlight_id(&1);
+    view.set_focused(true);
+    let expanded_height =
+        <DataView<_, _> as TuiNode<()>>::measure(&view, LayoutProposal::unbounded())
+            .preferred
+            .height;
+    let mut ctx = EventCtx::default();
+
+    let outcome = <DataView<_, _> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Key(Key::Char(' ').into()),
+        &mut ctx,
+    );
+
+    let collapsed_height =
+        <DataView<_, _> as TuiNode<()>>::measure(&view, LayoutProposal::unbounded())
+            .preferred
+            .height;
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(collapsed_height < expanded_height);
+    assert!(ctx.layout_requested());
 }
 
 #[test]

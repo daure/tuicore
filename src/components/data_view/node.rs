@@ -137,7 +137,11 @@ where
         }
         let focused_search = matches!(self.interaction, DataViewInteraction::Search);
         let before_interaction = self.interaction.clone();
+        let before_visible_rows = self.visible_row_count();
         let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
+        if self.visible_row_count() != before_visible_rows {
+            ctx.request_layout();
+        }
         if Self::search_exited(&before_interaction, &self.interaction) {
             self.focus_self(ctx);
         }
