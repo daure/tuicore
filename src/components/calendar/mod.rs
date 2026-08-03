@@ -106,14 +106,14 @@ pub struct CalendarKeyBindings {
 impl Default for CalendarKeyBindings {
     fn default() -> Self {
         Self {
-            month_view: vec![KeySpec::plain('m')],
-            week_view: vec![KeySpec::plain('w')],
-            day_view: vec![KeySpec::plain('d')],
+            month_view: vec![KeySpec::shifted('m')],
+            week_view: vec![KeySpec::shifted('w')],
+            day_view: vec![KeySpec::shifted('d')],
             toggle_weekends: vec![KeySpec::key_with_modifiers(
                 Key::Char('w'),
                 KeyModifiers::CONTROL,
             )],
-            today: vec![KeySpec::plain('t')],
+            today: vec![KeySpec::shifted('t')],
             activate: vec![KeySpec::key(Key::Enter), KeySpec::plain(' ')],
             back: vec![
                 KeySpec::key(Key::Esc),

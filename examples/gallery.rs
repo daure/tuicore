@@ -2676,8 +2676,8 @@ impl PreviewState {
         frame.render_widget(
             Paragraph::new(
                 "DatePicker, TimePicker, composed DateTimePicker, and dropdown DateTimePicker.\n\
-                 Hotkeys: |dp| date, |tp| time, |dt| datetime dropdown. Date: arrows/hjkl move day/week, m month grid, y year grid, t today, Ctrl+O $EDITOR, Enter select.\n\
-                 Month/year selection: press y, move with arrows/hjkl (PgUp/PgDn changes 24-year page), then Enter; choose a month with arrows/hjkl (PgUp/PgDn changes year), then Enter. Press m to open the month grid directly.\n\
+                 Hotkeys: |dp| date, |tp| time, |dt| datetime dropdown. Date: arrows/hjkl move day/week, M month grid, Y year grid, T today, Ctrl+O $EDITOR, Enter select.\n\
+                 Month/year selection: press Y, move with arrows/hjkl (PgUp/PgDn changes 24-year page), then Enter; choose a month with arrows/hjkl (PgUp/PgDn changes year), then Enter. Press M to open the month grid directly.\n\
                  Time: left/right or h/l selects field; up/down or k/j increments. Stepped inline picker uses Enter for date → time → commit; Escape from time returns to date. Tab/BackTab or Ctrl+h/k/j/l moves between form fields.",
             ),
             instructions,
@@ -2784,7 +2784,7 @@ impl PreviewState {
         let [help, bordered_area, borderless_area, status] = calendar_preview_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Bordered (top) and borderless (bottom): m/w/d switches views, t jumps today, arrows/hjkl navigate, Enter drills down, Esc/Ctrl+[ goes back.",
+                "Bordered (top) and borderless (bottom): M/W/D switches views, T jumps today, arrows/hjkl navigate, Enter drills down, Esc/Ctrl+[ goes back.",
             ),
             help,
         );

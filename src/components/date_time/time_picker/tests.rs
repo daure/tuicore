@@ -1,5 +1,6 @@
+use super::super::KeyBindingsGuard;
 use super::*;
-use crate::{Key, KeyModifiers};
+use crate::{Key, KeyBindings, KeyModifiers};
 
 #[test]
 fn time_picker_arrow_keys_move_minutes_by_one() {
@@ -159,7 +160,8 @@ fn time_picker_registers_and_handles_hotkey() {
 }
 
 #[test]
-fn time_picker_uses_configured_today_key_for_now() {
+fn time_picker_uses_uppercase_today_key_for_now() {
+    let _guard = KeyBindingsGuard::replace(KeyBindings::default());
     let now = super::super::today_time();
     let other = if now.hour() == 0 {
         time::Time::from_hms(1, now.minute(), now.second()).unwrap()
@@ -171,7 +173,8 @@ fn time_picker_uses_configured_today_key_for_now() {
     let ignored = picker.on_key(Key::Char('n'));
     assert_eq!(ignored, PickerOutcome::IGNORED);
 
-    let selected = picker.on_key(Key::Char('t'));
+    assert_eq!(picker.on_key(Key::Char('t')), PickerOutcome::IGNORED);
+    let selected = picker.on_key(Key::Char('T'));
     assert!(selected.selected);
     assert_ne!(picker.current_value(), other);
 }

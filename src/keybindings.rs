@@ -258,10 +258,10 @@ impl Default for DateTimePickerKeyBindings {
             line_down: vec![KeySpec::key(Key::Down), KeySpec::plain('j')],
             line_left: vec![KeySpec::key(Key::Left), KeySpec::plain('h')],
             line_right: vec![KeySpec::key(Key::Right), KeySpec::plain('l')],
-            today: vec![KeySpec::plain('t')],
-            day_view: vec![KeySpec::plain('d')],
-            month_view: vec![KeySpec::plain('m')],
-            year_view: vec![KeySpec::plain('y')],
+            today: vec![KeySpec::shifted('t')],
+            day_view: vec![KeySpec::shifted('d')],
+            month_view: vec![KeySpec::shifted('m')],
+            year_view: vec![KeySpec::shifted('y')],
             external_editor: vec![KeySpec::key_with_modifiers(
                 Key::Char('o'),
                 KeyModifiers::CONTROL,
@@ -2296,31 +2296,23 @@ mod tests {
     }
 
     #[test]
-    fn default_date_picker_today_matches_plain_t_only() {
+    fn default_date_picker_view_and_today_bindings_use_uppercase_shortcuts() {
         let bindings = KeyBindings::default();
+        let date_keys = bindings.date_time_picker();
+        let cases: [(char, fn(&DateTimePickerKeyBindings, KeyEvent) -> bool); 4] = [
+            ('D', DateTimePickerKeyBindings::day_view_matches),
+            ('M', DateTimePickerKeyBindings::month_view_matches),
+            ('Y', DateTimePickerKeyBindings::year_view_matches),
+            ('T', DateTimePickerKeyBindings::today_matches),
+        ];
 
-        assert!(bindings.date_time_picker().today_matches(KeyEvent {
-            code: Key::Char('t'),
-            modifiers: KeyModifiers::NONE,
-        }));
-        assert!(!bindings.date_time_picker().today_matches(KeyEvent {
-            code: Key::Char('t'),
-            modifiers: KeyModifiers::CONTROL,
-        }));
-    }
-
-    #[test]
-    fn default_date_picker_day_view_matches_plain_d_only() {
-        let bindings = KeyBindings::default();
-
-        assert!(bindings.date_time_picker().day_view_matches(KeyEvent {
-            code: Key::Char('d'),
-            modifiers: KeyModifiers::NONE,
-        }));
-        assert!(!bindings.date_time_picker().day_view_matches(KeyEvent {
-            code: Key::Char('d'),
-            modifiers: KeyModifiers::CONTROL,
-        }));
+        for (uppercase, matches) in cases {
+            assert!(matches(date_keys, KeyEvent::from(Key::Char(uppercase))));
+            assert!(!matches(
+                date_keys,
+                KeyEvent::from(Key::Char(uppercase.to_ascii_lowercase()))
+            ));
+        }
     }
 
     #[test]

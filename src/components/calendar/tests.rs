@@ -302,10 +302,42 @@ fn direct_view_switch_does_not_push_history() {
     calendar.on_key(Key::Enter);
     assert_eq!(calendar.current_view(), CalendarView::Day);
 
-    assert_eq!(calendar.on_key(Key::Char('m')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.on_key(Key::Char('M')), CalendarOutcome::CHANGED);
     assert_eq!(calendar.current_view(), CalendarView::Month);
     assert_eq!(calendar.on_key(Key::Esc), CalendarOutcome::IDLE);
     assert_eq!(calendar.current_view(), CalendarView::Month);
+}
+
+#[test]
+fn default_view_switches_use_uppercase_shortcuts() {
+    let mut calendar = demo_calendar().view(CalendarView::Week);
+
+    for key in ['m', 'w', 'd'] {
+        assert_eq!(calendar.on_key(Key::Char(key)), CalendarOutcome::IDLE);
+        assert_eq!(calendar.current_view(), CalendarView::Week);
+    }
+
+    for (key, view) in [
+        ('M', CalendarView::Month),
+        ('W', CalendarView::Week),
+        ('D', CalendarView::Day),
+    ] {
+        assert_eq!(calendar.on_key(Key::Char(key)), CalendarOutcome::CHANGED);
+        assert_eq!(calendar.current_view(), view);
+    }
+}
+
+#[test]
+fn default_today_binding_uses_uppercase_shortcut() {
+    let today = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(today)
+        .cursor(today + Duration::days(1));
+
+    assert_eq!(calendar.on_key(Key::Char('t')), CalendarOutcome::IDLE);
+    assert_eq!(calendar.cursor_date(), today + Duration::days(1));
+    assert_eq!(calendar.on_key(Key::Char('T')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), today);
 }
 
 #[test]
@@ -720,7 +752,7 @@ fn weekends_are_visible_by_default_and_public_controls_update_visibility() {
 }
 
 #[test]
-fn ctrl_w_toggles_weekends_while_plain_w_switches_to_week_view() {
+fn ctrl_w_toggles_weekends_while_plain_w_is_idle() {
     let mut calendar = demo_calendar().view(CalendarView::Month);
 
     assert_eq!(
@@ -733,8 +765,8 @@ fn ctrl_w_toggles_weekends_while_plain_w_switches_to_week_view() {
     assert!(!calendar.is_showing_weekends());
     assert_eq!(calendar.current_view(), CalendarView::Month);
 
-    assert_eq!(calendar.on_key(Key::Char('w')), CalendarOutcome::CHANGED);
-    assert_eq!(calendar.current_view(), CalendarView::Week);
+    assert_eq!(calendar.on_key(Key::Char('w')), CalendarOutcome::IDLE);
+    assert_eq!(calendar.current_view(), CalendarView::Month);
 }
 
 #[test]
@@ -952,7 +984,7 @@ fn hiding_weekends_does_not_change_day_cursor_or_navigation() {
 fn panel_legend_uses_default_view_binding_labels() {
     let border = rendered_top_border(&demo_calendar(), 100);
 
-    assert!(border.contains(" Day |d| · Week |w| · Month |m| "));
+    assert!(border.contains(" Day |D| · Week |W| · Month |M| "));
 }
 
 #[test]
@@ -1044,7 +1076,7 @@ fn preferred_width_fits_week_title_and_exact_legend() {
     assert_eq!(preferred, 72);
     assert!(border.contains(" 2026-06-22 — 2026-06-28 "), "{border}");
     assert!(!border.contains(" Week •"), "{border}");
-    assert!(border.contains(" Day |d| · Week |w| · Month |m| "));
+    assert!(border.contains(" Day |D| · Week |W| · Month |M| "));
 }
 
 #[test]
@@ -1054,7 +1086,7 @@ fn constrained_width_preserves_title_instead_of_overwriting_it() {
 
     assert!(border.contains(" 2026-06-22 — 2026-06-28 "));
     assert!(!border.contains(" Week •"));
-    assert!(!border.contains(" Day |d|"));
+    assert!(!border.contains(" Day |D|"));
 }
 
 #[test]
@@ -1069,7 +1101,7 @@ fn borderless_calendar_removes_only_outer_border() {
     let buffer = terminal.backend().buffer();
     assert!(!calendar.is_bordered());
     assert!(buffer_row(buffer, 0, 100).starts_with("June 2026"));
-    assert!(buffer_row(buffer, 0, 100).contains("Day |d| · Week |w| · Month |m|"));
+    assert!(buffer_row(buffer, 0, 100).contains("Day |D| · Week |W| · Month |M|"));
     assert!(buffer_row(buffer, 1, 100).starts_with("Mon"));
     assert_ne!(buffer.cell((0, 0)).unwrap().symbol(), "┌");
 }

@@ -89,7 +89,7 @@ fn main() -> tuicore::Result<()> {
     .on_event(|event| event);
     let app = Panel::new()
         .top_left("Schedule")
-        .top_right("m month · w week · d day · Enter drill down")
+        .top_right("M month · W week · D day · T today · Enter drill down")
         .host(calendar);
 
     tuicore::TreeApp::new(app)

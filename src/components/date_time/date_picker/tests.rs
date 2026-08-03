@@ -396,12 +396,15 @@ fn date_picker_year_quick_jump_expires_and_partial_confirm_does_not_move() {
 
 #[test]
 fn date_picker_switches_month_and_year_views() {
+    let _guard = KeyBindingsGuard::replace(KeyBindings::default());
     let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
     let mut picker = DatePicker::<()>::new().today(date);
 
-    picker.on_key(Key::Char('m'));
+    assert_eq!(picker.on_key(Key::Char('m')), PickerOutcome::IGNORED);
+    picker.on_key(Key::Char('M'));
     assert_eq!(picker.view, DatePickerView::Month);
-    picker.on_key(Key::Char('y'));
+    assert_eq!(picker.on_key(Key::Char('y')), PickerOutcome::IGNORED);
+    picker.on_key(Key::Char('Y'));
     assert_eq!(picker.view, DatePickerView::Year);
     picker.on_key(Key::Enter);
     assert_eq!(picker.view, DatePickerView::Month);
@@ -410,7 +413,7 @@ fn date_picker_switches_month_and_year_views() {
 }
 
 #[test]
-fn date_picker_d_switches_day_and_year_views_to_day_without_changing_selection() {
+fn date_picker_uppercase_d_switches_day_and_year_views_to_day_without_changing_selection() {
     let _guard = KeyBindingsGuard::replace(KeyBindings::default());
     let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
 
@@ -420,7 +423,8 @@ fn date_picker_d_switches_day_and_year_views_to_day_without_changing_selection()
         picker.on_key(Key::Right);
         let cursor = picker.cursor();
 
-        let outcome = picker.on_key(Key::Char('d'));
+        assert_eq!(picker.on_key(Key::Char('d')), PickerOutcome::IGNORED);
+        let outcome = picker.on_key(Key::Char('D'));
 
         assert!(outcome.handled);
         assert_eq!(picker.view, DatePickerView::Day);
@@ -566,12 +570,14 @@ fn date_picker_day_view_binding_can_be_overridden_with_toml() {
 
 #[test]
 fn date_picker_today_shortcut_moves_cursor_to_today() {
+    let _guard = KeyBindingsGuard::replace(KeyBindings::default());
     let today = Date::from_calendar_date(2026, Month::June, 22).unwrap();
     let mut picker = DatePicker::<()>::new().today(today);
 
     picker.on_key(Key::Right);
     assert_ne!(picker.cursor(), today);
-    let outcome = picker.on_key(Key::Char('t'));
+    assert_eq!(picker.on_key(Key::Char('t')), PickerOutcome::IGNORED);
+    let outcome = picker.on_key(Key::Char('T'));
 
     assert!(outcome.handled);
     assert_eq!(picker.cursor(), today);
@@ -607,7 +613,7 @@ fn date_picker_home_end_apply_to_month_and_year_views() {
     let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
     let mut picker = DatePicker::<()>::new().today(date);
 
-    picker.on_key(Key::Char('m'));
+    picker.on_key(Key::Char('M'));
     picker.on_key(Key::Home);
     assert_eq!(
         picker.cursor(),
@@ -619,7 +625,7 @@ fn date_picker_home_end_apply_to_month_and_year_views() {
         Date::from_calendar_date(2026, Month::December, 22).unwrap()
     );
 
-    picker.on_key(Key::Char('y'));
+    picker.on_key(Key::Char('Y'));
     picker.on_key(Key::Home);
     assert_eq!(
         picker.cursor(),
