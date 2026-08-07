@@ -107,3 +107,5 @@ pub use textarea_input::{TextareaInput, TextareaInputKeyBindings};
 pub use toggle::{Toggle, ToggleOutcome, ToggleStyle};
 pub use typography::{Header, Paragraph, ParagraphOverflow};
 pub use weather_provider::{WeatherFetchError, WeatherProviderConfig};
+pub mod syntax_highlighter;
+pub use syntax_highlighter::SyntaxHighlighter;

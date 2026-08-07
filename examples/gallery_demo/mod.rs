@@ -11,3 +11,5 @@ pub(crate) mod panels;
 pub(crate) mod relative_date;
 pub(crate) mod status_bar;
 pub(crate) mod tabs;
+pub(crate) mod syntax_highlighting;
+pub(crate) mod code_samples;

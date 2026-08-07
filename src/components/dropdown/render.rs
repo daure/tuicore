@@ -322,7 +322,7 @@ where
             } else {
                 border_set(preset().border())
             };
-            let block = Block::default()
+            let mut block = Block::default()
                 .borders(Borders::ALL)
                 .border_set(border)
                 .border_style(
@@ -338,6 +338,9 @@ where
                             Modifier::empty()
                         }),
                 );
+            if let Some(style) = popup_content_style {
+                block = block.style(Style::default().bg(style.bg.unwrap_or_default()));
+            }
             let inner = block.inner(area);
             frame.render_widget(block, area);
             inner
@@ -478,7 +481,12 @@ where
     }
 
     pub(super) fn popup_content_style(&self) -> Option<Style> {
-        (self.variant == DropdownVariant::Filled).then(|| Style::default().bg(theme().surface_bg()))
+        let bg = if self.variant == DropdownVariant::Filled {
+            theme().surface_bg()
+        } else {
+            theme().background_bg()
+        };
+        Some(Style::default().bg(bg))
     }
 
     fn render_title(

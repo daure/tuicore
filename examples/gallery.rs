@@ -798,6 +798,7 @@ struct PreviewState {
     validated_form: ValidatedForm,
     diff_side_by_side: DiffDemo<Msg>,
     diff_inline: DiffDemo<Msg>,
+    syntax_highlighting: gallery_demo::syntax_highlighting::SyntaxHighlightingDemo,
     diff_word: DiffDemo<Msg>,
     diff_raw_patch: DiffDemo<Msg>,
 }
@@ -999,6 +1000,7 @@ impl PreviewState {
             validated_form: ValidatedForm::new(),
             diff_side_by_side: side_by_side_diff_demo(),
             diff_inline: inline_diff_demo(),
+            syntax_highlighting: gallery_demo::syntax_highlighting::SyntaxHighlightingDemo::new(),
             diff_word: word_diff_demo(),
             diff_raw_patch: raw_patch_diff_demo(),
         }
@@ -1115,6 +1117,9 @@ impl PreviewState {
             }
             PreviewKind::LayoutGrid => {
                 self.layout_grid.layout(layout_demo_body(area), ctx);
+            }
+            PreviewKind::SyntaxHighlighting => {
+                self.syntax_highlighting.layout(area, ctx);
             }
             preview if preview.is_diff_viewer() => {
                 self.active_diff_viewer_mut(preview).layout(area, ctx);
@@ -1302,6 +1307,9 @@ impl PreviewState {
             PreviewKind::LayoutStack => self.render_layout_stack(frame, area, ctx),
             PreviewKind::LayoutOverlay => self.render_layout_layered(frame, area, ctx),
             PreviewKind::LayoutGrid => self.render_layout_grid(frame, area, ctx),
+            PreviewKind::SyntaxHighlighting => {
+                self.syntax_highlighting.render(frame, area, ctx);
+            }
             preview @ (PreviewKind::DiffSideBySide
             | PreviewKind::DiffInline
             | PreviewKind::DiffWord
@@ -1500,6 +1508,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::Checklist {
             return self.checklist.dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::SyntaxHighlighting {
+            return self.syntax_highlighting.dispatch_event(route, event, ctx);
         }
         if preview.is_diff_viewer() {
             return self
@@ -1777,6 +1788,9 @@ impl PreviewState {
                 .active_list_control_mut(preview)
                 .dispatch_focus(target, focused, ctx),
             PreviewKind::Checklist => self.checklist.dispatch_focus(target, focused, ctx),
+            PreviewKind::SyntaxHighlighting => {
+                self.syntax_highlighting.dispatch_focus(target, focused, ctx)
+            }
             preview if preview.is_diff_viewer() => self
                 .active_diff_viewer_mut(preview)
                 .dispatch_focus(target, focused, ctx),
@@ -2035,6 +2049,7 @@ impl PreviewState {
             .merge(self.validated_form.tick(dt, settings))
             .merge(self.diff_side_by_side.tick(dt, settings))
             .merge(self.diff_inline.tick(dt, settings))
+            .merge(TuiNode::<Msg>::tick(&mut self.syntax_highlighting, dt, settings))
             .merge(self.diff_word.tick(dt, settings))
             .merge(self.diff_raw_patch.tick(dt, settings))
     }
@@ -2049,6 +2064,7 @@ impl PreviewState {
         self.menu_button.init(ctx);
         self.diff_side_by_side.init(ctx);
         self.diff_inline.init(ctx);
+        TuiNode::<Msg>::init(&mut self.syntax_highlighting, ctx);
         self.diff_word.init(ctx);
         self.diff_raw_patch.init(ctx);
     }
@@ -2063,6 +2079,7 @@ impl PreviewState {
         self.menu_button.mount(ctx);
         self.diff_side_by_side.mount(ctx);
         self.diff_inline.mount(ctx);
+        TuiNode::<Msg>::mount(&mut self.syntax_highlighting, ctx);
         self.diff_word.mount(ctx);
         self.diff_raw_patch.mount(ctx);
     }
@@ -2071,6 +2088,7 @@ impl PreviewState {
         self.diff_raw_patch.unmount(ctx);
         self.diff_word.unmount(ctx);
         self.diff_inline.unmount(ctx);
+        TuiNode::<Msg>::unmount(&mut self.syntax_highlighting, ctx);
         self.diff_side_by_side.unmount(ctx);
         self.menu_button.unmount(ctx);
         self.list_reorder.unmount(ctx);
@@ -2085,6 +2103,7 @@ impl PreviewState {
         self.diff_raw_patch.destroy(ctx);
         self.diff_word.destroy(ctx);
         self.diff_inline.destroy(ctx);
+        TuiNode::<Msg>::destroy(&mut self.syntax_highlighting, ctx);
         self.diff_side_by_side.destroy(ctx);
         self.menu_button.destroy(ctx);
         self.list_reorder.destroy(ctx);
@@ -3741,12 +3760,13 @@ enum ComponentKind {
     DiffViewer,
     DiffSideBySide,
     DiffInline,
+    SyntaxHighlighting,
     DiffWord,
     DiffRawPatch,
 }
 
 impl ComponentKind {
-    const ALL: [Self; 52] = [
+    const ALL: [Self; 53] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3797,6 +3817,7 @@ impl ComponentKind {
         Self::DiffViewer,
         Self::DiffSideBySide,
         Self::DiffInline,
+        Self::SyntaxHighlighting,
         Self::DiffWord,
         Self::DiffRawPatch,
     ];
@@ -3855,6 +3876,7 @@ impl ComponentKind {
             Self::DiffInline => "Inline / Unified",
             Self::DiffWord => "Word / Intra-line",
             Self::DiffRawPatch => "Raw patch / Patch view",
+            Self::SyntaxHighlighting => "Syntax Highlighting",
         }
     }
 
@@ -3946,6 +3968,7 @@ impl ComponentKind {
             Self::Checklist => PreviewKind::Checklist,
             Self::DiffViewer | Self::DiffSideBySide => PreviewKind::DiffSideBySide,
             Self::DiffInline => PreviewKind::DiffInline,
+            Self::SyntaxHighlighting => PreviewKind::SyntaxHighlighting,
             Self::DiffWord => PreviewKind::DiffWord,
             Self::DiffRawPatch => PreviewKind::DiffRawPatch,
         }
@@ -3998,6 +4021,7 @@ enum PreviewKind {
     Checklist,
     DiffSideBySide,
     DiffInline,
+    SyntaxHighlighting,
     DiffWord,
     DiffRawPatch,
 }
@@ -4051,6 +4075,7 @@ impl PreviewKind {
             Self::DiffInline => "Inline / Unified",
             Self::DiffWord => "Word / Intra-line",
             Self::DiffRawPatch => "Raw patch / Patch view",
+            Self::SyntaxHighlighting => "Syntax Highlighting",
         }
     }
 
@@ -4094,6 +4119,7 @@ mod tests {
         let children = [
             (ComponentKind::DiffSideBySide, PreviewKind::DiffSideBySide),
             (ComponentKind::DiffInline, PreviewKind::DiffInline),
+            (ComponentKind::SyntaxHighlighting, PreviewKind::SyntaxHighlighting),
             (ComponentKind::DiffWord, PreviewKind::DiffWord),
             (ComponentKind::DiffRawPatch, PreviewKind::DiffRawPatch),
         ];

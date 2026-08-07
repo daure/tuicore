@@ -764,7 +764,8 @@ where
                 theme.accent_fg()
             } else {
                 theme.border_fg()
-            }));
+            }))
+            .style(Style::default().bg(theme.surface_bg()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 

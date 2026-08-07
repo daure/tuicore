@@ -33,6 +33,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
 unicode-segmentation = "1"
 similar = "2"
+lumis = { version = "0.12.1", features = ["all-languages"] }
+ansi-to-tui = "8.0.1"
 
 [dev-dependencies]
 dotenvy = { version = "0.15" }

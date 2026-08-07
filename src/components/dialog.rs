@@ -508,7 +508,8 @@ impl<M> Dialog<M> {
         let block = Block::default()
             .borders(edge_borders)
             .border_set(border_set(border))
-            .border_style(border_style);
+            .border_style(border_style)
+            .style(Style::default().bg(theme().surface_bg()));
         let inner = self.content_area_for(area, edge_borders);
         frame.render_widget(block, area);
 
