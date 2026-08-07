@@ -282,32 +282,49 @@ impl DiffViewer {
         if data_keys.top_prefix_matches(key) {
             if self.pending_top_prefix {
                 self.pending_top_prefix = false;
-                return self.select_index(0, area, settings, true);
+                let selection = self.select_index(0, area, settings, true);
+                if selection.changed {
+                    return selection;
+                }
+            } else {
+                self.pending_top_prefix = true;
+                return ScrollOutcome {
+                    handled: true,
+                    changed: false,
+                    active: false,
+                };
             }
-            self.pending_top_prefix = true;
-            return ScrollOutcome {
-                handled: true,
-                changed: false,
-                active: false,
-            };
+        } else {
+            self.pending_top_prefix = false;
         }
-        self.pending_top_prefix = false;
         if bindings.page_up_matches(key) {
-            return self.select_relative(-(page as isize), area, settings, true);
+            let selection = self.select_relative(-(page as isize), area, settings, true);
+            if selection.changed {
+                return selection;
+            }
         }
         if bindings.page_down_matches(key) {
-            return self.select_relative(page as isize, area, settings, true);
+            let selection = self.select_relative(page as isize, area, settings, true);
+            if selection.changed {
+                return selection;
+            }
         }
         if bindings.home_matches(key) {
-            return self.select_index(0, area, settings, true);
+            let selection = self.select_index(0, area, settings, true);
+            if selection.changed {
+                return selection;
+            }
         }
         if bindings.end_matches(key) || data_keys.bottom_matches(key) {
-            return self.select_index(
+            let selection = self.select_index(
                 self.selectable_locations().len().saturating_sub(1),
                 area,
                 settings,
                 true,
             );
+            if selection.changed {
+                return selection;
+            }
         }
         if bindings.line_up_matches(key) {
             let selection = self.move_selection(-1, area, settings);
