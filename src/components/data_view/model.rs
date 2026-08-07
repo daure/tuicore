@@ -3,13 +3,13 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 use ratatui::layout::Constraint;
-use ratatui::text::Line;
+use ratatui::text::{Line, Text};
 
 pub(super) type RowIdFn<T, Id> = dyn Fn(&T) -> Id;
 pub(super) type ParentIdFn<T, Id> = dyn Fn(&T) -> Option<Id>;
 pub(super) type ParentIdMutFn<T, Id> = dyn Fn(&mut T, Option<Id>);
 pub(super) type LevelFn<T> = dyn Fn(&T) -> usize;
-type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Line<'static>;
+type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Text<'static>;
 pub(super) type SortFn<T> = dyn Fn(&T, &T) -> Ordering;
 type TransformKeyFn<T> = dyn Fn(&T) -> String;
 
@@ -311,7 +311,7 @@ impl<T, Id> Column<T, Id> {
             visible: true,
             width,
             sizing: ColumnSizing::Intrinsic,
-            renderer: Box::new(move |row, _| Line::from(renderer_accessor(row))),
+            renderer: Box::new(move |row, _| Text::from(renderer_accessor(row))),
             sort_compare: None,
             reorder: None,
             search_key: Some(Box::new(move |row| search_accessor(row))),
@@ -331,7 +331,31 @@ impl<T, Id> Column<T, Id> {
             visible: true,
             width,
             sizing: ColumnSizing::Intrinsic,
-            renderer: Box::new(renderer),
+            renderer: Box::new(move |row, context| Text::from(renderer(row, context))),
+            sort_compare: None,
+            reorder: None,
+            search_key: None,
+            filter_key: None,
+        }
+    }
+
+    /// Creates a column whose cells may contain multiple logical lines.
+    ///
+    /// DataView clips returned content to each row's configured height; content never increases
+    /// row height automatically.
+    pub fn multiline<R: Into<Text<'static>>>(
+        id: impl Into<String>,
+        header: impl Into<String>,
+        width: Constraint,
+        renderer: impl Fn(&T, &CellContext<Id>) -> R + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            header: header.into(),
+            visible: true,
+            width,
+            sizing: ColumnSizing::Intrinsic,
+            renderer: Box::new(move |row, context| renderer(row, context).into()),
             sort_compare: None,
             reorder: None,
             search_key: None,

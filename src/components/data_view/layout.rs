@@ -12,6 +12,60 @@ use crate::{
     ChildKey, LayoutCtx, ScrollGeometry, ScrollOffset, ScrollSize, TuiNode, line_width, preset,
 };
 
+pub(super) struct VisibleRowGeometry {
+    offsets: Vec<usize>,
+}
+
+impl VisibleRowGeometry {
+    fn new(heights: impl IntoIterator<Item = u16>) -> Self {
+        let mut offsets = vec![0usize];
+        for height in heights {
+            offsets.push(
+                offsets
+                    .last()
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(height.max(1) as usize),
+            );
+        }
+        Self { offsets }
+    }
+
+    pub(super) fn total_height(&self) -> usize {
+        self.offsets.last().copied().unwrap_or(0)
+    }
+
+    pub(super) fn span(&self, index: usize) -> Option<(usize, usize)> {
+        Some((*self.offsets.get(index)?, *self.offsets.get(index + 1)?))
+    }
+
+    pub(super) fn capacity(&self, offset: usize, height: usize) -> usize {
+        self.intersecting(offset, offset.saturating_add(height))
+            .count()
+            .max(1)
+    }
+
+    fn height_through(&self, row_count: usize) -> usize {
+        self.offsets
+            .get(row_count.min(self.offsets.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn intersecting(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        self.offsets
+            .windows(2)
+            .enumerate()
+            .filter_map(move |(index, span)| {
+                (span[0] < end && span[1] > start).then_some((index, span[0], span[1]))
+            })
+    }
+}
+
 impl<T, Id> DataView<T, Id>
 where
     Id: Clone + Eq + Hash,
@@ -104,10 +158,20 @@ where
             .column_widths_with_rendered(viewport_width, rendered_widths)
             .into_iter()
             .sum();
-        ScrollSize::new(
-            width,
-            self.visible_len().saturating_mul(self.row_height as usize),
+        ScrollSize::new(width, self.visible_row_geometry().total_height())
+    }
+
+    pub(super) fn visible_row_geometry(&self) -> VisibleRowGeometry {
+        VisibleRowGeometry::new(
+            self.visible_rows()
+                .into_iter()
+                .map(|row| self.row_height_for(row.row)),
         )
+    }
+
+    pub(crate) fn measured_rows_height(&self, max_rows: usize) -> u16 {
+        let total = self.visible_row_geometry().height_through(max_rows);
+        total.min(u16::MAX as usize) as u16
     }
 
     pub(super) fn visible_offset(&self, viewport: ScrollSize, content: ScrollSize) -> ScrollOffset {
@@ -274,7 +338,7 @@ where
         selection_descendants: &HashMap<Id, Vec<Id>>,
         show_tree_gutter: bool,
     ) -> usize {
-        let line = (column.renderer)(
+        let text = (column.renderer)(
             row.row,
             &CellContext {
                 row_id: row.id.clone(),
@@ -291,7 +355,13 @@ where
         } else {
             0
         };
-        prefix_width + line_width(&line)
+        text.lines
+            .iter()
+            .take(self.row_height_for(row.row) as usize)
+            .map(line_width)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(prefix_width)
     }
 
     fn row_prefix_width(

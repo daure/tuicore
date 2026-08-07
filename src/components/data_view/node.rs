@@ -63,9 +63,8 @@ where
         let header = self.shows_headers() as u16;
         let action_bar = self.action_bar as u16;
         let rows = self
-            .visible_rows()
-            .len()
-            .saturating_mul(self.row_height as usize)
+            .visible_row_geometry()
+            .total_height()
             .min(u16::MAX as usize) as u16;
         LayoutSizeHint::content(
             width,

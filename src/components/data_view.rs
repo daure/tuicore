@@ -52,6 +52,7 @@ const DEFAULT_EMPTY_MESSAGE: &str = "No results found.";
 
 type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
+type RowHeightFn<T> = dyn Fn(&T) -> u16;
 
 pub(crate) fn search_focus_id() -> FocusId {
     FocusId::new(TEXT_INPUT_FOCUS)
@@ -78,6 +79,7 @@ pub struct DataView<T, Id> {
     focused_events_before_global_hotkeys: bool,
     headers: bool,
     row_height: u16,
+    row_height_by: Option<Box<RowHeightFn<T>>>,
     scroll: ScrollState,
     sort: Option<DataViewSort>,
     reorder_sort: Option<String>,
@@ -165,6 +167,7 @@ where
             focused_events_before_global_hotkeys: true,
             headers: false,
             row_height: 1,
+            row_height_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             sort: None,
             reorder_sort: None,
@@ -264,10 +267,29 @@ where
 
     pub fn set_row_height(&mut self, row_height: u16) {
         self.row_height = row_height.max(1);
+        self.row_height_by = None;
+    }
+
+    /// Sets a per-row height policy. Returned zero heights are clamped to one.
+    pub fn row_height_by(mut self, row_height: impl Fn(&T) -> u16 + 'static) -> Self {
+        self.set_row_height_by(row_height);
+        self
+    }
+
+    /// Replaces the current per-row height policy. Returned zero heights are clamped to one.
+    pub fn set_row_height_by(&mut self, row_height: impl Fn(&T) -> u16 + 'static) {
+        self.row_height_by = Some(Box::new(row_height));
     }
 
     pub fn configured_row_height(&self) -> u16 {
         self.row_height
+    }
+
+    pub(super) fn row_height_for(&self, row: &T) -> u16 {
+        self.row_height_by
+            .as_ref()
+            .map_or(self.row_height, |height| height(row))
+            .max(1)
     }
 
     pub fn action_bar(mut self, action_bar: bool) -> Self {
@@ -1146,10 +1168,16 @@ where
                 },
             );
             let text = line
-                .spans
+                .lines
                 .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             value.insert(column.id.clone(), serde_json::Value::String(text));
         }
         Some(serde_json::Value::Object(value).to_string())
@@ -1693,7 +1721,9 @@ where
 
     pub(crate) fn visible_page_step(&self, area: Rect) -> usize {
         let height = self.scroll_geometry(area).viewport.height.max(1);
-        let viewport_capacity = (height / self.row_height as usize).max(1);
+        let viewport_capacity = self
+            .visible_row_geometry()
+            .capacity(self.scroll.target_offset().y, height);
         let basis = self.visible_len().min(viewport_capacity);
         ((basis.saturating_mul(3)).saturating_add(4) / 5).max(1)
     }
@@ -1716,9 +1746,10 @@ where
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
         let current = self.scroll.target_offset().y;
-        let row_start = self.highlighted.saturating_mul(self.row_height as usize);
-        let row_end = row_start.saturating_add(self.row_height as usize);
-        let target = if self.row_height as usize >= viewport_height {
+        let rows = self.visible_row_geometry();
+        let (row_start, row_end) = rows.span(self.highlighted).unwrap_or((0, 0));
+        let row_height = row_end.saturating_sub(row_start);
+        let target = if row_height >= viewport_height {
             row_start
         } else if row_start < current {
             row_start
@@ -1742,9 +1773,10 @@ where
     ) -> ScrollOutcome {
         let geometry = self.scroll_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
-        let row_start = self.highlighted.saturating_mul(self.row_height as usize);
-        let target =
-            row_start.saturating_sub(viewport_height.saturating_sub(self.row_height as usize) / 2);
+        let rows = self.visible_row_geometry();
+        let (row_start, row_end) = rows.span(self.highlighted).unwrap_or((0, 0));
+        let row_height = row_end.saturating_sub(row_start);
+        let target = row_start.saturating_sub(viewport_height.saturating_sub(row_height) / 2);
         self.scroll.scroll_to(
             ScrollOffset::new(self.scroll.target_offset().x, target),
             geometry.viewport,

@@ -8,6 +8,7 @@ pub mod date_time;
 mod date_time_indicator;
 mod dialog;
 mod dialog_layer;
+mod diff_viewer;
 mod dropdown;
 mod flex;
 mod form_field;
@@ -67,6 +68,7 @@ pub use dialog::{
 pub use dialog_layer::{
     DialogBackdrop, DialogLayer, DialogLayerPlacement, DockChrome, DockSide, DockSpec, fade_buffer,
 };
+pub use diff_viewer::{DiffLocation, DiffStyle, DiffViewer};
 pub use dropdown::{
     Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition, DropdownOutcome,
     DropdownPopupDirection, DropdownSearchMode, DropdownVariant,

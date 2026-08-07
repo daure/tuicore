@@ -96,11 +96,15 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `ListOutcome`.
 - `DataView<T, Id>`: typed rows with stable IDs. `new(rows, id)` + `Column`s, or `list`.
   Configure rows, headers, action/filter/search, local/external transforms, sorting, pagination,
-  tree expansion, activation/selection, copying, empty state, and scrolling. Mutate with set/push/
+  tree expansion, activation/selection, copying, empty state, scrolling, fixed `row_height`, or
+  per-row `row_height_by`. Both height paths clamp to at least one; `set_row_height` clears a
+  dynamic policy and `configured_row_height` remains its fixed fallback. Mutate with set/push/
   append/update/remove APIs. Drain `DataViewTypedEvent<Id>` using `take_events`/`drain_events`;
   direct operations return `DataViewOutcome`.
-- Columns use `Column::text`/`rich`, then sortable/reorderable/search/filter/sizing/visibility
-  builders. Trees use `TreeAdapter`; supporting types: `CellContext`, `ColumnSizing`,
+- Columns use `Column::text`/`rich` or `Column::multiline`, then sortable/reorderable/search/filter/
+  sizing/visibility builders. Multiline output never auto-grows rows: declared fixed or per-row
+  height is authoritative and clips extra lines. Trees use `TreeAdapter`; supporting types:
+  `CellContext`, `ColumnSizing`,
   `ActivationMode`, `SelectionMode`, `SelectionTrigger`, `SelectionPropagation`, `CheckState`,
   `SelectionGlyphs`, `TreeGlyphs`, `SortDirection`, `DataViewEvent`, `DataViewSort`,
   `DataViewPagination`, `DataViewTransformMode`, `DataViewTransformState`, `DataViewFilter`.

@@ -45,6 +45,11 @@ impl<L, R> Split<L, R> {
         self
     }
 
+    pub fn set_constraints(&mut self, first: Constraint, second: Constraint) {
+        self.first_constraint = first;
+        self.second_constraint = second;
+    }
+
     pub fn first_constraint(mut self, constraint: Constraint) -> Self {
         self.first_constraint = constraint;
         self

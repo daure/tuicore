@@ -4,7 +4,7 @@ use std::hash::Hash;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
 
 use super::{
@@ -12,7 +12,7 @@ use super::{
     SortDirection, VisibleRow,
 };
 use crate::search::{MatchSpan, SearchMode, search_match};
-use crate::{RenderCtx, keybindings, lerp_color, preset, theme};
+use crate::{RenderCtx, keybindings, lerp_color, line_width, preset, theme};
 
 impl<T, Id> DataView<T, Id>
 where
@@ -116,14 +116,12 @@ where
             return;
         }
 
-        let row_height = self.row_height as usize;
-        let first_row = offset.y / row_height;
         let last_line = offset.y.saturating_add(geometry.viewport.height);
-        let row_count = last_line.saturating_add(row_height.saturating_sub(1)) / row_height;
-        for (line_index, row) in visible.iter().enumerate().take(row_count).skip(first_row) {
-            let row_start = line_index.saturating_mul(row_height);
+        let row_geometry = self.visible_row_geometry();
+        for (line_index, row_start, row_end) in row_geometry.intersecting(offset.y, last_line) {
+            let row = &visible[line_index];
             let clipped_start = row_start.max(offset.y);
-            let clipped_end = row_start.saturating_add(row_height).min(last_line);
+            let clipped_end = row_end.min(last_line);
             if clipped_start >= clipped_end {
                 continue;
             }
@@ -141,19 +139,18 @@ where
                 Block::default().style(row_style.unwrap_or_default()),
                 row_area,
             );
-            if clipped_start == row_start {
-                self.render_row(
-                    frame,
-                    row_area,
-                    &column_widths,
-                    offset.x,
-                    row,
-                    highlighted,
-                    row_style,
-                    &selection_descendants,
-                    show_tree_gutter,
-                );
-            }
+            self.render_row(
+                frame,
+                row_area,
+                &column_widths,
+                offset.x,
+                clipped_start.saturating_sub(row_start) as u16,
+                row,
+                highlighted,
+                row_style,
+                &selection_descendants,
+                show_tree_gutter,
+            );
         }
 
         self.scroll
@@ -258,6 +255,7 @@ where
         area: Rect,
         column_widths: &[usize],
         offset_x: usize,
+        clip_y: u16,
         row: &VisibleRow<'_, T, Id>,
         highlighted: bool,
         row_style: Option<Style>,
@@ -269,7 +267,7 @@ where
             let Some(cell_area) = cell_area else {
                 continue;
             };
-            let mut line = (column.renderer)(
+            let mut text = (column.renderer)(
                 row.row,
                 &CellContext {
                     row_id: row.id.clone(),
@@ -282,21 +280,29 @@ where
                 },
             );
             if column_index == 0 && (show_tree_gutter || self.displays_selection_glyphs()) {
-                line = self.with_row_prefix(line, row, selection_descendants, show_tree_gutter);
+                text = self.with_row_prefix(text, row, selection_descendants, show_tree_gutter);
             }
-            line = underline_search_matches(
-                line,
-                self.transform_state.search.trim(),
-                self.search_mode,
-            );
+            text.lines = text
+                .lines
+                .into_iter()
+                .map(|line| {
+                    underline_search_matches(
+                        line,
+                        self.transform_state.search.trim(),
+                        self.search_mode,
+                    )
+                })
+                .collect();
             if self.row_has_reorder_highlight(&row.id) || highlighted && self.focused {
                 if let Some(foreground) = row_style.and_then(|style| style.fg) {
-                    for span in &mut line.spans {
-                        span.style = span.style.fg(foreground);
+                    for line in &mut text.lines {
+                        for span in &mut line.spans {
+                            span.style = span.style.fg(foreground);
+                        }
                     }
                 }
             }
-            let mut paragraph = Paragraph::new(line).scroll((0, cell_area.scroll_x));
+            let mut paragraph = Paragraph::new(text).scroll((clip_y, cell_area.scroll_x));
             if let Some(style) = row_style {
                 paragraph = paragraph.style(style);
             }
@@ -306,46 +312,52 @@ where
 
     fn with_row_prefix(
         &self,
-        line: Line<'static>,
+        mut text: Text<'static>,
         row: &VisibleRow<'_, T, Id>,
         selection_descendants: &HashMap<Id, Vec<Id>>,
         show_tree_gutter: bool,
-    ) -> Line<'static> {
-        let Line {
-            spans: original_spans,
-            style,
-            alignment,
-        } = line;
-        let mut spans = Vec::new();
+    ) -> Text<'static> {
+        if text.lines.is_empty() {
+            text.lines.push(Line::default());
+        }
+        let mut prefix = Vec::new();
         if show_tree_gutter {
             let indent = " ".repeat(
                 row.depth
                     .saturating_mul(preset().data_view().tree_indent_width()),
             );
-            spans.push(Span::raw(indent));
+            prefix.push(Span::raw(indent));
             if row.has_children {
                 let glyph = if row.expanded {
                     self.tree_glyphs.expanded
                 } else {
                     self.tree_glyphs.collapsed
                 };
-                spans.push(Span::raw(format!("{glyph} ")));
+                prefix.push(Span::raw(format!("{glyph} ")));
             } else {
-                spans.push(Span::raw(format!("{} ", self.tree_glyphs.leaf)));
+                prefix.push(Span::raw(format!("{} ", self.tree_glyphs.leaf)));
             }
         }
         if self.displays_selection_glyphs() {
             let check_state = self.check_state_with_descendants(&row.id, selection_descendants);
             let glyph = self.selection_glyphs.glyph(check_state);
             let content = format!("{glyph} ");
-            spans.push(Span::raw(content));
+            prefix.push(Span::raw(content));
         }
-        spans.extend(original_spans);
-        Line {
-            spans,
-            style,
-            alignment,
+        let gutter_width = prefix
+            .iter()
+            .map(|span| line_width(&Line::from(span.clone())))
+            .sum();
+        for (index, line) in text.lines.iter_mut().enumerate() {
+            let mut spans = if index == 0 {
+                prefix.clone()
+            } else {
+                vec![Span::raw(" ".repeat(gutter_width))]
+            };
+            spans.append(&mut line.spans);
+            line.spans = spans;
         }
+        text
     }
 
     #[cfg(test)]

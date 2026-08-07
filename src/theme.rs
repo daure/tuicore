@@ -240,6 +240,12 @@ pub struct Theme {
     accent_fg: Color,
     success_fg: Color,
     error_fg: Color,
+    diff_added_fg: Color,
+    diff_added_bg: Color,
+    diff_removed_fg: Color,
+    diff_removed_bg: Color,
+    diff_added_emphasis_bg: Color,
+    diff_removed_emphasis_bg: Color,
     border_fg: Color,
     highlight_fg: Color,
     highlight_bg: Color,
@@ -266,6 +272,7 @@ impl Theme {
         let selected_bg = neutral_selection_background(&palette);
         let highlight_bg = interaction_highlight_background(&palette);
         let highlight_fg = strongest_contrast(palette.base, palette.text, highlight_bg);
+        let diff = diff_palette_for(&palette);
         let transparent_background = name == ThemeName::LucentOrng;
         Self {
             name,
@@ -292,6 +299,12 @@ impl Theme {
             accent_fg: palette.cyan,
             success_fg: palette.green,
             error_fg: palette.red,
+            diff_added_fg: diff.added_fg,
+            diff_added_bg: diff.added_bg,
+            diff_removed_fg: diff.removed_fg,
+            diff_removed_bg: diff.removed_bg,
+            diff_added_emphasis_bg: diff.added_emphasis_bg,
+            diff_removed_emphasis_bg: diff.removed_emphasis_bg,
             border_fg: palette.border,
             highlight_fg,
             highlight_bg,
@@ -380,6 +393,24 @@ impl Theme {
     pub fn error_fg(&self) -> Color {
         self.error_fg
     }
+    pub fn diff_added_fg(&self) -> Color {
+        self.diff_added_fg
+    }
+    pub fn diff_added_bg(&self) -> Color {
+        self.diff_added_bg
+    }
+    pub fn diff_removed_fg(&self) -> Color {
+        self.diff_removed_fg
+    }
+    pub fn diff_removed_bg(&self) -> Color {
+        self.diff_removed_bg
+    }
+    pub fn diff_added_emphasis_bg(&self) -> Color {
+        self.diff_added_emphasis_bg
+    }
+    pub fn diff_removed_emphasis_bg(&self) -> Color {
+        self.diff_removed_emphasis_bg
+    }
     pub fn border_fg(&self) -> Color {
         self.border_fg
     }
@@ -429,6 +460,12 @@ impl Theme {
             "accent_fg" => self.accent_fg = color,
             "success_fg" => self.success_fg = color,
             "error_fg" => self.error_fg = color,
+            "diff_added_fg" => self.diff_added_fg = color,
+            "diff_added_bg" => self.diff_added_bg = color,
+            "diff_removed_fg" => self.diff_removed_fg = color,
+            "diff_removed_bg" => self.diff_removed_bg = color,
+            "diff_added_emphasis_bg" => self.diff_added_emphasis_bg = color,
+            "diff_removed_emphasis_bg" => self.diff_removed_emphasis_bg = color,
             "border_fg" => self.border_fg = color,
             "highlight_fg" => self.highlight_fg = color,
             "highlight_bg" => self.highlight_bg = color,
@@ -479,6 +516,56 @@ struct WeatherPalette {
     warm: Color,
     hot: Color,
     rain: Color,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiffPalette {
+    added_fg: Color,
+    added_bg: Color,
+    removed_fg: Color,
+    removed_bg: Color,
+    added_emphasis_bg: Color,
+    removed_emphasis_bg: Color,
+}
+
+fn diff_palette_for(palette: &Palette) -> DiffPalette {
+    let added_bg = mix_color(palette.base, palette.green, 0.16);
+    let removed_bg = mix_color(palette.base, palette.red, 0.16);
+    let (added_fg, added_emphasis_bg) = readable_diff_pair(palette, added_bg, palette.green);
+    let (removed_fg, removed_emphasis_bg) = readable_diff_pair(palette, removed_bg, palette.red);
+    DiffPalette {
+        added_fg,
+        added_bg,
+        removed_fg,
+        removed_bg,
+        added_emphasis_bg,
+        removed_emphasis_bg,
+    }
+}
+
+fn readable_diff_pair(palette: &Palette, background: Color, semantic: Color) -> (Color, Color) {
+    let mut emphasis = mix_color(palette.base, semantic, 0.32);
+    for _ in 0..12 {
+        let foreground = diff_foreground(palette, background, emphasis);
+        if contrast_ratio(foreground, background) >= 4.5
+            && contrast_ratio(foreground, emphasis) >= 4.5
+        {
+            return (foreground, emphasis);
+        }
+        emphasis = mix_color(emphasis, palette.base, 0.18);
+    }
+    (diff_foreground(palette, background, emphasis), emphasis)
+}
+
+fn diff_foreground(palette: &Palette, background: Color, emphasis: Color) -> Color {
+    [palette.base, palette.text, Color::Black, Color::White]
+        .into_iter()
+        .max_by(|a, b| {
+            contrast_ratio(*a, background)
+                .min(contrast_ratio(*a, emphasis))
+                .total_cmp(&contrast_ratio(*b, background).min(contrast_ratio(*b, emphasis)))
+        })
+        .expect("diff foreground candidates should not be empty")
 }
 
 fn weather_palette_for(palette: &Palette) -> WeatherPalette {
@@ -1417,6 +1504,60 @@ mod tests {
         assert_eq!(theme.selected_bg(), Color::Rgb(0x44, 0x55, 0x66));
         assert_eq!(theme.highlight_fg(), Color::Rgb(0x77, 0x88, 0x99));
         assert_eq!(theme.highlight_bg(), Color::Rgb(0xaa, 0xbb, 0xcc));
+    }
+
+    #[test]
+    fn diff_roles_follow_palettes_and_remain_readable() {
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+            let base = palette_for(name).base;
+            for (foreground, backgrounds) in [
+                (
+                    theme.diff_added_fg(),
+                    [theme.diff_added_bg(), theme.diff_added_emphasis_bg()],
+                ),
+                (
+                    theme.diff_removed_fg(),
+                    [theme.diff_removed_bg(), theme.diff_removed_emphasis_bg()],
+                ),
+            ] {
+                for background in backgrounds {
+                    assert!(
+                        contrast_ratio(foreground, background) >= 4.5,
+                        "{name:?} diff contrast"
+                    );
+                }
+            }
+            assert_ne!(theme.diff_added_bg(), theme.diff_removed_bg(), "{name:?}");
+            assert!(
+                color_distance_squared(theme.diff_added_emphasis_bg(), base)
+                    > color_distance_squared(theme.diff_added_bg(), base),
+                "{name:?} added emphasis"
+            );
+            assert!(
+                color_distance_squared(theme.diff_removed_emphasis_bg(), base)
+                    > color_distance_squared(theme.diff_removed_bg(), base),
+                "{name:?} removed emphasis"
+            );
+        }
+    }
+
+    #[test]
+    fn diff_role_toml_overrides_win() {
+        let theme = Theme::from_toml_str(
+            "[colors]\ndiff_added_fg = \"#112233\"\ndiff_added_bg = \"#223344\"\ndiff_removed_fg = \"#334455\"\ndiff_removed_bg = \"#445566\"\ndiff_added_emphasis_bg = \"#556677\"\ndiff_removed_emphasis_bg = \"#667788\"\n",
+        )
+        .expect("diff overrides should parse");
+
+        assert_eq!(theme.diff_added_fg(), Color::Rgb(0x11, 0x22, 0x33));
+        assert_eq!(theme.diff_added_bg(), Color::Rgb(0x22, 0x33, 0x44));
+        assert_eq!(theme.diff_removed_fg(), Color::Rgb(0x33, 0x44, 0x55));
+        assert_eq!(theme.diff_removed_bg(), Color::Rgb(0x44, 0x55, 0x66));
+        assert_eq!(theme.diff_added_emphasis_bg(), Color::Rgb(0x55, 0x66, 0x77));
+        assert_eq!(
+            theme.diff_removed_emphasis_bg(),
+            Color::Rgb(0x66, 0x77, 0x88)
+        );
     }
 
     #[test]

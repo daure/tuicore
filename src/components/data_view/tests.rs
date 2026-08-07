@@ -4,7 +4,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key,
@@ -341,6 +341,249 @@ fn row_height_defaults_to_one_and_clamps_zero() {
     assert_eq!(view.configured_row_height(), 1);
     view.set_row_height(0);
     assert_eq!(view.configured_row_height(), 1);
+}
+
+#[test]
+fn dynamic_row_height_clamps_zero_and_fixed_height_replaces_policy() {
+    let mut view = DataView::list([1, 2], |row| *row, |row| row.to_string())
+        .row_height(3)
+        .row_height_by(|row| if *row == 1 { 0 } else { 2 });
+
+    assert_eq!(view.visible_row_geometry().total_height(), 3);
+    assert_eq!(view.configured_row_height(), 3);
+    view.set_row_height(4);
+    assert_eq!(view.visible_row_geometry().total_height(), 8);
+}
+
+#[test]
+fn multiline_cells_render_second_line_and_clip_beyond_row_height() {
+    let view = DataView::new([1], |row| *row)
+        .column(Column::multiline(
+            "value",
+            "",
+            Constraint::Fill(1),
+            |_, _| {
+                Text::from(vec![
+                    Line::from("first"),
+                    Line::from("second"),
+                    Line::from("third"),
+                ])
+            },
+        ))
+        .row_height(2);
+    let mut terminal = Terminal::new(TestBackend::new(10, 3)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "f");
+    assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "s");
+    assert_eq!(buffer.cell((0, 2)).unwrap().symbol(), " ");
+}
+
+#[test]
+fn partially_top_clipped_row_renders_its_continuation_line() {
+    let mut view = DataView::new([1, 2], |row| *row)
+        .column(Column::multiline(
+            "value",
+            "",
+            Constraint::Fill(1),
+            |row, _| {
+                Text::from(vec![
+                    Line::from(format!("{row} first")),
+                    Line::from(format!("{row} second")),
+                ])
+            },
+        ))
+        .row_height(2);
+    let area = Rect::new(0, 0, 12, 2);
+    let geometry = view.scroll_geometry(area);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    view.scroll.scroll_to(
+        ScrollOffset::new(0, 1),
+        geometry.viewport,
+        geometry.content,
+        settings,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(12, 2)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "1"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((2, 0)).unwrap().symbol(),
+        "s"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        "2"
+    );
+}
+
+#[test]
+fn intrinsic_width_uses_widest_multiline_continuation_with_prefix_gutter() {
+    let view = DataView::new(
+        [Row {
+            id: 1,
+            parent: None,
+            name: "x",
+        }],
+        |row| row.id,
+    )
+    .column(Column::multiline(
+        "value",
+        "",
+        Constraint::Length(1),
+        |_, _| Text::from(vec![Line::from("x"), Line::from("long continuation")]),
+    ))
+    .selection_mode(SelectionMode::Multi)
+    .selection_glyphs(SelectionGlyphs::ASCII)
+    .row_height(2);
+
+    assert_eq!(view.rendered_column_widths(), vec![21]);
+}
+
+#[test]
+fn intrinsic_width_ignores_multiline_content_clipped_by_row_height() {
+    let view = DataView::new([1], |row| *row)
+        .column(Column::multiline(
+            "value",
+            "",
+            Constraint::Length(1),
+            |_, _| Text::from(vec![Line::from("x"), Line::from("hidden continuation")]),
+        ))
+        .row_height(1);
+
+    assert_eq!(view.rendered_column_widths(), vec![1]);
+}
+
+#[test]
+fn empty_multiline_first_cell_still_renders_selection_gutter() {
+    let view = DataView::new([1], |row| *row)
+        .column(Column::multiline(
+            "value",
+            "",
+            Constraint::Fill(1),
+            |_, _| Text::default(),
+        ))
+        .selection_mode(SelectionMode::Multi)
+        .selection_glyphs(SelectionGlyphs::ASCII);
+    let mut terminal = Terminal::new(TestBackend::new(8, 1)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "[");
+    assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), " ");
+    assert_eq!(buffer.cell((2, 0)).unwrap().symbol(), "]");
+}
+
+#[test]
+fn multiline_continuations_align_after_ascii_tree_and_checkbox_gutters() {
+    let view = DataView::new(
+        [
+            Row {
+                id: 1,
+                parent: None,
+                name: "parent",
+            },
+            Row {
+                id: 2,
+                parent: Some(1),
+                name: "child",
+            },
+        ],
+        |row| row.id,
+    )
+    .column(Column::multiline(
+        "value",
+        "",
+        Constraint::Fill(1),
+        |row: &Row, _| Text::from(vec![Line::from(row.name), Line::from("metadata")]),
+    ))
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .tree_glyphs(TreeGlyphs::ASCII)
+    .expanded([1])
+    .selection_mode(SelectionMode::Multi)
+    .selection_glyphs(SelectionGlyphs::ASCII)
+    .row_height(2);
+    let mut terminal = Terminal::new(TestBackend::new(30, 4)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((6, 0)).unwrap().symbol(), "p");
+    assert_eq!(buffer.cell((6, 1)).unwrap().symbol(), "m");
+    assert_eq!(buffer.cell((8, 2)).unwrap().symbol(), "c");
+    assert_eq!(buffer.cell((8, 3)).unwrap().symbol(), "m");
+}
+
+#[test]
+fn mixed_row_heights_drive_measurement_content_reveal_centering_and_paging() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut view = DataView::list([1, 2, 3, 4], |row| *row, |row| row.to_string())
+        .row_height_by(|row| [2, 1, 3, 1][*row - 1]);
+    assert_eq!(view.visible_row_geometry().total_height(), 7);
+    assert_eq!(view.scroll_geometry(area).content.height, 7);
+    assert_eq!(
+        <DataView<_, _> as TuiNode<()>>::measure(&view, LayoutProposal::unbounded())
+            .preferred
+            .height,
+        7
+    );
+    assert_eq!(view.visible_page_step(area), 2);
+
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    view.highlight_id(&3);
+    view.ensure_highlight_visible(area, settings);
+    assert_eq!(view.scroll.target_offset().y, 2);
+    view.center_highlight(area, settings);
+    assert_eq!(view.scroll.target_offset().y, 3);
+}
+
+#[test]
+fn mixed_row_height_paging_uses_capacity_at_current_viewport() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut view = DataView::list(1..=6, |row| *row, |row| row.to_string())
+        .row_height_by(|row| if *row == 1 { 4 } else { 1 });
+    let geometry = view.scroll_geometry(area);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    view.highlight_id(&3);
+    view.scroll.scroll_to(
+        ScrollOffset::new(0, 4),
+        geometry.viewport,
+        geometry.content,
+        settings,
+    );
+
+    assert_eq!(view.visible_page_step(area), 3);
+    view.on_key_with_settings(Key::PageDown, area, settings);
+    assert_eq!(view.highlighted_id(), Some(6));
+    view.on_key_with_settings(Key::PageUp, area, settings);
+    assert_eq!(view.highlighted_id(), Some(3));
+}
+
+#[test]
+fn expanded_tree_content_height_sums_final_visible_rows() {
+    let collapsed = tree_view().row_height_by(|row| if row.parent.is_some() { 2 } else { 1 });
+    let expanded = tree_view()
+        .expanded([1, 2, 3])
+        .row_height_by(|row| if row.parent.is_some() { 2 } else { 1 });
+
+    assert_eq!(collapsed.visible_row_geometry().total_height(), 1);
+    assert_eq!(expanded.visible_row_geometry().total_height(), 13);
 }
 
 #[test]

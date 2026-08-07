@@ -11,6 +11,9 @@ use gallery_demo::dialogs::{
     dialog_demo_child_key, dialog_demo_child_route, dialog_demo_index, dock_overlay_button,
     gallery_confirmation_dialog, gallery_dialog, gallery_dock_overlay,
 };
+use gallery_demo::diffs::{
+    DiffDemo, inline_diff_demo, raw_patch_diff_demo, side_by_side_diff_demo, word_diff_demo,
+};
 use gallery_demo::dropdowns::{
     DropdownDemoItem, dropdown_area, dropdown_child_key, dropdown_child_route,
     dropdown_column_layout, dropdown_filled_fuzzy_single, dropdown_filled_multi_contains,
@@ -375,6 +378,7 @@ impl Gallery {
             ComponentKind::Layouts,
             ComponentKind::DataView,
             ComponentKind::ListControl,
+            ComponentKind::DiffViewer,
         ])
         .focused(true);
 
@@ -768,6 +772,7 @@ struct PreviewState {
     data_multi_select: DataView<DemoRow, usize>,
     data_checklist_tree: DataView<DemoRow, usize>,
     data_activate_on_navigate: DataView<DemoRow, usize>,
+    data_jira_tickets: DataView<DemoRow, usize>,
     data_status: String,
     list_compact: ListControlShowcase<Msg>,
     list_entity_table: ListControlShowcase<Msg>,
@@ -791,6 +796,10 @@ struct PreviewState {
     layout_layered: Overlay<DemoBox, DemoBox>,
     layout_grid: Grid<Msg>,
     validated_form: ValidatedForm,
+    diff_side_by_side: DiffDemo<Msg>,
+    diff_inline: DiffDemo<Msg>,
+    diff_word: DiffDemo<Msg>,
+    diff_raw_patch: DiffDemo<Msg>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -964,6 +973,7 @@ impl PreviewState {
             data_multi_select: DataViewMode::MultiSelect.data_view(),
             data_checklist_tree: DataViewMode::ChecklistTree.data_view(),
             data_activate_on_navigate: DataViewMode::ActivateOnNavigate.data_view(),
+            data_jira_tickets: DataViewMode::JiraTickets.data_view(),
             data_status: String::from("No event yet"),
             list_compact: compact_names(),
             list_entity_table: entity_table(),
@@ -987,6 +997,10 @@ impl PreviewState {
             layout_layered: layout_layered_demo(),
             layout_grid: layout_grid_demo(),
             validated_form: ValidatedForm::new(),
+            diff_side_by_side: side_by_side_diff_demo(),
+            diff_inline: inline_diff_demo(),
+            diff_word: word_diff_demo(),
+            diff_raw_patch: raw_patch_diff_demo(),
         }
     }
 
@@ -1066,7 +1080,8 @@ impl PreviewState {
             | PreviewKind::DataSingleSelect
             | PreviewKind::DataMultiSelect
             | PreviewKind::DataChecklistTree
-            | PreviewKind::DataActivateOnNavigate => {
+            | PreviewKind::DataActivateOnNavigate
+            | PreviewKind::DataJiraTickets => {
                 let [_, body] = data_view_layout(area);
                 <DataView<DemoRow, usize> as TuiNode<Msg>>::layout(
                     self.active_data_view_mut(preview),
@@ -1100,6 +1115,9 @@ impl PreviewState {
             }
             PreviewKind::LayoutGrid => {
                 self.layout_grid.layout(layout_demo_body(area), ctx);
+            }
+            preview if preview.is_diff_viewer() => {
+                self.active_diff_viewer_mut(preview).layout(area, ctx);
             }
             _ => {}
         }
@@ -1268,7 +1286,8 @@ impl PreviewState {
             | PreviewKind::DataSingleSelect
             | PreviewKind::DataMultiSelect
             | PreviewKind::DataChecklistTree
-            | PreviewKind::DataActivateOnNavigate => self.render_data_view(preview, frame, area),
+            | PreviewKind::DataActivateOnNavigate
+            | PreviewKind::DataJiraTickets => self.render_data_view(preview, frame, area),
             preview @ (PreviewKind::ListCompact | PreviewKind::ListEntityTable) => {
                 self.active_list_control(preview).render(frame, area, ctx);
             }
@@ -1283,6 +1302,12 @@ impl PreviewState {
             PreviewKind::LayoutStack => self.render_layout_stack(frame, area, ctx),
             PreviewKind::LayoutOverlay => self.render_layout_layered(frame, area, ctx),
             PreviewKind::LayoutGrid => self.render_layout_grid(frame, area, ctx),
+            preview @ (PreviewKind::DiffSideBySide
+            | PreviewKind::DiffInline
+            | PreviewKind::DiffWord
+            | PreviewKind::DiffRawPatch) => {
+                self.active_diff_viewer(preview).render(frame, area, ctx)
+            }
         }
     }
 
@@ -1475,6 +1500,11 @@ impl PreviewState {
         }
         if preview == PreviewKind::Checklist {
             return self.checklist.dispatch_event(route, event, ctx);
+        }
+        if preview.is_diff_viewer() {
+            return self
+                .active_diff_viewer_mut(preview)
+                .dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::Panel {
             if let Some(route) = panel_demo_child_route(route) {
@@ -1747,6 +1777,9 @@ impl PreviewState {
                 .active_list_control_mut(preview)
                 .dispatch_focus(target, focused, ctx),
             PreviewKind::Checklist => self.checklist.dispatch_focus(target, focused, ctx),
+            preview if preview.is_diff_viewer() => self
+                .active_diff_viewer_mut(preview)
+                .dispatch_focus(target, focused, ctx),
             PreviewKind::Panel => {
                 if !dispatch_focus_child(
                     &mut self.panel_demo,
@@ -2000,6 +2033,10 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.textarea_disabled, dt, settings))
             .merge(self.relative_date.tick(dt, settings))
             .merge(self.validated_form.tick(dt, settings))
+            .merge(self.diff_side_by_side.tick(dt, settings))
+            .merge(self.diff_inline.tick(dt, settings))
+            .merge(self.diff_word.tick(dt, settings))
+            .merge(self.diff_raw_patch.tick(dt, settings))
     }
 
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -2010,6 +2047,10 @@ impl PreviewState {
         self.list_reorder.init(ctx);
         self.checklist.init(ctx);
         self.menu_button.init(ctx);
+        self.diff_side_by_side.init(ctx);
+        self.diff_inline.init(ctx);
+        self.diff_word.init(ctx);
+        self.diff_raw_patch.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -2020,9 +2061,17 @@ impl PreviewState {
         self.list_reorder.mount(ctx);
         self.checklist.mount(ctx);
         self.menu_button.mount(ctx);
+        self.diff_side_by_side.mount(ctx);
+        self.diff_inline.mount(ctx);
+        self.diff_word.mount(ctx);
+        self.diff_raw_patch.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.diff_raw_patch.unmount(ctx);
+        self.diff_word.unmount(ctx);
+        self.diff_inline.unmount(ctx);
+        self.diff_side_by_side.unmount(ctx);
         self.menu_button.unmount(ctx);
         self.list_reorder.unmount(ctx);
         self.checklist.unmount(ctx);
@@ -2033,6 +2082,10 @@ impl PreviewState {
     }
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
+        self.diff_raw_patch.destroy(ctx);
+        self.diff_word.destroy(ctx);
+        self.diff_inline.destroy(ctx);
+        self.diff_side_by_side.destroy(ctx);
         self.menu_button.destroy(ctx);
         self.list_reorder.destroy(ctx);
         self.checklist.destroy(ctx);
@@ -2051,6 +2104,26 @@ impl PreviewState {
             2 => &mut self.panel_bottom_left,
             3 => &mut self.panel_bottom_right,
             _ => &mut self.panel_top_left,
+        }
+    }
+
+    fn active_diff_viewer(&self, preview: PreviewKind) -> &DiffDemo<Msg> {
+        match preview {
+            PreviewKind::DiffSideBySide => &self.diff_side_by_side,
+            PreviewKind::DiffInline => &self.diff_inline,
+            PreviewKind::DiffWord => &self.diff_word,
+            PreviewKind::DiffRawPatch => &self.diff_raw_patch,
+            _ => unreachable!("active diff viewer requires a diff preview"),
+        }
+    }
+
+    fn active_diff_viewer_mut(&mut self, preview: PreviewKind) -> &mut DiffDemo<Msg> {
+        match preview {
+            PreviewKind::DiffSideBySide => &mut self.diff_side_by_side,
+            PreviewKind::DiffInline => &mut self.diff_inline,
+            PreviewKind::DiffWord => &mut self.diff_word,
+            PreviewKind::DiffRawPatch => &mut self.diff_raw_patch,
+            _ => unreachable!("active diff viewer requires a diff preview"),
         }
     }
 
@@ -2096,6 +2169,7 @@ impl PreviewState {
             PreviewKind::DataMultiSelect => &self.data_multi_select,
             PreviewKind::DataChecklistTree => &self.data_checklist_tree,
             PreviewKind::DataActivateOnNavigate => &self.data_activate_on_navigate,
+            PreviewKind::DataJiraTickets => &self.data_jira_tickets,
             _ => &self.data_list,
         }
     }
@@ -2110,6 +2184,7 @@ impl PreviewState {
             PreviewKind::DataMultiSelect => &mut self.data_multi_select,
             PreviewKind::DataChecklistTree => &mut self.data_checklist_tree,
             PreviewKind::DataActivateOnNavigate => &mut self.data_activate_on_navigate,
+            PreviewKind::DataJiraTickets => &mut self.data_jira_tickets,
             _ => &mut self.data_list,
         }
     }
@@ -3657,15 +3732,21 @@ enum ComponentKind {
     DataViewMultiSelect,
     DataViewChecklistTree,
     DataViewActivateOnNavigate,
+    DataViewJiraTickets,
     ListControl,
     ListCompact,
     ListEntityTable,
     ListReorder,
     Checklist,
+    DiffViewer,
+    DiffSideBySide,
+    DiffInline,
+    DiffWord,
+    DiffRawPatch,
 }
 
 impl ComponentKind {
-    const ALL: [Self; 46] = [
+    const ALL: [Self; 52] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
@@ -3707,11 +3788,17 @@ impl ComponentKind {
         Self::DataViewMultiSelect,
         Self::DataViewChecklistTree,
         Self::DataViewActivateOnNavigate,
+        Self::DataViewJiraTickets,
         Self::ListControl,
         Self::ListCompact,
         Self::ListEntityTable,
         Self::ListReorder,
         Self::Checklist,
+        Self::DiffViewer,
+        Self::DiffSideBySide,
+        Self::DiffInline,
+        Self::DiffWord,
+        Self::DiffRawPatch,
     ];
 
     fn title(self) -> &'static str {
@@ -3757,11 +3844,17 @@ impl ComponentKind {
             Self::DataViewMultiSelect => "Multi Select",
             Self::DataViewChecklistTree => "Tree Checklist",
             Self::DataViewActivateOnNavigate => "Activate On Navigate",
+            Self::DataViewJiraTickets => "Jira Tickets",
             Self::ListControl => "List Control",
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
             Self::ListReorder => "Reorder mode",
             Self::Checklist => "Checklist",
+            Self::DiffViewer => "Diff viewer",
+            Self::DiffSideBySide => "Side-by-side / Split",
+            Self::DiffInline => "Inline / Unified",
+            Self::DiffWord => "Word / Intra-line",
+            Self::DiffRawPatch => "Raw patch / Patch view",
         }
     }
 
@@ -3774,7 +3867,8 @@ impl ComponentKind {
             | Self::DataViewSingleSelect
             | Self::DataViewMultiSelect
             | Self::DataViewChecklistTree
-            | Self::DataViewActivateOnNavigate => Some(Self::DataView),
+            | Self::DataViewActivateOnNavigate
+            | Self::DataViewJiraTickets => Some(Self::DataView),
             Self::ListCompact | Self::ListEntityTable | Self::ListReorder => {
                 Some(Self::ListControl)
             }
@@ -3798,6 +3892,9 @@ impl ComponentKind {
             | Self::LayoutGrid => Some(Self::Layouts),
             Self::PanelJoinedSeparators | Self::PanelTabSeparators => Some(Self::Panel),
             Self::NotificationTriggers => Some(Self::Notifications),
+            Self::DiffSideBySide | Self::DiffInline | Self::DiffWord | Self::DiffRawPatch => {
+                Some(Self::DiffViewer)
+            }
             _ => None,
         }
     }
@@ -3842,10 +3939,15 @@ impl ComponentKind {
             Self::DataViewMultiSelect => PreviewKind::DataMultiSelect,
             Self::DataViewChecklistTree => PreviewKind::DataChecklistTree,
             Self::DataViewActivateOnNavigate => PreviewKind::DataActivateOnNavigate,
+            Self::DataViewJiraTickets => PreviewKind::DataJiraTickets,
             Self::ListControl | Self::ListCompact => PreviewKind::ListCompact,
             Self::ListEntityTable => PreviewKind::ListEntityTable,
             Self::ListReorder => PreviewKind::ListReorder,
             Self::Checklist => PreviewKind::Checklist,
+            Self::DiffViewer | Self::DiffSideBySide => PreviewKind::DiffSideBySide,
+            Self::DiffInline => PreviewKind::DiffInline,
+            Self::DiffWord => PreviewKind::DiffWord,
+            Self::DiffRawPatch => PreviewKind::DiffRawPatch,
         }
     }
 }
@@ -3889,10 +3991,15 @@ enum PreviewKind {
     DataMultiSelect,
     DataChecklistTree,
     DataActivateOnNavigate,
+    DataJiraTickets,
     ListCompact,
     ListEntityTable,
     ListReorder,
     Checklist,
+    DiffSideBySide,
+    DiffInline,
+    DiffWord,
+    DiffRawPatch,
 }
 
 impl PreviewKind {
@@ -3935,10 +4042,15 @@ impl PreviewKind {
             Self::DataMultiSelect => "Multi Select",
             Self::DataChecklistTree => "Tree Checklist",
             Self::DataActivateOnNavigate => "Activate On Navigate",
+            Self::DataJiraTickets => "Jira Tickets",
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
             Self::ListReorder => "Reorder mode",
             Self::Checklist => "Checklist",
+            Self::DiffSideBySide => "Side-by-side / Split",
+            Self::DiffInline => "Inline / Unified",
+            Self::DiffWord => "Word / Intra-line",
+            Self::DiffRawPatch => "Raw patch / Patch view",
         }
     }
 
@@ -3953,6 +4065,7 @@ impl PreviewKind {
                 | Self::DataMultiSelect
                 | Self::DataChecklistTree
                 | Self::DataActivateOnNavigate
+                | Self::DataJiraTickets
         )
     }
 
@@ -3962,12 +4075,92 @@ impl PreviewKind {
             Self::ListCompact | Self::ListEntityTable | Self::ListReorder
         )
     }
+
+    fn is_diff_viewer(self) -> bool {
+        matches!(
+            self,
+            Self::DiffSideBySide | Self::DiffInline | Self::DiffWord | Self::DiffRawPatch
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn diff_viewer_has_four_children_with_working_toggles() {
+        let children = [
+            (ComponentKind::DiffSideBySide, PreviewKind::DiffSideBySide),
+            (ComponentKind::DiffInline, PreviewKind::DiffInline),
+            (ComponentKind::DiffWord, PreviewKind::DiffWord),
+            (ComponentKind::DiffRawPatch, PreviewKind::DiffRawPatch),
+        ];
+        assert_eq!(
+            ComponentKind::ALL
+                .iter()
+                .filter(|kind| kind.parent() == Some(ComponentKind::DiffViewer))
+                .count(),
+            4
+        );
+
+        for (component, preview) in children {
+            assert_eq!(component.preview(), preview);
+            let mut demo = match preview {
+                PreviewKind::DiffSideBySide => side_by_side_diff_demo::<Msg>(),
+                PreviewKind::DiffInline => inline_diff_demo::<Msg>(),
+                PreviewKind::DiffWord => word_diff_demo::<Msg>(),
+                PreviewKind::DiffRawPatch => raw_patch_diff_demo::<Msg>(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                <tuicore::DiffViewer as TuiNode<Msg>>::measure(
+                    demo.viewer(),
+                    LayoutProposal::unbounded(),
+                )
+                .preferred
+                .height,
+                20
+            );
+            assert!(demo.viewer().content_size().height > 20);
+
+            let mut layout = LayoutCtx::new();
+            demo.layout(Rect::new(0, 0, 140, 24), &mut layout);
+            assert_eq!(
+                layout
+                    .focus_targets()
+                    .iter()
+                    .filter(|target| target.id.as_str() == "toggle")
+                    .count(),
+                2
+            );
+            assert_eq!(
+                layout
+                    .focus_targets()
+                    .iter()
+                    .filter(|target| target.id.as_str() == "diff-viewer")
+                    .count(),
+                1
+            );
+
+            for (key, expected_headers, expected_wrap) in [
+                (gallery_demo::diffs::headers_child_key(), false, true),
+                (gallery_demo::diffs::wrap_child_key(), false, false),
+            ] {
+                let outcome = demo.dispatch_event(
+                    &EventRoute::new(TreePath::from_keys([key])),
+                    &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+                    &mut EventCtx::default(),
+                );
+                assert_eq!(outcome, EventOutcome::Handled);
+                assert_eq!(demo.headers_enabled(), expected_headers);
+                assert_eq!(demo.wrapping_enabled(), expected_wrap);
+                assert_eq!(demo.viewer().headers_visible(), expected_headers);
+                assert_eq!(demo.viewer().is_wrapping(), expected_wrap);
+            }
+        }
+    }
 
     #[test]
     fn preview_date_picker_ticks_quick_jump_timeout() {

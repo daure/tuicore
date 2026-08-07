@@ -964,6 +964,31 @@ fn measure_grows_by_rows_and_caps_with_headers_chrome_and_draft() {
 }
 
 #[test]
+fn measure_sums_mixed_data_row_heights_up_to_max_rows() {
+    let control = table(4).row_height(3).max_rows(3);
+    let mut control = control;
+    control
+        .data_view_mut()
+        .set_row_height_by(|row: &Row| if row.0 % 2 == 0 { 1 } else { 2 });
+
+    assert_eq!(
+        control
+            .measure(LayoutProposal::unbounded())
+            .preferred
+            .height,
+        7
+    );
+    control.begin_add(None);
+    assert_eq!(
+        control
+            .measure(LayoutProposal::unbounded())
+            .preferred
+            .height,
+        9
+    );
+}
+
+#[test]
 fn measure_reserves_height_for_horizontal_scrollbar() {
     let mut control: ListControl<_, _, ()> = ListControl::list(
         [(1, "https://example.com/a/very/long/link".to_string())],

@@ -22,19 +22,17 @@ where
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let child = <DataView<T, Id> as TuiNode<M>>::measure(&self.data_view, proposal);
-        let item_rows = self.data_view.visible_row_count().max(1);
-        let visible_rows = item_rows
-            .saturating_add(usize::from(self.editor_active()))
-            .min(self.max_rows)
-            .min(u16::MAX as usize) as u16;
         let chrome_height = self.data_view.measurement_chrome_height();
         let row_height = self.data_view.configured_row_height();
-        let editor_rows = u16::from(self.editor_active()).min(visible_rows);
-        let data_height = chrome_height.saturating_add(
-            visible_rows
-                .saturating_sub(editor_rows)
-                .saturating_mul(row_height),
-        );
+        let editor_rows = usize::from(self.editor_active()).min(self.max_rows);
+        let data_row_limit = self.max_rows.saturating_sub(editor_rows);
+        let data_rows_height = if self.data_view.visible_row_count() == 0 && data_row_limit > 0 {
+            row_height
+        } else {
+            self.data_view.measured_rows_height(data_row_limit)
+        };
+        let editor_height = row_height.saturating_mul(editor_rows as u16);
+        let data_height = chrome_height.saturating_add(data_rows_height);
         let horizontal_scrollbar_height = match proposal.width {
             AxisProposal::Unbounded => 0,
             AxisProposal::AtMost(width) | AxisProposal::Exact(width) => {
@@ -53,7 +51,8 @@ where
         };
         let panel_height = if self.panel_visible { 2 } else { 0 };
         let height = chrome_height
-            .saturating_add(visible_rows.saturating_mul(row_height))
+            .saturating_add(data_rows_height)
+            .saturating_add(editor_height)
             .saturating_add(horizontal_scrollbar_height)
             .saturating_add(panel_height);
         LayoutSizeHint::content(
