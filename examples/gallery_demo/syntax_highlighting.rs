@@ -117,12 +117,19 @@ impl tuicore::TuiNode<crate::Msg> for SyntaxHighlightingDemo {
             }
             return outcome;
         }
+        if let Some(child_path) = route.path.without_first_if(&ChildKey::new("code")) {
+            let child_route = EventRoute::new(child_path);
+            return TuiNode::<crate::Msg>::dispatch_event(&mut self.highlighter, &child_route, event, ctx);
+        }
         EventOutcome::Ignored
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<crate::Msg>) {
         if let Some(child_target) = target.for_child(&ChildKey::new("dropdown")) {
             TuiNode::<crate::Msg>::dispatch_focus(&mut self.dropdown, &child_target, focused, ctx);
+        }
+        if let Some(child_target) = target.for_child(&ChildKey::new("code")) {
+            TuiNode::<crate::Msg>::dispatch_focus(&mut self.highlighter, &child_target, focused, ctx);
         }
     }
 
