@@ -53,6 +53,7 @@ const DEFAULT_EMPTY_MESSAGE: &str = "No results found.";
 type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
 type RowHeightFn<T> = dyn Fn(&T) -> u16;
+type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
 
 pub(crate) fn search_focus_id() -> FocusId {
     FocusId::new(TEXT_INPUT_FOCUS)
@@ -80,6 +81,7 @@ pub struct DataView<T, Id> {
     headers: bool,
     row_height: u16,
     row_height_by: Option<Box<RowHeightFn<T>>>,
+    row_style_by: Option<Box<RowStyleFn<T>>>,
     scroll: ScrollState,
     sort: Option<DataViewSort>,
     reorder_sort: Option<String>,
@@ -168,6 +170,7 @@ where
             headers: false,
             row_height: 1,
             row_height_by: None,
+            row_style_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             sort: None,
             reorder_sort: None,
@@ -279,6 +282,17 @@ where
     /// Replaces the current per-row height policy. Returned zero heights are clamped to one.
     pub fn set_row_height_by(&mut self, row_height: impl Fn(&T) -> u16 + 'static) {
         self.row_height_by = Some(Box::new(row_height));
+    }
+
+    /// Sets a per-row style policy.
+    pub fn row_style_by(mut self, row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static) -> Self {
+        self.set_row_style_by(row_style);
+        self
+    }
+
+    /// Replaces the current per-row style policy.
+    pub fn set_row_style_by(&mut self, row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static) {
+        self.row_style_by = Some(Box::new(row_style));
     }
 
     pub fn configured_row_height(&self) -> u16 {

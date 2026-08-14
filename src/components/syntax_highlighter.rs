@@ -1,5 +1,6 @@
 use ansi_to_tui::IntoText;
-use lumis::{formatters::Formatter, languages::Language, themes, TerminalBuilder};
+use lumis::{formatters::Formatter, themes, TerminalBuilder};
+pub use lumis::languages::Language;
 use ratatui::{
     layout::Rect,
     text::Text,

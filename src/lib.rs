@@ -49,7 +49,7 @@ pub use components::{
     RelativeDateMode, SeasonalEmptyState, SeasonalGlyphs, SelectedTag, SelectionGlyphs,
     SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, Spinner, Split, Stack,
     StackAlign, StackItem, StackSize, StatusBar, StatusBarKeyBindings, StatusBarMenuItem,
-    StoreDebugView, SyntaxHighlighter, Tab, Tabs, TabsSelectionMemory, TagInput, TagInputEvent, TextInput,
+    StoreDebugView, SyntaxHighlighter, Language, Tab, Tabs, TabsSelectionMemory, TagInput, TagInputEvent, TextInput,
     TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings, TimeField, TimePicker,
     TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome, ToggleStyle, TreeAdapter,
     TreeGlyphs, WeatherFetchError, WeatherForecastDay, WeatherForecastDialog, WeatherForecastError,

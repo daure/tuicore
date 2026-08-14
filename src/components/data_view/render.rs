@@ -373,6 +373,17 @@ where
         selection_descendants: &HashMap<Id, Vec<Id>>,
         base_row_style: Option<Style>,
     ) -> Option<Style> {
+        let custom_style = self
+            .row_style_by
+            .as_ref()
+            .and_then(|style_fn| style_fn(row.row));
+
+        let effective_base = match (base_row_style, custom_style) {
+            (Some(b), Some(c)) => Some(b.patch(c)),
+            (None, Some(c)) => Some(c),
+            (b, None) => b,
+        };
+
         if self.row_has_reorder_highlight(&row.id) {
             Some(self.reorder_highlighted_row_style())
         } else if highlighted && self.focused {
@@ -382,7 +393,7 @@ where
         {
             Some(self.selected_row_style())
         } else {
-            base_row_style
+            effective_base
         }
     }
 
