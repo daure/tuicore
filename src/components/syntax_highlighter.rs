@@ -275,14 +275,18 @@ impl SyntaxHighlighter {
                 return selection;
             }
         }
+        let instant_settings = AnimationSettings {
+            enabled: false,
+            ..settings
+        };
         if bindings.line_up_matches(key) {
-            let selection = self.select_relative(-1, area, settings);
+            let selection = self.select_relative(-1, area, instant_settings);
             if selection.changed {
                 return selection;
             }
         }
         if bindings.line_down_matches(key) {
-            let selection = self.select_relative(1, area, settings);
+            let selection = self.select_relative(1, area, instant_settings);
             if selection.changed {
                 return selection;
             }
@@ -433,5 +437,40 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         }
         
         result.merge(Animated::tick(&mut self.scroll, dt, settings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Key;
+
+    #[test]
+    fn line_navigation_scrolls_to_selected_line_without_tweening() {
+        let code = (0..20)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut highlighter = SyntaxHighlighter::new(code, Language::Rust);
+        highlighter.content_size = ScrollSize::new(7, 20);
+        let area = Rect::new(0, 0, 7, 4);
+
+        for _ in 0..8 {
+            highlighter.on_key_with_settings(Key::Char('j'), area, AnimationSettings::default());
+        }
+
+        assert_eq!(
+            highlighter.scroll.offset(),
+            highlighter.scroll.target_offset()
+        );
+        assert!(!highlighter.scroll.is_active());
+
+        highlighter.on_key_with_settings(Key::Char('k'), area, AnimationSettings::default());
+
+        assert_eq!(
+            highlighter.scroll.offset(),
+            highlighter.scroll.target_offset()
+        );
+        assert!(!highlighter.scroll.is_active());
     }
 }

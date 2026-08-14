@@ -1,4 +1,5 @@
 pub(crate) mod checklist;
+pub(crate) mod code_samples;
 pub(crate) mod data;
 pub(crate) mod dialogs;
 pub(crate) mod diffs;
@@ -9,7 +10,7 @@ pub(crate) mod layouts;
 pub(crate) mod notifications;
 pub(crate) mod panels;
 pub(crate) mod relative_date;
+pub(crate) mod speed_reader;
 pub(crate) mod status_bar;
-pub(crate) mod tabs;
 pub(crate) mod syntax_highlighting;
-pub(crate) mod code_samples;
+pub(crate) mod tabs;

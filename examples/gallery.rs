@@ -45,6 +45,10 @@ use gallery_demo::panels::{
 use gallery_demo::relative_date::RelativeDateDemo;
 #[cfg(test)]
 use gallery_demo::relative_date::reference_picker_child_key;
+use gallery_demo::speed_reader::{
+    SpeedReaderExample, gallery_speed_reader, speed_reader_button_areas, speed_reader_buttons,
+    speed_reader_child_key, speed_reader_index, speed_reader_route,
+};
 use gallery_demo::status_bar::demo_weather_report;
 use gallery_demo::tabs::{
     ModalTabsExample, labeled_area, modal_tabs_button_areas, modal_tabs_dialog,
@@ -87,10 +91,10 @@ use tuicore::{
     FocusTarget, Grid, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent,
     KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, MenuButton, MenuItem, ModalCloseReason,
     Overlay, Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx, SeasonalEmptyState,
-    SelectionMode, SelectionTrigger, Spinner, Split, Stack, StatusBar, StatusBarMenuItem,
-    StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput, TextareaInput,
-    TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent,
-    TuiNode, WeatherProviderConfig,
+    SelectionMode, SelectionTrigger, SpeedReader, Spinner, Split, Stack, StatusBar,
+    StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput,
+    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
+    TuiEvent, TuiNode, WeatherProviderConfig,
 };
 
 #[derive(Debug, PartialEq)]
@@ -106,6 +110,8 @@ enum Msg {
     StoreViewClosed(ModalCloseReason),
     ConfirmationOpened,
     ConfirmationFinished(ConfirmationDialogOutcome),
+    SpeedReaderOpened(SpeedReaderExample),
+    SpeedReaderClosed(DialogCloseReason),
     OpenAiDock,
     CloseAiDock,
     FormNameChanged(String),
@@ -127,11 +133,16 @@ type ModalTabsLayer = DialogLayer<DialogDemoLayer, Tabs<Msg>>;
 type RootLayer = DialogLayer<ModalTabsLayer, DialogHost<GalleryDockOverlayContent, Msg>>;
 type StoreViewLayer = DialogLayer<RootLayer, StoreDebugView<Msg>>;
 type ConfirmationLayer = DialogLayer<StoreViewLayer, ConfirmationDialog<Msg>>;
+type SpeedReaderLayer = DialogLayer<ConfirmationLayer, DialogHost<SpeedReader, Msg>>;
 
-type AppRoot = DialogLayer<ConfirmationLayer, tuicore::components::AiDock<Msg>>;
+type AppRoot = DialogLayer<SpeedReaderLayer, tuicore::components::AiDock<Msg>>;
+
+fn speed_reader_layer(root: &mut AppRoot) -> &mut SpeedReaderLayer {
+    root.base_mut()
+}
 
 fn confirmation_layer(root: &mut AppRoot) -> &mut ConfirmationLayer {
-    root.base_mut()
+    speed_reader_layer(root).base_mut()
 }
 
 fn store_view_layer(root: &mut AppRoot) -> &mut StoreViewLayer {
@@ -171,7 +182,17 @@ fn main() -> tuicore::Result<()> {
         .placement(DialogLayerPlacement::Center)
         .backdrop(DialogBackdrop::dim().amount(0.55));
 
-    let final_root = DialogLayer::new(confirmation, ai_dock_dialog()).active(false);
+    let speed_reader = DialogLayer::new(
+        confirmation,
+        gallery_speed_reader(SpeedReaderExample::Markdown),
+    )
+    .active(false)
+    .fit_content()
+    .fit_content_max(72, 12)
+    .placement(DialogLayerPlacement::Center)
+    .backdrop(DialogBackdrop::dim().amount(0.58));
+
+    let final_root = DialogLayer::new(speed_reader, ai_dock_dialog()).active(false);
 
     tuicore::TreeApp::new(final_root)
         .on_message(|root, msg, ctx| {
@@ -306,6 +327,16 @@ fn main() -> tuicore::Result<()> {
                         }
                     };
                     ctx.request_redraw();
+                }
+                Msg::SpeedReaderOpened(example) => {
+                    let layer = speed_reader_layer(root);
+                    layer.replace_layer(gallery_speed_reader(example), ctx);
+                    layer.set_active_with_context(true, ctx);
+                }
+                Msg::SpeedReaderClosed(_reason) => {
+                    let layer = speed_reader_layer(root);
+                    layer.layer_mut().child_mut().pause();
+                    layer.set_active_with_context(false, ctx);
                 }
                 Msg::OpenAiDock => {
                     root.set_docked(DockSpec::bottom(80).cross_percent(80));
@@ -746,6 +777,7 @@ struct PreviewState {
     dialog_40: Button<Msg>,
     dialog_20: Button<Msg>,
     dialog_top: Button<Msg>,
+    speed_reader_buttons: [Button<Msg>; 2],
     confirmation: Button<Msg>,
     confirmation_status: String,
     dock_top: Button<Msg>,
@@ -939,6 +971,7 @@ impl PreviewState {
             dialog_40: dialog_button(DialogExample::Small),
             dialog_20: dialog_button(DialogExample::Tiny),
             dialog_top: dialog_button(DialogExample::Top),
+            speed_reader_buttons: speed_reader_buttons(),
             confirmation: confirmation_button(),
             confirmation_status: String::from("No confirmation result yet"),
             dock_top: dock_overlay_button(DockOverlayExample::Top),
@@ -1019,6 +1052,14 @@ impl PreviewState {
             PreviewKind::PanelJoinedSeparators => self.layout_panel_join_preview(area, ctx),
             PreviewKind::PanelTabSeparators => self.layout_panel_tabs_join_preview(area, ctx),
             PreviewKind::Dialog => self.layout_dialog(area, ctx),
+            PreviewKind::SpeedReader => {
+                for (index, button_area) in speed_reader_button_areas(area).into_iter().enumerate()
+                {
+                    ctx.push_slot(speed_reader_child_key(index), button_area, |ctx| {
+                        self.speed_reader_buttons[index].layout(button_area, ctx);
+                    });
+                }
+            }
             PreviewKind::NotificationTriggers => self.layout_notification_triggers(area, ctx),
             PreviewKind::Button => self.layout_button(area, ctx),
             PreviewKind::Toggle => self.layout_toggle(area, ctx),
@@ -1262,6 +1303,7 @@ impl PreviewState {
                 self.render_panel_tabs_join_preview(frame, area, ctx)
             }
             PreviewKind::Dialog => self.render_dialog(frame, area),
+            PreviewKind::SpeedReader => self.render_speed_reader(frame, area),
             PreviewKind::Spinner => self.render_spinner(frame, area),
             PreviewKind::SeasonalEmptyState => <SeasonalEmptyState as TuiNode<Msg>>::render(
                 &self.seasonal_empty_state,
@@ -1548,6 +1590,12 @@ impl PreviewState {
                 .dialog_button_mut(index)
                 .dispatch_event(&route, event, ctx);
         }
+        if preview == PreviewKind::SpeedReader {
+            let Some((index, route)) = speed_reader_route(route) else {
+                return EventOutcome::Ignored;
+            };
+            return self.speed_reader_buttons[index].dispatch_event(&route, event, ctx);
+        }
         if preview != PreviewKind::Dropdown {
             return EventOutcome::Ignored;
         }
@@ -1761,6 +1809,16 @@ impl PreviewState {
                     ctx,
                 );
             }
+            PreviewKind::SpeedReader => {
+                dispatch_focus_indexed(
+                    target,
+                    speed_reader_index,
+                    |state, index| &mut state.speed_reader_buttons[index],
+                    self,
+                    focused,
+                    ctx,
+                );
+            }
             PreviewKind::Button => self.button.dispatch_focus(target, focused, ctx),
             PreviewKind::TagInput => {
                 if dispatch_focus_child(
@@ -1922,6 +1980,16 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.dialog_40, dt, settings))
             .merge(Animated::tick(&mut self.dialog_20, dt, settings))
             .merge(Animated::tick(&mut self.dialog_top, dt, settings))
+            .merge(Animated::tick(
+                &mut self.speed_reader_buttons[0],
+                dt,
+                settings,
+            ))
+            .merge(Animated::tick(
+                &mut self.speed_reader_buttons[1],
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(&mut self.confirmation, dt, settings))
             .merge(Animated::tick(&mut self.dock_top, dt, settings))
             .merge(Animated::tick(&mut self.dock_bottom, dt, settings))
@@ -2366,6 +2434,18 @@ impl PreviewState {
             Paragraph::new(self.confirmation_status.as_str()),
             Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
         );
+    }
+
+    fn render_speed_reader(&self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(
+            Paragraph::new(
+                "RSVP reader with plain-text and Markdown modes. Both open paused in a centered, dimmed modal.",
+            ),
+            Rect::new(area.x, area.y, area.width, 2.min(area.height)),
+        );
+        for (index, button_area) in speed_reader_button_areas(area).into_iter().enumerate() {
+            self.speed_reader_buttons[index].render(frame, button_area);
+        }
     }
 
     fn dialog_button(&self, index: usize) -> &Button<Msg> {
@@ -3715,6 +3795,7 @@ enum ComponentKind {
     PanelJoinedSeparators,
     PanelTabSeparators,
     Dialog,
+    SpeedReader,
     Spinner,
     SeasonalEmptyState,
     Notifications,
@@ -3766,12 +3847,13 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 53] = [
+    const ALL: [Self; 54] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelJoinedSeparators,
         Self::PanelTabSeparators,
         Self::Dialog,
+        Self::SpeedReader,
         Self::Spinner,
         Self::SeasonalEmptyState,
         Self::Notifications,
@@ -3829,6 +3911,7 @@ impl ComponentKind {
             Self::PanelJoinedSeparators => "Joined Separators",
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
+            Self::SpeedReader => "Speed Reader",
             Self::Spinner => "Spinner",
             Self::SeasonalEmptyState => "Seasonal Empty State",
             Self::Notifications => "Notifications",
@@ -3928,6 +4011,7 @@ impl ComponentKind {
             Self::PanelJoinedSeparators => PreviewKind::PanelJoinedSeparators,
             Self::PanelTabSeparators => PreviewKind::PanelTabSeparators,
             Self::Dialog => PreviewKind::Dialog,
+            Self::SpeedReader => PreviewKind::SpeedReader,
             Self::Spinner => PreviewKind::Spinner,
             Self::SeasonalEmptyState => PreviewKind::SeasonalEmptyState,
             Self::Notifications => PreviewKind::NotificationTriggers,
@@ -3982,6 +4066,7 @@ enum PreviewKind {
     PanelJoinedSeparators,
     PanelTabSeparators,
     Dialog,
+    SpeedReader,
     Spinner,
     SeasonalEmptyState,
     NotificationTriggers,
@@ -4034,6 +4119,7 @@ impl PreviewKind {
             Self::PanelJoinedSeparators => "Joined Separators",
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
+            Self::SpeedReader => "Speed Reader",
             Self::Spinner => "Spinner",
             Self::SeasonalEmptyState => "Seasonal Empty State",
             Self::NotificationTriggers => "Notification Triggers",
@@ -4652,7 +4738,12 @@ mod tests {
         let store_view = DialogLayer::new(root_layer, empty_store_debug_dialog()).active(false);
         let confirmation =
             DialogLayer::new(store_view, gallery_confirmation_dialog()).active(false);
-        let mut root = DialogLayer::new(confirmation, ai_dock_dialog()).active(false);
+        let speed_reader = DialogLayer::new(
+            confirmation,
+            gallery_speed_reader(SpeedReaderExample::Markdown),
+        )
+        .active(false);
+        let mut root = DialogLayer::new(speed_reader, ai_dock_dialog()).active(false);
         gallery(&mut root).select(ComponentKind::TextInput);
         gallery(&mut root).previews.text_input.set_focused(true);
         gallery(&mut root).previews.text_input.event(

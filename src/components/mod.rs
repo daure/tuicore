@@ -21,6 +21,7 @@ mod notifications;
 mod overlay;
 mod panel;
 mod seasonal_empty_state;
+mod speed_reader;
 mod spinner;
 mod split;
 mod stack;
@@ -89,6 +90,9 @@ pub use notifications::{
 pub use overlay::{Overlay, OverlayAnchor, OverlaySize};
 pub use panel::{Panel, PanelHost, PanelTitlePosition, PanelTone};
 pub use seasonal_empty_state::{SeasonalEmptyState, SeasonalGlyphs};
+pub use speed_reader::{
+    SpeedReader, SpeedReaderInputMode, SpeedReaderKeyBindings, SpeedReaderOutcome, SpeedReaderState,
+};
 pub use spinner::Spinner;
 pub use split::Split;
 pub use stack::{Stack, StackAlign, StackItem, StackSize};

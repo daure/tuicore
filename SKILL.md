@@ -146,6 +146,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `Chip`: `new(label)`, icons and `ChipColorRole`. `Header`: `new(text)`, optional icon.
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,
   must tick. `SeasonalEmptyState`: `new(message)`, `SeasonalGlyphs`, must tick when live.
+- `SpeedReader`: `new(plain_text)` or `markdown(source)`; configure title, WPM, natural pauses, and
+  `SpeedReaderKeyBindings`; inspect `SpeedReaderState`/progress and tick while playing. `dialog`
+  wraps it in a `DialogHost`.
 
 ### Notifications, status, weather, AI
 
