@@ -285,13 +285,19 @@ where
     }
 
     /// Sets a per-row style policy.
-    pub fn row_style_by(mut self, row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static) -> Self {
+    pub fn row_style_by(
+        mut self,
+        row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static,
+    ) -> Self {
         self.set_row_style_by(row_style);
         self
     }
 
     /// Replaces the current per-row style policy.
-    pub fn set_row_style_by(&mut self, row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static) {
+    pub fn set_row_style_by(
+        &mut self,
+        row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static,
+    ) {
         self.row_style_by = Some(Box::new(row_style));
     }
 

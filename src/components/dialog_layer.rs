@@ -708,7 +708,7 @@ fn fade_buffer_except(
             } else {
                 dimmed_bg
             };
-            let fg = if is_powerline_fill(cell.symbol()) {
+            let fg = if is_visual_fill(cell.symbol()) {
                 blend_cell_color(
                     cell.fg,
                     fallback_fg,
@@ -729,8 +729,11 @@ fn fade_buffer_except(
     }
 }
 
-fn is_powerline_fill(symbol: &str) -> bool {
-    matches!(symbol, "" | "" | "" | "")
+fn is_visual_fill(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        "" | "" | "" | "" | "▏" | "▎" | "▍" | "▌" | "▋" | "▊" | "▉" | "█"
+    )
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -1282,6 +1285,31 @@ mod tests {
         let cap = terminal.backend().buffer().cell((0, 0)).unwrap();
         let content = terminal.backend().buffer().cell((1, 0)).unwrap();
         assert_eq!(cap.fg, content.bg);
+    }
+
+    #[test]
+    fn buffer_fade_keeps_block_fill_aligned_with_label_background() {
+        let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal should build");
+        let accent = Color::Rgb(220, 80, 30);
+        let surface = Color::Rgb(20, 20, 20);
+
+        terminal
+            .draw(|frame| {
+                frame.buffer_mut()[(0, 0)]
+                    .set_symbol("█")
+                    .set_fg(accent)
+                    .set_bg(surface);
+                frame.buffer_mut()[(1, 0)]
+                    .set_symbol("1")
+                    .set_fg(surface)
+                    .set_bg(accent);
+                fade_buffer(frame, frame.area(), 0.5);
+            })
+            .expect("buffer should render");
+
+        let bar = terminal.backend().buffer().cell((0, 0)).unwrap();
+        let label = terminal.backend().buffer().cell((1, 0)).unwrap();
+        assert_eq!(bar.fg, label.bg);
     }
 
     #[test]

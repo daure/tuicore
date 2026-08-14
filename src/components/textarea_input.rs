@@ -1,10 +1,13 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use std::ops::Deref;
+use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::thread;
 use std::time::Duration;
 
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::animation::{Animated, AnimationSettings, TickResult};
@@ -14,20 +17,24 @@ use crate::event::{
 use crate::hotkey::normalize_hotkey;
 use crate::{
     AxisProposal, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, line_width,
+    LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, ThemeName, TuiNode, line_width,
 };
 use crate::{ScrollAxes, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui::keybindings};
 
-use super::Panel;
+use super::syntax_highlighter::highlight_text;
 use super::text_input::{
     CursorFade, InputChrome, InputOutcome, append_unfocused_hotkey, cell_width, dim_buffer_area,
     display_char, focus_navigation_key, label_with_visible_hotkey, placeholder_label,
     placeholder_line, restore_disabled_chrome_labels, selected_input_style, text_char,
     visible_start_for_cursor,
 };
+use super::{Language, Panel};
 
 const TEXTAREA_FOCUS: &str = "textarea";
 const TAB_INSERT: &str = "    ";
+const SYNTAX_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const SYNTAX_QUEUE_CAPACITY: usize = 1;
+static SYNTAX_WORKER: OnceLock<Option<SyncSender<SyntaxRequest>>> = OnceLock::new();
 
 pub struct TextareaInput<M = ()> {
     value: String,
@@ -35,6 +42,7 @@ pub struct TextareaInput<M = ()> {
     disabled: bool,
     hotkey: Option<String>,
     editor_hotkey: Option<String>,
+    action_hotkeys: Vec<(String, Box<dyn Fn(String) -> M>)>,
     cursor: usize,
     focused: bool,
     insert_mode: bool,
@@ -51,6 +59,11 @@ pub struct TextareaInput<M = ()> {
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_edit_end: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
+    external_editor_file_extension: Option<String>,
+    language: Option<Language>,
+    syntax_revision: u64,
+    syntax_cache: Option<SyntaxCache>,
+    syntax_job: Option<SyntaxJob>,
     keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
     pending_hotkey_prefix: Option<String>,
@@ -170,6 +183,7 @@ impl<M> TextareaInput<M> {
             disabled: false,
             hotkey: None,
             editor_hotkey: None,
+            action_hotkeys: Vec::new(),
             cursor: 0,
             focused: false,
             insert_mode: false,
@@ -186,6 +200,11 @@ impl<M> TextareaInput<M> {
             on_submit: None,
             on_edit_end: None,
             external_editor_key: Some(ctrl_key('o')),
+            external_editor_file_extension: None,
+            language: None,
+            syntax_revision: 0,
+            syntax_cache: None,
+            syntax_job: None,
             keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
             pending_hotkey_prefix: None,
@@ -193,8 +212,7 @@ impl<M> TextareaInput<M> {
     }
 
     pub fn value(mut self, value: impl Into<String>) -> Self {
-        self.value = value.into();
-        self.clamp_lines();
+        self.set_value(value);
         self
     }
 
@@ -250,13 +268,16 @@ impl<M> TextareaInput<M> {
     }
 
     fn display_hotkey(&self) -> Option<String> {
-        let editor_hotkey = self.editor_hotkey.as_ref().filter(|_| !self.disabled);
-        match (&self.hotkey, editor_hotkey) {
-            (Some(action), Some(editor)) => Some(format!("{action}·{editor}")),
-            (Some(action), None) => Some(action.clone()),
-            (None, Some(editor)) => Some(editor.clone()),
-            (None, None) => None,
+        let mut hotkeys = self.hotkey.clone().into_iter().collect::<Vec<_>>();
+        if !self.disabled {
+            hotkeys.extend(self.editor_hotkey.iter().cloned());
+            hotkeys.extend(
+                self.action_hotkeys
+                    .iter()
+                    .map(|(sequence, _)| sequence.clone()),
+            );
         }
+        (!hotkeys.is_empty()).then(|| hotkeys.join("·"))
     }
 
     fn inline_hotkey(&self) -> Option<String> {
@@ -301,7 +322,7 @@ impl<M> TextareaInput<M> {
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
-        if self.editor_hotkey.is_none() {
+        if self.editor_hotkey.is_none() && self.action_hotkeys.is_empty() {
             self.pending_hotkey_prefix = None;
         }
         self.sync_panel();
@@ -319,10 +340,21 @@ impl<M> TextareaInput<M> {
 
     pub fn clear_editor_hotkey(&mut self) {
         self.editor_hotkey = None;
-        if self.hotkey.is_none() {
+        if self.hotkey.is_none() && self.action_hotkeys.is_empty() {
             self.pending_hotkey_prefix = None;
         }
         self.sync_panel();
+    }
+
+    pub fn action_hotkey(
+        mut self,
+        sequence: impl Into<String>,
+        on_trigger: impl Fn(String) -> M + 'static,
+    ) -> Self {
+        self.action_hotkeys
+            .push((sequence.into(), Box::new(on_trigger)));
+        self.sync_panel();
+        self
     }
 
     fn handle_visual_hotkey(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) {
@@ -361,7 +393,19 @@ impl<M> TextareaInput<M> {
                     ctx.request_redraw();
                 }
                 let (line, col) = self.external_editor_request_position();
-                ctx.request_external_editor(self.value.clone(), line, col);
+                self.request_external_editor(ctx, line, col);
+            }
+            ctx.stop_propagation();
+            return true;
+        }
+
+        if let Some((_, on_trigger)) = self
+            .action_hotkeys
+            .iter()
+            .find(|(hotkey, _)| normalize_hotkey(hotkey) == normalize_hotkey(sequence))
+        {
+            if !self.disabled {
+                ctx.emit(on_trigger(self.value.clone()));
             }
             ctx.stop_propagation();
             return true;
@@ -424,6 +468,48 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    pub fn external_editor_file_extension(mut self, extension: impl Into<String>) -> Self {
+        self.set_external_editor_file_extension(extension);
+        self
+    }
+
+    pub fn set_external_editor_file_extension(&mut self, extension: impl Into<String>) {
+        self.external_editor_file_extension = Some(extension.into());
+    }
+
+    pub fn clear_external_editor_file_extension(&mut self) {
+        self.external_editor_file_extension = None;
+    }
+
+    pub fn language(mut self, language: Language) -> Self {
+        self.set_language(language);
+        self
+    }
+
+    pub fn set_language(&mut self, language: Language) {
+        if self.language != Some(language) {
+            self.language = Some(language);
+            self.invalidate_syntax_cache();
+        }
+    }
+
+    pub fn clear_language(&mut self) {
+        self.language = None;
+        self.invalidate_syntax_cache();
+    }
+
+    pub fn current_language(&self) -> Option<Language> {
+        self.language
+    }
+
+    fn request_external_editor(&self, ctx: &mut EventCtx<M>, line: usize, col: usize) {
+        if let Some(extension) = self.external_editor_extension() {
+            ctx.request_external_editor_with_extension(self.value.clone(), line, col, extension);
+        } else {
+            ctx.request_external_editor(self.value.clone(), line, col);
+        }
+    }
+
     pub fn keybindings(mut self, keys: TextareaInputKeyBindings) -> Self {
         self.keys = keys;
         self
@@ -472,6 +558,7 @@ impl<M> TextareaInput<M> {
 
     pub fn set_value(&mut self, value: impl Into<String>) {
         self.value = value.into();
+        self.invalidate_syntax_cache();
         self.clamp_lines();
         self.cursor = self.cursor.min(self.len_chars());
     }
@@ -624,7 +711,10 @@ impl<M> TextareaInput<M> {
             area.width,
             self.visible_outer_height(area.width, area.height),
         );
-        let style = if self.focused && !self.insert_mode && !self.disabled {
+        let navigation_focused = self.focused && !self.insert_mode && !self.disabled;
+        let style = if navigation_focused && self.language.is_some() {
+            syntax_navigation_focus_style(Style::default())
+        } else if navigation_focused {
             selected_input_style(Style::default())
         } else {
             Style::default()
@@ -703,7 +793,9 @@ impl<M> TextareaInput<M> {
 
         let theme = theme();
         let selected = self.focused && !self.insert_mode && !self.disabled;
-        let placeholder_style = if selected {
+        let placeholder_style = if selected && self.language.is_some() {
+            syntax_navigation_focus_style(Style::default().fg(theme.muted_fg()))
+        } else if selected {
             selected_input_style(Style::default().fg(theme.muted_fg()))
         } else {
             Style::default().fg(theme.muted_fg())
@@ -762,18 +854,24 @@ impl<M> TextareaInput<M> {
         cursor: Option<(usize, usize)>,
     ) -> VisibleLines {
         let theme = theme();
+        let theme_name = theme.name();
         let selected = self.focused && !self.insert_mode && !self.disabled;
+        let syntax_navigation_focused = selected && self.language.is_some();
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
             theme.subtle_fg()
         });
-        let value_style = if selected {
+        let value_style = if syntax_navigation_focused {
+            syntax_navigation_focus_style(value_style)
+        } else if selected {
             selected_input_style(value_style)
         } else {
             value_style
         };
-        let hotkey_style = if selected {
+        let hotkey_style = if syntax_navigation_focused {
+            syntax_navigation_focus_style(Style::default().fg(theme.muted_fg()))
+        } else if selected {
             selected_input_style(Style::default())
         } else {
             Style::default().fg(theme.muted_fg())
@@ -789,6 +887,7 @@ impl<M> TextareaInput<M> {
                 value_style,
                 hotkey_style,
                 cursor_style,
+                theme_name,
                 &ranges,
             );
         }
@@ -820,6 +919,7 @@ impl<M> TextareaInput<M> {
                         && line_index == ranges.len().saturating_sub(1))
                     .then_some(hotkey_style),
                     cursor_style,
+                    theme_name,
                 )
             })
             .collect();
@@ -835,6 +935,7 @@ impl<M> TextareaInput<M> {
         value_style: Style,
         hotkey_style: Style,
         cursor_style: Style,
+        theme_name: ThemeName,
         ranges: &[LineRange],
     ) -> VisibleLines {
         let rows = self.visual_rows(width, ranges);
@@ -856,6 +957,7 @@ impl<M> TextareaInput<M> {
                     (!(self.focused && self.insert_mode) && row_index == last_row)
                         .then_some(hotkey_style),
                     cursor_style,
+                    theme_name,
                 )
             })
             .collect();
@@ -871,10 +973,13 @@ impl<M> TextareaInput<M> {
         value_style: Style,
         hotkey_style: Option<Style>,
         cursor_style: Style,
+        theme_name: ThemeName,
     ) -> Line<'static> {
         let chars = self.value.chars().collect::<Vec<_>>();
         let mut spans = Vec::new();
         let mut drawn = 0;
+        let syntax_navigation_focused =
+            self.focused && !self.insert_mode && !self.disabled && self.language.is_some();
 
         for col in horizontal..=range.len() {
             if drawn >= width {
@@ -903,7 +1008,10 @@ impl<M> TextareaInput<M> {
             {
                 let text = display_char(*value, remaining);
                 drawn += cell_width(&text);
-                spans.push(Span::styled(text, value_style));
+                spans.push(Span::styled(
+                    text,
+                    self.syntax_style(position, value_style, syntax_navigation_focused, theme_name),
+                ));
             }
         }
         if let Some(hotkey_style) = hotkey_style {
@@ -933,6 +1041,7 @@ impl<M> TextareaInput<M> {
         let len = value.chars().count();
         self.value.insert_str(self.byte_index(self.cursor), value);
         self.cursor += len;
+        self.invalidate_syntax_cache();
         InputOutcome::CHANGED
     }
 
@@ -1019,6 +1128,7 @@ impl<M> TextareaInput<M> {
         }
         self.value.clear();
         self.cursor = 0;
+        self.invalidate_syntax_cache();
         InputOutcome::CHANGED
     }
 
@@ -1429,6 +1539,7 @@ impl<M> TextareaInput<M> {
         let start = self.byte_index(start);
         let end = self.byte_index(end);
         self.value.replace_range(start..end, "");
+        self.invalidate_syntax_cache();
     }
 
     fn clamp_lines(&mut self) {
@@ -1440,7 +1551,11 @@ impl<M> TextareaInput<M> {
         if lines.is_empty() {
             return;
         }
-        self.value = lines.drain(..).collect::<Vec<_>>().join("\n");
+        let clamped = lines.drain(..).collect::<Vec<_>>().join("\n");
+        if self.value != clamped {
+            self.value = clamped;
+            self.invalidate_syntax_cache();
+        }
     }
 
     fn external_editor_key_matches(&self, key: KeyEvent) -> bool {
@@ -1456,6 +1571,7 @@ impl<M> TextareaInput<M> {
 
     fn apply_external_editor_response(&mut self, response: &crate::ExternalEditorResponse) {
         self.value = response.value.clone();
+        self.invalidate_syntax_cache();
         self.clamp_lines();
         let ranges = self.line_ranges();
         let line_idx = response
@@ -1479,6 +1595,109 @@ impl<M> TextareaInput<M> {
         if let Some(on_edit_end) = &self.on_edit_end {
             ctx.emit(on_edit_end(self.value.clone()));
         }
+    }
+
+    fn invalidate_syntax_cache(&mut self) {
+        self.syntax_revision = self.syntax_revision.wrapping_add(1);
+        self.syntax_cache = None;
+    }
+
+    fn start_syntax_job(&mut self, theme_name: ThemeName) -> bool {
+        let Some(language) = self.language else {
+            self.syntax_job = None;
+            return false;
+        };
+        if self.syntax_cache.as_ref().is_some_and(|cache| {
+            cache.revision == self.syntax_revision
+                && cache.language == language
+                && cache.theme_name == theme_name
+        }) {
+            return false;
+        }
+        if self.syntax_job.is_some() {
+            return true;
+        }
+
+        let revision = self.syntax_revision;
+        let source = self.value.clone();
+        let (sender, receiver) = mpsc::channel();
+        let request = SyntaxRequest {
+            revision,
+            source,
+            language,
+            theme_name,
+            sender,
+        };
+        let Some(worker) = syntax_worker() else {
+            return false;
+        };
+        match worker.try_send(request) {
+            Ok(()) => {
+                self.syntax_job = Some(SyntaxJob { receiver });
+                true
+            }
+            Err(TrySendError::Full(_)) => true,
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+
+    fn poll_syntax_job(&mut self) -> bool {
+        let Some(job) = self.syntax_job.as_ref() else {
+            return false;
+        };
+        match job.receiver.try_recv() {
+            Ok(cache) => {
+                self.syntax_job = None;
+                if cache.revision == self.syntax_revision
+                    && self.language == Some(cache.language)
+                    && cache.theme_name == theme().name()
+                {
+                    self.syntax_cache = Some(cache);
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.syntax_job = None;
+                false
+            }
+        }
+    }
+
+    fn syntax_style(
+        &self,
+        position: usize,
+        value_style: Style,
+        syntax_navigation_focused: bool,
+        theme_name: ThemeName,
+    ) -> Style {
+        let Some(cache) = &self.syntax_cache else {
+            return value_style;
+        };
+        if cache.revision != self.syntax_revision
+            || self.language != Some(cache.language)
+            || cache.theme_name != theme_name
+        {
+            return value_style;
+        }
+        let style = cache
+            .styles
+            .get(position)
+            .copied()
+            .map_or(value_style, |syntax| value_style.patch(syntax));
+        if syntax_navigation_focused {
+            syntax_navigation_focus_style(style)
+        } else {
+            style
+        }
+    }
+
+    fn external_editor_extension(&self) -> Option<String> {
+        self.external_editor_file_extension
+            .clone()
+            .or_else(|| self.language.and_then(language_extension))
     }
 }
 
@@ -1521,12 +1740,21 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.outer_area = area;
         self.area = self.content_area(area);
-        self.scroll_cursor_into_view(disabled_animation_settings());
+        if self.insert_mode {
+            self.scroll_cursor_into_view(disabled_animation_settings());
+        }
         let mut hotkeys = self.hotkey.clone().into_iter().collect::<Vec<_>>();
         if !self.disabled
             && let Some(hotkey) = self.editor_hotkey.clone()
         {
             hotkeys.push(hotkey);
+        }
+        if !self.disabled {
+            hotkeys.extend(
+                self.action_hotkeys
+                    .iter()
+                    .map(|(sequence, _)| sequence.clone()),
+            );
         }
         if !hotkeys.is_empty() {
             ctx.register_text_entry_focusable_with_hotkey_sequences(
@@ -1675,7 +1903,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 ctx.request_redraw();
             }
             let (line, col) = self.external_editor_request_position();
-            ctx.request_external_editor(self.value.clone(), line, col);
+            self.request_external_editor(ctx, line, col);
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
@@ -1769,6 +1997,18 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         ctx.request_redraw();
     }
 
+    fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
+        if self.start_syntax_job(theme().name()) {
+            ctx.request_tick();
+        }
+    }
+
+    fn mount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        if self.start_syntax_job(theme().name()) {
+            ctx.request_tick();
+        }
+    }
+
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         Animated::tick(self, dt, settings)
     }
@@ -1776,11 +2016,85 @@ impl<M> TuiNode<M> for TextareaInput<M> {
 
 impl<M> Animated for TextareaInput<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.cursor_fade
-            .tick(self.focused && self.insert_mode, dt, settings)
-            .merge(self.scroll.tick(dt, settings))
-            .merge(Animated::tick(&mut self.panel, dt, settings))
+        let syntax_changed = self.poll_syntax_job();
+        let syntax_pending = self.start_syntax_job(theme().name());
+        let syntax = TickResult {
+            changed: syntax_changed,
+            layout: false,
+            active: false,
+            next_tick: syntax_pending.then_some(SYNTAX_POLL_INTERVAL),
+        };
+        syntax.merge(
+            self.cursor_fade
+                .tick(self.focused && self.insert_mode, dt, settings)
+                .merge(self.scroll.tick(dt, settings))
+                .merge(Animated::tick(&mut self.panel, dt, settings)),
+        )
     }
+}
+
+struct SyntaxCache {
+    revision: u64,
+    language: Language,
+    theme_name: ThemeName,
+    styles: Vec<Style>,
+}
+
+struct SyntaxJob {
+    receiver: Receiver<SyntaxCache>,
+}
+
+struct SyntaxRequest {
+    revision: u64,
+    source: String,
+    language: Language,
+    theme_name: ThemeName,
+    sender: mpsc::Sender<SyntaxCache>,
+}
+
+fn syntax_worker() -> Option<&'static SyncSender<SyntaxRequest>> {
+    SYNTAX_WORKER
+        .get_or_init(|| {
+            let (sender, receiver) = mpsc::sync_channel::<SyntaxRequest>(SYNTAX_QUEUE_CAPACITY);
+            thread::Builder::new()
+                .name("tuicore-syntax".into())
+                .spawn(move || {
+                    while let Ok(request) = receiver.recv() {
+                        let highlighted =
+                            highlight_text(&request.source, request.language, request.theme_name);
+                        let cache = SyntaxCache {
+                            revision: request.revision,
+                            language: request.language,
+                            theme_name: request.theme_name,
+                            styles: syntax_styles(&request.source, &highlighted),
+                        };
+                        let _ = request.sender.send(cache);
+                    }
+                })
+                .ok()
+                .map(|_| sender)
+        })
+        .as_ref()
+}
+
+fn syntax_styles(source: &str, highlighted: &Text<'_>) -> Vec<Style> {
+    let mut styles = vec![Style::default(); source.chars().count()];
+    let mut line_start = 0;
+    for (source_line, highlighted_line) in source.split('\n').zip(&highlighted.lines) {
+        let line_end = line_start + source_line.chars().count();
+        let mut position = line_start;
+        for span in &highlighted_line.spans {
+            for _ in span.content.chars() {
+                if position >= line_end {
+                    break;
+                }
+                styles[position] = span.style;
+                position += 1;
+            }
+        }
+        line_start = line_end.saturating_add(1);
+    }
+    styles
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1847,6 +2161,24 @@ fn disabled_animation_settings() -> AnimationSettings {
         enabled: false,
         ..AnimationSettings::default()
     }
+}
+
+fn syntax_navigation_focus_style(style: Style) -> Style {
+    style.bg(theme().highlight_bg())
+}
+
+fn language_extension(language: Language) -> Option<String> {
+    Language::language_globs(language)
+        .into_iter()
+        .map(|glob| glob.to_string())
+        .find_map(|glob| {
+            let extension = glob.strip_prefix("*.")?;
+            (!extension.is_empty()
+                && extension
+                    .chars()
+                    .all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '+' | '-')))
+            .then(|| extension.to_ascii_lowercase())
+        })
 }
 
 fn delete_forward_key(key: KeyEvent) -> bool {

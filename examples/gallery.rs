@@ -89,12 +89,12 @@ use tuicore::{
     DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
     Dropdown, EventCtx, EventOutcome, EventRoute, Flex, FocusCtx, FocusId, FocusRequest,
     FocusTarget, Grid, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent,
-    KeyModifiers, LayoutCtx, LayoutResult, LifecycleCtx, MenuButton, MenuItem, ModalCloseReason,
-    Overlay, Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx, SeasonalEmptyState,
-    SelectionMode, SelectionTrigger, SpeedReader, Spinner, Split, Stack, StatusBar,
-    StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput, TextInput,
-    TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle, TreeAdapter, TreePath,
-    TuiEvent, TuiNode, WeatherProviderConfig,
+    KeyModifiers, Language, LayoutCtx, LayoutResult, LifecycleCtx, MenuButton, MenuItem,
+    ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx,
+    SeasonalEmptyState, SelectionMode, SelectionTrigger, SpeedReader, Spinner, Split, Stack,
+    StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput,
+    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
+    TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherProviderConfig,
 };
 
 #[derive(Debug, PartialEq)]
@@ -746,6 +746,7 @@ impl TuiNode<Msg> for Gallery {
 struct PreviewState {
     text_input: TextInput<Msg>,
     text_input_panel: TextInput<Msg>,
+    text_input_numbers: TextInput<Msg>,
     text_input_disabled: TextInput<Msg>,
     password_input: PasswordInput<Msg>,
     password_panel: PasswordInput<Msg>,
@@ -870,6 +871,13 @@ impl PreviewState {
                 .hotkey("pa")
                 .editor_hotkey("pb")
                 .style(InputChrome::panel("Description").top_right("Panel style")),
+            text_input_numbers: TextInput::new()
+                .placeholder("Digits only")
+                .value("2026")
+                .numbers_only(true)
+                .hotkey("na")
+                .editor_hotkey("nb")
+                .style(InputChrome::panel("Numbers only").top_right("0-9 · $EDITOR")),
             text_input_disabled: TextInput::new()
                 .value("Disabled panel input")
                 .disabled(true)
@@ -893,13 +901,14 @@ impl PreviewState {
                 .min_rows(2)
                 .max_rows(4),
             textarea_panel: TextareaInput::new()
-                .placeholder("Nested textarea")
-                .value("Draft note\nMore detail\nThird row\nFourth row\nFifth row scrolls")
+                .placeholder("Write Markdown...")
+                .value("# Draft note\n\n- More detail\n- Third row\n- Fourth row\n- Fifth row scrolls")
+                .language(Language::Markdown)
                 .hotkey("pa")
                 .editor_hotkey("pb")
                 .min_rows(2)
                 .max_rows(4)
-                .style(InputChrome::panel("Description").top_right("2-4 rows")),
+                .style(InputChrome::panel("Markdown").top_right("$EDITOR · .md")),
             textarea_disabled: TextareaInput::new()
                 .value("Disabled textarea\nNavigation still works")
                 .hotkey("d")
@@ -1064,12 +1073,15 @@ impl PreviewState {
             PreviewKind::Button => self.layout_button(area, ctx),
             PreviewKind::Toggle => self.layout_toggle(area, ctx),
             PreviewKind::TextInput => {
-                let [_, input, panel, disabled] = text_input_showcase_layout(area);
+                let [_, input, panel, numbers, disabled] = text_input_showcase_layout(area);
                 ctx.push_slot(text_input_child_key(), input, |ctx| {
                     self.text_input.layout(input, ctx);
                 });
                 ctx.push_slot(text_input_panel_child_key(), panel, |ctx| {
                     self.text_input_panel.layout(panel, ctx);
+                });
+                ctx.push_slot(text_input_numbers_child_key(), numbers, |ctx| {
+                    self.text_input_numbers.layout(numbers, ctx);
                 });
                 ctx.push_slot(text_input_disabled_child_key(), disabled, |ctx| {
                     self.text_input_disabled.layout(disabled, ctx);
@@ -1206,12 +1218,14 @@ impl PreviewState {
                 let keys = [
                     text_input_child_key(),
                     text_input_panel_child_key(),
+                    text_input_numbers_child_key(),
                     text_input_disabled_child_key(),
                 ];
                 let index = child_position(key, &keys)?;
                 let active = match index {
                     0 => self.text_input.insert_mode(),
                     1 => self.text_input_panel.insert_mode(),
+                    2 => self.text_input_numbers.insert_mode(),
                     _ => self.text_input_disabled.insert_mode(),
                 };
                 (index, keys.len(), active)
@@ -1421,6 +1435,13 @@ impl PreviewState {
             {
                 return self.text_input_panel.dispatch_event(&route, event, ctx);
             }
+            if let Some(route) = route
+                .path
+                .without_first_if(&text_input_numbers_child_key())
+                .map(EventRoute::new)
+            {
+                return self.text_input_numbers.dispatch_event(&route, event, ctx);
+            }
             let Some(route) = route
                 .path
                 .without_first_if(&text_input_disabled_child_key())
@@ -1628,6 +1649,15 @@ impl PreviewState {
                     &mut self.text_input_panel,
                     target,
                     text_input_panel_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                if dispatch_focus_child(
+                    &mut self.text_input_numbers,
+                    target,
+                    text_input_numbers_child_key(),
                     focused,
                     ctx,
                 ) {
@@ -1846,9 +1876,9 @@ impl PreviewState {
                 .active_list_control_mut(preview)
                 .dispatch_focus(target, focused, ctx),
             PreviewKind::Checklist => self.checklist.dispatch_focus(target, focused, ctx),
-            PreviewKind::SyntaxHighlighting => {
-                self.syntax_highlighting.dispatch_focus(target, focused, ctx)
-            }
+            PreviewKind::SyntaxHighlighting => self
+                .syntax_highlighting
+                .dispatch_focus(target, focused, ctx),
             preview if preview.is_diff_viewer() => self
                 .active_diff_viewer_mut(preview)
                 .dispatch_focus(target, focused, ctx),
@@ -2107,6 +2137,7 @@ impl PreviewState {
             .merge(self.menu_button.tick(dt, settings))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
             .merge(Animated::tick(&mut self.text_input_panel, dt, settings))
+            .merge(Animated::tick(&mut self.text_input_numbers, dt, settings))
             .merge(Animated::tick(&mut self.text_input_disabled, dt, settings))
             .merge(Animated::tick(&mut self.password_input, dt, settings))
             .merge(Animated::tick(&mut self.password_panel, dt, settings))
@@ -2117,7 +2148,11 @@ impl PreviewState {
             .merge(self.validated_form.tick(dt, settings))
             .merge(self.diff_side_by_side.tick(dt, settings))
             .merge(self.diff_inline.tick(dt, settings))
-            .merge(TuiNode::<Msg>::tick(&mut self.syntax_highlighting, dt, settings))
+            .merge(TuiNode::<Msg>::tick(
+                &mut self.syntax_highlighting,
+                dt,
+                settings,
+            ))
             .merge(self.diff_word.tick(dt, settings))
             .merge(self.diff_raw_patch.tick(dt, settings))
     }
@@ -2668,11 +2703,11 @@ impl PreviewState {
     }
 
     fn render_text_input(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, input, panel, disabled] = text_input_showcase_layout(area);
+        let [instructions, input, panel, numbers, disabled] = text_input_showcase_layout(area);
         frame.render_widget(
             Paragraph::new(
                 "Type text. Enter/Ctrl+Enter submits. Tab inserts spaces. Esc/Ctrl+[ exits input mode, then returns to the list.\n\
-                 Hotkeys: |ia| plain action, |ib| plain $EDITOR, |pa| panel action, |pb| panel $EDITOR, |d| disabled. Enter opens disabled browse mode; h/k and j/l move between idle fields.\n\
+                 Hotkeys: |ia| plain action, |ib| plain $EDITOR, |pa| panel action, |pb| panel $EDITOR, |na| numbers action, |nb| numbers $EDITOR, |d| disabled. Invalid number editor saves are discarded with a warning.\n\
                  Shortcuts:\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
                  • Ctrl+Backspace / Ctrl+W                : Delete word backward\n\
@@ -2686,6 +2721,7 @@ impl PreviewState {
         );
         self.text_input.render(frame, input);
         self.text_input_panel.render(frame, panel);
+        self.text_input_numbers.render(frame, numbers);
         self.text_input_disabled.render(frame, disabled);
     }
 
@@ -2780,7 +2816,7 @@ impl PreviewState {
         frame.render_widget(
             Paragraph::new(
                 "Type text. Enter inserts newline. Ctrl+Enter finishes editing. Ctrl+J also inserts newline. Tab inserts spaces. Esc/Ctrl+[ returns to list. Ctrl+Q quits from gallery root.\n\
-                 Plain textarea uses |ta| action and |tb| $EDITOR. Panel uses |pa| action and |pb| $EDITOR. Disabled panel |d| blocks editing. When idle, h/k moves back and j/l forward.\n\
+                 Plain textarea uses |ta| action and |tb| $EDITOR. Markdown panel uses |pa| action and |pb| $EDITOR with an .md temp file. Disabled panel |d| blocks editing. When idle, h/k moves back and j/l forward.\n\
                  Shortcuts:\n\
                  • PgUp / PgDn / Ctrl+U / Ctrl+D          : Scroll overflowing text\n\
                  • Ctrl+Left / Ctrl+Right / Alt+B / Alt+F : Jump word backward / forward\n\
@@ -3491,6 +3527,10 @@ fn text_input_child_key() -> ChildKey {
 
 fn text_input_panel_child_key() -> ChildKey {
     ChildKey::new("text-input-panel")
+}
+
+fn text_input_numbers_child_key() -> ChildKey {
+    ChildKey::new("text-input-numbers")
 }
 
 fn text_input_disabled_child_key() -> ChildKey {
@@ -4205,7 +4245,6 @@ mod tests {
         let children = [
             (ComponentKind::DiffSideBySide, PreviewKind::DiffSideBySide),
             (ComponentKind::DiffInline, PreviewKind::DiffInline),
-            (ComponentKind::SyntaxHighlighting, PreviewKind::SyntaxHighlighting),
             (ComponentKind::DiffWord, PreviewKind::DiffWord),
             (ComponentKind::DiffRawPatch, PreviewKind::DiffRawPatch),
         ];

@@ -1,19 +1,14 @@
 use ansi_to_tui::IntoText;
-use lumis::{formatters::Formatter, themes, TerminalBuilder};
 pub use lumis::languages::Language;
-use ratatui::{
-    layout::Rect,
-    text::Text,
-    widgets::Paragraph,
-    Frame,
-};
+use lumis::{TerminalBuilder, formatters::Formatter, themes};
+use ratatui::{Frame, layout::Rect, text::Text, widgets::Paragraph};
 use std::time::Duration;
 
 use crate::{
-    keybindings, paragraph_scroll, theme, Animated, AnimationSettings, EventCtx, EventOutcome,
-    EventRoute, FocusCtx, FocusId, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult,
-    LayoutSizeHint, RenderCtx, ScrollGeometry, ScrollOutcome, ScrollSize, ScrollState, ThemeName,
-    TickResult, TuiEvent, TuiNode, KeyEvent, AxisProposal,
+    Animated, AnimationSettings, AxisProposal, EventCtx, EventOutcome, EventRoute, FocusCtx,
+    FocusId, FocusTarget, KeyEvent, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    RenderCtx, ScrollGeometry, ScrollOutcome, ScrollSize, ScrollState, ThemeName, TickResult,
+    TuiEvent, TuiNode, keybindings, paragraph_scroll, theme,
 };
 
 const SYNTAX_FOCUS: &str = "syntax-highlighter";
@@ -73,73 +68,7 @@ impl SyntaxHighlighter {
     }
 
     fn highlight(&self, theme_name: ThemeName) -> Text<'static> {
-        let lumis_theme_name = match theme_name {
-            ThemeName::Amoled => "matte_black",
-            ThemeName::Aura => "aura_dark",
-            ThemeName::Ayu => "ayu_dark",
-            ThemeName::Carbonfox => "carbonfox",
-            ThemeName::Catppuccin => "catppuccin_mocha",
-            ThemeName::CatppuccinFrappe => "catppuccin_frappe",
-            ThemeName::CatppuccinMacchiato => "catppuccin_macchiato",
-            ThemeName::Cobalt2 => "tokyonight_night",
-            ThemeName::Cursor => "vscode_dark",
-            ThemeName::Dracula => "dracula",
-            ThemeName::Everforest => "everforest_dark",
-            ThemeName::Flexoki => "flexoki_dark",
-            ThemeName::Github => "github_dark",
-            ThemeName::Gruvbox => "gruvbox_dark",
-            ThemeName::Kanagawa => "kanagawa_wave",
-            ThemeName::LucentOrng => "github_light",
-            ThemeName::Material => "material_darker",
-            ThemeName::Matrix => "tokyonight_night",
-            ThemeName::Mercury => "github_light",
-            ThemeName::Monokai => "monokai_pro_dark",
-            ThemeName::NightOwl => "tokyonight_night",
-            ThemeName::Nord => "nord",
-            ThemeName::Oc2 => "tokyonight_night",
-            ThemeName::OneDark => "onedark",
-            ThemeName::Onedarkpro => "onedarkpro_dark",
-            ThemeName::Opencode => "tokyonight_night",
-            ThemeName::Orng => "tokyonight_night",
-            ThemeName::OsakaJade => "tokyonight_night",
-            ThemeName::Palenight => "material_palenight",
-            ThemeName::RosePine => "rosepine_dark",
-            ThemeName::Solarized => "solarized_autumn_dark",
-            ThemeName::Synthwave84 => "tokyonight_night",
-            ThemeName::TokyoNight => "tokyonight_night",
-            ThemeName::Vercel => "tokyonight_night",
-            ThemeName::Vesper => "tokyonight_night",
-            ThemeName::Zenburn => "zenburn",
-        };
-
-        let theme = themes::get(lumis_theme_name).unwrap_or_else(|_| themes::get("tokyonight_night").unwrap());
-        let formatter = TerminalBuilder::new()
-            .language(self.language)
-            .theme(Some(theme))
-            .background(lumis::TerminalBackground::Inherit)
-            .build()
-            .unwrap();
-
-        let mut output = Vec::new();
-        if formatter.format(&self.code, &mut output).is_ok() {
-            if let Ok(ansi_str) = String::from_utf8(output) {
-                if let Ok(mut text) = ansi_str.into_text() {
-                    for line in &mut text.lines {
-                        for span in &mut line.spans {
-                            if span.style.bg == Some(ratatui::style::Color::Reset) {
-                                span.style.bg = None;
-                            }
-                            if span.style.fg == Some(ratatui::style::Color::Reset) {
-                                span.style.fg = None;
-                            }
-                        }
-                    }
-                    return text;
-                }
-            }
-        }
-        
-        Text::raw(self.code.clone())
+        highlight_text(&self.code, self.language, theme_name)
     }
 
     fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
@@ -158,11 +87,7 @@ impl SyntaxHighlighter {
         );
     }
 
-    fn center_selection(
-        &mut self,
-        area: Rect,
-        settings: AnimationSettings,
-    ) -> ScrollOutcome {
+    fn center_selection(&mut self, area: Rect, settings: AnimationSettings) -> ScrollOutcome {
         let Some(selected) = self.selected_line else {
             return ScrollOutcome::idle();
         };
@@ -230,7 +155,7 @@ impl SyntaxHighlighter {
         let data_keys = bindings.data_view();
         let viewport = self.scroll_geometry(area).viewport.height.max(1);
         let page = (viewport.saturating_mul(3).saturating_add(4) / 5).max(1);
-        
+
         if data_keys.top_prefix_matches(key) {
             if self.pending_top_prefix {
                 self.pending_top_prefix = false;
@@ -298,10 +223,90 @@ impl SyntaxHighlighter {
     }
 }
 
+pub(crate) fn highlight_text(
+    code: &str,
+    language: Language,
+    theme_name: ThemeName,
+) -> Text<'static> {
+    let lumis_theme_name = match theme_name {
+        ThemeName::Amoled => "matte_black",
+        ThemeName::Aura => "aura_dark",
+        ThemeName::Ayu => "ayu_dark",
+        ThemeName::Carbonfox => "carbonfox",
+        ThemeName::Catppuccin => "catppuccin_mocha",
+        ThemeName::CatppuccinFrappe => "catppuccin_frappe",
+        ThemeName::CatppuccinMacchiato => "catppuccin_macchiato",
+        ThemeName::Cobalt2 => "tokyonight_night",
+        ThemeName::Cursor => "vscode_dark",
+        ThemeName::Dracula => "dracula",
+        ThemeName::Everforest => "everforest_dark",
+        ThemeName::Flexoki => "flexoki_dark",
+        ThemeName::Github => "github_dark",
+        ThemeName::Gruvbox => "gruvbox_dark",
+        ThemeName::Kanagawa => "kanagawa_wave",
+        ThemeName::LucentOrng => "github_light",
+        ThemeName::Material => "material_darker",
+        ThemeName::Matrix => "tokyonight_night",
+        ThemeName::Mercury => "github_light",
+        ThemeName::Monokai => "monokai_pro_dark",
+        ThemeName::NightOwl => "tokyonight_night",
+        ThemeName::Nord => "nord",
+        ThemeName::Oc2 => "tokyonight_night",
+        ThemeName::OneDark => "onedark",
+        ThemeName::Onedarkpro => "onedarkpro_dark",
+        ThemeName::Opencode => "tokyonight_night",
+        ThemeName::Orng => "tokyonight_night",
+        ThemeName::OsakaJade => "tokyonight_night",
+        ThemeName::Palenight => "material_palenight",
+        ThemeName::RosePine => "rosepine_dark",
+        ThemeName::Solarized => "solarized_autumn_dark",
+        ThemeName::Synthwave84 => "tokyonight_night",
+        ThemeName::TokyoNight => "tokyonight_night",
+        ThemeName::Vercel => "tokyonight_night",
+        ThemeName::Vesper => "tokyonight_night",
+        ThemeName::Zenburn => "zenburn",
+    };
+
+    let theme =
+        themes::get(lumis_theme_name).unwrap_or_else(|_| themes::get("tokyonight_night").unwrap());
+    let formatter = TerminalBuilder::new()
+        .language(language)
+        .theme(Some(theme))
+        .background(lumis::TerminalBackground::Inherit)
+        .build()
+        .unwrap();
+
+    let mut output = Vec::new();
+    if formatter.format(code, &mut output).is_ok() {
+        if let Ok(ansi_str) = String::from_utf8(output) {
+            if let Ok(mut text) = ansi_str.into_text() {
+                for line in &mut text.lines {
+                    for span in &mut line.spans {
+                        if span.style.bg == Some(ratatui::style::Color::Reset) {
+                            span.style.bg = None;
+                        }
+                        if span.style.fg == Some(ratatui::style::Color::Reset) {
+                            span.style.fg = None;
+                        }
+                    }
+                }
+                return text;
+            }
+        }
+    }
+
+    Text::raw(code.to_owned())
+}
+
 impl<M> TuiNode<M> for SyntaxHighlighter {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let lines = self.code.lines().count() as u16;
-        let max_width = self.code.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+        let max_width = self
+            .code
+            .lines()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0) as u16;
         let width = match proposal.width {
             AxisProposal::Unbounded => max_width,
             AxisProposal::AtMost(max) => max_width.min(max),
@@ -313,9 +318,14 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let resized = self.area.width != area.width || self.area.height != area.height;
         self.area = area;
-        
+
         let lines = self.code.lines().count();
-        let max_width = self.code.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        let max_width = self
+            .code
+            .lines()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
         self.content_size = ScrollSize {
             width: max_width,
             height: lines,
@@ -332,7 +342,7 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         } else {
             self.clamp_scroll();
         }
-        
+
         ctx.register_focusable(FocusId::new(SYNTAX_FOCUS), area, true);
         LayoutResult::new(area)
     }
@@ -341,7 +351,7 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         if area.is_empty() {
             return;
         }
-        
+
         let current_theme = theme().name();
         let text = if let Some(cached) = &self.cached_text {
             cached.clone()
@@ -378,7 +388,7 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
                 geometry.layout.viewport,
             );
         }
-        
+
         self.scroll
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
     }
@@ -429,13 +439,13 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let current_theme = theme().name();
         let mut result = TickResult::IDLE;
-        
+
         if self.last_theme != Some(current_theme) || self.cached_text.is_none() {
             self.cached_text = Some(self.highlight(current_theme));
             self.last_theme = Some(current_theme);
             result = TickResult::CHANGED;
         }
-        
+
         result.merge(Animated::tick(&mut self.scroll, dt, settings))
     }
 }

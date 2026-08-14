@@ -14,7 +14,7 @@ use crate::hotkey::normalize_hotkey;
 use crate::theme;
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, HotkeyLabelMode, KeySpec, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, TuiNode, hotkey_label_spans,
+    LayoutProposal, LayoutResult, LayoutSizeHint, Notification, TuiNode, hotkey_label_spans,
     hotkey_underline_style, line_width,
 };
 
@@ -91,11 +91,13 @@ pub struct TextInput<M = ()> {
     cursor: usize,
     focused: bool,
     insert_mode: bool,
+    numbers_only: bool,
     max_len: Option<usize>,
     on_change: Option<Box<dyn Fn(String) -> M>>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
     on_edit_end: Option<Box<dyn Fn(String) -> M>>,
     external_editor_key: Option<KeyEvent>,
+    external_editor_file_extension: Option<String>,
     keys: TextInputKeyBindings,
     cursor_fade: CursorFade,
     pending_hotkey_prefix: Option<String>,
@@ -322,11 +324,13 @@ impl<M> TextInput<M> {
             cursor: 0,
             focused: false,
             insert_mode: false,
+            numbers_only: false,
             max_len: None,
             on_change: None,
             on_submit: None,
             on_edit_end: None,
             external_editor_key: Some(ctrl_key('o')),
+            external_editor_file_extension: None,
             keys: TextInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
             pending_hotkey_prefix: None,
@@ -515,7 +519,7 @@ impl<M> TextInput<M> {
                     ctx.request_layout();
                     ctx.request_redraw();
                 }
-                ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
+                self.request_external_editor(ctx);
             }
             ctx.stop_propagation();
             return true;
@@ -576,6 +580,32 @@ impl<M> TextInput<M> {
         self
     }
 
+    pub fn external_editor_file_extension(mut self, extension: impl Into<String>) -> Self {
+        self.set_external_editor_file_extension(extension);
+        self
+    }
+
+    pub fn set_external_editor_file_extension(&mut self, extension: impl Into<String>) {
+        self.external_editor_file_extension = Some(extension.into());
+    }
+
+    pub fn clear_external_editor_file_extension(&mut self) {
+        self.external_editor_file_extension = None;
+    }
+
+    fn request_external_editor(&self, ctx: &mut EventCtx<M>) {
+        if let Some(extension) = &self.external_editor_file_extension {
+            ctx.request_external_editor_with_extension(
+                self.value.clone(),
+                1,
+                self.cursor + 1,
+                extension.clone(),
+            );
+        } else {
+            ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
+        }
+    }
+
     pub fn keybindings(mut self, keys: TextInputKeyBindings) -> Self {
         self.keys = keys;
         self
@@ -590,6 +620,21 @@ impl<M> TextInput<M> {
         self.clamp_value();
         self.cursor = self.cursor.min(self.len_chars());
         self
+    }
+
+    pub fn numbers_only(mut self, numbers_only: bool) -> Self {
+        self.set_numbers_only(numbers_only);
+        self
+    }
+
+    pub fn set_numbers_only(&mut self, numbers_only: bool) {
+        self.numbers_only = numbers_only;
+        self.clamp_value();
+        self.cursor = self.cursor.min(self.len_chars());
+    }
+
+    pub fn is_numbers_only(&self) -> bool {
+        self.numbers_only
     }
 
     pub fn current_value(&self) -> &str {
@@ -867,6 +912,9 @@ impl<M> TextInput<M> {
 
     fn insert_text(&mut self, value: impl AsRef<str>) -> InputOutcome {
         let value = value.as_ref();
+        if !self.accepts_value(value) {
+            return InputOutcome::HANDLED;
+        }
         if self
             .max_len
             .is_some_and(|max_len| self.len_chars() >= max_len)
@@ -1055,8 +1103,22 @@ impl<M> TextInput<M> {
     }
 
     fn clamp_value(&mut self) {
+        if self.numbers_only {
+            self.value.retain(|value| value.is_ascii_digit());
+        }
         if let Some(max_len) = self.max_len {
             self.value = self.value.chars().take(max_len).collect();
+        }
+    }
+
+    fn accepts_value(&self, value: &str) -> bool {
+        !self.numbers_only || value.chars().all(|value| value.is_ascii_digit())
+    }
+
+    fn trim_numbers_only_value(&mut self) {
+        if self.numbers_only {
+            self.value = self.value.trim_matches(' ').to_owned();
+            self.cursor = self.cursor.min(self.len_chars());
         }
     }
 
@@ -1068,9 +1130,23 @@ impl<M> TextInput<M> {
     pub(crate) fn apply_external_editor_response(
         &mut self,
         response: &crate::ExternalEditorResponse,
-    ) {
+    ) -> bool {
+        let editor_value = response
+            .value
+            .strip_suffix("\r\n")
+            .or_else(|| response.value.strip_suffix('\n'))
+            .unwrap_or(&response.value);
+        let editor_value = if self.numbers_only {
+            editor_value.trim_matches(' ')
+        } else {
+            editor_value
+        };
+        let value = editor_value.replace('\n', " ");
+        if !self.accepts_value(&value) {
+            return false;
+        }
         let mut collapsed_cursor = 0;
-        let lines: Vec<&str> = response.value.split('\n').collect();
+        let lines: Vec<&str> = editor_value.split('\n').collect();
         let target_line_idx = response
             .line
             .saturating_sub(1)
@@ -1084,9 +1160,10 @@ impl<M> TextInput<M> {
         let target_line_chars = lines[target_line_idx].chars().count();
         collapsed_cursor += col_idx.min(target_line_chars);
 
-        self.value = response.value.replace('\n', " ");
+        self.value = value;
         self.clamp_value();
         self.cursor = collapsed_cursor.min(self.len_chars());
+        true
     }
 
     fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
@@ -1392,8 +1469,14 @@ impl<M> TuiNode<M> for TextInput<M> {
             }
             let was_editing = self.insert_mode;
             let previous_value = self.value.clone();
-            self.apply_external_editor_response(response);
-            self.emit_change_if_needed(&previous_value, ctx);
+            if self.apply_external_editor_response(response) {
+                self.emit_change_if_needed(&previous_value, ctx);
+            } else {
+                ctx.notify(Notification::warning(
+                    "Invalid number",
+                    "External editor changes were discarded; only digits 0-9 are allowed.",
+                ));
+            }
             self.insert_mode = false;
             if was_editing {
                 self.emit_edit_end(ctx);
@@ -1475,7 +1558,7 @@ impl<M> TuiNode<M> for TextInput<M> {
                 ctx.request_layout();
                 ctx.request_redraw();
             }
-            ctx.request_external_editor(self.value.clone(), 1, self.cursor + 1);
+            self.request_external_editor(ctx);
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
@@ -1528,6 +1611,9 @@ impl<M> TuiNode<M> for TextInput<M> {
         }
         let previous_value = self.value.clone();
         let outcome = self.on_key(*key);
+        if outcome.submitted {
+            self.trim_numbers_only_value();
+        }
         self.emit_change_if_needed(&previous_value, ctx);
         if outcome.submitted {
             self.insert_mode = false;

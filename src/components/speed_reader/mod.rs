@@ -18,7 +18,7 @@ use crate::{
 
 use super::dialog::{Dialog, DialogCloseReason, DialogHost};
 
-const DEFAULT_WPM: u16 = 300;
+const DEFAULT_WPM: u16 = 600;
 const MIN_WPM: u16 = 100;
 const MAX_WPM: u16 = 1_000;
 const WPM_STEP: u16 = 25;
@@ -125,6 +125,7 @@ pub struct SpeedReader {
     wpm: u16,
     elapsed: Duration,
     natural_pauses: bool,
+    markdown_block_pause: Option<Duration>,
     keys: SpeedReaderKeyBindings,
     area: Rect,
 }
@@ -155,6 +156,7 @@ impl SpeedReader {
             wpm: DEFAULT_WPM,
             elapsed: Duration::ZERO,
             natural_pauses: true,
+            markdown_block_pause: None,
             keys: SpeedReaderKeyBindings::default(),
             area: Rect::default(),
         }
@@ -218,6 +220,19 @@ impl SpeedReader {
     pub fn natural_pauses(mut self, enabled: bool) -> Self {
         self.natural_pauses = enabled;
         self
+    }
+
+    pub fn markdown_block_pause(mut self, delay: Duration) -> Self {
+        self.set_markdown_block_pause(delay);
+        self
+    }
+
+    pub fn set_markdown_block_pause(&mut self, delay: Duration) {
+        self.markdown_block_pause = Some(delay);
+    }
+
+    pub fn clear_markdown_block_pause(&mut self) {
+        self.markdown_block_pause = None;
     }
 
     pub fn keybindings(mut self, keys: SpeedReaderKeyBindings) -> Self {
@@ -571,11 +586,16 @@ impl SpeedReader {
         let Some(token) = self.tokens.get(self.position) else {
             return base;
         };
-        base.mul_f64(if self.natural_pauses {
-            dwell_factor(token)
-        } else {
-            1.0
-        })
+        if !self.natural_pauses {
+            return base;
+        }
+        if self.mode == SpeedReaderInputMode::Markdown
+            && token.boundary_after
+            && let Some(delay) = self.markdown_block_pause
+        {
+            return base.saturating_add(delay);
+        }
+        base.mul_f64(dwell_factor(token))
     }
 
     fn advance_after_dwell(&mut self) {
@@ -723,27 +743,20 @@ fn parse_plain(source: &str) -> Vec<ReaderToken> {
 }
 
 fn dwell_factor(token: &ReaderToken) -> f64 {
+    punctuation_dwell_factor(token)
+}
+
+fn punctuation_dwell_factor(token: &ReaderToken) -> f64 {
     let punctuation = token
         .text
         .trim_end_matches(['"', '\'', '”', '’', ')', ']', '}']);
-    let punctuation_factor: f64 =
-        if punctuation.ends_with(['.', '?', '!']) || punctuation.ends_with("…") {
-            2.0
-        } else if punctuation.ends_with([',', ':', ';', '—', '–']) {
-            1.5
-        } else {
-            1.0
-        };
-    let boundary_factor: f64 = if token.boundary_after {
-        if token.heading || !token.prefix.is_empty() {
-            2.0
-        } else {
-            2.25
-        }
+    if punctuation.ends_with(['.', '?', '!']) || punctuation.ends_with("…") {
+        2.0
+    } else if punctuation.ends_with([',', ':', ';', '—', '–']) {
+        1.5
     } else {
         1.0
-    };
-    punctuation_factor.max(boundary_factor)
+    }
 }
 
 fn styled_graphemes(token: &ReaderToken) -> Vec<(String, InlineMarks)> {
@@ -942,12 +955,66 @@ mod tests {
         let reader = SpeedReader::new("Wait. Next").wpm(300);
         assert_eq!(reader.current_dwell(), Duration::from_millis(400));
 
-        let mut reader = SpeedReader::new("A paragraph.\n\nNext").wpm(300);
+        let mut reader = SpeedReader::new("A paragraph\n\nNext").wpm(300);
         reader.next();
-        assert_eq!(reader.current_dwell(), Duration::from_millis(450));
+        assert_eq!(reader.current_dwell(), Duration::from_millis(200));
 
         let reader = SpeedReader::markdown("# Heading\n\nParagraph").wpm(300);
-        assert_eq!(reader.current_dwell(), Duration::from_millis(400));
+        assert_eq!(reader.current_dwell(), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn markdown_block_pause_adds_fixed_delay_to_base_dwell() {
+        let reader = SpeedReader::markdown("First\n\nSecond")
+            .wpm(300)
+            .markdown_block_pause(Duration::from_millis(500));
+        assert_eq!(reader.current_dwell(), Duration::from_millis(700));
+
+        let reader = SpeedReader::markdown("Wait.\n\nNext")
+            .wpm(300)
+            .markdown_block_pause(Duration::from_millis(500));
+        assert_eq!(reader.current_dwell(), Duration::from_millis(700));
+    }
+
+    #[test]
+    fn zero_markdown_block_pause_uses_one_base_dwell_for_all_block_types() {
+        let paragraph =
+            SpeedReader::markdown("Paragraph.\n\nNext").markdown_block_pause(Duration::ZERO);
+        let heading =
+            SpeedReader::markdown("# Heading\n\nNext").markdown_block_pause(Duration::ZERO);
+
+        assert_eq!(paragraph.current_dwell(), Duration::from_millis(100));
+        assert_eq!(heading.current_dwell(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn markdown_block_pause_only_applies_to_natural_markdown_boundaries() {
+        let reader = SpeedReader::markdown("First word\n\nSecond")
+            .wpm(300)
+            .markdown_block_pause(Duration::from_millis(500));
+        assert_eq!(reader.current_dwell(), Duration::from_millis(200));
+
+        let reader = SpeedReader::new("First\n\nSecond")
+            .wpm(300)
+            .markdown_block_pause(Duration::from_millis(500));
+        assert_eq!(reader.current_dwell(), Duration::from_millis(200));
+
+        let reader = SpeedReader::markdown("First\n\nSecond")
+            .wpm(300)
+            .markdown_block_pause(Duration::from_millis(500))
+            .natural_pauses(false);
+        assert_eq!(reader.current_dwell(), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn clearing_markdown_block_pause_restores_automatic_boundary_dwell() {
+        let mut reader = SpeedReader::markdown("First\n\nSecond")
+            .wpm(300)
+            .markdown_block_pause(Duration::from_millis(500));
+
+        reader.clear_markdown_block_pause();
+
+        assert_eq!(reader.current_dwell(), Duration::from_millis(200));
     }
 
     #[test]
@@ -978,7 +1045,7 @@ mod tests {
             terminal.backend().buffer().cell((context_x, 3)).unwrap().fg,
             theme().subtle_fg()
         );
-        assert!(content.contains("300 WPM"));
+        assert!(content.contains("600 WPM"));
         assert!(content.contains("Space"));
         assert!(!content.contains("┬"));
     }

@@ -1052,7 +1052,7 @@ fn edit_in_external_editor(
     terminal: &mut TerminalGuard,
     request: crate::ExternalEditorRequest,
 ) -> std::io::Result<Option<crate::ExternalEditorResponse>> {
-    let temp_files = create_editor_temp_files(&request.value)?;
+    let temp_files = create_editor_temp_files(&request.value, request.file_extension.as_deref())?;
 
     let status = terminal.suspend(|| {
         run_editor(
@@ -1114,8 +1114,12 @@ impl Drop for EditorTempFiles {
     }
 }
 
-fn create_editor_temp_files(value: &str) -> std::io::Result<EditorTempFiles> {
-    let (text_path, mut file) = create_unique_temp_file("edit", "txt")?;
+fn create_editor_temp_files(
+    value: &str,
+    file_extension: Option<&str>,
+) -> std::io::Result<EditorTempFiles> {
+    let file_extension = valid_editor_file_extension(file_extension).unwrap_or("txt");
+    let (text_path, mut file) = create_unique_temp_file("edit", file_extension)?;
     let mut temp_files = EditorTempFiles {
         text_path,
         pos_path: None,
@@ -1128,6 +1132,17 @@ fn create_editor_temp_files(value: &str) -> std::io::Result<EditorTempFiles> {
     temp_files.pos_path = Some(pos_path);
 
     Ok(temp_files)
+}
+
+fn valid_editor_file_extension(file_extension: Option<&str>) -> Option<&str> {
+    let extension = file_extension?;
+    let extension = extension.strip_prefix('.').unwrap_or(extension);
+    (!extension.is_empty()
+        && extension.len() <= 32
+        && extension.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        }))
+    .then_some(extension)
 }
 
 fn create_unique_temp_file(prefix: &str, extension: &str) -> std::io::Result<(PathBuf, File)> {
@@ -2812,8 +2827,10 @@ mod tests {
 
     #[test]
     fn editor_temp_files_are_unique_and_created_with_contents() {
-        let first = create_editor_temp_files("one").expect("first temp files should be created");
-        let second = create_editor_temp_files("two").expect("second temp files should be created");
+        let first =
+            create_editor_temp_files("one", None).expect("first temp files should be created");
+        let second =
+            create_editor_temp_files("two", None).expect("second temp files should be created");
         let first_text_path = first.text_path.clone();
         let first_pos_path = first.pos_path().to_owned();
         let second_text_path = second.text_path.clone();
@@ -2837,7 +2854,8 @@ mod tests {
     fn editor_temp_files_are_owner_readable_and_writable_only() {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp_files = create_editor_temp_files("secret").expect("temp files should be created");
+        let temp_files =
+            create_editor_temp_files("secret", None).expect("temp files should be created");
 
         assert_eq!(
             std::fs::metadata(&temp_files.text_path)
@@ -2854,6 +2872,34 @@ mod tests {
                 .mode()
                 & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn editor_temp_file_uses_requested_safe_extension() {
+        let temp_files = create_editor_temp_files("# Draft", Some(".md"))
+            .expect("Markdown temp file should be created");
+
+        assert_eq!(
+            temp_files
+                .text_path
+                .extension()
+                .and_then(|value| value.to_str()),
+            Some("md")
+        );
+    }
+
+    #[test]
+    fn editor_temp_file_rejects_unsafe_extension() {
+        let temp_files = create_editor_temp_files("draft", Some("../md"))
+            .expect("fallback temp file should be created");
+
+        assert_eq!(
+            temp_files
+                .text_path
+                .extension()
+                .and_then(|value| value.to_str()),
+            Some("txt")
         );
     }
 

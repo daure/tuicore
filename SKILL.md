@@ -70,10 +70,12 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `ButtonOutcome`. `HotkeyLabelMode` controls label rendering.
 - `Toggle<M>`: `new(label)`, checked/value/style/hotkey/`on_change`; `ToggleStyle`, `ToggleOutcome`.
 - `TextInput<M>` / `PasswordInput<M>`: `new`, value, placeholder, panel/style, hotkey, focus,
-  max length, submit/change/edit-end callbacks, key/paste handling; password adds mask char.
+  max length, optional ASCII digit-only input via `numbers_only(true)`, submit/change/edit-end
+  callbacks, key/paste handling; password adds mask char.
   `InputChrome`, `InputPanelChrome`, `InputOutcome`, `TextInputKeyBindings` configure behavior.
-- `TextareaInput<M>`: multiline equivalent with rows, wrapping, external editor, and
-  `TextareaInputKeyBindings`.
+- `TextareaInput<M>`: multiline equivalent with rows, wrapping, optional live syntax highlighting
+  via `language(Language)`, external editor, repeatable message-producing `action_hotkey` bindings,
+  and `TextareaInputKeyBindings`.
 - `TagInput<Id>`: `new(strings)` or `with_options`; configure selected/custom tags, placeholder,
   hotkey/style/panel; drain `take_events() -> Vec<TagInputEvent<Id>>`. Values use `SelectedTag`.
 
@@ -134,6 +136,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 
 - `Panel`: non-modal chrome; configure titles, border/tone, text, focus, scroll. `host(child)` gives
   `PanelHost<C>`. Types: `PanelTitlePosition`, `PanelTone`.
+- `SpeedReader`: `new` for plain text or `markdown` for Markdown-aware blocks; configure title, WPM,
+  natural pauses, fixed extra `markdown_block_pause(Duration)`, and keybindings; `dialog` creates a
+  closable host.
 - `Dialog<M>`: chrome/content/actions/close/scroll; `host(child)` gives `DialogHost<C, M>`. Build
   `DialogAction::new`; configure `DialogKeyBindings`, `DialogTitlePosition`; outputs use
   `DialogCloseReason`. Place modals in `DialogLayer`.

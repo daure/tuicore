@@ -356,6 +356,23 @@ impl<M> EventCtx<M> {
             value: value.into(),
             line,
             col,
+            file_extension: None,
+        });
+        self.redraw = true;
+    }
+
+    pub fn request_external_editor_with_extension(
+        &mut self,
+        value: impl Into<String>,
+        line: usize,
+        col: usize,
+        file_extension: impl Into<String>,
+    ) {
+        self.external_editor = Some(ExternalEditorRequest {
+            value: value.into(),
+            line,
+            col,
+            file_extension: Some(file_extension.into()),
         });
         self.redraw = true;
     }

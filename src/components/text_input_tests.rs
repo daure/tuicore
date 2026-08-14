@@ -116,6 +116,7 @@ fn text_input_action_and_editor_hotkeys_have_distinct_behavior() {
             value: "draft".into(),
             line: 1,
             col: 6,
+            file_extension: None,
         })
     );
 }
@@ -690,10 +691,38 @@ fn ctrl_o_requests_external_editor() {
             value: "initial".to_string(),
             line: 1,
             col: 8,
+            file_extension: None,
         })
     );
     assert!(ctx.redraw_requested());
     assert!(!ctx.clear_requested());
+}
+
+#[test]
+fn text_input_passes_file_extension_to_external_editor_request() {
+    let mut input = TextInput::<()>::new()
+        .value("query")
+        .external_editor_file_extension("sql");
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.external_editor_request(),
+        Some(&crate::ExternalEditorRequest {
+            value: "query".into(),
+            line: 1,
+            col: 6,
+            file_extension: Some("sql".into()),
+        })
+    );
 }
 
 #[test]
@@ -785,6 +814,125 @@ fn external_editor_emits_change_only_when_accepted_value_differs() {
     );
 
     assert_eq!(ctx.messages(), &["change:edited".to_string()]);
+}
+
+#[test]
+fn numbers_only_input_rejects_non_digits_from_keys_and_paste() {
+    let mut input = TextInput::<()>::new().numbers_only(true).value("12");
+    input.insert_mode = true;
+
+    assert_eq!(
+        input.on_key(KeyEvent::from(Key::Char('a'))),
+        InputOutcome::HANDLED
+    );
+    assert_eq!(input.on_paste("3x"), InputOutcome::HANDLED);
+    assert_eq!(input.current_value(), "12");
+
+    assert_eq!(
+        input.on_key(KeyEvent::from(Key::Char('3'))),
+        InputOutcome::CHANGED
+    );
+    assert_eq!(input.on_paste("45"), InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "12345");
+}
+
+#[test]
+fn numbers_only_input_filters_programmatic_values() {
+    let mut input = TextInput::<()>::new().value("room 101").numbers_only(true);
+    assert_eq!(input.current_value(), "101");
+
+    input.set_value("floor 2, room 03");
+    assert_eq!(input.current_value(), "203");
+}
+
+#[test]
+fn numbers_only_input_discards_invalid_external_editor_value_with_warning() {
+    let mut input = TextInput::<String>::new()
+        .numbers_only(true)
+        .value("123")
+        .on_change(|value| format!("change:{value}"));
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "12x\n".into(),
+            line: 1,
+            col: 4,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.current_value(), "123");
+    assert!(ctx.messages().is_empty());
+    assert_eq!(ctx.notifications().len(), 1);
+    assert_eq!(
+        ctx.notifications()[0].kind(),
+        crate::NotificationKind::Warning
+    );
+    assert_eq!(ctx.notifications()[0].title(), "Invalid number");
+    assert!(!input.insert_mode());
+}
+
+#[test]
+fn numbers_only_input_accepts_editor_terminal_newline() {
+    let mut input = TextInput::<()>::new().numbers_only(true).value("123");
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "456\n".into(),
+            line: 1,
+            col: 4,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(input.current_value(), "456");
+    assert!(ctx.notifications().is_empty());
+}
+
+#[test]
+fn numbers_only_input_trims_editor_spaces_before_validation() {
+    let mut input = TextInput::<()>::new().numbers_only(true).value("123");
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "  456  \n".into(),
+            line: 1,
+            col: 8,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(input.current_value(), "456");
+    assert!(ctx.notifications().is_empty());
+}
+
+#[test]
+fn numbers_only_input_trims_spaces_when_enter_finishes_editing() {
+    let mut input = TextInput::new()
+        .numbers_only(true)
+        .on_change(|value| format!("change:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
+    input.value = "  456  ".into();
+    input.cursor = input.len_chars();
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(input.current_value(), "456");
+    assert_eq!(
+        ctx.messages(),
+        &["change:456".to_string(), "end:456".to_string()]
+    );
+    assert!(!input.insert_mode());
 }
 
 #[test]

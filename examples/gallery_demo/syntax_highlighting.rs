@@ -1,12 +1,12 @@
 use lumis::languages::Language;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
     Frame,
+    layout::{Constraint, Direction, Layout, Rect},
 };
 use tuicore::{
-    ChildKey, Dropdown, DropdownSearchMode, EventCtx, EventRoute, FocusCtx, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, RenderCtx, TuiEvent, EventOutcome, FocusTarget,
-    TuiNode, SyntaxHighlighter,
+    ChildKey, Dropdown, DropdownSearchMode, EventCtx, EventOutcome, EventRoute, FocusCtx,
+    FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, RenderCtx,
+    SyntaxHighlighter, TuiEvent, TuiNode,
 };
 
 use super::code_samples::*;
@@ -19,15 +19,42 @@ pub(crate) struct LanguageItem {
 
 fn language_items() -> Vec<LanguageItem> {
     vec![
-        LanguageItem { id: Language::Rust, label: "Rust" },
-        LanguageItem { id: Language::JavaScript, label: "JavaScript" },
-        LanguageItem { id: Language::Python, label: "Python" },
-        LanguageItem { id: Language::HTML, label: "HTML" },
-        LanguageItem { id: Language::CSS, label: "CSS" },
-        LanguageItem { id: Language::JSON, label: "JSON" },
-        LanguageItem { id: Language::Toml, label: "TOML" },
-        LanguageItem { id: Language::Bash, label: "Bash" },
-        LanguageItem { id: Language::Markdown, label: "Markdown" },
+        LanguageItem {
+            id: Language::Rust,
+            label: "Rust",
+        },
+        LanguageItem {
+            id: Language::JavaScript,
+            label: "JavaScript",
+        },
+        LanguageItem {
+            id: Language::Python,
+            label: "Python",
+        },
+        LanguageItem {
+            id: Language::HTML,
+            label: "HTML",
+        },
+        LanguageItem {
+            id: Language::CSS,
+            label: "CSS",
+        },
+        LanguageItem {
+            id: Language::JSON,
+            label: "JSON",
+        },
+        LanguageItem {
+            id: Language::Toml,
+            label: "TOML",
+        },
+        LanguageItem {
+            id: Language::Bash,
+            label: "Bash",
+        },
+        LanguageItem {
+            id: Language::Markdown,
+            label: "Markdown",
+        },
     ]
 }
 
@@ -58,8 +85,11 @@ impl tuicore::TuiNode<crate::Msg> for SyntaxHighlightingDemo {
         let dropdown_hint = TuiNode::<crate::Msg>::measure(&self.dropdown, proposal);
         let highlighter_hint = TuiNode::<crate::Msg>::measure(&self.highlighter, proposal);
         LayoutSizeHint::content(
-            dropdown_hint.preferred.width.max(highlighter_hint.preferred.width),
-            dropdown_hint.preferred.height + highlighter_hint.preferred.height + 1
+            dropdown_hint
+                .preferred
+                .width
+                .max(highlighter_hint.preferred.width),
+            dropdown_hint.preferred.height + highlighter_hint.preferred.height + 1,
         )
     }
 
@@ -68,15 +98,15 @@ impl tuicore::TuiNode<crate::Msg> for SyntaxHighlightingDemo {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Fill(1)])
             .areas(area);
-            
+
         ctx.push_slot(ChildKey::new("dropdown"), dropdown_area, |ctx| {
             TuiNode::<crate::Msg>::layout(&mut self.dropdown, dropdown_area, ctx);
         });
-        
+
         ctx.push_slot(ChildKey::new("code"), code_area, |ctx| {
             TuiNode::<crate::Msg>::layout(&mut self.highlighter, code_area, ctx);
         });
-        
+
         LayoutResult::new(area)
     }
 
@@ -85,7 +115,7 @@ impl tuicore::TuiNode<crate::Msg> for SyntaxHighlightingDemo {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Fill(1)])
             .areas(area);
-            
+
         TuiNode::<crate::Msg>::render(&self.dropdown, frame, dropdown_area, ctx);
         TuiNode::<crate::Msg>::render(&self.highlighter, frame, code_area, ctx);
     }
@@ -98,7 +128,8 @@ impl tuicore::TuiNode<crate::Msg> for SyntaxHighlightingDemo {
     ) -> EventOutcome {
         if let Some(child_path) = route.path.without_first_if(&ChildKey::new("dropdown")) {
             let child_route = EventRoute::new(child_path);
-            let outcome = TuiNode::<crate::Msg>::dispatch_event(&mut self.dropdown, &child_route, event, ctx);
+            let outcome =
+                TuiNode::<crate::Msg>::dispatch_event(&mut self.dropdown, &child_route, event, ctx);
             if let Some(selected) = self.dropdown.selected_ids().first() {
                 let source = match selected {
                     Language::Rust => RUST_SAMPLE,
@@ -119,23 +150,46 @@ impl tuicore::TuiNode<crate::Msg> for SyntaxHighlightingDemo {
         }
         if let Some(child_path) = route.path.without_first_if(&ChildKey::new("code")) {
             let child_route = EventRoute::new(child_path);
-            return TuiNode::<crate::Msg>::dispatch_event(&mut self.highlighter, &child_route, event, ctx);
+            return TuiNode::<crate::Msg>::dispatch_event(
+                &mut self.highlighter,
+                &child_route,
+                event,
+                ctx,
+            );
         }
         EventOutcome::Ignored
     }
 
-    fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<crate::Msg>) {
+    fn dispatch_focus(
+        &mut self,
+        target: &FocusTarget,
+        focused: bool,
+        ctx: &mut FocusCtx<crate::Msg>,
+    ) {
         if let Some(child_target) = target.for_child(&ChildKey::new("dropdown")) {
             TuiNode::<crate::Msg>::dispatch_focus(&mut self.dropdown, &child_target, focused, ctx);
         }
         if let Some(child_target) = target.for_child(&ChildKey::new("code")) {
-            TuiNode::<crate::Msg>::dispatch_focus(&mut self.highlighter, &child_target, focused, ctx);
+            TuiNode::<crate::Msg>::dispatch_focus(
+                &mut self.highlighter,
+                &child_target,
+                focused,
+                ctx,
+            );
         }
     }
 
-    fn tick(&mut self, dt: std::time::Duration, settings: tuicore::AnimationSettings) -> tuicore::TickResult {
+    fn tick(
+        &mut self,
+        dt: std::time::Duration,
+        settings: tuicore::AnimationSettings,
+    ) -> tuicore::TickResult {
         let mut result = TuiNode::<crate::Msg>::tick(&mut self.dropdown, dt, settings);
-        result = result.merge(TuiNode::<crate::Msg>::tick(&mut self.highlighter, dt, settings));
+        result = result.merge(TuiNode::<crate::Msg>::tick(
+            &mut self.highlighter,
+            dt,
+            settings,
+        ));
         result
     }
 

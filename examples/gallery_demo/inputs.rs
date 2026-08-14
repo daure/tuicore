@@ -52,12 +52,13 @@ pub(crate) fn password_input_showcase_layout(area: Rect) -> [Rect; 4] {
         .areas(area)
 }
 
-pub(crate) fn text_input_showcase_layout(area: Rect) -> [Rect; 4] {
+pub(crate) fn text_input_showcase_layout(area: Rect) -> [Rect; 5] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(11),
             Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
         ])

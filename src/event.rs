@@ -27,6 +27,7 @@ pub struct ExternalEditorRequest {
     pub value: String,
     pub line: usize,
     pub col: usize,
+    pub file_extension: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
