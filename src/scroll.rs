@@ -7,7 +7,8 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::animation::{
-    Animated, AnimationSettings, AnimationSpec, ResolvedAnimationSpec, ScrollAnimator, TickResult,
+    Animated, AnimationSettings, AnimationSpec, Easing, ResolvedAnimationSpec, ScrollAnimator,
+    TickResult,
 };
 use crate::event::{Key, KeyEvent, KeyModifiers};
 use crate::{KeyBindings, theme, ui::keybindings};
@@ -160,7 +161,7 @@ impl ScrollState {
             .behavior(ScrollBehavior {
                 line_step: preset.line_step,
                 page_overlap: preset.page_overlap,
-                animation: AnimationSpec::default(),
+                animation: scroll_animation_spec(),
             })
             .scrollbars(ScrollbarConfig {
                 vertical: preset.vertical_scrollbar,
@@ -784,8 +785,15 @@ impl Default for ScrollBehavior {
         Self {
             line_step: 1,
             page_overlap: 1,
-            animation: AnimationSpec::default(),
+            animation: scroll_animation_spec(),
         }
+    }
+}
+
+fn scroll_animation_spec() -> AnimationSpec {
+    AnimationSpec {
+        easing: Some(Easing::EaseOutCubic),
+        ..AnimationSpec::default()
     }
 }
 
@@ -974,6 +982,30 @@ mod tests {
         assert_eq!(scroll.offset().x, 1);
         assert_eq!(scroll.target_offset().x, 1);
         assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn repeated_page_keys_start_moving_before_key_release() {
+        let key = KeyEvent {
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+        let viewport = ScrollSize::new(1, 5);
+        let content = ScrollSize::new(1, 40);
+        let settings = AnimationSettings::default();
+
+        for mut scroll in [
+            ScrollState::default(),
+            ScrollState::from_preset(ScrollAxes::Vertical, ScrollPreset::default()),
+        ] {
+            for _ in 0..3 {
+                scroll.on_key(key, viewport, content, settings);
+                scroll.tick(Duration::from_millis(30), settings);
+            }
+
+            assert!(scroll.offset().y > 0);
+            assert!(scroll.is_active());
+        }
     }
 
     #[test]
