@@ -88,6 +88,7 @@ pub struct StatusBar<M = ()> {
     menu_items: Vec<StatusBarMenuItem>,
     theme_dropdown: Dropdown<ThemeChoice, ThemeName>,
     theme_return_focus: Option<FocusRequest>,
+    ai_enabled: bool,
     ai: Button<M>,
     ai_dock: AiDock<M>,
     ai_dock_open: bool,
@@ -126,6 +127,7 @@ where
             menu_items,
             theme_dropdown: theme_dropdown(),
             theme_return_focus: None,
+            ai_enabled: true,
             ai: Button::new(AI_ICON)
                 .hotkey(keybindings.ai_hotkey())
                 .tab_stop(false),
@@ -174,6 +176,14 @@ where
         self.menu_trigger.set_hotkey(self.keybindings.menu_hotkey());
         self.ai.set_hotkey(self.keybindings.ai_hotkey());
         self.rebuild_menu();
+    }
+
+    pub fn ai_enabled(mut self, enabled: bool) -> Self {
+        self.ai_enabled = enabled;
+        if !enabled {
+            self.ai_dock_open = false;
+        }
+        self
     }
 
     pub fn weather_report(mut self, report: WeatherReport) -> Self {
@@ -240,9 +250,11 @@ where
         ctx.push_slot(status_bar_menu_trigger_key(), self.areas.menu, |ctx| {
             self.menu_trigger.layout(self.areas.menu, ctx);
         });
-        ctx.push_slot(status_bar_ai_key(), self.areas.ai, |ctx| {
-            self.ai.layout(self.areas.ai, ctx);
-        });
+        if self.ai_enabled {
+            ctx.push_slot(status_bar_ai_key(), self.areas.ai, |ctx| {
+                self.ai.layout(self.areas.ai, ctx);
+            });
+        }
         ctx.push_slot(status_bar_weather_key(), self.areas.weather, |ctx| {
             self.weather.layout(self.areas.weather, ctx);
         });
@@ -292,7 +304,7 @@ where
         } else {
             self.weather_dialog_path = ctx.current_path().child(status_bar_weather_dialog_key());
         }
-        if self.ai_dock_open {
+        if self.ai_enabled && self.ai_dock_open {
             self.ai_dock_area = bottom_dock_area(overlay_bounds, 80, 80);
             self.ai_dock_path = ctx.current_path().child(status_bar_ai_dock_key());
             ctx.with_global_hotkeys_suppressed(|ctx| {
@@ -308,7 +320,11 @@ where
 
     fn layout_areas(&self, area: Rect, overlay_bounds: Rect) -> StatusBarAreas {
         let menu_width = measured_width(&self.menu_trigger).min(area.width);
-        let ai_width = measured_width(&self.ai).min(area.width.saturating_sub(menu_width));
+        let ai_width = if self.ai_enabled {
+            measured_width(&self.ai).min(area.width.saturating_sub(menu_width))
+        } else {
+            0
+        };
         let action_tail_width = STATUS_ACTION_TAIL_WIDTH.min(
             area.width
                 .saturating_sub(menu_width)
@@ -574,7 +590,11 @@ where
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let width = measured_width(&self.menu_trigger)
-            + measured_width(&self.ai)
+            + if self.ai_enabled {
+                measured_width(&self.ai)
+            } else {
+                0
+            }
             + STATUS_ACTION_TAIL_WIDTH
             + measured_width(&self.weather)
             + measured_width(&self.time);
@@ -589,8 +609,10 @@ where
         let action_bg = theme().surface_bg();
         self.menu_trigger
             .render_with_inactive_background(frame, self.areas.menu, action_bg);
-        self.ai
-            .render_with_inactive_background(frame, self.areas.ai, action_bg);
+        if self.ai_enabled {
+            self.ai
+                .render_with_inactive_background(frame, self.areas.ai, action_bg);
+        }
         frame.render_widget(Paragraph::new(status_action_tail()), self.areas.action_tail);
         let weather_bg = theme().weather_sun_fg();
         let time_bg = theme().accent_fg();
@@ -646,7 +668,7 @@ where
                 ctx,
             );
         }
-        if self.ai_dock_open {
+        if self.ai_enabled && self.ai_dock_open {
             <AiDock<M> as TuiNode<M>>::render(&self.ai_dock, frame, self.ai_dock_area, ctx);
         }
     }
@@ -681,16 +703,18 @@ where
             return outcome;
         }
 
-        if let Some(route) = route
-            .path
-            .without_first_if(&status_bar_ai_key())
-            .map(EventRoute::new)
-        {
-            let outcome = self.ai.dispatch_event(&route, event, ctx);
-            if outcome.handled() && !self.custom_ai_open {
-                self.open_ai_dock(ctx);
+        if self.ai_enabled {
+            if let Some(route) = route
+                .path
+                .without_first_if(&status_bar_ai_key())
+                .map(EventRoute::new)
+            {
+                let outcome = self.ai.dispatch_event(&route, event, ctx);
+                if outcome.handled() && !self.custom_ai_open {
+                    self.open_ai_dock(ctx);
+                }
+                return outcome;
             }
-            return outcome;
         }
 
         if let Some(route) = route
@@ -737,29 +761,31 @@ where
             return self.weather_dialog.dispatch_event(&route, event, ctx);
         }
 
-        if let Some(route) = route
-            .path
-            .without_first_if(&status_bar_ai_dock_key())
-            .map(EventRoute::new)
-        {
-            let outcome = self.ai_dock.dispatch_event(&route, event, ctx);
-            self.close_ai_dock_if_requested(ctx);
-            if outcome.handled() {
-                return outcome;
-            }
-            if ai_dock_close_event(event) {
-                self.close_ai_dock(ctx);
+        if self.ai_enabled {
+            if let Some(route) = route
+                .path
+                .without_first_if(&status_bar_ai_dock_key())
+                .map(EventRoute::new)
+            {
+                let outcome = self.ai_dock.dispatch_event(&route, event, ctx);
+                self.close_ai_dock_if_requested(ctx);
+                if outcome.handled() {
+                    return outcome;
+                }
+                if ai_dock_close_event(event) {
+                    self.close_ai_dock(ctx);
+                    return EventOutcome::Handled;
+                }
+                ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
-            ctx.stop_propagation();
-            return EventOutcome::Handled;
         }
 
         EventOutcome::Ignored
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
-        if self.ai_dock_open {
+        if self.ai_enabled && self.ai_dock_open {
             let outcome = self.ai_dock.event(event, ctx);
             self.close_ai_dock_if_requested(ctx);
             if outcome.handled() {
@@ -778,7 +804,7 @@ where
         if status_menu_hotkey(event, &self.keybindings) {
             return self.toggle_menu(ctx);
         }
-        if status_ai_hotkey(event, &self.keybindings) {
+        if self.ai_enabled && status_ai_hotkey(event, &self.keybindings) {
             let outcome = self.ai.event(event, ctx);
             if !self.custom_ai_open {
                 self.open_ai_dock(ctx);
@@ -806,7 +832,9 @@ where
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
         if let Some(target) = target.for_child(&status_bar_menu_trigger_key()) {
             self.menu_trigger.dispatch_focus(&target, focused, ctx);
-        } else if let Some(target) = target.for_child(&status_bar_ai_key()) {
+        } else if self.ai_enabled
+            && let Some(target) = target.for_child(&status_bar_ai_key())
+        {
             self.ai.dispatch_focus(&target, focused, ctx);
         } else if let Some(target) = target.for_child(&status_bar_weather_key()) {
             self.weather.dispatch_focus(&target, focused, ctx);
@@ -818,7 +846,9 @@ where
             self.theme_dropdown.dispatch_focus(&target, focused, ctx);
         } else if let Some(target) = target.for_child(&status_bar_weather_dialog_key()) {
             self.weather_dialog.dispatch_focus(&target, focused, ctx);
-        } else if let Some(target) = target.for_child(&status_bar_ai_dock_key()) {
+        } else if self.ai_enabled
+            && let Some(target) = target.for_child(&status_bar_ai_dock_key())
+        {
             self.ai_dock.dispatch_focus(&target, focused, ctx);
         }
     }
@@ -835,7 +865,11 @@ where
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         Animated::tick(&mut self.menu_trigger, dt, settings)
-            .merge(Animated::tick(&mut self.ai, dt, settings))
+            .merge(if self.ai_enabled {
+                Animated::tick(&mut self.ai, dt, settings)
+            } else {
+                TickResult::IDLE
+            })
             .merge(self.drain_weather_fetch())
             .merge(<WeatherIndicator<M> as TuiNode<M>>::tick(
                 &mut self.weather,
@@ -853,7 +887,7 @@ where
                 dt,
                 settings,
             ))
-            .merge(if self.ai_dock_open {
+            .merge(if self.ai_enabled && self.ai_dock_open {
                 <AiDock<M> as TuiNode<M>>::tick(&mut self.ai_dock, dt, settings)
             } else {
                 TickResult::IDLE
@@ -1077,6 +1111,52 @@ mod tests {
                 .iter()
                 .all(|target| target.path.first() != Some(&status_bar_weather_key()))
         );
+    }
+
+    #[test]
+    fn disabled_ai_removes_control_hotkey_and_builtin_dock_access() {
+        let area = Rect::new(0, 0, 80, 1);
+        let enabled_width = StatusBar::<()>::new()
+            .measure(LayoutProposal::unbounded())
+            .preferred
+            .width;
+        let mut status = StatusBar::<()>::new().ai_enabled(false);
+        let disabled_width = status.measure(LayoutProposal::unbounded()).preferred.width;
+        let mut layout = LayoutCtx::new();
+
+        status.layout(area, &mut layout);
+
+        assert_eq!(status.areas.ai.width, 0);
+        assert_eq!(enabled_width - disabled_width, measured_width(&status.ai));
+        assert!(
+            layout
+                .focus_targets()
+                .iter()
+                .all(|target| target.path.first() != Some(&status_bar_ai_key()))
+        );
+        assert!(
+            layout
+                .hit_regions()
+                .iter()
+                .all(|region| region.path.first() != Some(&status_bar_ai_key()))
+        );
+
+        let mut hotkey_ctx = EventCtx::default();
+        let hotkey_outcome = status.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('\''))),
+            &mut hotkey_ctx,
+        );
+        assert!(!hotkey_outcome.handled());
+        assert!(!status.ai_dock_open);
+
+        let mut routed_ctx = EventCtx::default();
+        let routed_outcome = status.dispatch_event(
+            &EventRoute::new(TreePath::from_keys([status_bar_ai_dock_key()])),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('z'))),
+            &mut routed_ctx,
+        );
+        assert!(!routed_outcome.handled());
+        assert_eq!(routed_ctx.propagation(), Propagation::Continue);
     }
 
     #[test]
