@@ -1042,8 +1042,7 @@ where
     }
 
     fn summary_entry_line(&self, index: usize) -> Line<'static> {
-        if self.render_entry.is_none()
-            && let Some((breakpoint, title)) = &self.compact_summary_title
+        if let Some((breakpoint, title)) = &self.compact_summary_title
             && self.area.width < *breakpoint
         {
             return Line::from(title(&self.entries[index]));

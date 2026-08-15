@@ -1211,6 +1211,36 @@ fn month_event_summary_uses_up_to_two_lines() {
 }
 
 #[test]
+fn compact_summary_title_overrides_custom_entry_renderer() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [DemoEntry {
+            id: "ID-1",
+            title: "Full title",
+            span: CalendarSpan::all_day(day),
+        }],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .render_entry(|entry| Line::from(format!("{} {}", entry.id, entry.title)))
+    .compact_summary_title(100, |entry| entry.title.to_string());
+    calendar.layout(Rect::new(0, 0, 80, 12), &mut LayoutCtx::new());
+    let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
+        .unwrap();
+    let rendered = (0..4)
+        .map(|y| buffer_row(terminal.backend().buffer(), y, 10))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Full"), "{rendered}");
+    assert!(!rendered.contains("ID-1"), "{rendered}");
+}
+
+#[test]
 fn week_event_summary_wraps_to_three_lines_then_shows_more_without_overlap() {
     let day = date(2026, Month::June, 22);
     let calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
