@@ -1132,12 +1132,11 @@ mod tests {
     }
 
     #[test]
-    fn render_uses_current_theme_even_without_focus_change() {
-        let _lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
-        let original = theme();
-        crate::set_theme(crate::Theme::named(crate::ThemeName::Vercel));
-        let panel = Panel::new();
-        crate::set_theme(crate::Theme::named(crate::ThemeName::Dracula));
+    fn render_uses_current_theme_instead_of_stale_idle_colors() {
+        let stale_theme = crate::Theme::named(crate::ThemeName::Dracula);
+        let mut panel = Panel::new();
+        panel.border_color.snap_to(stale_theme.border_fg());
+        panel.title_color.snap_to(stale_theme.muted_fg());
         let expected = theme().border_fg();
         let mut terminal = Terminal::new(TestBackend::new(12, 4)).expect("terminal should build");
 
@@ -1149,7 +1148,6 @@ mod tests {
             terminal.backend().buffer().cell((0, 0)).unwrap().fg,
             expected
         );
-        crate::set_theme(original);
     }
 
     #[test]
