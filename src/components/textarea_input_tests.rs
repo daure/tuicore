@@ -542,8 +542,30 @@ fn measure_respects_min_and_max_rows_without_clamping_value() {
 
     let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded());
 
+    assert_eq!(hint.min.height, 2);
     assert_eq!(hint.preferred.height, 3);
     assert_eq!(input.current_value(), "one\ntwo\nthree\nfour");
+}
+
+#[test]
+fn min_rows_is_measured_minimum_with_panel_chrome() {
+    let plain = TextareaInput::<()>::new()
+        .min_rows(2)
+        .max_rows(3)
+        .value("one\ntwo\nthree\nfour");
+    let panel = TextareaInput::<()>::new()
+        .min_rows(2)
+        .max_rows(3)
+        .value("one\ntwo\nthree\nfour")
+        .panel("Notes");
+
+    let plain_hint = plain.measure(LayoutProposal::unbounded());
+    let panel_hint = panel.measure(LayoutProposal::unbounded());
+
+    assert_eq!(plain_hint.min.height, 2);
+    assert_eq!(plain_hint.preferred.height, 3);
+    assert_eq!(panel_hint.min.height, 4);
+    assert_eq!(panel_hint.preferred.height, 5);
 }
 
 #[test]

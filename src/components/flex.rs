@@ -41,6 +41,7 @@ pub enum CrossSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlexItem {
     main: FlexMain,
+    shrink: u16,
     cross: CrossSize,
     align_self: Option<CrossAlign>,
 }
@@ -82,6 +83,7 @@ impl FlexItem {
     pub fn fixed(size: u16) -> Self {
         Self {
             main: FlexMain::Fixed(size),
+            shrink: 0,
             cross: CrossSize::Auto,
             align_self: None,
         }
@@ -90,6 +92,7 @@ impl FlexItem {
     pub fn fill(weight: u16) -> Self {
         Self {
             main: FlexMain::Fill(weight.max(1)),
+            shrink: 0,
             cross: CrossSize::Auto,
             align_self: None,
         }
@@ -98,6 +101,7 @@ impl FlexItem {
     pub fn percent(percent: u16) -> Self {
         Self {
             main: FlexMain::Percent(percent.min(100)),
+            shrink: 0,
             cross: CrossSize::Auto,
             align_self: None,
         }
@@ -106,6 +110,7 @@ impl FlexItem {
     pub fn fit_content() -> Self {
         Self {
             main: FlexMain::FitContent,
+            shrink: 1,
             cross: CrossSize::Auto,
             align_self: None,
         }
@@ -113,6 +118,17 @@ impl FlexItem {
 
     pub fn content() -> Self {
         Self::fit_content()
+    }
+
+    /// Sets this item's relative shrink factor.
+    ///
+    /// A factor of `0` disables shrinking. Positive factors control how much
+    /// fit-content/content items yield relative to siblings, down to their measured minimum.
+    /// Fixed, percent, and fill items remain non-shrinkable, so calling this on them has no
+    /// layout effect.
+    pub fn shrink(mut self, factor: u16) -> Self {
+        self.shrink = factor;
+        self
     }
 
     pub fn cross_size(mut self, cross: CrossSize) -> Self {
@@ -672,7 +688,12 @@ impl<M> Flex<M> {
                 FlexMain::FitContent => {
                     let (preferred, min) =
                         self.fit_content_basis(child, proposal, available.unwrap_or(1));
-                    (min, preferred)
+                    let effective_min = if child.item.shrink == 0 {
+                        preferred
+                    } else {
+                        min
+                    };
+                    (effective_min, preferred)
                 }
             };
             min_total = min_total.saturating_add(min);
@@ -844,6 +865,7 @@ fn distribute_spare(spare: u32, buckets: usize) -> Vec<u32> {
 }
 
 fn shrink_fit_content(items: &[FlexChild], bases: &mut [u32], minimums: &[u32], available: u32) {
+    let original_bases = bases.to_vec();
     let total = bases
         .iter()
         .fold(0u32, |sum, basis| sum.saturating_add(*basis));
@@ -852,24 +874,56 @@ fn shrink_fit_content(items: &[FlexChild], bases: &mut [u32], minimums: &[u32], 
         return;
     }
 
-    loop {
-        let mut shrunk_any = false;
-        for (index, child) in items.iter().enumerate() {
-            if debt == 0 {
-                return;
-            }
-            if !matches!(child.item.main, FlexMain::FitContent) {
-                continue;
-            }
-            if bases[index] > minimums[index] {
-                bases[index] -= 1;
-                debt -= 1;
-                shrunk_any = true;
-            }
-        }
-        if !shrunk_any {
+    while debt > 0 {
+        let weights = items
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                if matches!(child.item.main, FlexMain::FitContent)
+                    && child.item.shrink > 0
+                    && bases[index] > minimums[index]
+                {
+                    u64::from(child.item.shrink) * u64::from(original_bases[index])
+                } else {
+                    0
+                }
+            })
+            .collect::<Vec<_>>();
+        let total_weight = weights.iter().copied().sum::<u64>();
+        if total_weight == 0 {
             break;
         }
+
+        let round_debt = debt;
+        let mut shares = weights
+            .iter()
+            .map(|weight| u64::from(round_debt) * *weight / total_weight)
+            .collect::<Vec<_>>();
+        let distributed = shares.iter().copied().sum::<u64>();
+        let mut remainder = u64::from(round_debt).saturating_sub(distributed);
+        for (share, weight) in shares.iter_mut().zip(&weights) {
+            if remainder == 0 {
+                break;
+            }
+            if *weight > 0 {
+                *share += 1;
+                remainder -= 1;
+            }
+        }
+
+        let mut applied = 0u32;
+        for index in 0..bases.len() {
+            let capacity = bases[index].saturating_sub(minimums[index]);
+            let shrink = u32::try_from(shares[index])
+                .unwrap_or(u32::MAX)
+                .min(capacity);
+            bases[index] -= shrink;
+            applied = applied.saturating_add(shrink);
+        }
+        if applied == 0 {
+            break;
+        }
+        debt = debt.saturating_sub(applied);
     }
 }
 
@@ -934,6 +988,31 @@ mod tests {
         }
 
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+    }
+
+    struct RecordingMeasuredProbe {
+        min: LayoutSize,
+        preferred: LayoutSize,
+        rect: Rc<RefCell<Option<Rect>>>,
+    }
+
+    impl TuiNode<()> for RecordingMeasuredProbe {
+        fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
+            LayoutSizeHint {
+                source: HintSource::Measured,
+                min: self.min,
+                preferred: self.preferred,
+                expand: crate::AxisExpand::default(),
+            }
+            .normalized(proposal)
+        }
+
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            *self.rect.borrow_mut() = Some(area);
             LayoutResult::new(area)
         }
 
@@ -1094,6 +1173,80 @@ mod tests {
 
         assert_eq!(hint.min.width, 2);
         assert_eq!(hint.preferred.width, 9);
+    }
+
+    #[test]
+    fn flex_protected_content_reports_proposal_resolved_basis_as_minimum() {
+        let flex = Flex::row().child(
+            "protected",
+            MeasuredProbe {
+                min: LayoutSize::new(2, 1),
+                preferred: LayoutSize::new(8, 1),
+            },
+            FlexItem::content().shrink(0),
+        );
+
+        let unbounded = flex.measure(LayoutProposal::unbounded());
+        let bounded = flex.measure(LayoutProposal::at_most(5, 1));
+
+        assert_eq!(unbounded.min.width, 8);
+        assert_eq!(unbounded.preferred.width, 8);
+        assert_eq!(bounded.min.width, 5);
+        assert_eq!(bounded.preferred.width, 5);
+    }
+
+    #[test]
+    fn flex_mixed_content_minimum_combines_protected_basis_shrinkable_minimum_and_spacing() {
+        let flex = Flex::row()
+            .gap(1)
+            .child(
+                "protected",
+                MeasuredProbe {
+                    min: LayoutSize::new(2, 1),
+                    preferred: LayoutSize::new(8, 1),
+                },
+                FlexItem::content().shrink(0),
+            )
+            .child(
+                "shrinkable",
+                MeasuredProbe {
+                    min: LayoutSize::new(3, 1),
+                    preferred: LayoutSize::new(7, 1),
+                },
+                FlexItem::content(),
+            );
+
+        let hint = flex.measure(LayoutProposal::unbounded());
+
+        assert_eq!(hint.min.width, 12);
+        assert_eq!(hint.preferred.width, 16);
+    }
+
+    #[test]
+    fn nested_flex_at_reported_minimum_preserves_protected_content_without_overflow() {
+        let protected_rect = Rc::new(RefCell::new(None));
+        let nested = Flex::row().child(
+            "protected",
+            RecordingMeasuredProbe {
+                min: LayoutSize::new(2, 1),
+                preferred: LayoutSize::new(8, 1),
+                rect: Rc::clone(&protected_rect),
+            },
+            FlexItem::content().shrink(0),
+        );
+        let reported_min = nested.measure(LayoutProposal::unbounded()).min.width;
+        let mut outer = Flex::row().child("nested", nested, FlexItem::fixed(reported_min));
+        let mut ctx = LayoutCtx::new();
+
+        outer.layout(Rect::new(0, 0, reported_min, 1), &mut ctx);
+
+        assert_eq!(reported_min, 8);
+        assert_eq!(
+            outer.child_rect(&ChildKey::from("nested")),
+            Some(Rect::new(0, 0, 8, 1))
+        );
+        assert_eq!(*protected_rect.borrow(), Some(Rect::new(0, 0, 8, 1)));
+        assert!(ctx.overflow_diagnostics().is_empty());
     }
 
     #[test]
@@ -1366,5 +1519,127 @@ mod tests {
 
         assert_eq!(flex.child_rect(&ChildKey::from("one")).unwrap().width, 7);
         assert_eq!(flex.child_rect(&ChildKey::from("two")).unwrap().width, 6);
+    }
+
+    #[test]
+    fn flex_shrink_zero_protects_content_while_sibling_absorbs_debt() {
+        let mut flex = Flex::row()
+            .child(
+                "protected",
+                MeasuredProbe {
+                    min: LayoutSize::new(4, 1),
+                    preferred: LayoutSize::new(8, 1),
+                },
+                FlexItem::content().shrink(0),
+            )
+            .child(
+                "yielding",
+                MeasuredProbe {
+                    min: LayoutSize::new(2, 1),
+                    preferred: LayoutSize::new(10, 1),
+                },
+                FlexItem::content().shrink(1),
+            );
+
+        flex.layout(Rect::new(0, 0, 10, 1), &mut LayoutCtx::new());
+
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("protected")).unwrap().width,
+            8
+        );
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("yielding")).unwrap().width,
+            2
+        );
+    }
+
+    #[test]
+    fn flex_shrink_uses_factor_times_original_basis() {
+        let mut flex = Flex::row()
+            .child(
+                "wide",
+                MeasuredProbe {
+                    min: LayoutSize::new(1, 1),
+                    preferred: LayoutSize::new(12, 1),
+                },
+                FlexItem::content().shrink(1),
+            )
+            .child(
+                "weighted",
+                MeasuredProbe {
+                    min: LayoutSize::new(1, 1),
+                    preferred: LayoutSize::new(6, 1),
+                },
+                FlexItem::content().shrink(2),
+            );
+
+        flex.layout(Rect::new(0, 0, 12, 1), &mut LayoutCtx::new());
+
+        assert_eq!(flex.child_rect(&ChildKey::from("wide")).unwrap().width, 9);
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("weighted")).unwrap().width,
+            3
+        );
+    }
+
+    #[test]
+    fn flex_shrink_redistributes_debt_after_item_reaches_minimum() {
+        let mut flex = Flex::row()
+            .child(
+                "limited",
+                MeasuredProbe {
+                    min: LayoutSize::new(8, 1),
+                    preferred: LayoutSize::new(10, 1),
+                },
+                FlexItem::content().shrink(3),
+            )
+            .child(
+                "flexible",
+                MeasuredProbe {
+                    min: LayoutSize::new(0, 1),
+                    preferred: LayoutSize::new(10, 1),
+                },
+                FlexItem::content().shrink(1),
+            );
+
+        flex.layout(Rect::new(0, 0, 10, 1), &mut LayoutCtx::new());
+
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("limited")).unwrap().width,
+            8
+        );
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("flexible")).unwrap().width,
+            2
+        );
+    }
+
+    #[test]
+    fn flex_all_shrink_zero_overflows_instead_of_resizing_protected_items() {
+        let mut flex = Flex::row()
+            .child(
+                "one",
+                MeasuredProbe {
+                    min: LayoutSize::new(2, 1),
+                    preferred: LayoutSize::new(8, 1),
+                },
+                FlexItem::content().shrink(0),
+            )
+            .child(
+                "two",
+                MeasuredProbe {
+                    min: LayoutSize::new(2, 1),
+                    preferred: LayoutSize::new(8, 1),
+                },
+                FlexItem::content().shrink(0),
+            );
+        let mut ctx = LayoutCtx::new();
+
+        flex.layout(Rect::new(0, 0, 10, 1), &mut ctx);
+
+        assert_eq!(flex.child_rect(&ChildKey::from("one")).unwrap().width, 8);
+        assert_eq!(flex.child_rect(&ChildKey::from("two")).unwrap().width, 2);
+        assert_eq!(ctx.overflow_diagnostics()[0].needed, 16);
+        assert_eq!(ctx.overflow_diagnostics()[0].available, 10);
     }
 }

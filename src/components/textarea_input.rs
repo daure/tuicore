@@ -526,6 +526,10 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    /// Sets minimum content rows. Panel chrome adds two outer rows.
+    ///
+    /// Zero becomes one. Minimum and maximum normalize so minimum never exceeds maximum,
+    /// regardless of builder order.
     pub fn min_rows(mut self, min_rows: usize) -> Self {
         self.min_rows = self
             .max_rows
@@ -533,6 +537,10 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    /// Sets maximum content rows. Panel chrome adds two outer rows.
+    ///
+    /// Zero becomes one. Minimum and maximum normalize so minimum never exceeds maximum,
+    /// regardless of builder order.
     pub fn max_rows(mut self, max_rows: usize) -> Self {
         self.max_rows = Some(max_rows.max(1));
         if let Some(max_rows) = self.max_rows
@@ -762,11 +770,20 @@ impl<M> TextareaInput<M> {
     }
 
     fn chrome_measure(&self, width: u16, height: u16, proposal: LayoutProposal) -> LayoutSizeHint {
-        let (width, height) = match self.chrome {
-            InputChrome::Plain => (width, height),
-            InputChrome::Panel(_) => (width.saturating_add(2), height.saturating_add(2)),
+        let chrome_height = match self.chrome {
+            InputChrome::Plain => 0,
+            InputChrome::Panel(_) => 2,
         };
-        LayoutSizeHint::content(width, height).normalized(proposal)
+        let width = match self.chrome {
+            InputChrome::Plain => width,
+            InputChrome::Panel(_) => width.saturating_add(2),
+        };
+        let height = height.saturating_add(chrome_height);
+        let min_height =
+            (self.min_rows.min(u16::MAX as usize) as u16).saturating_add(chrome_height);
+        let mut hint = LayoutSizeHint::content(width, height);
+        hint.min.height = min_height;
+        hint.normalized(proposal)
     }
 
     fn visible_outer_height(&self, width: u16, available: u16) -> u16 {

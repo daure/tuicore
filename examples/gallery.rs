@@ -3438,7 +3438,7 @@ impl PreviewState {
         render_layout_intro(
             frame,
             area,
-            "Flex: fixed + fit-content + fill with gap 2 and horizontal/vertical padding 2/1.",
+            "Flex: fixed, fit-content, fill, and CSS-like content shrink factors.",
         );
         self.layout_flex.render(frame, layout_demo_body(area), ctx);
     }

@@ -2,11 +2,11 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::Paragraph as RatatuiParagraph;
 use tuicore::{
     Flex, FlexItem, Gap, Grid, GridItem, GridTrack, HintSource, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSize, LayoutSizeHint, Overlay, OverlayAnchor, OverlaySize, Separator,
-    SeparatorColorRole, Split, Stack, StackAlign, StackItem, TuiNode,
+    LayoutResult, LayoutSize, LayoutSizeHint, Overlay, OverlayAnchor, OverlaySize, Paragraph,
+    Separator, SeparatorColorRole, Split, Stack, StackAlign, StackItem, TuiNode,
 };
 
 use crate::Msg;
@@ -52,13 +52,12 @@ impl TuiNode<Msg> for DemoBox {
             Line::from(self.body),
             Line::from(format!("rect: {}×{}", area.width, area.height)),
         ];
-        frame.render_widget(Paragraph::new(lines), area);
+        frame.render_widget(RatatuiParagraph::new(lines), area);
     }
 }
 
 pub(crate) fn layout_flex_demo() -> Flex<Msg> {
-    Flex::row()
-        .padding(tuicore::Padding::horizontal_vertical(2, 1))
+    let sizing = Flex::row()
         .gap(2)
         .separator(Separator::new().role(SeparatorColorRole::Subtle))
         .child(
@@ -75,7 +74,36 @@ pub(crate) fn layout_flex_demo() -> Flex<Msg> {
             "fill",
             DemoBox::new("Fill", "takes the rest", 12, 3),
             FlexItem::fill(1),
+        );
+    let shrink = Flex::row()
+        .child(
+            "protected",
+            DemoBox::new("shrink(0) protected", "keeps 20 cols", 20, 3),
+            FlexItem::content().shrink(0),
         )
+        .child(
+            "yielding",
+            DemoBox::new("shrink(1) yields", "28 → 16 cols", 28, 3),
+            FlexItem::content().shrink(1),
+        );
+    let constrained = Flex::row()
+        .child("shrink", shrink, FlexItem::fixed(36))
+        .child(
+            "constraint",
+            Paragraph::new("← constrained to 36 cols"),
+            FlexItem::fill(1),
+        );
+
+    Flex::column()
+        .padding(tuicore::Padding::horizontal_vertical(2, 1))
+        .gap(1)
+        .child("sizing", sizing, FlexItem::fixed(3))
+        .child(
+            "shrink-label",
+            Paragraph::new("Shrink factors: content basis yields to measured minimum"),
+            FlexItem::fixed(1),
+        )
+        .child("shrink-demo", constrained, FlexItem::fixed(3))
 }
 
 pub(crate) fn layout_split_demo() -> Split<DemoBox, DemoBox> {
@@ -164,7 +192,7 @@ pub(crate) fn layout_grid_demo() -> Grid<Msg> {
 }
 
 pub(crate) fn render_layout_intro(frame: &mut Frame, area: Rect, text: &'static str) {
-    frame.render_widget(Paragraph::new(text), layout_demo_header(area));
+    frame.render_widget(RatatuiParagraph::new(text), layout_demo_header(area));
 }
 
 fn layout_demo_header(area: Rect) -> Rect {

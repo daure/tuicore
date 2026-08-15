@@ -46,7 +46,9 @@ Low-level custom-loop exports exist but normal apps should not need them: `Termi
 ## Layout and layers
 
 - `Flex::row()`/`column()`: keyed children with `FlexItem::{fixed, fill, percent, fit_content,
-  content}`; configure gap, separator, padding, `MainAlign`, `CrossAlign`, `CrossSize`.
+  content}`; configure gap, separator, padding, `MainAlign`, `CrossAlign`, `CrossSize`. Content modes
+  default to shrink factor 1; use `.shrink(weight)` for relative yielding, `.shrink(0)` to protect an
+  item, and measured minimum as shrink floor.
 - `Grid::new()`: `GridTrack::{fixed, percent, fill, fit_content}` and `GridItem::new(row, column)`;
   configure spans, alignment, gaps, padding, `GridSeparators`, and `GridSeparatorAxes`.
 - `Split::horizontal`/`vertical`: two panes with ratio/constraints, gap, separator.
@@ -75,7 +77,7 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `InputChrome`, `InputPanelChrome`, `InputOutcome`, `TextInputKeyBindings` configure behavior.
 - `TextareaInput<M>`: multiline equivalent with rows, wrapping, optional live syntax highlighting
   via `language(Language)`, external editor, repeatable message-producing `action_hotkey` bindings,
-  and `TextareaInputKeyBindings`.
+  and `TextareaInputKeyBindings`; `min_rows` is measured minimum height before panel chrome.
 - `TagInput<Id>`: `new(strings)` or `with_options`; configure selected/custom tags, placeholder,
   hotkey/style/panel; drain `take_events() -> Vec<TagInputEvent<Id>>`. Values use `SelectedTag`.
 
