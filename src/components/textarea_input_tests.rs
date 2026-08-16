@@ -1606,7 +1606,7 @@ fn disabled_textarea_allows_horizontal_vertical_and_shortcut_navigation() {
 }
 
 #[test]
-fn disabled_textarea_uses_dashed_panel_border() {
+fn disabled_textarea_uses_rounded_dashed_panel_border() {
     let input = TextareaInput::<()>::new()
         .value("locked")
         .panel("Notes")
@@ -1618,7 +1618,10 @@ fn disabled_textarea_uses_dashed_panel_border() {
         .expect("textarea should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "┌");
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "╭");
+    assert_eq!(buffer.cell((11, 0)).unwrap().symbol(), "╮");
+    assert_eq!(buffer.cell((0, 2)).unwrap().symbol(), "╰");
+    assert_eq!(buffer.cell((11, 2)).unwrap().symbol(), "╯");
     assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "╎");
     assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), "-");
     assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().border_fg());

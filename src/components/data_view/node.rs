@@ -5,8 +5,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::{
-    ChoiceDropdown, DATA_VIEW_FOCUS, DataView, DataViewInteraction, FILTER_DROPDOWN_SLOT,
-    HEADER_PICK_TIMEOUT, ReorderHighlightPhase, SEARCH_SLOT, TEXT_INPUT_FOCUS,
+    ChoiceDropdown, DATA_VIEW_FOCUS, DataView, DataViewInteraction, DataViewVerticalScroll,
+    FILTER_DROPDOWN_SLOT, HEADER_PICK_TIMEOUT, ReorderHighlightPhase, SEARCH_SLOT,
+    TEXT_INPUT_FOCUS,
 };
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
@@ -66,14 +67,27 @@ where
             .visible_row_geometry()
             .total_height()
             .min(u16::MAX as usize) as u16;
-        LayoutSizeHint::content(
-            width,
-            action_bar
-                .saturating_add(header)
-                .saturating_add(rows)
-                .max(1),
-        )
-        .normalized(proposal)
+        let base_height = action_bar
+            .saturating_add(header)
+            .saturating_add(rows)
+            .max(1);
+        let proposed_width = match proposal.width {
+            crate::AxisProposal::Unbounded => u16::MAX,
+            crate::AxisProposal::AtMost(width) | crate::AxisProposal::Exact(width) => width,
+        };
+        let mut height = base_height;
+        for _ in 0..3 {
+            let area = Rect::new(0, 0, proposed_width, height);
+            let body = self.body_area(area);
+            let geometry = self.scroll_geometry(area);
+            let next = base_height
+                .saturating_add(body.height.saturating_sub(geometry.layout.viewport.height));
+            if next == height {
+                break;
+            }
+            height = next;
+        }
+        LayoutSizeHint::content(width, height).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
@@ -82,15 +96,20 @@ where
         if width_changed {
             self.scroll.snap_horizontal_to_start();
         }
+        let focus_area = if self.vertical_scroll == DataViewVerticalScroll::ParentDelegated {
+            self.highlighted_row_area()
+        } else {
+            area
+        };
         if let Some(hotkey) = &self.hotkey {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATA_VIEW_FOCUS),
-                area,
+                focus_area,
                 true,
                 vec![hotkey.clone()],
             );
         } else {
-            ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), area, true);
+            ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), focus_area, true);
         }
         ctx.set_focus_receives_events_before_global_hotkeys(
             FocusId::new(DATA_VIEW_FOCUS),
@@ -138,6 +157,30 @@ where
         let before_interaction = self.interaction.clone();
         let before_visible_rows = self.visible_row_count();
         let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
+        let delegated_boundary = self.vertical_scroll == DataViewVerticalScroll::ParentDelegated
+            && !outcome.changed
+            && !outcome.active
+            && !outcome.activated
+            && (bindings.line_up_matches(*key)
+                || bindings.line_down_matches(*key)
+                || bindings.page_up_matches(*key)
+                || bindings.page_down_matches(*key)
+                || bindings.home_matches(*key)
+                || bindings.end_matches(*key));
+        let delegated_line_navigation = self.vertical_scroll
+            == DataViewVerticalScroll::ParentDelegated
+            && (bindings.line_up_matches(*key) || bindings.line_down_matches(*key));
+        if self.vertical_scroll == DataViewVerticalScroll::ParentDelegated {
+            self.scroll.snap_vertical_to_start();
+            if !delegated_boundary && outcome.changed && delegated_line_navigation {
+                ctx.request_reveal_centered(self.highlighted_row_area());
+            } else if !delegated_boundary && outcome.handled {
+                ctx.request_reveal(self.highlighted_row_area());
+            }
+            if outcome.changed && !delegated_line_navigation {
+                ctx.request_layout();
+            }
+        }
         if self.visible_row_count() != before_visible_rows {
             ctx.request_layout();
         }
@@ -165,7 +208,9 @@ where
             ctx.request_redraw();
         }
         if outcome.handled || focused_search || popup_open {
-            ctx.stop_propagation();
+            if !delegated_boundary {
+                ctx.stop_propagation();
+            }
             EventOutcome::Handled
         } else {
             EventOutcome::Ignored
@@ -277,5 +322,14 @@ where
         if target.path.is_empty() {
             self.focus(Some(&target.id), focused, ctx);
         }
+    }
+
+    fn focus_reveal_area(&self, target: &FocusTarget) -> Option<Rect> {
+        (self.vertical_scroll == DataViewVerticalScroll::ParentDelegated && target.path.is_empty())
+            .then(|| self.highlighted_row_area())
+    }
+
+    fn focus_reveal_centered(&self, target: &FocusTarget) -> bool {
+        self.vertical_scroll == DataViewVerticalScroll::ParentDelegated && target.path.is_empty()
     }
 }

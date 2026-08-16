@@ -93,6 +93,14 @@ pub(crate) fn dropdown_filled_searchable_none_immediate() -> Dropdown<DropdownDe
         .alt_style(true)
 }
 
+pub(crate) fn dropdown_disabled() -> Dropdown<DropdownDemoItem, &'static str> {
+    dropdown_fuzzy_single()
+        .selected_one("omega")
+        .label("Read-only")
+        .hotkey("7")
+        .disabled(true)
+}
+
 pub(crate) fn dropdown_preview_layout(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
@@ -111,13 +119,18 @@ fn dropdown_columns(area: Rect) -> [Rect; 3] {
         .areas(area)
 }
 
-pub(crate) fn dropdown_grid_areas(area: Rect) -> [Rect; 6] {
-    let rows: [Rect; 2] = Layout::default()
+pub(crate) fn dropdown_grid_areas(area: Rect) -> [Rect; 7] {
+    let rows: [Rect; 3] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .areas(area);
     let bordered = dropdown_columns(rows[0]);
     let filled = dropdown_columns(rows[1]);
+    let disabled = dropdown_columns(rows[2]);
     [
         bordered[0],
         bordered[1],
@@ -125,6 +138,7 @@ pub(crate) fn dropdown_grid_areas(area: Rect) -> [Rect; 6] {
         filled[0],
         filled[1],
         filled[2],
+        disabled[1],
     ]
 }
 
@@ -152,7 +166,7 @@ pub(crate) fn dropdown_index(key: &ChildKey) -> Option<usize> {
         .strip_prefix("dropdown-")?
         .parse()
         .ok()
-        .filter(|index| *index < 6)
+        .filter(|index| *index < 7)
 }
 
 pub(crate) fn dropdown_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {

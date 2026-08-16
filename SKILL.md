@@ -27,6 +27,8 @@ Prefer `TreeApp::new(root).run()`; configure `animation_settings`, `terminal_foc
 `Dim(FocusDimSettings)`. `EventCtx` emits messages and requests focus, redraw, layout, clear, quit,
 notifications, clipboard, or external-editor work. `FocusCtx` and `LifecycleCtx` expose relevant
 subsets. `EventOutcome::{Ignored, Handled}` and `Propagation::{Continue, Stopped}` describe routing.
+Cursor-owning children can request an ancestor viewport reveal with `EventCtx::request_reveal` or
+`request_reveal_centered`; only events initiate these requests.
 
 Use `ChildSlot::new(key, child)` or `Children::new().child(...)` for custom composites. Their APIs
 forward measure/layout/events/focus/tick/lifecycle and support context-aware insert/replace/remove.
@@ -54,6 +56,29 @@ asynchronous work needs polling beyond the current animation window. Runtime err
   configure spans, alignment, gaps, padding, `GridSeparators`, and `GridSeparatorAxes`.
 - `Split::horizontal`/`vertical`: two panes with ratio/constraints, gap, separator.
 - `Stack::new()`: overlap using `StackItem`, `StackAlign`, and `StackSize`; use `Tabs` for pages.
+- `ScrollContainer::vertical(child)`: one viewport, `ScrollState`, and scrollbar around arbitrary
+  measured `TuiNode` content. Use `FlexItem::fill(1)` for its viewport and `fit_content()` for
+  stacked content: the child measures to natural height, while the container clips and translates
+  it. Configure `scrollbars`, `scroll_behavior`, `padding`, and `focus_reveal`. Child input routes
+  first; unhandled configured keys and wheel events scroll the container. Tab focus auto-reveals
+  descendants. `horizontal` and `both` select other axes. Copy `examples/scroll_container.rs` for
+  mixed content or stacked tree DataViews.
+
+  ```rust
+  let page = ScrollContainer::vertical(
+      Flex::<()>::column()
+          .gap(1)
+          .child("sprint-5", sprint_5.parent_vertical_scroll(), FlexItem::fit_content())
+          .child("backlog", backlog.hotkey("shift+b").parent_vertical_scroll(), FlexItem::fit_content()),
+  )
+  .scrollbars(ScrollbarConfig::default())
+  .focus_reveal(true);
+
+  let root = Flex::<()>::column().child("page", page, FlexItem::fill(1));
+  ```
+
+  Custom composite nodes forward `focus_reveal_area` and `focus_reveal_centered` through the same
+  child path as `dispatch_focus`; their defaults preserve ordinary focus-area reveal.
 - `Overlay::new(base, layer)`: anchored `OverlayAnchor` + `OverlaySize`.
 - `DialogLayer::new(base, layer)`: modal/docked layer using `DialogBackdrop`,
   `DialogLayerPlacement`, `DockSpec`, `DockSide`, and `DockChrome`; replace alternatives with
@@ -87,7 +112,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 ### Choice and commands
 
 - `Dropdown<T, Id>`: `single`/`multi`; retained selection, search, commit, popup, label, hotkey, and
-  callbacks. Search results can require `min_search_chars`, be capped with `max_filtered_items`,
+  callbacks. Configure disabled state with `disabled(bool)`/`set_disabled` and inspect it with
+  `is_disabled`; disabled fields use muted dashed rounded chrome and remain focusable, hotkey-openable,
+  searchable, and navigable while locking committed selection and `on_select` callbacks. Search results can require `min_search_chars`, be capped with `max_filtered_items`,
   and use `visible_without_search` for a default subset before querying all options. Replace options
   with `set_rows` while preserving open/query state, and set a query programmatically with
   `set_search_query`. Switch matching at runtime with `set_search_mode`.
@@ -121,7 +148,16 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `CellContext`, `ColumnSizing`,
   `ActivationMode`, `SelectionMode`, `SelectionTrigger`, `SelectionPropagation`, `CheckState`,
   `SelectionGlyphs`, `TreeGlyphs`, `SortDirection`, `DataViewEvent`, `DataViewSort`,
-  `DataViewPagination`, `DataViewTransformMode`, `DataViewTransformState`, `DataViewFilter`.
+   `DataViewPagination`, `DataViewTransformMode`, `DataViewTransformState`, `DataViewFilter`.
+   Use `parent_vertical_scroll()` or `vertical_scroll(DataViewVerticalScroll::ParentDelegated)`
+   inside `ScrollContainer` to keep a tree's native navigation/check glyphs while one outer page
+   owns vertical reveal and scrolling. Delegated mode hides its local vertical scrollbar and sends
+   immediate centered row-reveal requests upward for configured line navigation (`j`/`k` by
+   default); page/top/bottom navigation keeps normal outer scrolling animation. Vertical navigation
+   at a tree boundary bubbles to the outer page. Tabbing back to a delegated DataView centers its
+   active row in the outer viewport.
+   Call `.scrollbars(...)` after delegation only when intentionally restoring local chrome. Default
+   `Local` behavior remains unchanged.
 - `ListControl<T, Id, M>`: mutable `DataView`; construct `new`, `new_fields`, or `list`. Define
   `ListControlField::text`/`dropdown`/`dropdown_options`, validation and conditional visibility;
   configure columns,
@@ -223,7 +259,8 @@ provides structural defaults. Types: `BorderKind`, `BorderChars`, `TabsPreset`, 
 `lerp_color` are reusable primitives.
 
 `ScrollState::new(axes)` uses primitive defaults; prefer `from_preset(axes, preset().scroll())` in
-components. Configure axes/behavior/scrollbars; use offsets, scroll/clamp/layout/render/tick APIs.
+components. Configure axes/behavior/scrollbars, including a single-axis scrollbar with
+`vertical_scrollbar`; use offsets, scroll/clamp/layout/render/tick APIs.
 Render reduced viewport and current offset; smooth offsets only. Types: `ScrollAxes`,
 `ScrollBehavior`, `ScrollDelta`, `ScrollGeometry`, `ScrollLayout`, `ScrollOffset`, `ScrollOutcome`,
 `ScrollPreset`, `ScrollSize`, `ScrollbarConfig`, `ScrollbarGutter`, `ScrollbarStyle`,

@@ -20,6 +20,7 @@ mod menu_button;
 mod notifications;
 mod overlay;
 mod panel;
+mod scroll_container;
 mod seasonal_empty_state;
 mod speed_reader;
 mod spinner;
@@ -56,8 +57,8 @@ pub use confirmation_dialog::{
 pub use data_view::{
     ActivationMode, CellContext, CheckState, Column, ColumnSizing, DataView, DataViewEvent,
     DataViewFilter, DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
-    DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
-    SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
+    DataViewTransformState, DataViewTypedEvent, DataViewVerticalScroll, SelectionGlyphs,
+    SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
 pub use date_time::{
     DatePicker, DatePickerDropdown, DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout,
@@ -89,6 +90,7 @@ pub use notifications::{
 };
 pub use overlay::{Overlay, OverlayAnchor, OverlaySize};
 pub use panel::{Panel, PanelHost, PanelTitlePosition, PanelTone};
+pub use scroll_container::ScrollContainer;
 pub use seasonal_empty_state::{SeasonalEmptyState, SeasonalGlyphs};
 pub use speed_reader::{
     SpeedReader, SpeedReaderInputMode, SpeedReaderKeyBindings, SpeedReaderOutcome, SpeedReaderState,

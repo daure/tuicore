@@ -138,6 +138,17 @@ where
             self.child.dispatch_focus(&target, focused, ctx);
         }
     }
+
+    pub fn focus_reveal_area(&self, target: &FocusTarget) -> Option<Rect> {
+        let target = target.for_child(&self.key)?;
+        self.child.focus_reveal_area(&target)
+    }
+
+    pub fn focus_reveal_centered(&self, target: &FocusTarget) -> bool {
+        target
+            .for_child(&self.key)
+            .is_some_and(|target| self.child.focus_reveal_centered(&target))
+    }
 }
 
 impl<M> Default for Children<M> {
@@ -426,6 +437,19 @@ impl<M> Children<M> {
         if let Some(slot) = self.get_mut(&key) {
             slot.dispatch_focus(target, focused, ctx);
         }
+    }
+
+    pub fn focus_reveal_area(&self, target: &FocusTarget) -> Option<Rect> {
+        let key = target.path.first()?;
+        self.get(key)?.focus_reveal_area(target)
+    }
+
+    pub fn focus_reveal_centered(&self, target: &FocusTarget) -> bool {
+        target
+            .path
+            .first()
+            .and_then(|key| self.get(key))
+            .is_some_and(|slot| slot.focus_reveal_centered(target))
     }
 
     pub fn focus_child(

@@ -7,9 +7,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 
 use crate::{
-    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key,
-    KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation, TreePath, TuiEvent, TuiNode,
-    lerp_color, theme,
+    Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
+    FocusRequest, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation, TreePath,
+    TuiEvent, TuiNode, lerp_color, theme,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -91,6 +91,99 @@ fn focused_event_precedence_can_be_disabled_for_app_hotkeys() {
             expected
         );
     }
+}
+
+#[test]
+fn delegated_vertical_scroll_keeps_the_local_offset_at_zero_and_requests_reveal() {
+    let mut view = DataView::list(0..20, |id| *id, |id| id.to_string()).parent_vertical_scroll();
+    let area = Rect::new(0, 0, 20, 3);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut layout = LayoutCtx::new();
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut layout);
+    <DataView<usize, usize> as TuiNode<()>>::focus(
+        &mut view,
+        None,
+        true,
+        &mut FocusCtx::new(settings),
+    );
+    let mut event = EventCtx::new(settings);
+
+    let outcome = <DataView<usize, usize> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Key(KeyEvent::from(Key::Down)),
+        &mut event,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(view.scroll.offset().y, 0);
+    assert_eq!(
+        event.take_reveal_request().map(|(area, _)| area),
+        Some(Rect::new(0, 1, 20, 1))
+    );
+    assert!(!event.layout_requested());
+}
+
+#[test]
+fn delegated_vertical_scroll_bubbles_navigation_at_its_upper_boundary() {
+    let mut view = DataView::list(0..20, |id| *id, |id| id.to_string()).parent_vertical_scroll();
+    let area = Rect::new(0, 0, 20, 3);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut layout = LayoutCtx::new();
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut layout);
+    <DataView<usize, usize> as TuiNode<()>>::focus(
+        &mut view,
+        None,
+        true,
+        &mut FocusCtx::new(settings),
+    );
+    let mut event = EventCtx::new(settings);
+
+    let outcome = <DataView<usize, usize> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Key(KeyEvent::from(Key::Up)),
+        &mut event,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(event.propagation(), Propagation::Continue);
+    assert_eq!(event.take_reveal_request(), None);
+}
+
+#[test]
+fn delegated_vertical_scroll_hides_the_local_vertical_scrollbar() {
+    let view = DataView::list(0..20, |id| *id, |id| id.to_string()).parent_vertical_scroll();
+
+    let geometry = view.scroll_geometry(Rect::new(0, 0, 20, 3));
+
+    assert_eq!(geometry.layout.vertical_bar, None);
+}
+
+#[test]
+fn measured_height_reserves_a_row_for_an_overflowing_horizontal_scrollbar() {
+    let view = DataView::new(0..20, |id| *id)
+        .column(Column::text(
+            "value",
+            "Value",
+            Constraint::Length(30),
+            |id: &usize| id.to_string(),
+        ))
+        .parent_vertical_scroll();
+
+    let measured = <DataView<usize, usize> as TuiNode<()>>::measure(
+        &view,
+        LayoutProposal::at_most(10, u16::MAX),
+    );
+    let geometry = view.scroll_geometry(Rect::new(0, 0, 10, measured.preferred.height));
+
+    assert_eq!(measured.preferred.height, 21);
+    assert!(geometry.layout.horizontal_bar.is_some());
+    assert_eq!(geometry.viewport.height, 20);
 }
 
 #[test]

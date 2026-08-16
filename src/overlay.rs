@@ -68,6 +68,7 @@ pub struct RenderCtx<'a> {
     portals: Vec<PortalTask<'a>>,
     next_order: u64,
     overlays_disabled: bool,
+    portal_offset: (i32, i32),
 }
 
 struct PortalTask<'a> {
@@ -154,6 +155,13 @@ impl OverlayManager {
         &self.entries
     }
 
+    pub(crate) fn translate_entries_from(&mut self, start: usize, x_offset: i32, y_offset: i32) {
+        for entry in &mut self.entries[start..] {
+            entry.anchor = translate_rect(entry.anchor, x_offset, y_offset);
+            entry.area = translate_rect(entry.area, x_offset, y_offset);
+        }
+    }
+
     pub fn sorted_entries(&self) -> Vec<OverlayLayoutEntry> {
         let mut entries = self.entries.clone();
         sort_overlay_entries(&mut entries);
@@ -187,6 +195,7 @@ impl<'a> RenderCtx<'a> {
             portals: Vec::new(),
             next_order: 0,
             overlays_disabled: false,
+            portal_offset: (0, 0),
         }
     }
 
@@ -229,7 +238,7 @@ impl<'a> RenderCtx<'a> {
             layer,
             z_index,
             order: self.next_order,
-            area,
+            area: translate_rect(area, self.portal_offset.0, self.portal_offset.1),
             render,
         };
         self.next_order += 1;
@@ -241,6 +250,22 @@ impl<'a> RenderCtx<'a> {
         self.overlays_disabled = true;
         let result = render(self);
         self.overlays_disabled = was_disabled;
+        result
+    }
+
+    pub(crate) fn with_portal_offset<R>(
+        &mut self,
+        x_offset: i32,
+        y_offset: i32,
+        render: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.portal_offset;
+        self.portal_offset = (
+            previous.0.saturating_add(x_offset),
+            previous.1.saturating_add(y_offset),
+        );
+        let result = render(self);
+        self.portal_offset = previous;
         result
     }
 
@@ -259,6 +284,12 @@ impl<'a> RenderCtx<'a> {
     pub fn is_empty(&self) -> bool {
         self.portals.is_empty()
     }
+}
+
+pub(crate) fn translate_rect(area: Rect, x_offset: i32, y_offset: i32) -> Rect {
+    let x = (i32::from(area.x) + x_offset).clamp(0, i32::from(u16::MAX)) as u16;
+    let y = (i32::from(area.y) + y_offset).clamp(0, i32::from(u16::MAX)) as u16;
+    Rect::new(x, y, area.width, area.height)
 }
 
 fn sort_overlay_entries(entries: &mut [OverlayLayoutEntry]) {

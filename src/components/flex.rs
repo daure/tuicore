@@ -405,6 +405,14 @@ impl<M> TuiNode<M> for Flex<M> {
         self.children.dispatch_focus_target(target, focused, ctx);
     }
 
+    fn focus_reveal_area(&self, target: &FocusTarget) -> Option<Rect> {
+        self.children.focus_reveal_area(target)
+    }
+
+    fn focus_reveal_centered(&self, target: &FocusTarget) -> bool {
+        self.children.focus_reveal_centered(target)
+    }
+
     fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
         self.children.init(ctx);
     }

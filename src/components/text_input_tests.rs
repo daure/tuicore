@@ -1172,7 +1172,7 @@ fn disabled_text_input_does_not_enter_insert_mode_or_submit() {
 }
 
 #[test]
-fn disabled_text_input_uses_dashed_panel_border() {
+fn disabled_text_input_uses_rounded_dashed_panel_border() {
     let input = TextInput::<()>::new()
         .value("locked")
         .panel("Name")
@@ -1184,7 +1184,10 @@ fn disabled_text_input_uses_dashed_panel_border() {
         .expect("input should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "┌");
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "╭");
+    assert_eq!(buffer.cell((11, 0)).unwrap().symbol(), "╮");
+    assert_eq!(buffer.cell((0, 2)).unwrap().symbol(), "╰");
+    assert_eq!(buffer.cell((11, 2)).unwrap().symbol(), "╯");
     assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "╎");
     assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), "-");
     assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().border_fg());

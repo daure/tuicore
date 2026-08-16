@@ -395,7 +395,7 @@ impl<M> TextInput<M> {
             InputChrome::Panel(panel) => panel.panel_badge(self.focused, self.display_hotkey()),
         };
         if self.disabled {
-            panel = panel.border(BorderKind::AsciiDashed);
+            panel = panel.border(BorderKind::RoundedDashed);
         }
         panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
         self.panel = panel;

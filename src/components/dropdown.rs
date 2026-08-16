@@ -143,6 +143,7 @@ pub struct Dropdown<T, Id> {
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     tab_stop: bool,
+    disabled: bool,
     alt_style: bool,
     error: bool,
     label_position: DropdownLabelPosition,
@@ -255,6 +256,7 @@ where
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             tab_stop: true,
+            disabled: false,
             alt_style: false,
             error: false,
             label_position: DropdownLabelPosition::Top,
@@ -320,6 +322,28 @@ where
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        if self.disabled == disabled {
+            return;
+        }
+
+        if disabled {
+            self.draft = self.committed.clone();
+            self.opened_committed = self.committed.clone();
+            self.sync_view_selection();
+        }
+        self.disabled = disabled;
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
     }
 
     pub fn error(mut self, error: bool) -> Self {
@@ -557,7 +581,11 @@ where
         self.opened_committed = self.committed.clone();
         self.draft = self.committed.clone();
         self.highlight_committed();
-        if !self.multi && self.draft.is_empty() && self.no_selection_text.is_none() {
+        if !self.disabled
+            && !self.multi
+            && self.draft.is_empty()
+            && self.no_selection_text.is_none()
+        {
             self.set_single_draft_from_highlight();
         }
         self.refresh_filter();
@@ -664,7 +692,7 @@ where
             return DropdownOutcome::HANDLED;
         }
 
-        if self.commit_mode == DropdownCommitMode::Explicit {
+        if !self.disabled && self.commit_mode == DropdownCommitMode::Explicit {
             if !self.opened_committed.is_empty() || !self.committed.is_empty() {
                 self.committed = self.opened_committed.clone();
             }
@@ -679,6 +707,11 @@ where
     }
 
     pub fn commit(&mut self) -> DropdownOutcome {
+        if self.disabled {
+            self.draft = self.committed.clone();
+            self.sync_view_selection();
+            return self.close();
+        }
         if !self.multi && self.draft.is_empty() && self.no_selection_text.is_none() {
             self.set_single_draft_from_highlight();
         }
@@ -694,6 +727,9 @@ where
     }
 
     fn commit_immediate_draft(&mut self) {
+        if self.disabled {
+            return;
+        }
         let changed = self.committed != self.draft;
         self.committed = self.draft.clone();
         if changed && let Some(on_select) = &self.on_select {
@@ -704,6 +740,9 @@ where
     fn sync_after_search_change(&mut self) -> bool {
         let highlighted_before = self.data_view.highlighted_id();
         self.refresh_filter();
+        if self.disabled {
+            return false;
+        }
         if !self.multi {
             let has_activation_target = if self.no_selection_highlighted {
                 self.draft.clear();
@@ -750,7 +789,7 @@ where
     }
 
     fn on_search_paste(&mut self, value: &str) -> DropdownOutcome {
-        if !self.search_input.insert_mode() {
+        if self.focus_region.is_none() {
             return DropdownOutcome::HANDLED;
         }
         let input = self.search_input.on_paste(value);
@@ -784,7 +823,7 @@ where
 
         if matches_any(&self.action_keys.commit, key) {
             let activates_no_selection = self.no_selection_highlighted;
-            if activates_no_selection {
+            if activates_no_selection && !self.disabled {
                 self.draft.clear();
                 self.sync_view_selection();
             }
@@ -934,12 +973,13 @@ where
             .data_view
             .on_key(KeyEvent::from(key), self.list_area(area));
         if moved_to_no_selection {
-            if !self.multi {
+            if !self.disabled && !self.multi {
                 self.draft.clear();
                 self.sync_view_selection();
             }
             self.set_no_selection_highlighted(true);
-            let committed = !self.multi && self.commit_mode == DropdownCommitMode::Immediate;
+            let committed =
+                !self.disabled && !self.multi && self.commit_mode == DropdownCommitMode::Immediate;
             if committed {
                 self.commit_immediate_draft();
             }
@@ -949,7 +989,7 @@ where
             };
         }
         self.set_no_selection_highlighted(false);
-        if !self.multi {
+        if !self.disabled && !self.multi {
             self.set_single_draft_from_highlight();
             self.sync_view_selection();
             if self.commit_mode == DropdownCommitMode::Immediate {
@@ -959,12 +999,17 @@ where
         DropdownOutcome {
             handled: outcome.handled,
             changed: outcome.changed,
-            committed: !self.multi && self.commit_mode == DropdownCommitMode::Immediate,
+            committed: !self.disabled
+                && !self.multi
+                && self.commit_mode == DropdownCommitMode::Immediate,
             ..DropdownOutcome::IDLE
         }
     }
 
     fn toggle_highlighted(&mut self) -> DropdownOutcome {
+        if self.disabled {
+            return DropdownOutcome::HANDLED;
+        }
         if self.no_selection_highlighted {
             return self.activate_no_selection();
         }
@@ -980,6 +1025,13 @@ where
     }
 
     fn select_highlighted(&mut self) -> DropdownOutcome {
+        if self.disabled {
+            return if self.multi {
+                DropdownOutcome::HANDLED
+            } else {
+                self.commit()
+            };
+        }
         if self.no_selection_highlighted {
             return self.activate_no_selection();
         }
@@ -1119,7 +1171,7 @@ where
         }
         if matches!(key, Key::Down | Key::PageDown) {
             self.set_no_selection_highlighted(false);
-            if !self.multi {
+            if !self.disabled && !self.multi {
                 self.set_single_draft_from_highlight();
                 self.sync_view_selection();
                 if self.commit_mode == DropdownCommitMode::Immediate {

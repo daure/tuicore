@@ -16,9 +16,10 @@ use gallery_demo::diffs::{
 };
 use gallery_demo::dropdowns::{
     DropdownDemoItem, dropdown_area, dropdown_child_key, dropdown_child_route,
-    dropdown_column_layout, dropdown_filled_fuzzy_single, dropdown_filled_multi_contains,
-    dropdown_filled_searchable_none_immediate, dropdown_fuzzy_single, dropdown_grid_areas,
-    dropdown_index, dropdown_multi_contains, dropdown_no_search_immediate, dropdown_preview_layout,
+    dropdown_column_layout, dropdown_disabled, dropdown_filled_fuzzy_single,
+    dropdown_filled_multi_contains, dropdown_filled_searchable_none_immediate,
+    dropdown_fuzzy_single, dropdown_grid_areas, dropdown_index, dropdown_multi_contains,
+    dropdown_no_search_immediate, dropdown_preview_layout,
 };
 use gallery_demo::forms::{FormControlId, ValidatedForm};
 use gallery_demo::inputs::{
@@ -92,10 +93,10 @@ use tuicore::{
     FocusTarget, Grid, HotkeyLabelMode, InputChrome, InspectField, InspectValue, Key, KeyEvent,
     KeyModifiers, Language, LayoutCtx, LayoutResult, LifecycleCtx, MenuButton, MenuItem,
     ModalCloseReason, Overlay, Panel, PanelHost, PanelTitlePosition, PasswordInput, RenderCtx,
-    SeasonalEmptyState, SelectionMode, SelectionTrigger, SpeedReader, Spinner, Split, Stack,
-    StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase, Tabs, TabsVariant, TagInput,
-    TextInput, TextareaInput, TickResult, TimePicker, TimePrecision, ToastRack, Toggle,
-    TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherProviderConfig,
+    ScrollContainer, SeasonalEmptyState, SelectionGlyphs, SelectionMode, SelectionTrigger,
+    SpeedReader, Spinner, Split, Stack, StatusBar, StatusBarMenuItem, StoreLogEntry, StoreLogPhase,
+    Tabs, TabsVariant, TagInput, TextInput, TextareaInput, TickResult, TimePicker, TimePrecision,
+    ToastRack, Toggle, TreeAdapter, TreePath, TuiEvent, TuiNode, WeatherProviderConfig,
 };
 
 #[derive(Debug, PartialEq)]
@@ -839,6 +840,7 @@ struct PreviewState {
     dropdown_filled_fuzzy_single: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_multi_contains: Dropdown<DropdownDemoItem, &'static str>,
     dropdown_filled_searchable_none_immediate: Dropdown<DropdownDemoItem, &'static str>,
+    dropdown_disabled: Dropdown<DropdownDemoItem, &'static str>,
     menu_button: MenuButton<&'static str, Msg>,
     menu_status: String,
     layout_flex: Flex<Msg>,
@@ -846,6 +848,8 @@ struct PreviewState {
     layout_stack: Stack<Msg>,
     layout_layered: Overlay<DemoBox, DemoBox>,
     layout_grid: Grid<Msg>,
+    scroll_mixed: ScrollContainer<Flex<Msg>, Msg>,
+    scroll_data_views: ScrollContainer<Flex<Msg>, Msg>,
     validated_form: ValidatedForm,
     diff_side_by_side: DiffDemo<Msg>,
     diff_inline: DiffDemo<Msg>,
@@ -1067,6 +1071,7 @@ impl PreviewState {
             dropdown_filled_fuzzy_single: dropdown_filled_fuzzy_single(),
             dropdown_filled_multi_contains: dropdown_filled_multi_contains(),
             dropdown_filled_searchable_none_immediate: dropdown_filled_searchable_none_immediate(),
+            dropdown_disabled: dropdown_disabled(),
             menu_button: demo_menu_button(),
             menu_status: String::from("No menu action yet"),
             layout_flex: layout_flex_demo(),
@@ -1074,6 +1079,8 @@ impl PreviewState {
             layout_stack: layout_stack_demo(),
             layout_layered: layout_layered_demo(),
             layout_grid: layout_grid_demo(),
+            scroll_mixed: scroll_mixed_demo(),
+            scroll_data_views: scroll_data_views_demo(),
             validated_form: ValidatedForm::new(),
             diff_side_by_side: side_by_side_diff_demo(),
             diff_inline: inline_diff_demo(),
@@ -1207,6 +1214,12 @@ impl PreviewState {
             PreviewKind::LayoutGrid => {
                 self.layout_grid.layout(layout_demo_body(area), ctx);
             }
+            PreviewKind::LayoutScrollMixed => {
+                self.scroll_mixed.layout(area, ctx);
+            }
+            PreviewKind::LayoutScrollDataViews => {
+                self.scroll_data_views.layout(area, ctx);
+            }
             PreviewKind::SyntaxHighlighting => {
                 self.syntax_highlighting.layout(area, ctx);
             }
@@ -1327,7 +1340,7 @@ impl PreviewState {
             }
             PreviewKind::Dropdown => {
                 let index = dropdown_index(key)?;
-                (index, 6, self.dropdown(index).is_open())
+                (index, 7, self.dropdown(index).is_open())
             }
             _ => return None,
         };
@@ -1400,6 +1413,8 @@ impl PreviewState {
             PreviewKind::LayoutStack => self.render_layout_stack(frame, area, ctx),
             PreviewKind::LayoutOverlay => self.render_layout_layered(frame, area, ctx),
             PreviewKind::LayoutGrid => self.render_layout_grid(frame, area, ctx),
+            PreviewKind::LayoutScrollMixed => self.scroll_mixed.render(frame, area, ctx),
+            PreviewKind::LayoutScrollDataViews => self.scroll_data_views.render(frame, area, ctx),
             PreviewKind::SyntaxHighlighting => {
                 self.syntax_highlighting.render(frame, area, ctx);
             }
@@ -1456,6 +1471,12 @@ impl PreviewState {
     ) -> EventOutcome {
         if self.handle_form_navigation(preview, route, event, ctx) {
             return EventOutcome::Handled;
+        }
+        if preview == PreviewKind::LayoutScrollMixed {
+            return self.scroll_mixed.dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::LayoutScrollDataViews {
+            return self.scroll_data_views.dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::TextInput {
             if let Some(route) = route
@@ -1915,6 +1936,12 @@ impl PreviewState {
                 );
             }
             PreviewKind::Menu => self.menu_dispatch_focus(target, focused, ctx),
+            PreviewKind::LayoutScrollMixed => {
+                self.scroll_mixed.dispatch_focus(target, focused, ctx)
+            }
+            PreviewKind::LayoutScrollDataViews => {
+                self.scroll_data_views.dispatch_focus(target, focused, ctx)
+            }
             preview if preview.is_data_view() => self
                 .active_data_view_mut(preview)
                 .dispatch_focus(target, focused, ctx),
@@ -2200,6 +2227,7 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(Animated::tick(&mut self.dropdown_disabled, dt, settings))
             .merge(self.menu_button.tick(dt, settings))
             .merge(Animated::tick(&mut self.text_input, dt, settings))
             .merge(Animated::tick(&mut self.text_input_panel, dt, settings))
@@ -2221,6 +2249,8 @@ impl PreviewState {
             ))
             .merge(self.diff_word.tick(dt, settings))
             .merge(self.diff_raw_patch.tick(dt, settings))
+            .merge(self.scroll_mixed.tick(dt, settings))
+            .merge(self.scroll_data_views.tick(dt, settings))
     }
 
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -2236,6 +2266,8 @@ impl PreviewState {
         TuiNode::<Msg>::init(&mut self.syntax_highlighting, ctx);
         self.diff_word.init(ctx);
         self.diff_raw_patch.init(ctx);
+        self.scroll_mixed.init(ctx);
+        self.scroll_data_views.init(ctx);
     }
 
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
@@ -2251,11 +2283,15 @@ impl PreviewState {
         TuiNode::<Msg>::mount(&mut self.syntax_highlighting, ctx);
         self.diff_word.mount(ctx);
         self.diff_raw_patch.mount(ctx);
+        self.scroll_mixed.mount(ctx);
+        self.scroll_data_views.mount(ctx);
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.diff_raw_patch.unmount(ctx);
         self.diff_word.unmount(ctx);
+        self.scroll_data_views.unmount(ctx);
+        self.scroll_mixed.unmount(ctx);
         self.diff_inline.unmount(ctx);
         TuiNode::<Msg>::unmount(&mut self.syntax_highlighting, ctx);
         self.diff_side_by_side.unmount(ctx);
@@ -2271,6 +2307,8 @@ impl PreviewState {
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.diff_raw_patch.destroy(ctx);
         self.diff_word.destroy(ctx);
+        self.scroll_data_views.destroy(ctx);
+        self.scroll_mixed.destroy(ctx);
         self.diff_inline.destroy(ctx);
         TuiNode::<Msg>::destroy(&mut self.syntax_highlighting, ctx);
         self.diff_side_by_side.destroy(ctx);
@@ -2344,6 +2382,7 @@ impl PreviewState {
             3 => &mut self.dropdown_filled_fuzzy_single,
             4 => &mut self.dropdown_filled_multi_contains,
             5 => &mut self.dropdown_filled_searchable_none_immediate,
+            6 => &mut self.dropdown_disabled,
             _ => &mut self.dropdown_fuzzy_single,
         }
     }
@@ -2429,7 +2468,7 @@ impl PreviewState {
         let [help, body] = dropdown_preview_layout(area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::raw("1-6 focus demo • Enter/Space opens • "),
+                Span::raw("1-6 focus demo • disabled 7 is read-only • Enter/Space opens • "),
                 Span::raw("Ctrl+J/Ctrl+K navigate while typing search; Enter commit; Esc cancel; Space opens/toggles multi • "),
                 Span::raw("Tab/BackTab or h/k/j/l moves across form demos • Ctrl+Q quits"),
             ])),
@@ -2503,6 +2542,13 @@ impl PreviewState {
                 self.dropdown_filled_searchable_none_immediate
                     .search_query()
             ),
+        );
+        self.render_dropdown_column(
+            frame,
+            areas[6],
+            6,
+            "Disabled 7 • Read-only",
+            "Muted dashed rounded chrome; focus, hotkey, search, and navigation work but selection stays locked.",
         );
 
         for (index, area) in areas.iter().copied().enumerate() {
@@ -2668,6 +2714,15 @@ impl PreviewState {
                 );
             });
         });
+        ctx.push_slot(dropdown_child_key(6), areas[6], |ctx| {
+            ctx.with_overlay_bounds(overlay_bounds, |ctx| {
+                <Dropdown<DropdownDemoItem, &'static str> as TuiNode<Msg>>::layout(
+                    &mut self.dropdown_disabled,
+                    areas[6],
+                    ctx,
+                );
+            });
+        });
     }
 
     fn dropdown(&self, index: usize) -> &Dropdown<DropdownDemoItem, &'static str> {
@@ -2677,6 +2732,7 @@ impl PreviewState {
             3 => &self.dropdown_filled_fuzzy_single,
             4 => &self.dropdown_filled_multi_contains,
             5 => &self.dropdown_filled_searchable_none_immediate,
+            6 => &self.dropdown_disabled,
             _ => &self.dropdown_fuzzy_single,
         }
     }
@@ -3944,6 +4000,97 @@ fn indexed_child_target(
     Some((index, target.for_child(first)?))
 }
 
+fn scroll_mixed_demo() -> ScrollContainer<Flex<Msg>, Msg> {
+    ScrollContainer::vertical(
+        Flex::column()
+            .gap(1)
+            .child(
+                "intro",
+                Panel::new().top_left("One outer scrollbar").host(tuicore::Paragraph::new(
+                    "Panels, inputs, buttons, and a DataView compose in one scroll viewport.\nFocus a control below the fold to reveal it.",
+                )),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "input",
+                TextInput::new().placeholder("Focus me"),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "button",
+                Button::new("Action"),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "panel",
+                Panel::new()
+                    .top_left("Long panel")
+                    .host(tuicore::Paragraph::new(
+                        "A regular PanelHost participates in the outer page.\nIt owns chrome; ScrollContainer owns vertical scrolling.\nNo nested scrollbar appears here.",
+                    )),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "table",
+                DataViewMode::Table
+                    .data_view()
+                    .action_bar(false)
+                    .parent_vertical_scroll(),
+                tuicore::FlexItem::fit_content(),
+            ),
+    )
+}
+
+fn scroll_data_views_demo() -> ScrollContainer<Flex<Msg>, Msg> {
+    ScrollContainer::vertical(
+        Flex::column()
+            .gap(1)
+            .child(
+                "sprint-5",
+                delegated_tree_view("Sprint 5", 8, None),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "sprint-6",
+                delegated_tree_view("Sprint 6", 8, None),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "sprint-7",
+                delegated_tree_view("Sprint 7", 8, None),
+                tuicore::FlexItem::fit_content(),
+            )
+            .child(
+                "backlog",
+                delegated_tree_view("Backlog", 120, Some("shift+b")),
+                tuicore::FlexItem::fit_content(),
+            ),
+    )
+}
+
+fn delegated_tree_view(title: &str, rows: usize, hotkey: Option<&str>) -> DataView<DemoRow, usize> {
+    let view = DataViewMode::ListTree
+        .data_view()
+        .expanded([])
+        .selection_mode(SelectionMode::Multi)
+        .selection_trigger(SelectionTrigger::OnActivate)
+        .selection_glyphs(SelectionGlyphs::NERD_FONT)
+        .parent_vertical_scroll();
+    let view = if rows > 100 {
+        DataViewMode::ListTree
+            .data_view()
+            .expanded([])
+            .selection_mode(SelectionMode::Multi)
+            .selection_trigger(SelectionTrigger::OnActivate)
+            .selection_glyphs(SelectionGlyphs::NERD_FONT)
+            .parent_vertical_scroll()
+    } else {
+        view
+    };
+    let view = view.hotkey(hotkey.unwrap_or(title));
+    view
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 enum ComponentKind {
     Tabs,
@@ -3965,6 +4112,8 @@ enum ComponentKind {
     LayoutStack,
     LayoutOverlay,
     LayoutGrid,
+    LayoutScrollMixed,
+    LayoutScrollDataViews,
     Inputs,
     Button,
     Chip,
@@ -4004,7 +4153,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 55] = [
+    const ALL: [Self; 57] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelVariants,
@@ -4024,6 +4173,8 @@ impl ComponentKind {
         Self::LayoutStack,
         Self::LayoutOverlay,
         Self::LayoutGrid,
+        Self::LayoutScrollMixed,
+        Self::LayoutScrollDataViews,
         Self::Inputs,
         Self::Button,
         Self::Chip,
@@ -4083,6 +4234,8 @@ impl ComponentKind {
             Self::LayoutStack => "Stack",
             Self::LayoutOverlay => "Overlay",
             Self::LayoutGrid => "Grid",
+            Self::LayoutScrollMixed => "Scroll: Mixed content",
+            Self::LayoutScrollDataViews => "Scroll: DataViews",
             Self::Inputs => "Inputs",
             Self::Button => "Button",
             Self::Chip => "Chip",
@@ -4153,7 +4306,9 @@ impl ComponentKind {
             | Self::LayoutSplit
             | Self::LayoutStack
             | Self::LayoutOverlay
-            | Self::LayoutGrid => Some(Self::Layouts),
+            | Self::LayoutGrid
+            | Self::LayoutScrollMixed
+            | Self::LayoutScrollDataViews => Some(Self::Layouts),
             Self::PanelVariants | Self::PanelJoinedSeparators | Self::PanelTabSeparators => {
                 Some(Self::Panel)
             }
@@ -4185,6 +4340,8 @@ impl ComponentKind {
             Self::LayoutStack => PreviewKind::LayoutStack,
             Self::LayoutOverlay => PreviewKind::LayoutOverlay,
             Self::LayoutGrid => PreviewKind::LayoutGrid,
+            Self::LayoutScrollMixed => PreviewKind::LayoutScrollMixed,
+            Self::LayoutScrollDataViews => PreviewKind::LayoutScrollDataViews,
             Self::Inputs | Self::Button => PreviewKind::Button,
             Self::Chip => PreviewKind::Chip,
             Self::TagInput => PreviewKind::TagInput,
@@ -4240,6 +4397,8 @@ enum PreviewKind {
     LayoutStack,
     LayoutOverlay,
     LayoutGrid,
+    LayoutScrollMixed,
+    LayoutScrollDataViews,
     TextInput,
     PasswordInput,
     TextareaInput,
@@ -4294,6 +4453,8 @@ impl PreviewKind {
             Self::LayoutStack => "Stack Layout",
             Self::LayoutOverlay => "Overlay Layout",
             Self::LayoutGrid => "Grid Layout",
+            Self::LayoutScrollMixed => "Scroll Container: Mixed content",
+            Self::LayoutScrollDataViews => "Scroll Container: DataViews",
             Self::TextInput => "Text",
             Self::PasswordInput => "Password",
             Self::TextareaInput => "Textarea",

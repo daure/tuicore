@@ -39,6 +39,7 @@ impl ButtonOutcome {
 pub struct Button<M = ()> {
     label: String,
     hotkey: Option<String>,
+    hotkey_focus_enabled: bool,
     hotkey_label_mode: HotkeyLabelMode,
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
@@ -57,6 +58,7 @@ impl<M> Button<M> {
         Self {
             label: label.into(),
             hotkey: None,
+            hotkey_focus_enabled: true,
             hotkey_label_mode: HotkeyLabelMode::PreferMnemonic,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             pending_hotkey_prefix: None,
@@ -97,6 +99,11 @@ impl<M> Button<M> {
 
     pub fn hotkey_label_mode(mut self, mode: HotkeyLabelMode) -> Self {
         self.hotkey_label_mode = mode;
+        self
+    }
+
+    pub fn hotkey_focus_enabled(mut self, enabled: bool) -> Self {
+        self.hotkey_focus_enabled = enabled;
         self
     }
 
@@ -397,7 +404,7 @@ where
             ctx.set_focus_control(FocusId::new(BUTTON_FOCUS), true);
             return LayoutResult::new(area);
         }
-        if let Some(hotkey) = self.hotkey.clone() {
+        if let Some(hotkey) = self.hotkey.clone().filter(|_| self.hotkey_focus_enabled) {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(BUTTON_FOCUS),
                 area,
@@ -511,6 +518,18 @@ mod tests {
         let target = &layout.focus_targets()[0];
         assert!(!target.tab_stop);
         assert_eq!(target.hotkey_sequences, vec!["b"]);
+    }
+
+    #[test]
+    fn hotkey_can_be_rendered_without_registering_a_focus_shortcut() {
+        let mut button = Button::<()>::new("Run")
+            .hotkey("b")
+            .hotkey_focus_enabled(false);
+        let mut layout = LayoutCtx::new();
+
+        button.layout(Rect::new(0, 0, 20, 1), &mut layout);
+
+        assert!(layout.focus_targets()[0].hotkey_sequences.is_empty());
     }
 
     #[test]

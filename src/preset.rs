@@ -18,6 +18,7 @@ pub enum BorderKind {
     Rounded,
     Double,
     Thick,
+    RoundedDashed,
     AsciiDashed,
 }
 
@@ -36,6 +37,7 @@ impl FromStr for BorderKind {
             "rounded" => Ok(Self::Rounded),
             "double" => Ok(Self::Double),
             "thick" => Ok(Self::Thick),
+            "rounded-dashed" => Ok(Self::RoundedDashed),
             "ascii-dashed" => Ok(Self::AsciiDashed),
             other => Err(PresetError(format!("Unknown border `{other}`"))),
         }
@@ -502,6 +504,23 @@ mod tests {
         assert_eq!(
             TabsVariant::from_str("one-row").expect("variant should parse"),
             TabsVariant::OneRow
+        );
+    }
+
+    #[test]
+    fn rounded_dashed_border_parses_from_preset_value() {
+        let preset = Preset::from_toml_str(
+            r#"
+            [preset]
+            border = "rounded-dashed"
+            "#,
+        )
+        .expect("preset should parse");
+
+        assert_eq!(preset.border(), BorderKind::RoundedDashed);
+        assert_eq!(
+            BorderKind::from_str("ascii-dashed").expect("legacy border should parse"),
+            BorderKind::AsciiDashed
         );
     }
 

@@ -151,6 +151,11 @@ impl ScrollState {
         self
     }
 
+    pub fn vertical_scrollbar(mut self, visibility: ScrollbarVisibility) -> Self {
+        self.scrollbars.vertical = visibility;
+        self
+    }
+
     pub fn with_axes(mut self, axes: ScrollAxes) -> Self {
         self.axes = axes;
         self
@@ -432,6 +437,15 @@ impl ScrollState {
 
     pub fn snap_horizontal_to_start(&mut self) -> ScrollOutcome {
         let changed = self.x.snap_to(0);
+        ScrollOutcome {
+            handled: changed,
+            changed,
+            active: self.is_active(),
+        }
+    }
+
+    pub fn snap_vertical_to_start(&mut self) -> ScrollOutcome {
+        let changed = self.y.snap_to(0);
         ScrollOutcome {
             handled: changed,
             changed,

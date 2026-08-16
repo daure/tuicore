@@ -4,15 +4,15 @@ use std::rc::Rc;
 
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::{Frame, Terminal};
 
 use super::*;
 use crate::event::KeyModifiers;
 use crate::{
-    ChildKey, Dialog, DialogLayer, EventCtx, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
-    FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, Propagation, RenderCtx, Tab,
-    Tabs, TuiEvent, TuiNode, border_chars, preset,
+    ChildKey, Dialog, DialogLayer, EventCtx, EventRoute, ExternalEditorResponse, Flex, FlexItem,
+    FocusCtx, FocusId, FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, Propagation,
+    RenderCtx, Tab, Tabs, TuiEvent, TuiNode, border_chars, preset,
 };
 
 fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -150,6 +150,83 @@ fn error_tone_overrides_focus_for_own_border_and_title() {
 }
 
 #[test]
+fn focused_disabled_dropdown_keeps_muted_dashed_chrome_with_accent_focus_cue() {
+    let mut dropdown = single_dropdown()
+        .label("Environment")
+        .error(true)
+        .selected_one("Beta")
+        .disabled(true);
+    dropdown.focus_region = Some(DropdownFocusRegion::Field);
+    let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "╭");
+    assert_eq!(buffer.cell((23, 0)).unwrap().symbol(), "╮");
+    assert_eq!(buffer.cell((0, 2)).unwrap().symbol(), "╰");
+    assert_eq!(buffer.cell((23, 2)).unwrap().symbol(), "╯");
+    assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "-");
+    assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "╎");
+    assert_eq!(buffer.cell((1, 0)).unwrap().fg, theme().accent_fg());
+    assert!(
+        buffer
+            .cell((1, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::BOLD)
+    );
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().muted_fg());
+}
+
+#[test]
+fn unfocused_disabled_dropdown_renders_hotkey_with_border_color() {
+    let mut dropdown = single_dropdown().hotkey("it").disabled(true);
+    dropdown.pending_hotkey_prefix = Some("i".into());
+    let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    for (position, symbol) in [(20, "┤"), (21, "i"), (22, "t"), (23, "╎")] {
+        let cell = buffer.cell((position, 2)).unwrap();
+        assert_eq!(cell.symbol(), symbol);
+        assert_eq!(cell.fg, theme().border_fg());
+    }
+}
+
+#[test]
+fn open_disabled_dropdown_uses_accent_hotkey_and_dashed_popup_border() {
+    let mut dropdown = single_dropdown()
+        .label("Priority")
+        .hotkey("it")
+        .disabled(true);
+    dropdown.open();
+    let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            dropdown.render_field(frame, Rect::new(0, 0, 24, 3));
+            dropdown.render_popup(frame, Rect::new(0, 3, 24, 5), DropdownPopupDirection::Down);
+        })
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((1, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((23, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((21, 2)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((1, 3)).unwrap().symbol(), "-");
+    assert_eq!(buffer.cell((0, 4)).unwrap().symbol(), "╎");
+    assert_eq!(buffer.cell((1, 3)).unwrap().fg, theme().accent_fg());
+}
+
+#[test]
 fn open_popup_dims_backdrop_but_not_trigger() {
     let mut dropdown = single_dropdown()
         .selected_one("Beta")
@@ -194,7 +271,8 @@ fn open_popup_dims_backdrop_but_not_trigger() {
 fn disabled_backdrop_leaves_host_undimmed_and_renders_popup() {
     let mut dropdown = single_dropdown()
         .variant(DropdownVariant::Filled)
-        .backdrop_amount(0.0);
+        .backdrop_amount(0.0)
+        .disabled(true);
     dropdown.open();
     layout_dropdown(&mut dropdown, Rect::new(0, 0, 12, 1), AREA);
     let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
@@ -329,6 +407,250 @@ fn closed_ctrl_j_and_ctrl_k_do_not_open_or_navigate() {
         assert!(!dropdown.is_open());
         assert_eq!(dropdown.data_view.highlighted_id(), Some("Alpha"));
     }
+}
+
+#[test]
+fn disabled_dropdown_registers_focus_and_hotkey_then_navigates_read_only() {
+    let mut dropdown = single_dropdown()
+        .selected_one("Alpha")
+        .hotkey("d")
+        .disabled(true);
+    let layout = layout_dropdown(&mut dropdown, AREA, AREA);
+    let target = layout.focus_targets()[0].clone();
+    let mut focus = FocusCtx::<()>::default();
+
+    assert!(dropdown.is_disabled());
+    assert_eq!(target.area, Rect::new(0, 0, 24, 3));
+    assert!(target.enabled);
+    assert!(target.tab_stop);
+    assert_eq!(target.hotkey_sequences, ["d"]);
+    dropdown.dispatch_focus(&target, true, &mut focus);
+    assert!(dropdown.is_focused());
+
+    let mut open_event = EventCtx::<()>::default();
+    let opened = dropdown.dispatch_event(
+        &EventRoute::new(target.path.clone()),
+        &TuiEvent::Hotkey(HotkeyEvent::Commit("d".into())),
+        &mut open_event,
+    );
+
+    assert_eq!(opened, EventOutcome::Handled);
+    assert!(dropdown.is_open());
+    assert_eq!(
+        open_event.focus_request(),
+        Some(&FocusRequest::TargetAt {
+            path: target.path.clone(),
+            id: FocusId::new(SEARCH_FOCUS),
+        })
+    );
+
+    let mut event = EventCtx::<()>::default();
+    let outcome = dropdown.dispatch_event(
+        &EventRoute::new(target.path.clone()),
+        &TuiEvent::Key(ctrl('j')),
+        &mut event,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(event.propagation(), Propagation::Stopped);
+    assert_eq!(dropdown.data_view.highlighted_id(), Some("Beta"));
+    assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    assert_eq!(dropdown.draft, vec!["Alpha"]);
+}
+
+#[test]
+fn enabled_dropdown_routes_ctrl_j_and_ctrl_k() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+
+    for (key, expected) in [(ctrl('j'), "Beta"), (ctrl('k'), "Alpha")] {
+        let mut event = EventCtx::<()>::default();
+        let outcome = dropdown.dispatch_event(
+            &EventRoute::new(TreePath::default()),
+            &TuiEvent::Key(key),
+            &mut event,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(event.propagation(), Propagation::Stopped);
+        assert_eq!(dropdown.data_view.highlighted_id(), Some(expected));
+    }
+}
+
+#[test]
+fn idempotent_disabled_setter_preserves_enabled_hotkey_sequence() {
+    let mut dropdown = single_dropdown().hotkey("db");
+
+    assert!(dropdown.on_key(char_key('d'), AREA).handled);
+    dropdown.set_disabled(false);
+
+    assert!(dropdown.on_key(char_key('b'), AREA).opened);
+}
+
+#[test]
+fn disabling_open_dropdown_preserves_view_state_and_rebases_draft() {
+    let mut dropdown = single_dropdown().selected_one("Alpha");
+    dropdown.open();
+    dropdown.on_key(ctrl('j'), AREA);
+    dropdown.set_search_query("b");
+    dropdown.focus_region = Some(DropdownFocusRegion::Search);
+    dropdown.sync_child_focus();
+
+    dropdown.set_disabled(true);
+
+    assert!(dropdown.is_open());
+    assert_eq!(dropdown.search_query(), "b");
+    assert_eq!(dropdown.data_view.highlighted_id(), Some("Beta"));
+    assert_eq!(dropdown.focus_region, Some(DropdownFocusRegion::Search));
+    assert_eq!(dropdown.draft, vec!["Alpha"]);
+    assert_eq!(dropdown.opened_committed, vec!["Alpha"]);
+    assert_eq!(dropdown.data_view.selected_ids(), vec!["Alpha"]);
+}
+
+#[test]
+fn disabled_dropdown_keeps_explicit_and_immediate_search_navigation_read_only() {
+    for mode in [DropdownCommitMode::Explicit, DropdownCommitMode::Immediate] {
+        let callbacks = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&callbacks);
+        let mut dropdown = single_dropdown()
+            .commit_mode(mode)
+            .selected_one("Alpha")
+            .on_select(move |ids| captured.borrow_mut().push(ids));
+        dropdown.open();
+        dropdown.set_disabled(true);
+
+        let search = dropdown.on_key(char_key('g'), AREA);
+        let navigation = dropdown.on_key(ctrl('j'), AREA);
+        assert_eq!(dropdown.search_query(), "g");
+        let commit = dropdown.on_key(Key::Enter, AREA);
+
+        assert!(!search.committed);
+        assert!(!navigation.committed);
+        assert!(commit.closed);
+        assert!(!commit.committed);
+        assert_eq!(dropdown.selected_id(), Some("Alpha"));
+        assert_eq!(dropdown.draft, vec!["Alpha"]);
+        assert!(callbacks.borrow().is_empty());
+    }
+}
+
+#[test]
+fn disabled_multi_toggle_and_commit_keep_selection_markers_locked() {
+    let callbacks = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&callbacks);
+    let mut dropdown = multi_dropdown()
+        .selected(["Alpha"])
+        .on_select(move |ids| captured.borrow_mut().push(ids));
+    dropdown.open();
+    dropdown.set_disabled(true);
+    dropdown.on_key(ctrl('j'), AREA);
+
+    let toggle = dropdown.on_key(Key::Enter, AREA);
+    let commit = dropdown.on_key(ctrl_enter(), AREA);
+
+    assert!(toggle.handled);
+    assert!(!toggle.changed);
+    assert!(commit.closed);
+    assert!(!commit.committed);
+    assert_eq!(dropdown.selected_ids(), vec!["Alpha"]);
+    assert_eq!(dropdown.draft, vec!["Alpha"]);
+    assert_eq!(dropdown.data_view.selected_ids(), vec!["Alpha"]);
+    assert!(callbacks.borrow().is_empty());
+}
+
+#[test]
+fn disabled_direct_commit_closes_without_mutating_or_notifying() {
+    let callbacks = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&callbacks);
+    let mut dropdown = single_dropdown()
+        .selected_one("Alpha")
+        .on_select(move |ids| captured.borrow_mut().push(ids));
+    dropdown.open();
+    dropdown.on_key(ctrl('j'), AREA);
+    dropdown.set_disabled(true);
+
+    let outcome = dropdown.commit();
+
+    assert!(outcome.closed);
+    assert!(!outcome.committed);
+    assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    assert!(callbacks.borrow().is_empty());
+}
+
+#[test]
+fn disabled_dropdown_accepts_paste_and_external_editor_search_without_committing() {
+    let callbacks = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&callbacks);
+    let mut dropdown = single_dropdown()
+        .selected_one("Alpha")
+        .on_select(move |ids| captured.borrow_mut().push(ids));
+    dropdown.open();
+    dropdown.set_disabled(true);
+    dropdown.focus_region = Some(DropdownFocusRegion::Search);
+    dropdown.sync_child_focus();
+    let mut ctx = EventCtx::<()>::default();
+
+    let paste = dropdown.event(&TuiEvent::Paste("g".into()), &mut ctx);
+    let editor = dropdown.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "b".into(),
+            line: 1,
+            col: 1,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(paste, EventOutcome::Handled);
+    assert_eq!(editor, EventOutcome::Handled);
+    assert_eq!(dropdown.search_query(), "b");
+    assert_eq!(dropdown.filtered, vec!["Beta"]);
+    assert_eq!(dropdown.selected_id(), Some("Alpha"));
+    assert_eq!(dropdown.draft, vec!["Alpha"]);
+    assert!(callbacks.borrow().is_empty());
+}
+
+#[test]
+fn disabled_dropdown_accepts_paste_with_field_focus_after_external_editor() {
+    let mut dropdown = single_dropdown()
+        .auto_focus_search(false)
+        .selected_one("Alpha")
+        .disabled(true);
+    dropdown.open();
+    dropdown.focus_region = Some(DropdownFocusRegion::Field);
+    dropdown.sync_child_focus();
+    let mut ctx = EventCtx::<()>::default();
+
+    assert_eq!(
+        dropdown.event(
+            &TuiEvent::ExternalEditor(ExternalEditorResponse {
+                value: "b".into(),
+                line: 1,
+                col: 1,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(
+        dropdown.event(&TuiEvent::Paste("e".into()), &mut ctx),
+        EventOutcome::Handled
+    );
+    assert_eq!(dropdown.search_query(), "eb");
+    assert_eq!(dropdown.selected_id(), Some("Alpha"));
+}
+
+#[test]
+fn disabled_dropdown_allows_programmatic_selection_and_row_updates() {
+    let mut dropdown = single_dropdown().selected_one("Alpha").disabled(true);
+
+    dropdown.set_selected_one("Beta");
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+    dropdown.clear_selection();
+    assert_eq!(dropdown.selected_id(), None);
+    dropdown.set_rows(["Beta", "Gamma"]);
+    dropdown.set_selected_one("Gamma");
+
+    assert_eq!(dropdown.selected_id(), Some("Gamma"));
 }
 
 #[test]

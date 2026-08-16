@@ -20,7 +20,8 @@ use crate::search::SearchMode;
 use crate::{
     AnimationSettings, AnimationSpec, ChildKey, Easing, EventCtx, FocusId, FocusRequest,
     KeyBindings, ScrollAxes, ScrollBehavior, ScrollDelta, ScrollOffset, ScrollOutcome, ScrollState,
-    ScrollbarConfig, TickResult, Tween, animation_settings, keybindings, preset,
+    ScrollbarConfig, ScrollbarVisibility, TickResult, Tween, animation_settings, keybindings,
+    preset,
 };
 
 use super::{
@@ -84,6 +85,7 @@ pub struct DataView<T, Id> {
     row_height_by: Option<Box<RowHeightFn<T>>>,
     row_style_by: Option<Box<RowStyleFn<T>>>,
     scroll: ScrollState,
+    vertical_scroll: DataViewVerticalScroll,
     sort: Option<DataViewSort>,
     reorder_sort: Option<String>,
     derived_row_order: Option<Vec<Id>>,
@@ -116,6 +118,13 @@ pub struct DataView<T, Id> {
     reorder_highlight_phase: ReorderHighlightPhase,
     reorder_highlight_crossfades: bool,
     scroll_restoration: Option<DataViewScrollRestoration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DataViewVerticalScroll {
+    #[default]
+    Local,
+    ParentDelegated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +184,7 @@ where
             row_height_by: None,
             row_style_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
+            vertical_scroll: DataViewVerticalScroll::Local,
             sort: None,
             reorder_sort: None,
             derived_row_order: None,
@@ -664,6 +674,26 @@ where
     pub fn scrollbars(mut self, config: ScrollbarConfig) -> Self {
         self.scroll = self.scroll.scrollbars(config);
         self
+    }
+
+    /// Lets an ancestor [`ScrollContainer`](crate::ScrollContainer) own vertical viewporting.
+    /// DataView still owns horizontal scrolling, tree navigation, selection, and rendering.
+    pub fn parent_vertical_scroll(mut self) -> Self {
+        self.vertical_scroll = DataViewVerticalScroll::ParentDelegated;
+        self.scroll = self.scroll.vertical_scrollbar(ScrollbarVisibility::Never);
+        self
+    }
+
+    pub fn vertical_scroll(mut self, mode: DataViewVerticalScroll) -> Self {
+        self.vertical_scroll = mode;
+        if mode == DataViewVerticalScroll::ParentDelegated {
+            self.scroll = self.scroll.vertical_scrollbar(ScrollbarVisibility::Never);
+        }
+        self
+    }
+
+    pub fn vertical_scroll_mode(&self) -> DataViewVerticalScroll {
+        self.vertical_scroll
     }
 
     pub fn sort_by(

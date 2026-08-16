@@ -169,6 +169,20 @@ where
         )
     }
 
+    pub(super) fn highlighted_row_area(&self) -> Rect {
+        let body = self.body_area(self.area);
+        let (start, end) = self
+            .visible_row_geometry()
+            .span(self.highlighted)
+            .unwrap_or((0, 1));
+        Rect::new(
+            body.x,
+            body.y.saturating_add(start.min(u16::MAX as usize) as u16),
+            body.width,
+            end.saturating_sub(start).min(u16::MAX as usize) as u16,
+        )
+    }
+
     pub(crate) fn measured_rows_height(&self, max_rows: usize) -> u16 {
         let total = self.visible_row_geometry().height_through(max_rows);
         total.min(u16::MAX as usize) as u16

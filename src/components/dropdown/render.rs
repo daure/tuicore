@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use super::super::text_input::placeholder_line;
+use super::super::text_input::{disabled_input_background, placeholder_line};
 use super::util::{bounded_title, connected_popup_border_set, truncate_cells};
 use super::{
     DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownLabelPosition,
@@ -94,7 +94,13 @@ where
             if !text.is_empty() && !label_area.is_empty() {
                 let theme = theme();
                 let style = Style::default()
-                    .fg(if self.error {
+                    .fg(if self.disabled {
+                        if self.chrome_is_active() {
+                            theme.accent_fg()
+                        } else {
+                            theme.muted_fg()
+                        }
+                    } else if self.error {
                         theme.error_fg()
                     } else if self.field_is_focused() {
                         theme.accent_fg()
@@ -141,9 +147,17 @@ where
 
     fn render_bordered_field(&self, frame: &mut Frame, area: Rect) {
         let theme = theme();
-        let border = preset().border();
+        let border = if self.disabled {
+            BorderKind::RoundedDashed
+        } else {
+            preset().border()
+        };
         let border_style = Style::default()
-            .fg(if self.error {
+            .fg(if self.disabled && self.chrome_is_active() {
+                theme.accent_fg()
+            } else if self.disabled {
+                theme.border_fg()
+            } else if self.error {
                 theme.error_fg()
             } else if self.field_is_focused() {
                 theme.accent_fg()
@@ -152,7 +166,7 @@ where
             } else {
                 theme.border_fg()
             })
-            .add_modifier(if self.field_is_focused() {
+            .add_modifier(if self.chrome_is_active() {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
@@ -183,7 +197,11 @@ where
         } else {
             Line::from(Span::styled(
                 self.selected_summary(),
-                Style::default().fg(theme.text_fg()),
+                Style::default().fg(if self.disabled {
+                    theme.muted_fg()
+                } else {
+                    theme.text_fg()
+                }),
             ))
         };
         frame.render_widget(Paragraph::new(text), text_area);
@@ -193,14 +211,12 @@ where
                 Paragraph::new(self.dropdown_arrow())
                     .style(
                         Style::default()
-                            .fg(if self.field_is_focused() {
-                                theme.accent_fg()
-                            } else if self.chrome_is_active() {
+                            .fg(if self.chrome_is_active() {
                                 theme.accent_fg()
                             } else {
                                 theme.muted_fg()
                             })
-                            .add_modifier(if self.field_is_focused() {
+                            .add_modifier(if self.chrome_is_active() {
                                 Modifier::BOLD
                             } else {
                                 Modifier::empty()
@@ -231,7 +247,20 @@ where
     fn render_filled_field(&self, frame: &mut Frame, area: Rect) {
         let theme = theme();
         let active = !self.open && self.field_is_focused();
-        let base_style = if self.is_showing_press_feedback() {
+        let base_style = if self.disabled {
+            Style::default()
+                .fg(if self.chrome_is_active() {
+                    theme.accent_fg()
+                } else {
+                    theme.muted_fg()
+                })
+                .bg(disabled_input_background())
+                .add_modifier(if self.chrome_is_active() {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                })
+        } else if self.is_showing_press_feedback() {
             Style::default()
                 .fg(if active {
                     theme.highlight_fg()
@@ -317,17 +346,22 @@ where
         frame.render_widget(Clear, area);
         let popup_content_style = self.popup_content_style();
         let inner = if self.popup_has_border() {
-            let border = if self.variant == DropdownVariant::Bordered && !self.centered {
-                connected_popup_border_set(preset().border(), popup_direction)
+            let border_kind = if self.disabled {
+                BorderKind::RoundedDashed
             } else {
-                border_set(preset().border())
+                preset().border()
+            };
+            let border = if self.variant == DropdownVariant::Bordered && !self.centered {
+                connected_popup_border_set(border_kind, popup_direction)
+            } else {
+                border_set(border_kind)
             };
             let mut block = Block::default()
                 .borders(Borders::ALL)
                 .border_set(border)
                 .border_style(
                     Style::default()
-                        .fg(if self.is_focused() {
+                        .fg(if self.is_focused() || (self.disabled && self.open) {
                             theme.accent_fg()
                         } else {
                             theme.border_fg()
@@ -541,7 +575,13 @@ where
         };
         let theme = theme();
         let style = Style::default()
-            .fg(if self.error {
+            .fg(if self.disabled {
+                if self.chrome_is_active() {
+                    theme.accent_fg()
+                } else {
+                    theme.muted_fg()
+                }
+            } else if self.error {
                 theme.error_fg()
             } else if self.field_is_focused() {
                 theme.accent_fg()
@@ -571,7 +611,13 @@ where
         }
 
         let theme = theme();
-        let border_style = Style::default().fg(if self.error {
+        let border_style = Style::default().fg(if self.disabled {
+            if self.chrome_is_active() {
+                theme.accent_fg()
+            } else {
+                theme.border_fg()
+            }
+        } else if self.error {
             theme.error_fg()
         } else if self.field_is_focused() {
             theme.accent_fg()
@@ -580,7 +626,13 @@ where
         } else {
             theme.border_fg()
         });
-        let title_style = Style::default().fg(if self.error {
+        let title_style = Style::default().fg(if self.disabled {
+            if self.chrome_is_active() {
+                theme.accent_fg()
+            } else {
+                theme.border_fg()
+            }
+        } else if self.error {
             theme.error_fg()
         } else if self.field_is_focused() {
             theme.accent_fg()

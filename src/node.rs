@@ -45,6 +45,14 @@ pub trait TuiNode<M = ()> {
         }
     }
 
+    fn focus_reveal_area(&self, _target: &FocusTarget) -> Option<Rect> {
+        None
+    }
+
+    fn focus_reveal_centered(&self, _target: &FocusTarget) -> bool {
+        false
+    }
+
     fn init(&mut self, _ctx: &mut LifecycleCtx<M>) {}
 
     fn mount(&mut self, _ctx: &mut LifecycleCtx<M>) {}
@@ -95,6 +103,14 @@ where
         self.as_mut().dispatch_focus(target, focused, ctx);
     }
 
+    fn focus_reveal_area(&self, target: &FocusTarget) -> Option<Rect> {
+        self.as_ref().focus_reveal_area(target)
+    }
+
+    fn focus_reveal_centered(&self, target: &FocusTarget) -> bool {
+        self.as_ref().focus_reveal_centered(target)
+    }
+
     fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
         self.as_mut().init(ctx);
     }
@@ -127,6 +143,7 @@ pub struct EventCtx<M> {
     external_editor: Option<ExternalEditorRequest>,
     clipboard: Option<String>,
     notifications: Vec<Notification>,
+    reveal_request: Option<(Rect, RevealAlignment)>,
     current_path: TreePath,
 }
 
@@ -141,6 +158,12 @@ pub enum Propagation {
     #[default]
     Continue,
     Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RevealAlignment {
+    Nearest,
+    Center,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,6 +338,7 @@ impl<M> EventCtx<M> {
             external_editor: None,
             clipboard: None,
             notifications: Vec::new(),
+            reveal_request: None,
             current_path: TreePath::new(),
         }
     }
@@ -385,6 +409,16 @@ impl<M> EventCtx<M> {
 
     pub fn request_tick(&mut self) {
         self.tick = true;
+    }
+
+    /// Requests that the nearest ancestor viewport reveal a content-local rectangle.
+    pub fn request_reveal(&mut self, area: Rect) {
+        self.reveal_request = Some((area, RevealAlignment::Nearest));
+    }
+
+    /// Requests that the nearest ancestor viewport immediately center a content-local rectangle.
+    pub fn request_reveal_centered(&mut self, area: Rect) {
+        self.reveal_request = Some((area, RevealAlignment::Center));
     }
 
     pub fn request_quit(&mut self) {
@@ -513,6 +547,10 @@ impl<M> EventCtx<M> {
 
     pub fn propagation(&self) -> Propagation {
         self.propagation
+    }
+
+    pub(crate) fn take_reveal_request(&mut self) -> Option<(Rect, RevealAlignment)> {
+        self.reveal_request.take()
     }
 
     pub fn animation(&self) -> AnimationSettings {
@@ -1050,6 +1088,47 @@ impl LayoutCtx {
         &self.focus_paths
     }
 
+    pub(crate) fn focus_target_count(&self) -> usize {
+        self.focus_paths.len()
+    }
+
+    pub(crate) fn hit_region_count(&self) -> usize {
+        self.hit_regions.len()
+    }
+
+    pub(crate) fn overlay_count(&self) -> usize {
+        self.overlays.entries().len()
+    }
+
+    pub(crate) fn translate_focus_targets_from(
+        &mut self,
+        start: usize,
+        x_offset: i32,
+        y_offset: i32,
+        clip: Rect,
+    ) {
+        for target in &mut self.focus_paths[start..] {
+            target.area = translate_and_clip(target.area, x_offset, y_offset, clip);
+        }
+    }
+
+    pub(crate) fn translate_hit_regions_from(
+        &mut self,
+        start: usize,
+        x_offset: i32,
+        y_offset: i32,
+        clip: Rect,
+    ) {
+        for region in &mut self.hit_regions[start..] {
+            region.area = translate_and_clip(region.area, x_offset, y_offset, clip);
+        }
+    }
+
+    pub(crate) fn translate_overlays_from(&mut self, start: usize, x_offset: i32, y_offset: i32) {
+        self.overlays
+            .translate_entries_from(start, x_offset, y_offset);
+    }
+
     pub(crate) fn mark_replaced_subtree(&mut self) {
         self.replaced_subtrees.push(self.current_path());
     }
@@ -1077,6 +1156,27 @@ impl LayoutCtx {
     pub fn overflow_diagnostics(&self) -> &[LayoutOverflowDiagnostic] {
         &self.overflow_diagnostics
     }
+}
+
+pub(crate) fn translate_and_clip(area: Rect, x_offset: i32, y_offset: i32, clip: Rect) -> Rect {
+    let left = i32::from(area.x) + x_offset;
+    let top = i32::from(area.y) + y_offset;
+    let right = left.saturating_add(i32::from(area.width));
+    let bottom = top.saturating_add(i32::from(area.height));
+    let clip_left = i32::from(clip.x);
+    let clip_top = i32::from(clip.y);
+    let clip_right = clip_left.saturating_add(i32::from(clip.width));
+    let clip_bottom = clip_top.saturating_add(i32::from(clip.height));
+    let left = left.max(clip_left);
+    let top = top.max(clip_top);
+    let right = right.min(clip_right).max(left);
+    let bottom = bottom.min(clip_bottom).max(top);
+    Rect::new(
+        left.clamp(0, i32::from(u16::MAX)) as u16,
+        top.clamp(0, i32::from(u16::MAX)) as u16,
+        (right - left).clamp(0, i32::from(u16::MAX)) as u16,
+        (bottom - top).clamp(0, i32::from(u16::MAX)) as u16,
+    )
 }
 
 impl LayoutResult {
