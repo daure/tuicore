@@ -387,10 +387,12 @@ where
             width += line_width(&Line::from(format!("{glyph} ")));
         }
         if self.selection_mode == SelectionMode::Multi {
-            width += line_width(&Line::from(format!(
-                "{} ",
+            let glyph = if self.is_selection_disabled(&row.id) {
+                self.selection_disabled_glyph
+            } else {
                 self.selection_glyph_with_descendants(&row.id, selection_descendants)
-            )));
+            };
+            width += line_width(&Line::from(format!("{glyph} ")));
         }
         width
     }

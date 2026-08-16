@@ -13,6 +13,7 @@ pub struct DispatchEffects<M> {
     pub messages: Vec<M>,
     pub redraw: bool,
     pub layout: bool,
+    pub tick: bool,
     pub quit: bool,
     pub focus_request: Option<FocusRequest>,
     pub focus_repair: Option<FocusRepair>,
@@ -81,6 +82,7 @@ impl TreeDispatcher {
             messages: ctx.drain_messages().collect(),
             redraw: true,
             layout: true,
+            tick: false,
             quit: false,
             focus_request: ctx.focus_request().cloned(),
             focus_repair: None,
@@ -119,6 +121,7 @@ impl<M> DispatchEffects<M> {
             messages: Vec::new(),
             redraw: false,
             layout: false,
+            tick: false,
             quit: false,
             focus_request: None,
             focus_repair: None,
@@ -133,6 +136,7 @@ impl<M> DispatchEffects<M> {
     pub fn from_event_ctx(outcome: EventOutcome, mut ctx: EventCtx<M>) -> Self {
         let redraw = outcome.handled() || ctx.redraw_requested();
         let layout = ctx.layout_requested();
+        let tick = ctx.tick_requested();
         let quit = ctx.quit_requested();
         let focus_request = ctx.focus_request().cloned();
         let focus_repair = ctx.focus_repair();
@@ -148,6 +152,7 @@ impl<M> DispatchEffects<M> {
             messages,
             redraw,
             layout,
+            tick,
             quit,
             focus_request,
             focus_repair,
@@ -194,6 +199,7 @@ mod tests {
             self.events += 1;
             ctx.emit("event");
             ctx.request_redraw();
+            ctx.request_tick();
             EventOutcome::Handled
         }
     }
@@ -273,6 +279,7 @@ mod tests {
         assert_eq!(root.events, 1);
         assert!(effects.redraw);
         assert!(!effects.layout);
+        assert!(effects.tick);
         assert_eq!(effects.messages, vec!["event"]);
     }
 

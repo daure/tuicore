@@ -471,6 +471,11 @@ where
     }
 
     pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
+        self.set_selected(ids);
+        self
+    }
+
+    pub fn set_selected(&mut self, ids: impl IntoIterator<Item = Id>) {
         self.committed = self.known_ids(ids);
         if !self.multi {
             self.committed.truncate(1);
@@ -478,11 +483,14 @@ where
         self.draft = self.committed.clone();
         self.no_selection_highlighted = false;
         self.sync_view_selection();
-        self
     }
 
     pub fn selected_one(self, id: Id) -> Self {
         self.selected([id])
+    }
+
+    pub fn set_selected_one(&mut self, id: Id) {
+        self.set_selected([id]);
     }
 
     pub fn selected_id(&self) -> Option<Id> {

@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span, Text};
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusRequest, Key,
     KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation, TreePath, TuiEvent, TuiNode,
-    lerp_color,
+    lerp_color, theme,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -2788,6 +2788,62 @@ fn selected_builder_and_queries_ignore_selection_when_mode_is_none() {
 }
 
 #[test]
+fn disabled_checkbox_rows_are_muted_and_cannot_be_selected() {
+    let mut view = DataView::list([1, 2], |row| *row, |row| format!("row {row}"))
+        .selection_mode(SelectionMode::Multi)
+        .selection_glyphs(SelectionGlyphs::ASCII)
+        .selection_disabled_by(|row| *row == 2)
+        .selection_disabled_glyph("󱋭")
+        .selected([1, 2]);
+
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert!(view.is_selection_disabled(&2));
+    assert!(!view.toggle_selected(2));
+    assert_eq!(view.check_state(&2), CheckState::Unchecked);
+
+    let mut terminal = Terminal::new(TestBackend::new(20, 2)).unwrap();
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    let disabled = terminal.backend().buffer().cell((0, 1)).unwrap();
+    assert_eq!(disabled.symbol(), "󱋭");
+    assert_eq!(disabled.fg, theme().muted_fg());
+}
+
+#[test]
+fn disabled_tree_descendants_leave_parent_unchecked_and_are_removed_after_row_updates() {
+    let mut view = DataView::list(
+        [
+            Row {
+                id: 1,
+                parent: None,
+                name: "parent",
+            },
+            Row {
+                id: 2,
+                parent: Some(1),
+                name: "child",
+            },
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .selection_mode(SelectionMode::Multi)
+    .selection_propagation(SelectionPropagation::CascadeDescendants)
+    .selection_disabled_by(|row| row.parent.is_some())
+    .selected([1, 2]);
+
+    assert_eq!(view.selected_ids(), vec![1]);
+    assert_eq!(view.check_state(&1), CheckState::Unchecked);
+
+    view.update_row(&1, |row| row.parent = Some(99));
+
+    assert!(view.selected_ids().is_empty());
+}
+
+#[test]
 fn page_change_emits_navigation_activation_when_highlighted_index_stays_same() {
     let mut view = DataView::list(
         [
@@ -2990,6 +3046,86 @@ fn single_and_multi_selection_emit_stable_ordered_changes() {
             },
         ]
     );
+}
+
+#[test]
+fn select_all_shortcut_toggles_multi_selection() {
+    let mut view = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two"), Row::new(3, "three")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Multi);
+    let area = Rect::new(0, 0, 20, 3);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+
+    let selected = view.on_key_with_settings(Key::Char('a'), area, settings);
+
+    assert!(selected.handled);
+    assert!(selected.changed);
+    assert_eq!(view.selected_ids(), vec![1, 2, 3]);
+
+    let cleared = view.on_key_with_settings(Key::Char('a'), area, settings);
+
+    assert!(cleared.handled);
+    assert!(cleared.changed);
+    assert!(view.selected_ids().is_empty());
+
+    let mut single = DataView::list(
+        [Row::new(1, "one"), Row::new(2, "two")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .selection_mode(SelectionMode::Single)
+    .selected([1]);
+
+    let ignored = single.on_key_with_settings(Key::Char('a'), area, settings);
+
+    assert!(!ignored.handled);
+    assert_eq!(single.selected_ids(), vec![1]);
+}
+
+#[test]
+fn tree_bulk_shortcut_expands_when_collapsed_and_collapses_when_expanded() {
+    let mut view = tree_view();
+    let area = Rect::new(0, 0, 20, 6);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+
+    let expanded = view.on_key_with_settings(Key::Char('z'), area, settings);
+
+    assert!(expanded.handled);
+    assert!(expanded.changed);
+    assert!(!view.expanded.is_empty());
+
+    let mut partial = tree_view().expanded([1]);
+    let completed = partial.on_key_with_settings(Key::Char('z'), area, settings);
+
+    assert!(completed.handled);
+    assert!(completed.changed);
+    assert_eq!(
+        partial.expanded,
+        partial
+            .expandable_ids()
+            .collect::<std::collections::HashSet<_>>()
+    );
+
+    let collapsed = view.on_key_with_settings(Key::Char('z'), area, settings);
+
+    assert!(collapsed.handled);
+    assert!(collapsed.changed);
+    assert!(view.expanded.is_empty());
+
+    let mut stale = tree_view().expanded([1, 2, 3, 99]);
+    let collapsed = stale.on_key_with_settings(Key::Char('z'), area, settings);
+
+    assert!(collapsed.changed);
+    assert!(stale.expanded.is_empty());
 }
 
 #[test]

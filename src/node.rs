@@ -117,6 +117,7 @@ pub struct EventCtx<M> {
     messages: Vec<M>,
     redraw: bool,
     layout: bool,
+    tick: bool,
     quit: bool,
     focus_request: Option<FocusRequest>,
     focus_repair: Option<FocusRepair>,
@@ -304,6 +305,7 @@ impl<M> EventCtx<M> {
             messages: Vec::new(),
             redraw: false,
             layout: false,
+            tick: false,
             quit: false,
             focus_request: None,
             focus_repair: None,
@@ -381,6 +383,10 @@ impl<M> EventCtx<M> {
         self.layout = true;
     }
 
+    pub fn request_tick(&mut self) {
+        self.tick = true;
+    }
+
     pub fn request_quit(&mut self) {
         self.quit = true;
     }
@@ -456,6 +462,9 @@ impl<M> EventCtx<M> {
         if child.layout_requested() {
             self.request_layout();
         }
+        if child.tick_requested() {
+            self.request_tick();
+        }
         if child.quit_requested() {
             self.request_quit();
         }
@@ -484,6 +493,10 @@ impl<M> EventCtx<M> {
 
     pub fn layout_requested(&self) -> bool {
         self.layout
+    }
+
+    pub fn tick_requested(&self) -> bool {
+        self.tick
     }
 
     pub fn quit_requested(&self) -> bool {

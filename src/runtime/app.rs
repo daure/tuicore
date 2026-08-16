@@ -355,7 +355,8 @@ where
 
             flags.redraw |= ctx.redraw_requested();
             flags.layout |= ctx.layout_requested();
-            flags.wake_animations |= ctx.redraw_requested() || ctx.layout_requested();
+            flags.wake_animations |=
+                ctx.redraw_requested() || ctx.layout_requested() || ctx.tick_requested();
             flags.clear |= ctx.clear_requested();
             flags.quit |= ctx.quit_requested();
             if let Some(request) = ctx.focus_request().cloned() {
@@ -379,7 +380,8 @@ where
 
             flags.redraw |= ctx.redraw_requested();
             flags.layout |= ctx.layout_requested();
-            flags.wake_animations |= ctx.redraw_requested() || ctx.layout_requested();
+            flags.wake_animations |=
+                ctx.redraw_requested() || ctx.layout_requested() || ctx.tick_requested();
             flags.clear |= ctx.clear_requested();
             flags.quit |= ctx.quit_requested();
             if let Some(request) = ctx.focus_request().cloned() {
@@ -1352,7 +1354,7 @@ impl RuntimeFlags {
             focus_request: effects.focus_request.clone(),
             focus_repair: effects.focus_repair,
             clear: effects.clear,
-            wake_animations: effects.redraw || effects.layout,
+            wake_animations: effects.redraw || effects.layout || effects.tick,
         }
     }
 
@@ -2274,6 +2276,7 @@ mod tests {
             messages: Vec::new(),
             redraw: false,
             layout: false,
+            tick: false,
             quit: false,
             focus_request: None,
             focus_repair: None,
@@ -2352,6 +2355,18 @@ mod tests {
 
         assert!(flags.clear);
         assert!(flags.redraw);
+    }
+
+    #[test]
+    fn lifecycle_message_tick_request_wakes_the_scheduler() {
+        let mut app =
+            TreeApp::new(LifecycleMessageNode::default()).on_message(|_root, _message, ctx| {
+                ctx.request_tick();
+            });
+
+        let flags = app.mount_root();
+
+        assert!(flags.wake_animations);
     }
 
     #[test]

@@ -44,11 +44,7 @@ impl DataViewMode {
             bindings.line_up_label(),
             bindings.line_down_label()
         );
-        let all_tree_keys = format!(
-            "{}/{}",
-            data_keys.collapse_all_label(),
-            data_keys.expand_all_label()
-        );
+        let all_tree_key = data_keys.toggle_all_expansion_label();
         match self {
             Self::List => format!(
                 "100 rows • {} search • one column • no header • {scroll_keys} scroll • {} activates row",
@@ -63,12 +59,12 @@ impl DataViewMode {
                 )
             }
             Self::ListTree => format!(
-                "100 rows • {} search • {} node • {all_tree_keys} collapse/expand all • using tree glyphs /",
+                "100 rows • {} search • {} node • {all_tree_key} toggles all • using tree glyphs /",
                 data_keys.search_label(),
                 data_keys.toggle_expansion_label()
             ),
             Self::TableTree => format!(
-                "100 rows • {} search • {} filter header key • rich cells • {} node • {all_tree_keys} all • s sorts • using tree glyphs /",
+                "100 rows • {} search • {} filter header key • rich cells • {} node • {all_tree_key} toggles all • s sorts • using tree glyphs /",
                 data_keys.search_label(),
                 data_keys.filter_label(),
                 data_keys.toggle_expansion_label()

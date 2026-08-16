@@ -263,6 +263,10 @@ where
         self.body_border_style = style;
     }
 
+    pub fn current_body_border_style(&self) -> TabsBodyBorderStyle {
+        self.body_border_style
+    }
+
     pub fn animation(mut self, animation: AnimationSpec) -> Self {
         self.animation = Some(animation);
         self

@@ -63,6 +63,7 @@ pub struct TextareaInput<M = ()> {
     language: Option<Language>,
     syntax_revision: u64,
     syntax_cache: Option<SyntaxCache>,
+    stale_syntax_prefix_len: usize,
     syntax_job: Option<SyntaxJob>,
     keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
@@ -204,6 +205,7 @@ impl<M> TextareaInput<M> {
             language: None,
             syntax_revision: 0,
             syntax_cache: None,
+            stale_syntax_prefix_len: 0,
             syntax_job: None,
             keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
@@ -1032,7 +1034,13 @@ impl<M> TextareaInput<M> {
                 drawn += cell_width(&text);
                 spans.push(Span::styled(
                     text,
-                    self.syntax_style(position, value_style, syntax_navigation_focused, theme_name),
+                    self.syntax_style(
+                        position,
+                        *value,
+                        value_style,
+                        syntax_navigation_focused,
+                        theme_name,
+                    ),
                 ));
             }
         }
@@ -1620,8 +1628,15 @@ impl<M> TextareaInput<M> {
     }
 
     fn invalidate_syntax_cache(&mut self) {
+        self.stale_syntax_prefix_len = self.syntax_cache.as_ref().map_or(0, |cache| {
+            cache
+                .source
+                .iter()
+                .zip(self.value.chars())
+                .take_while(|(cached, current)| *cached == current)
+                .count()
+        });
         self.syntax_revision = self.syntax_revision.wrapping_add(1);
-        self.syntax_cache = None;
     }
 
     fn start_syntax_job(&mut self, theme_name: ThemeName) -> bool {
@@ -1675,6 +1690,7 @@ impl<M> TextareaInput<M> {
                     && cache.theme_name == theme().name()
                 {
                     self.syntax_cache = Some(cache);
+                    self.stale_syntax_prefix_len = 0;
                     true
                 } else {
                     false
@@ -1691,6 +1707,7 @@ impl<M> TextareaInput<M> {
     fn syntax_style(
         &self,
         position: usize,
+        value: char,
         value_style: Style,
         syntax_navigation_focused: bool,
         theme_name: ThemeName,
@@ -1698,9 +1715,12 @@ impl<M> TextareaInput<M> {
         let Some(cache) = &self.syntax_cache else {
             return value_style;
         };
+        if self.language != Some(cache.language) || cache.theme_name != theme_name {
+            return value_style;
+        }
         if cache.revision != self.syntax_revision
-            || self.language != Some(cache.language)
-            || cache.theme_name != theme_name
+            && (position >= self.stale_syntax_prefix_len
+                || cache.source.get(position) != Some(&value))
         {
             return value_style;
         }
@@ -2033,6 +2053,7 @@ struct SyntaxCache {
     revision: u64,
     language: Language,
     theme_name: ThemeName,
+    source: Vec<char>,
     styles: Vec<Style>,
 }
 
@@ -2062,6 +2083,7 @@ fn syntax_worker() -> Option<&'static SyncSender<SyntaxRequest>> {
                             revision: request.revision,
                             language: request.language,
                             theme_name: request.theme_name,
+                            source: request.source.chars().collect(),
                             styles: syntax_styles(&request.source, &highlighted),
                         };
                         let _ = request.sender.send(cache);

@@ -54,6 +54,7 @@ type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
 type RowHeightFn<T> = dyn Fn(&T) -> u16;
 type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
+type SelectionDisabledFn<T> = dyn Fn(&T) -> bool;
 
 pub(crate) fn search_focus_id() -> FocusId {
     FocusId::new(TEXT_INPUT_FOCUS)
@@ -95,6 +96,8 @@ pub struct DataView<T, Id> {
     selection_propagation: SelectionPropagation,
     selected: HashSet<Id>,
     selection_glyphs: SelectionGlyphs,
+    selection_disabled_by: Option<Box<SelectionDisabledFn<T>>>,
+    selection_disabled_glyph: &'static str,
     tree_glyphs: TreeGlyphs,
     hotkey: Option<String>,
     pending_g: bool,
@@ -184,6 +187,8 @@ where
             selection_propagation: SelectionPropagation::default(),
             selected: HashSet::new(),
             selection_glyphs: SelectionGlyphs::NERD_FONT,
+            selection_disabled_by: None,
+            selection_disabled_glyph: "󰄲",
             tree_glyphs: TreeGlyphs::NERD_FONT,
             hotkey: None,
             pending_g: false,
@@ -504,6 +509,7 @@ where
                 .collect::<Vec<_>>()
         });
         self.rows = rows.into_iter().collect();
+        self.normalize_selection();
         if let Some(ids) = visible_ids {
             self.visible_row_indices = Some(self.row_indices_for_ids(ids));
         }
@@ -566,6 +572,7 @@ where
             &(self.row_id)(row) == id,
             "DataView row update must preserve the row ID"
         );
+        self.normalize_selection();
         let (_, highlight) = self.sync_highlight_after_visible_set_change(before_id);
         Some(DataViewOutcome {
             handled: true,
@@ -1164,6 +1171,20 @@ where
         }
     }
 
+    fn toggle_all_expansion_with_settings(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        let expandable = self.expandable_ids().collect::<HashSet<_>>();
+        let all_expanded = expandable.is_subset(&self.expanded);
+        if all_expanded {
+            self.collapse_all_with_settings(area, settings)
+        } else {
+            self.expand_all_with_settings(area, settings)
+        }
+    }
+
     pub fn highlighted_id(&self) -> Option<Id> {
         self.visible_rows()
             .get(self.highlighted)
@@ -1339,6 +1360,9 @@ where
         } else if data_keys.toggle_selection_matches(key) {
             self.pending_g = false;
             self.toggle_highlighted_selection()
+        } else if data_keys.toggle_all_selection_matches(key) {
+            self.pending_g = false;
+            self.toggle_all_selection_with_outcome()
         } else if data_keys.toggle_expansion_matches(key) {
             self.pending_g = false;
             self.toggle_highlighted_expansion(area, settings)
@@ -1348,12 +1372,9 @@ where
         } else if data_keys.previous_page_matches(key) {
             self.pending_g = false;
             self.previous_page_with_settings(area, settings)
-        } else if data_keys.collapse_all_matches(key) {
+        } else if data_keys.toggle_all_expansion_matches(key) {
             self.pending_g = false;
-            self.collapse_all_with_settings(area, settings)
-        } else if data_keys.expand_all_matches(key) {
-            self.pending_g = false;
-            self.expand_all_with_settings(area, settings)
+            self.toggle_all_expansion_with_settings(area, settings)
         } else if data_keys.top_prefix_matches(key) {
             self.handle_g(area, settings)
         } else if data_keys.bottom_matches(key) {

@@ -41,7 +41,8 @@ Measurement vocabulary: `AxisProposal`, `LayoutProposal`, `LayoutSize`, `AxisExp
 
 Low-level custom-loop exports exist but normal apps should not need them: `TerminalGuard`,
 `EventSource`, `LayoutEngine`, `FocusManager`, `TreeDispatcher`, `Scheduler`, `Renderer`,
-`DispatchEffects`, and `FocusTransition`. Runtime errors use `Result`.
+`DispatchEffects`, and `FocusTransition`. Event handlers can call `EventCtx::request_tick` when
+asynchronous work needs polling beyond the current animation window. Runtime errors use `Result`.
 
 ## Layout and layers
 
@@ -108,7 +109,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `ListOutcome`.
 - `DataView<T, Id>`: typed rows with stable IDs. `new(rows, id)` + `Column`s, or `list`.
   Configure rows, headers, action/filter/search, local/external transforms, sorting, pagination,
-  tree expansion, activation/selection, copying, empty state, scrolling, fixed `row_height`, or
+  tree expansion, activation/selection, per-row disabled checkboxes via `selection_disabled_by`
+  and `selection_disabled_glyph`, copying, empty state, scrolling, fixed `row_height`, or
   per-row `row_height_by`. Both height paths clamp to at least one; `set_row_height` clears a
   dynamic policy and `configured_row_height` remains its fixed fallback. Mutate with set/push/
   append/update/remove APIs. Drain `DataViewTypedEvent<Id>` using `take_events`/`drain_events`;

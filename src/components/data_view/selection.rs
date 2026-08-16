@@ -32,6 +32,40 @@ where
         self
     }
 
+    pub fn selection_disabled_by(mut self, disabled: impl Fn(&T) -> bool + 'static) -> Self {
+        self.set_selection_disabled_by(disabled);
+        self
+    }
+
+    pub fn set_selection_disabled_by(&mut self, disabled: impl Fn(&T) -> bool + 'static) {
+        self.selection_disabled_by = Some(Box::new(disabled));
+        self.normalize_selection();
+    }
+
+    pub fn clear_selection_disabled_by(&mut self) {
+        self.selection_disabled_by = None;
+    }
+
+    pub fn selection_disabled_glyph(mut self, glyph: &'static str) -> Self {
+        self.selection_disabled_glyph = glyph;
+        self
+    }
+
+    pub fn set_selection_disabled_glyph(&mut self, glyph: &'static str) {
+        self.selection_disabled_glyph = glyph;
+    }
+
+    pub fn is_selection_disabled(&self, id: &Id) -> bool {
+        self.rows
+            .iter()
+            .find(|row| (self.row_id)(row) == *id)
+            .is_some_and(|row| {
+                self.selection_disabled_by
+                    .as_ref()
+                    .is_some_and(|disabled| disabled(row))
+            })
+    }
+
     pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
         if self.selection_mode == SelectionMode::None {
             self.selected.clear();
@@ -79,12 +113,19 @@ where
         self.replace_selection(HashSet::new())
     }
 
+    pub fn select_all(&mut self) -> bool {
+        if self.selection_mode != SelectionMode::Multi {
+            return false;
+        }
+        self.replace_selection(self.row_ids().into_iter().collect())
+    }
+
     /// Returns the visual check state for a row.
     ///
     /// With cascade selection, parent state is derived from descendants and can
     /// be checked or indeterminate independently from direct parent selection.
     pub fn check_state(&self, id: &Id) -> CheckState {
-        if self.selection_mode == SelectionMode::None {
+        if self.selection_mode == SelectionMode::None || self.is_selection_disabled(id) {
             return CheckState::Unchecked;
         }
         let descendants = self.selection_descendants_by_id();
@@ -104,10 +145,13 @@ where
         id: &Id,
         descendants_by_id: &HashMap<Id, Vec<Id>>,
     ) -> CheckState {
-        if self.selection_mode == SelectionMode::None {
+        if self.selection_mode == SelectionMode::None || self.is_selection_disabled(id) {
             return CheckState::Unchecked;
         }
         let ids = self.check_state_ids_from_descendants(id, descendants_by_id);
+        if ids.is_empty() {
+            return CheckState::Unchecked;
+        }
         let checked = ids.iter().filter(|id| self.selected.contains(*id)).count();
         match checked {
             0 => CheckState::Unchecked,
@@ -204,13 +248,29 @@ where
         }
     }
 
+    pub(super) fn toggle_all_selection_with_outcome(&mut self) -> DataViewOutcome {
+        if self.selection_mode != SelectionMode::Multi {
+            return DataViewOutcome::IDLE;
+        }
+        DataViewOutcome {
+            handled: true,
+            changed: if self.select_all() {
+                true
+            } else {
+                self.clear_selection()
+            },
+            active: false,
+            activated: false,
+        }
+    }
+
     pub(super) fn emit_activation(&mut self, row_id: Id) {
         self.last_activated = Some(row_id.clone());
         self.events.push(DataViewTypedEvent::Activated { row_id });
     }
 
     pub(super) fn select_id_internal(&mut self, id: Id) -> bool {
-        if !self.contains_row_id(&id) {
+        if !self.contains_row_id(&id) || self.is_selection_disabled(&id) {
             return false;
         }
         match self.selection_mode {
@@ -235,7 +295,7 @@ where
     }
 
     pub(super) fn toggle_selected_internal(&mut self, id: Id) -> bool {
-        if !self.contains_row_id(&id) {
+        if !self.contains_row_id(&id) || self.is_selection_disabled(&id) {
             return false;
         }
         match self.selection_mode {
@@ -265,12 +325,18 @@ where
 
     fn selection_group(&self, id: Id) -> Vec<Id> {
         if !self.cascades_selection() {
-            return vec![id];
+            return (!self.is_selection_disabled(&id))
+                .then_some(id)
+                .into_iter()
+                .collect();
         }
         let mut group = Vec::with_capacity(1);
         group.push(id.clone());
         group.extend(self.descendant_ids(&id));
         group
+            .into_iter()
+            .filter(|id| !self.is_selection_disabled(id))
+            .collect()
     }
 
     pub(super) fn replace_selection(&mut self, next: HashSet<Id>) -> bool {
@@ -344,7 +410,7 @@ where
     fn known_ids(&self, ids: HashSet<Id>) -> HashSet<Id> {
         let known = self.row_ids().into_iter().collect::<HashSet<_>>();
         ids.into_iter()
-            .filter(|id| known.contains(id))
+            .filter(|id| known.contains(id) && !self.is_selection_disabled(id))
             .collect::<HashSet<_>>()
     }
 
@@ -363,14 +429,18 @@ where
 
         let descendants = descendants_by_id.get(id).cloned().unwrap_or_default();
         if descendants.is_empty() {
-            vec![id.clone()]
+            (!self.is_selection_disabled(id))
+                .then(|| id.clone())
+                .into_iter()
+                .collect()
         } else {
             descendants
                 .into_iter()
                 .filter(|descendant| {
-                    descendants_by_id
-                        .get(descendant)
-                        .is_none_or(|children| children.is_empty())
+                    !self.is_selection_disabled(descendant)
+                        && descendants_by_id
+                            .get(descendant)
+                            .is_none_or(|children| children.is_empty())
                 })
                 .collect()
         }

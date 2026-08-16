@@ -2,6 +2,7 @@
 name = "tuicore"
 version = "0.18.0"
 edition = "2024"
+default-run = "gallery"
 description = "Composable ratatui components and a crossterm tree runtime for terminal UIs"
 repository = "https://github.com/daure/tuicore"
 readme = "README.md"
@@ -18,6 +19,10 @@ include = [
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
 ]
+
+[[bin]]
+name = "gallery"
+path = "examples/gallery.rs"
 
 [dependencies]
 base64 = "0.22"
@@ -36,7 +41,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 similar = "2"
 lumis = { version = "0.12.1", features = ["all-languages"] }
 ansi-to-tui = "8.0.1"
+schemars = "1"
 
 [dev-dependencies]
 dotenvy = { version = "0.15" }
-schemars = "1"

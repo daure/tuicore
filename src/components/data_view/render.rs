@@ -293,7 +293,9 @@ where
                     )
                 })
                 .collect();
-            if self.row_has_reorder_highlight(&row.id) || highlighted && self.focused {
+            if (self.row_has_reorder_highlight(&row.id) || highlighted && self.focused)
+                && !self.is_selection_disabled(&row.id)
+            {
                 if let Some(foreground) = row_style.and_then(|style| style.fg) {
                     for line in &mut text.lines {
                         for span in &mut line.spans {
@@ -339,10 +341,19 @@ where
             }
         }
         if self.displays_selection_glyphs() {
+            let disabled = self.is_selection_disabled(&row.id);
             let check_state = self.check_state_with_descendants(&row.id, selection_descendants);
-            let glyph = self.selection_glyphs.glyph(check_state);
+            let glyph = if disabled {
+                self.selection_disabled_glyph
+            } else {
+                self.selection_glyphs.glyph(check_state)
+            };
             let content = format!("{glyph} ");
-            prefix.push(Span::raw(content));
+            prefix.push(if disabled {
+                Span::styled(content, Style::default().fg(theme().muted_fg()))
+            } else {
+                Span::raw(content)
+            });
         }
         let gutter_width = prefix
             .iter()

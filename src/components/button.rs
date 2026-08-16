@@ -249,11 +249,7 @@ impl<M> Button<M> {
         } else {
             self.hotkey_matcher.prefix()
         };
-        let hotkey_style = if self.disabled {
-            text_style
-        } else {
-            crate::hotkey_underline_style(text_style)
-        };
+        let hotkey_style = crate::hotkey_underline_style(text_style);
         spans.extend(hotkey_label_spans(
             &self.label,
             self.hotkey.as_deref(),
@@ -630,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_button_uses_muted_text_without_hotkey_emphasis() {
+    fn disabled_button_keeps_hotkey_underlined_in_muted_text() {
         let button = Button::<()>::new("Disabled").hotkey("d").disabled(true);
         let mut terminal = Terminal::new(TestBackend::new(16, 1)).expect("terminal should build");
 
@@ -640,7 +636,7 @@ mod tests {
 
         let label_cell = terminal.backend().buffer().cell((1, 0)).unwrap();
         assert_eq!(label_cell.fg, theme().muted_fg());
-        assert!(!label_cell.modifier.contains(Modifier::UNDERLINED));
+        assert!(label_cell.modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]

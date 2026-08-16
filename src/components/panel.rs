@@ -225,8 +225,16 @@ impl<M> Panel<M> {
     }
 
     pub fn border(mut self, border: BorderKind) -> Self {
-        self.border = Some(border);
+        self.set_border(border);
         self
+    }
+
+    pub fn set_border(&mut self, border: BorderKind) {
+        self.border = Some(border);
+    }
+
+    pub fn clear_border(&mut self) {
+        self.border = None;
     }
 
     pub fn one_row(mut self, one_row: bool) -> Self {

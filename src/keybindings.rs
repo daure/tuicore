@@ -72,11 +72,11 @@ pub struct ToggleKeyBindings {
 pub struct DataViewKeyBindings {
     activate: Vec<KeySpec>,
     toggle_selection: Vec<KeySpec>,
+    toggle_all_selection: Vec<KeySpec>,
     toggle_expansion: Vec<KeySpec>,
     next_page: Vec<KeySpec>,
     previous_page: Vec<KeySpec>,
-    collapse_all: Vec<KeySpec>,
-    expand_all: Vec<KeySpec>,
+    toggle_all_expansion: Vec<KeySpec>,
     search: Vec<KeySpec>,
     clear_search: Vec<KeySpec>,
     filter: Vec<KeySpec>,
@@ -203,11 +203,11 @@ impl Default for DataViewKeyBindings {
         Self {
             activate: vec![KeySpec::key(Key::Enter)],
             toggle_selection: Vec::new(),
+            toggle_all_selection: vec![KeySpec::plain('a')],
             toggle_expansion: vec![KeySpec::plain(' ')],
             next_page: vec![KeySpec::plain('n')],
             previous_page: vec![KeySpec::plain('p')],
-            collapse_all: vec![KeySpec::plain('z')],
-            expand_all: vec![KeySpec::shifted('z')],
+            toggle_all_expansion: vec![KeySpec::plain('z')],
             search: vec![KeySpec::plain('/')],
             clear_search: vec![KeySpec::key_with_modifiers(
                 Key::Char('/'),
@@ -382,6 +382,12 @@ impl KeyBindings {
         set_keys(
             &value,
             "data_view",
+            "toggle_all_selection",
+            &mut bindings.data_view.toggle_all_selection,
+        )?;
+        set_keys(
+            &value,
+            "data_view",
             "toggle_expansion",
             &mut bindings.data_view.toggle_expansion,
         )?;
@@ -400,14 +406,8 @@ impl KeyBindings {
         set_keys(
             &value,
             "data_view",
-            "collapse_all",
-            &mut bindings.data_view.collapse_all,
-        )?;
-        set_keys(
-            &value,
-            "data_view",
-            "expand_all",
-            &mut bindings.data_view.expand_all,
+            "toggle_all_expansion",
+            &mut bindings.data_view.toggle_all_expansion,
         )?;
         set_keys(
             &value,
@@ -788,6 +788,30 @@ impl KeyBindings {
         self
     }
 
+    pub fn set_data_view_toggle_all_selection(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.toggle_all_selection = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_toggle_all_selection(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_data_view_toggle_all_selection(keys);
+        self
+    }
+
+    pub fn set_data_view_toggle_all_expansion(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.data_view.toggle_all_expansion = keys.into_iter().collect();
+    }
+
+    pub fn with_data_view_toggle_all_expansion(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_data_view_toggle_all_expansion(keys);
+        self
+    }
+
     pub fn with_data_view_toggle_expansion(
         mut self,
         keys: impl IntoIterator<Item = KeySpec>,
@@ -811,24 +835,6 @@ impl KeyBindings {
 
     pub fn with_data_view_previous_page(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_data_view_previous_page(keys);
-        self
-    }
-
-    pub fn set_data_view_collapse_all(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
-        self.data_view.collapse_all = keys.into_iter().collect();
-    }
-
-    pub fn with_data_view_collapse_all(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
-        self.set_data_view_collapse_all(keys);
-        self
-    }
-
-    pub fn set_data_view_expand_all(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
-        self.data_view.expand_all = keys.into_iter().collect();
-    }
-
-    pub fn with_data_view_expand_all(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
-        self.set_data_view_expand_all(keys);
         self
     }
 
@@ -1265,6 +1271,14 @@ impl DataViewKeyBindings {
         labels(&self.toggle_selection)
     }
 
+    pub fn toggle_all_selection_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.toggle_all_selection, key.into())
+    }
+
+    pub fn toggle_all_selection_label(&self) -> String {
+        labels(&self.toggle_all_selection)
+    }
+
     pub fn next_page_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.next_page, key.into())
     }
@@ -1273,20 +1287,12 @@ impl DataViewKeyBindings {
         matches_any(&self.previous_page, key.into())
     }
 
-    pub fn collapse_all_matches(&self, key: impl Into<KeyEvent>) -> bool {
-        matches_any(&self.collapse_all, key.into())
+    pub fn toggle_all_expansion_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.toggle_all_expansion, key.into())
     }
 
-    pub fn collapse_all_label(&self) -> String {
-        labels(&self.collapse_all)
-    }
-
-    pub fn expand_all_matches(&self, key: impl Into<KeyEvent>) -> bool {
-        matches_any(&self.expand_all, key.into())
-    }
-
-    pub fn expand_all_label(&self) -> String {
-        labels(&self.expand_all)
+    pub fn toggle_all_expansion_label(&self) -> String {
+        labels(&self.toggle_all_expansion)
     }
 
     pub fn search_matches(&self, key: impl Into<KeyEvent>) -> bool {
@@ -1902,11 +1908,11 @@ mod tests {
             [data_view]
             activate = "enter"
             toggle_selection = "x"
+            toggle_all_selection = "a"
             toggle_expansion = "space"
             next_page = "n"
             previous_page = "p"
-            collapse_all = "z"
-            expand_all = "shift+z"
+            toggle_all_expansion = "z"
             search = "/"
             filter = "f"
             group = "r"
@@ -1995,6 +2001,10 @@ mod tests {
             code: Key::Char('x'),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.data_view().toggle_all_selection_matches(KeyEvent {
+            code: Key::Char('a'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.data_view().toggle_expansion_matches(KeyEvent {
             code: Key::Char(' '),
             modifiers: KeyModifiers::NONE,
@@ -2007,13 +2017,9 @@ mod tests {
             code: Key::Char('p'),
             modifiers: KeyModifiers::NONE,
         }));
-        assert!(bindings.data_view().collapse_all_matches(KeyEvent {
+        assert!(bindings.data_view().toggle_all_expansion_matches(KeyEvent {
             code: Key::Char('z'),
             modifiers: KeyModifiers::NONE,
-        }));
-        assert!(bindings.data_view().expand_all_matches(KeyEvent {
-            code: Key::Char('Z'),
-            modifiers: KeyModifiers::SHIFT,
         }));
         assert!(bindings.data_view().search_matches(KeyEvent {
             code: Key::Char('/'),
@@ -2096,11 +2102,11 @@ mod tests {
             .with_nav_bottom([KeySpec::plain('b')])
             .with_data_view_activate([KeySpec::plain('a')])
             .with_data_view_toggle_selection([KeySpec::plain('s')])
+            .with_data_view_toggle_all_selection([KeySpec::plain('a')])
             .with_data_view_toggle_expansion([KeySpec::plain('e')])
             .with_data_view_next_page([KeySpec::plain('n')])
             .with_data_view_previous_page([KeySpec::plain('p')])
-            .with_data_view_collapse_all([KeySpec::plain('c')])
-            .with_data_view_expand_all([KeySpec::plain('x')])
+            .with_data_view_toggle_all_expansion([KeySpec::plain('z')])
             .with_data_view_search([KeySpec::plain('/')])
             .with_data_view_filter([KeySpec::plain('f')])
             .with_data_view_top_prefix([KeySpec::plain('t')])
@@ -2178,6 +2184,10 @@ mod tests {
             code: Key::Char('s'),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.data_view().toggle_all_selection_matches(KeyEvent {
+            code: Key::Char('a'),
+            modifiers: KeyModifiers::NONE,
+        }));
         assert!(bindings.data_view().toggle_expansion_matches(KeyEvent {
             code: Key::Char('e'),
             modifiers: KeyModifiers::NONE,
@@ -2190,12 +2200,8 @@ mod tests {
             code: Key::Char('p'),
             modifiers: KeyModifiers::NONE,
         }));
-        assert!(bindings.data_view().collapse_all_matches(KeyEvent {
-            code: Key::Char('c'),
-            modifiers: KeyModifiers::NONE,
-        }));
-        assert!(bindings.data_view().expand_all_matches(KeyEvent {
-            code: Key::Char('x'),
+        assert!(bindings.data_view().toggle_all_expansion_matches(KeyEvent {
+            code: Key::Char('z'),
             modifiers: KeyModifiers::NONE,
         }));
         assert!(bindings.data_view().search_matches(KeyEvent {

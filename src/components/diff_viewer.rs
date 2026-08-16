@@ -156,6 +156,18 @@ impl DiffViewer {
         self
     }
 
+    pub fn set_texts(&mut self, old: impl Into<String>, new: impl Into<String>) {
+        let old = normalize_newlines(old.into());
+        let new = normalize_newlines(new.into());
+        if self.old_text == old && self.new_text == new {
+            return;
+        }
+        self.old_text = old;
+        self.new_text = new;
+        self.selected = None;
+        self.rebuild();
+    }
+
     pub fn style(mut self, style: DiffStyle) -> Self {
         self.set_style(style);
         self

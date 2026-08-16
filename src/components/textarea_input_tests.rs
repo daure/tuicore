@@ -30,7 +30,11 @@ impl Drop for KeyBindingsGuard {
 fn finish_syntax(input: &mut TextareaInput<()>) -> TickResult {
     for _ in 0..2_000 {
         let result = Animated::tick(input, Duration::ZERO, AnimationSettings::default());
-        if input.syntax_cache.is_some() {
+        if input
+            .syntax_cache
+            .as_ref()
+            .is_some_and(|cache| cache.revision == input.syntax_revision)
+        {
             return result;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -1233,6 +1237,7 @@ fn syntax_invalidation_keeps_one_in_flight_job() {
                 revision: in_flight_revision,
                 language: Language::Markdown,
                 theme_name: theme().name(),
+                source: Vec::new(),
                 styles: Vec::new(),
             })
             .is_ok()
@@ -1273,31 +1278,53 @@ fn textarea_rebuilds_invalidated_highlighting_after_edits_and_set_value() {
 
     input.cursor = input.len_chars();
     input.on_key(Key::Char('x'));
-    assert!(input.syntax_cache.is_none());
+    assert_ne!(
+        input.syntax_cache.as_ref().unwrap().revision,
+        input.syntax_revision
+    );
     finish_syntax(&mut input);
     assert_ne!(input.visible_lines(20, 1).lines[0].spans[0].style, plain);
 
     input.set_value("let value = 1;");
-    assert!(input.syntax_cache.is_none());
+    assert_ne!(
+        input.syntax_cache.as_ref().unwrap().revision,
+        input.syntax_revision
+    );
     finish_syntax(&mut input);
     assert_ne!(input.visible_lines(20, 1).lines[0].spans[0].style, plain);
 }
 
 #[test]
-fn textarea_edit_falls_back_to_plain_style_until_highlight_cache_rebuilds() {
+fn textarea_edit_keeps_previous_highlighting_until_cache_rebuilds() {
     let mut input = TextareaInput::<()>::new()
         .value("fn main() {}")
         .language(Language::Rust);
     finish_syntax(&mut input);
-    let plain = Style::default().fg(theme().subtle_fg());
-    assert_ne!(input.visible_lines(20, 1).lines[0].spans[0].style, plain);
+    let highlighted_style = input.visible_lines(20, 1).lines[0].spans[0].style;
+
+    input.cursor = input.len_chars();
+    input.on_key(Key::Char('x'));
+    let line = &input.visible_lines(20, 1).lines[0];
+
+    assert_eq!(line.spans[0].style, highlighted_style);
+}
+
+#[test]
+fn textarea_edit_uses_stale_highlighting_only_for_unchanged_prefix() {
+    let mut input = TextareaInput::<()>::new()
+        .value("fn main() {}")
+        .language(Language::Rust);
+    finish_syntax(&mut input);
 
     input.cursor = 0;
     input.on_key(Key::Char('x'));
     let line = &input.visible_lines(20, 1).lines[0];
 
-    assert!(input.syntax_cache.is_none());
-    assert!(line.spans.iter().all(|span| span.style == plain));
+    assert_eq!(line.spans[0].content, "x");
+    assert_eq!(
+        line.spans[0].style,
+        Style::default().fg(theme().subtle_fg())
+    );
 }
 
 #[test]
