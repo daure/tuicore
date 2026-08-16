@@ -1,6 +1,6 @@
 [package]
 name = "tuicore"
-version = "0.18.0"
+version = "0.19.0"
 edition = "2024"
 default-run = "gallery"
 description = "Composable ratatui components and a crossterm tree runtime for terminal UIs"
