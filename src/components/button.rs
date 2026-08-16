@@ -43,6 +43,7 @@ pub struct Button<M = ()> {
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
     tab_stop: bool,
+    disabled: bool,
     focused: bool,
     on_press: Option<Box<dyn Fn() -> M>>,
     background_color: ColorTween,
@@ -60,6 +61,7 @@ impl<M> Button<M> {
             hotkey_matcher: HotkeySequenceMatcher::default(),
             pending_hotkey_prefix: None,
             tab_stop: true,
+            disabled: false,
             focused: false,
             on_press: None,
             background_color: ColorTween::idle(theme.surface_bg()),
@@ -103,6 +105,28 @@ impl<M> Button<M> {
         self
     }
 
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
+        if disabled {
+            self.focused = false;
+            self.pending_hotkey_prefix = None;
+            self.hotkey_matcher = HotkeySequenceMatcher::default();
+            self.press_feedback.snap_to(0.0);
+        } else if let Some(hotkey) = self.hotkey.clone() {
+            self.hotkey_matcher = HotkeySequenceMatcher::new([hotkey]);
+        }
+        self.sync_idle_colors();
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
     pub fn set_hotkey_label_mode(&mut self, mode: HotkeyLabelMode) {
         self.hotkey_label_mode = mode;
     }
@@ -113,7 +137,7 @@ impl<M> Button<M> {
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
+        self.focused = focused && !self.disabled;
         self.sync_idle_colors();
         self
     }
@@ -123,6 +147,7 @@ impl<M> Button<M> {
     }
 
     pub fn set_focused(&mut self, focused: bool, _settings: AnimationSettings) {
+        let focused = focused && !self.disabled;
         if self.focused == focused {
             return;
         }
@@ -131,6 +156,9 @@ impl<M> Button<M> {
     }
 
     pub fn press(&mut self, settings: AnimationSettings) -> ButtonOutcome {
+        if self.disabled {
+            return ButtonOutcome::IGNORED;
+        }
         if settings.enabled {
             self.press_feedback
                 .start(1.0, 0.0, PRESS_FEEDBACK, Easing::EaseOutCubic);
@@ -147,6 +175,9 @@ impl<M> Button<M> {
         key: impl Into<KeyEvent>,
         settings: AnimationSettings,
     ) -> ButtonOutcome {
+        if self.disabled {
+            return ButtonOutcome::IGNORED;
+        }
         let key = key.into();
         match self.hotkey_matcher.on_key(key) {
             HotkeyMatch::Matched(_) => return self.press(settings),
@@ -201,8 +232,12 @@ impl<M> Button<M> {
             inactive_background
         };
         let text_style = Style::default()
-            .fg(self.visible_text_color())
-            .add_modifier(if self.focused {
+            .fg(if self.disabled {
+                theme().muted_fg()
+            } else {
+                self.visible_text_color()
+            })
+            .add_modifier(if self.focused && !self.disabled {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
@@ -214,13 +249,18 @@ impl<M> Button<M> {
         } else {
             self.hotkey_matcher.prefix()
         };
+        let hotkey_style = if self.disabled {
+            text_style
+        } else {
+            crate::hotkey_underline_style(text_style)
+        };
         spans.extend(hotkey_label_spans(
             &self.label,
             self.hotkey.as_deref(),
             self.hotkey_label_mode,
             Some(active_prefix),
             text_style,
-            crate::hotkey_underline_style(text_style),
+            hotkey_style,
         ));
         spans.push(Span::styled(" ", text_style));
 
@@ -276,6 +316,9 @@ impl<M> Button<M> {
         event: &TuiEvent,
         ctx: &mut EventCtx<M>,
     ) -> (EventOutcome, bool) {
+        if self.disabled {
+            return (EventOutcome::Ignored, false);
+        }
         if let TuiEvent::Hotkey(hotkey) = event {
             match hotkey {
                 HotkeyEvent::Pending(prefix) => {
@@ -352,6 +395,12 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        if self.disabled {
+            ctx.register_focusable(FocusId::new(BUTTON_FOCUS), area, false);
+            ctx.set_focus_tab_stop(FocusId::new(BUTTON_FOCUS), false);
+            ctx.set_focus_control(FocusId::new(BUTTON_FOCUS), true);
+            return LayoutResult::new(area);
+        }
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(BUTTON_FOCUS),
@@ -469,6 +518,25 @@ mod tests {
     }
 
     #[test]
+    fn disabled_button_is_skipped_by_focus_and_cannot_be_pressed() {
+        let mut button = Button::<()>::new("Run").hotkey("b").disabled(true);
+        let mut layout = LayoutCtx::new();
+
+        button.layout(Rect::new(0, 0, 20, 1), &mut layout);
+
+        let target = &layout.focus_targets()[0];
+        assert!(!target.enabled);
+        assert!(!target.tab_stop);
+        assert!(target.hotkey_sequences.is_empty());
+        assert_eq!(button.on_key(Key::Enter), ButtonOutcome::IGNORED);
+        assert_eq!(button.on_key(Key::Char('b')), ButtonOutcome::IGNORED);
+        assert_eq!(
+            button.press(AnimationSettings::default()),
+            ButtonOutcome::IGNORED
+        );
+    }
+
+    #[test]
     fn focus_colors_change_instantly() {
         let mut button = Button::<()>::new("Run");
 
@@ -559,6 +627,20 @@ mod tests {
         assert!(row.starts_with(" button "));
         assert!(!row.contains(""));
         assert!(!row.contains(""));
+    }
+
+    #[test]
+    fn disabled_button_uses_muted_text_without_hotkey_emphasis() {
+        let button = Button::<()>::new("Disabled").hotkey("d").disabled(true);
+        let mut terminal = Terminal::new(TestBackend::new(16, 1)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| button.render(frame, frame.area()))
+            .expect("button should render");
+
+        let label_cell = terminal.backend().buffer().cell((1, 0)).unwrap();
+        assert_eq!(label_cell.fg, theme().muted_fg());
+        assert!(!label_cell.modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]

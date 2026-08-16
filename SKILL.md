@@ -68,7 +68,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 
 ### Actions and input
 
-- `Button<M>`: `new(label)`, hotkey/tab-stop/focus/`on_press`; direct operations return
+- `Button<M>`: `new(label)`, hotkey/tab-stop/focus/`on_press`; configure disabled state with
+  `disabled(bool)`/`set_disabled` and inspect it with `is_disabled`. Disabled buttons use muted
+  styling, skip focus traversal and hotkeys, and ignore presses. Direct operations return
   `ButtonOutcome`. `HotkeyLabelMode` controls label rendering.
 - `Toggle<M>`: `new(label)`, checked/value/style/hotkey/`on_change`; `ToggleStyle`, `ToggleOutcome`.
 - `TextInput<M>` / `PasswordInput<M>`: `new`, value, placeholder, panel/style, hotkey, focus,

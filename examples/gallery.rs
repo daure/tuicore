@@ -778,6 +778,7 @@ struct PreviewState {
     calendar_status: String,
     status_bar: StatusBar<Msg>,
     button: Button<Msg>,
+    disabled_button: Button<Msg>,
     button_presses: u32,
     chips: [Chip; 7],
     tag_input: TagInput,
@@ -970,7 +971,8 @@ impl PreviewState {
                 .weather_provider(WeatherProviderConfig::new().enabled(false))
                 .on_ai_open(|| Msg::OpenAiDock)
                 .on_store_view_open(|| Msg::StoreViewOpened),
-            button: Button::new("button").hotkey("b"),
+            button: Button::new("Enabled").hotkey("b"),
+            disabled_button: Button::new("Disabled").hotkey("d").disabled(true),
             button_presses: 0,
             chips: [
                 Chip::new("Chip value"),
@@ -3147,20 +3149,30 @@ impl PreviewState {
     }
 
     fn layout_button(&mut self, area: Rect, ctx: &mut LayoutCtx) {
-        let [_, button_area, _] = button_layout(area);
+        let [_, button_row, _] = button_layout(area);
+        let [button_area, disabled_area] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(10), Constraint::Length(12)])
+            .areas(button_row);
         self.button.layout(button_area, ctx);
+        self.disabled_button.layout(disabled_area, ctx);
     }
 
     fn render_button(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, button_area, status] = button_layout(area);
+        let [instructions, button_row, status] = button_layout(area);
+        let [button_area, disabled_area] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(10), Constraint::Length(12)])
+            .areas(button_row);
         frame.render_widget(
             Paragraph::new(format!(
-                "{} presses. Press b from anywhere in this preview to focus and press.",
+                "Enabled and disabled styles. {} presses; b focuses and presses the enabled button.",
                 tuicore::keybindings().button().press_label()
             )),
             instructions,
         );
         self.button.render(frame, button_area);
+        self.disabled_button.render(frame, disabled_area);
         frame.render_widget(
             Paragraph::new(format!("Pressed {} times", self.button_presses)),
             status,
