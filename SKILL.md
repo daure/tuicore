@@ -85,8 +85,14 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 
 - `Dropdown<T, Id>`: `single`/`multi`; retained selection, search, commit, popup, label, hotkey, and
   callbacks. Search results can require `min_search_chars`, be capped with `max_filtered_items`,
-  and use `visible_without_search` for a default subset before querying all options. Inspect
-  IDs/query/open state; open/close/cancel/commit return `DropdownOutcome`.
+  and use `visible_without_search` for a default subset before querying all options. Replace options
+  with `set_rows` while preserving open/query state, and set a query programmatically with
+  `set_search_query`. Switch matching at runtime with `set_search_mode`.
+  `DropdownSearchMode::External` keeps search input active but disables local filtering and match
+  highlighting so a remote service can own results. Configure its loading state with
+  `external_loading`/`set_external_loading` and a custom message with
+  `external_loading_message`/`set_external_loading_message`; loading renders the shared `Spinner`.
+  Inspect IDs/query/open state; open/close/cancel/commit return `DropdownOutcome`.
   Configure with `DropdownActionKeys`, `DropdownCommitMode`, `DropdownLabelPosition`,
   `DropdownPopupDirection`, `DropdownSearchMode`, and `DropdownVariant`.
 - `Menu<Id>`: transient commands from `MenuItem::new`; configure search/popup/action keys/hotkey,
@@ -136,8 +142,11 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 
 ### Panels, dialogs, tabs, display
 
-- `Panel`: non-modal chrome; configure titles, border/tone, text, focus, scroll. `host(child)` gives
-  `PanelHost<C>`. Types: `PanelTitlePosition`, `PanelTone`.
+- `Panel<M>`: non-modal chrome; configure titles, border/tone, text, focus, scroll. Use
+  `one_row(true)` for a top-border-only panel without side or bottom borders. Repeat
+  `action_hotkey(sequence, || message)` to add custom actions beside the optional focus hotkey in
+  the bottom-right badge. `host(child)` gives `PanelHost<C, M>`. Types: `PanelTitlePosition`,
+  `PanelTone`.
 - `SpeedReader`: `new` for plain text or `markdown` for Markdown-aware blocks; configure title, WPM,
   natural pauses, fixed extra `markdown_block_pause(Duration)`, and keybindings; `dialog` creates a
   closable host.
@@ -147,8 +156,11 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `ConfirmationDialog<M>`: `new(title, description)`, labels/hotkeys/callback, drain outcomes;
   `ConfirmationDialogKeyBindings`, `ConfirmationDialogOutcome`.
 - `Tabs<M>` + `Tab<M>`: `Tab::new(title, body)`/`text`, then `Tabs::new`; configure selection,
-  looping, variant, borders, modal mode, hotkeys/focus/close. Types: `TabsSelectionMemory`,
-  `ModalCloseReason`.
+  looping, variant, borders, modal mode, hotkeys/focus/close. Repeat
+  `action_hotkey(sequence, |selected_index| message)` for custom bottom-right actions alongside the
+  optional focus hotkey. `TabsVariant` provides `Minimal`, `Underline`, `Boxed`, and `OneRow`;
+  `OneRow` (preset value `one-row`) matches minimal styling with only the top tab-row border and no
+  left, right, or bottom border. Types: `TabsSelectionMemory`, `ModalCloseReason`.
 - `FormField<C, M>`: `new(label, child)`, embedded mode, error and child access.
 - `Chip`: `new(label)`, icons and `ChipColorRole`. `Header`: `new(text)`, optional icon.
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,

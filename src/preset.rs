@@ -9,6 +9,7 @@ pub enum TabsVariant {
     Minimal,
     Underline,
     Boxed,
+    OneRow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +18,7 @@ pub enum BorderKind {
     Rounded,
     Double,
     Thick,
+    AsciiDashed,
 }
 
 impl Default for BorderKind {
@@ -34,6 +36,7 @@ impl FromStr for BorderKind {
             "rounded" => Ok(Self::Rounded),
             "double" => Ok(Self::Double),
             "thick" => Ok(Self::Thick),
+            "ascii-dashed" => Ok(Self::AsciiDashed),
             other => Err(PresetError(format!("Unknown border `{other}`"))),
         }
     }
@@ -53,6 +56,7 @@ impl FromStr for TabsVariant {
             "minimal" => Ok(Self::Minimal),
             "underline" => Ok(Self::Underline),
             "boxed" => Ok(Self::Boxed),
+            "one-row" => Ok(Self::OneRow),
             other => Err(PresetError(format!("Unknown tabs variant `{other}`"))),
         }
     }
@@ -491,6 +495,14 @@ mod tests {
     #[test]
     fn default_dropdown_preset_max_popup_height_is_30() {
         assert_eq!(Preset::default().dropdown().max_popup_height(), 30);
+    }
+
+    #[test]
+    fn one_row_tabs_variant_parses_from_preset_value() {
+        assert_eq!(
+            TabsVariant::from_str("one-row").expect("variant should parse"),
+            TabsVariant::OneRow
+        );
     }
 
     #[test]

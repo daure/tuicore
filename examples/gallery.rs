@@ -40,7 +40,8 @@ use gallery_demo::panels::{
     panel_separator_preview_layout, panel_tabs_join_demo, panel_tabs_join_demo_child_key,
     panel_tabs_join_demo_child_route, panel_title_child_key, panel_title_child_route,
     panel_title_column_layout, panel_title_control_areas, panel_title_dropdown,
-    panel_title_dropdown_area, panel_title_index,
+    panel_title_dropdown_area, panel_title_index, panel_variant_child_key,
+    panel_variant_child_route, panel_variant_index, panel_variants_layout,
 };
 use gallery_demo::relative_date::RelativeDateDemo;
 #[cfg(test)]
@@ -105,6 +106,8 @@ enum Msg {
     DockOverlayClosed(DialogCloseReason),
     ModalTabsOpened(ModalTabsExample),
     ModalTabsClosed(ModalCloseReason),
+    PanelAction(&'static str),
+    TabsAction(&'static str, usize),
     NotificationTriggered(usize),
     StoreViewOpened,
     StoreViewClosed(ModalCloseReason),
@@ -291,6 +294,15 @@ fn main() -> tuicore::Result<()> {
                     tabs_layer.layer_mut().prepare_modal_close();
                     tabs_layer.set_active_with_context(false, ctx);
                 }
+                Msg::PanelAction(action) => {
+                    gallery(root).previews.panel_action_status = format!("Panel action: {action}");
+                    ctx.request_redraw();
+                }
+                Msg::TabsAction(action, selected) => {
+                    gallery(root).previews.tabs_action_status =
+                        format!("{action} on tab {}", selected + 1);
+                    ctx.request_redraw();
+                }
                 Msg::NotificationTriggered(index) => {
                     gallery(root)
                         .previews
@@ -372,7 +384,7 @@ struct Gallery {
     list_panel: Panel,
     preview_panel: Panel,
     footer: StatusBar<Msg>,
-    previews: PreviewState,
+    previews: Box<PreviewState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -430,7 +442,7 @@ impl Gallery {
                 .focused(true),
             preview_panel: Panel::new().top_left(ComponentKind::Tabs.preview().title()),
             footer,
-            previews: PreviewState::new(),
+            previews: Box::new(PreviewState::new()),
         }
     }
 
@@ -790,12 +802,17 @@ struct PreviewState {
     seasonal_empty_state: SeasonalEmptyState,
     notification_triggers: ToastRack,
     notification_buttons: [Button<Msg>; 4],
-    panel_demo: Panel,
-    panel_join_demo: PanelHost<Flex<Msg>>,
-    panel_tabs_join_demo: PanelHost<Tabs<Msg>>,
+    panel_demo: Panel<Msg>,
+    panel_join_demo: PanelHost<Flex<Msg>, Msg>,
+    panel_tabs_join_demo: PanelHost<Tabs<Msg>, Msg>,
+    panel_one_row_demo: Panel<Msg>,
+    panel_actions_demo: Panel<Msg>,
+    panel_action_status: String,
     tabs_minimal: Tabs<Msg>,
     tabs_underline: Tabs<Msg>,
     tabs_boxed: Tabs<Msg>,
+    tabs_one_row: Tabs<Msg>,
+    tabs_action_status: String,
     tabs_modal_buttons: [Button<Msg>; 8],
     data_list: DataView<DemoRow, usize>,
     data_table: DataView<DemoRow, usize>,
@@ -995,9 +1012,25 @@ impl PreviewState {
             panel_demo: panel_demo(),
             panel_join_demo: panel_join_demo(),
             panel_tabs_join_demo: panel_tabs_join_demo(),
+            panel_one_row_demo: Panel::new()
+                .one_row(true)
+                .top_left("One-row panel")
+                .content(["Only the top border is rendered; content uses full width."]),
+            panel_actions_demo: Panel::new()
+                .top_left("Panel action hotkeys")
+                .hotkey("pf")
+                .action_hotkey("r", || Msg::PanelAction("refresh"))
+                .action_hotkey("x", || Msg::PanelAction("clear"))
+                .content(["Focus |pf| · refresh |r| · clear |x|"]),
+            panel_action_status: String::from("No panel action yet"),
             tabs_minimal: tabs_demo(TabsVariant::Minimal).hotkey("m"),
             tabs_underline: tabs_demo(TabsVariant::Underline).hotkey("ma"),
-            tabs_boxed: tabs_demo(TabsVariant::Boxed).hotkey("mam"),
+            tabs_boxed: tabs_demo(TabsVariant::Boxed)
+                .hotkey("mam")
+                .action_hotkey("tr", |selected| Msg::TabsAction("refresh", selected))
+                .action_hotkey("tc", |selected| Msg::TabsAction("clear", selected)),
+            tabs_one_row: tabs_demo(TabsVariant::OneRow).hotkey("mar"),
+            tabs_action_status: String::from("No tabs action yet"),
             tabs_modal_buttons: [
                 modal_tabs_button(ModalTabsExample::CenterMinimal),
                 modal_tabs_button(ModalTabsExample::CenterUnderline),
@@ -1058,6 +1091,7 @@ impl PreviewState {
         match preview {
             PreviewKind::Tabs => self.layout_tabs(area, ctx),
             PreviewKind::Panel => self.layout_panel_preview(area, ctx),
+            PreviewKind::PanelVariants => self.layout_panel_variants_preview(area, ctx),
             PreviewKind::PanelJoinedSeparators => self.layout_panel_join_preview(area, ctx),
             PreviewKind::PanelTabSeparators => self.layout_panel_tabs_join_preview(area, ctx),
             PreviewKind::Dialog => self.layout_dialog(area, ctx),
@@ -1312,6 +1346,7 @@ impl PreviewState {
         match preview {
             PreviewKind::Tabs => self.render_tabs(frame, area, ctx),
             PreviewKind::Panel => self.render_panel_preview(frame, area, ctx),
+            PreviewKind::PanelVariants => self.render_panel_variants_preview(frame, area, ctx),
             PreviewKind::PanelJoinedSeparators => self.render_panel_join_preview(frame, area, ctx),
             PreviewKind::PanelTabSeparators => {
                 self.render_panel_tabs_join_preview(frame, area, ctx)
@@ -1590,6 +1625,15 @@ impl PreviewState {
             return self
                 .panel_title_dropdown_mut(index)
                 .dispatch_event(&route, event, ctx);
+        }
+        if preview == PreviewKind::PanelVariants {
+            let Some((index, route)) = panel_variant_child_route(route) else {
+                return EventOutcome::Ignored;
+            };
+            return match index {
+                0 => self.panel_one_row_demo.dispatch_event(&route, event, ctx),
+                _ => self.panel_actions_demo.dispatch_event(&route, event, ctx),
+            };
         }
         if preview == PreviewKind::PanelJoinedSeparators {
             let Some(route) = panel_join_demo_child_route(route) else {
@@ -1900,6 +1944,19 @@ impl PreviewState {
                     );
                 }
             }
+            PreviewKind::PanelVariants => {
+                dispatch_focus_indexed(
+                    target,
+                    panel_variant_index,
+                    |state, index| match index {
+                        0 => &mut state.panel_one_row_demo,
+                        _ => &mut state.panel_actions_demo,
+                    },
+                    self,
+                    focused,
+                    ctx,
+                );
+            }
             PreviewKind::PanelJoinedSeparators => {
                 dispatch_focus_child(
                     &mut self.panel_join_demo,
@@ -2041,6 +2098,11 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(<Tabs<Msg> as TuiNode<Msg>>::tick(
+                &mut self.tabs_one_row,
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(
                 &mut self.tabs_modal_buttons[0],
                 dt,
@@ -2100,6 +2162,8 @@ impl PreviewState {
             .merge(Animated::tick(&mut self.panel_demo, dt, settings))
             .merge(self.panel_join_demo.tick(dt, settings))
             .merge(self.panel_tabs_join_demo.tick(dt, settings))
+            .merge(Animated::tick(&mut self.panel_one_row_demo, dt, settings))
+            .merge(Animated::tick(&mut self.panel_actions_demo, dt, settings))
             .merge(Animated::tick(&mut self.panel_top_left, dt, settings))
             .merge(Animated::tick(&mut self.panel_top_right, dt, settings))
             .merge(Animated::tick(&mut self.panel_bottom_left, dt, settings))
@@ -2262,6 +2326,7 @@ impl PreviewState {
         match index {
             1 => &mut self.tabs_underline,
             2 => &mut self.tabs_boxed,
+            3 => &mut self.tabs_one_row,
             _ => &mut self.tabs_minimal,
         }
     }
@@ -2647,7 +2712,7 @@ impl PreviewState {
 
         self.sync_panel_demo_from_dropdowns();
         ctx.push_slot(panel_demo_child_key(), panel_area, |ctx| {
-            <Panel as TuiNode<Msg>>::layout(&mut self.panel_demo, panel_area, ctx);
+            <Panel<Msg> as TuiNode<Msg>>::layout(&mut self.panel_demo, panel_area, ctx);
         });
 
         ctx.push_slot(panel_title_child_key(0), areas[0], |ctx| {
@@ -2685,6 +2750,16 @@ impl PreviewState {
                     ctx,
                 );
             });
+        });
+    }
+
+    fn layout_panel_variants_preview(&mut self, area: Rect, ctx: &mut LayoutCtx) {
+        let [_, one_row, actions, _] = panel_variants_layout(area);
+        ctx.push_slot(panel_variant_child_key(0), one_row, |ctx| {
+            self.panel_one_row_demo.layout(one_row, ctx);
+        });
+        ctx.push_slot(panel_variant_child_key(1), actions, |ctx| {
+            self.panel_actions_demo.layout(actions, ctx);
         });
     }
 
@@ -3339,6 +3414,22 @@ impl PreviewState {
         self.render_panel_title_control(frame, areas[3], 3, "Bottom right", ctx);
     }
 
+    fn render_panel_variants_preview<'a>(
+        &'a self,
+        frame: &mut Frame,
+        area: Rect,
+        _ctx: &mut RenderCtx<'a>,
+    ) {
+        let [help, one_row, actions, status] = panel_variants_layout(area);
+        frame.render_widget(
+            Paragraph::new("One-row chrome and multiple bottom-right action hotkeys."),
+            help,
+        );
+        self.panel_one_row_demo.render(frame, one_row);
+        self.panel_actions_demo.render(frame, actions);
+        frame.render_widget(Paragraph::new(self.panel_action_status.as_str()), status);
+    }
+
     fn render_panel_join_preview<'a>(
         &'a self,
         frame: &mut Frame,
@@ -3400,10 +3491,11 @@ impl PreviewState {
                 self.tabs_modal_buttons[index].layout(button_area, ctx);
             });
         }
-        let [minimal, underline, boxed] = tabs_areas(demos_area);
+        let [minimal, underline, boxed, one_row] = tabs_areas(demos_area);
         let [_, minimal_tabs] = labeled_area(minimal);
         let [_, underline_tabs] = labeled_area(underline);
         let [_, boxed_tabs] = labeled_area(boxed);
+        let [_, one_row_tabs] = labeled_area(one_row);
         ctx.push_slot(tab_demo_child_key(0), minimal_tabs, |ctx| {
             self.tabs_minimal.layout(minimal_tabs, ctx);
         });
@@ -3413,6 +3505,9 @@ impl PreviewState {
         ctx.push_slot(tab_demo_child_key(2), boxed_tabs, |ctx| {
             self.tabs_boxed.layout(boxed_tabs, ctx);
         });
+        ctx.push_slot(tab_demo_child_key(3), one_row_tabs, |ctx| {
+            self.tabs_one_row.layout(one_row_tabs, ctx);
+        });
     }
 
     fn render_tabs<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
@@ -3421,17 +3516,26 @@ impl PreviewState {
         for (index, button_area) in button_areas.into_iter().enumerate() {
             self.tabs_modal_buttons[index].render(frame, button_area);
         }
-        let [minimal, underline, boxed] = tabs_areas(demos_area);
+        let [minimal, underline, boxed, one_row] = tabs_areas(demos_area);
         let [minimal_label, minimal_tabs] = labeled_area(minimal);
         let [underline_label, underline_tabs] = labeled_area(underline);
         let [boxed_label, boxed_tabs] = labeled_area(boxed);
+        let [one_row_label, one_row_tabs] = labeled_area(one_row);
 
         frame.render_widget(Paragraph::new("Style 1: minimal (m)"), minimal_label);
         self.tabs_minimal.render(frame, minimal_tabs, ctx);
         frame.render_widget(Paragraph::new("Style 2: underline (l)"), underline_label);
         self.tabs_underline.render(frame, underline_tabs, ctx);
-        frame.render_widget(Paragraph::new("Style 3: boxed (b)"), boxed_label);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Style 3: boxed actions (mam·tr·tc) — {}",
+                self.tabs_action_status
+            )),
+            boxed_label,
+        );
         self.tabs_boxed.render(frame, boxed_tabs, ctx);
+        frame.render_widget(Paragraph::new("Style 4: one-row (mar)"), one_row_label);
+        self.tabs_one_row.render(frame, one_row_tabs, ctx);
     }
 
     fn render_layout_flex<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
@@ -3832,6 +3936,7 @@ fn indexed_child_target(
 enum ComponentKind {
     Tabs,
     Panel,
+    PanelVariants,
     PanelJoinedSeparators,
     PanelTabSeparators,
     Dialog,
@@ -3887,9 +3992,10 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 54] = [
+    const ALL: [Self; 55] = [
         Self::Tabs,
         Self::Panel,
+        Self::PanelVariants,
         Self::PanelJoinedSeparators,
         Self::PanelTabSeparators,
         Self::Dialog,
@@ -3948,6 +4054,7 @@ impl ComponentKind {
         match self {
             Self::Tabs => "Tabs",
             Self::Panel => "Panels",
+            Self::PanelVariants => "One-row + Actions",
             Self::PanelJoinedSeparators => "Joined Separators",
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
@@ -4035,7 +4142,9 @@ impl ComponentKind {
             | Self::LayoutStack
             | Self::LayoutOverlay
             | Self::LayoutGrid => Some(Self::Layouts),
-            Self::PanelJoinedSeparators | Self::PanelTabSeparators => Some(Self::Panel),
+            Self::PanelVariants | Self::PanelJoinedSeparators | Self::PanelTabSeparators => {
+                Some(Self::Panel)
+            }
             Self::NotificationTriggers => Some(Self::Notifications),
             Self::DiffSideBySide | Self::DiffInline | Self::DiffWord | Self::DiffRawPatch => {
                 Some(Self::DiffViewer)
@@ -4048,6 +4157,7 @@ impl ComponentKind {
         match self {
             Self::Tabs => PreviewKind::Tabs,
             Self::Panel => PreviewKind::Panel,
+            Self::PanelVariants => PreviewKind::PanelVariants,
             Self::PanelJoinedSeparators => PreviewKind::PanelJoinedSeparators,
             Self::PanelTabSeparators => PreviewKind::PanelTabSeparators,
             Self::Dialog => PreviewKind::Dialog,
@@ -4103,6 +4213,7 @@ impl ComponentKind {
 enum PreviewKind {
     Tabs,
     Panel,
+    PanelVariants,
     PanelJoinedSeparators,
     PanelTabSeparators,
     Dialog,
@@ -4156,6 +4267,7 @@ impl PreviewKind {
         match self {
             Self::Tabs => "Tabs",
             Self::Panel => "Panels",
+            Self::PanelVariants => "Panel One-row + Actions",
             Self::PanelJoinedSeparators => "Joined Separators",
             Self::PanelTabSeparators => "Tabs + Separators",
             Self::Dialog => "Dialog",
@@ -4239,6 +4351,44 @@ impl PreviewKind {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn gallery_root_state_stays_stack_safe() {
+        let size = std::mem::size_of::<Gallery>();
+        assert!(size < 64 * 1024, "Gallery is {size} bytes");
+    }
+
+    #[test]
+    fn active_panel_gallery_action_hotkey_emits_message() {
+        let mut state = PreviewState::new();
+        let area = Rect::new(0, 0, 80, 24);
+        let mut layout = LayoutCtx::new();
+        state.layout(PreviewKind::PanelVariants, area, area, &mut layout);
+        let target = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.path.first() == Some(&panel_variant_child_key(1)))
+            .expect("actions panel should register focus")
+            .clone();
+        state.dispatch_focus(
+            PreviewKind::PanelVariants,
+            &target,
+            true,
+            &mut FocusCtx::new(AnimationSettings::default()),
+        );
+        let route = EventRoute::new(target.path.clone());
+        let mut ctx = EventCtx::default();
+
+        let triggered = state.dispatch_event(
+            PreviewKind::PanelVariants,
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
+            &mut ctx,
+        );
+
+        assert_eq!(triggered, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &[Msg::PanelAction("refresh")]);
+    }
 
     #[test]
     fn diff_viewer_has_four_children_with_working_toggles() {

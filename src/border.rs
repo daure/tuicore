@@ -66,6 +66,18 @@ pub fn border_chars(border: BorderKind) -> BorderChars {
             vertical: "┃",
             horizontal: "━",
         },
+        BorderKind::AsciiDashed => BorderChars {
+            top_left: "┌",
+            top_right: "┐",
+            bottom_left: "└",
+            bottom_right: "┘",
+            top_join: "┬",
+            bottom_join: "┴",
+            left_join: "├",
+            right_join: "┤",
+            vertical: "╎",
+            horizontal: "-",
+        },
     }
 }
 
@@ -75,6 +87,16 @@ pub fn border_set(border: BorderKind) -> Set<'static> {
         BorderKind::Rounded => ROUNDED,
         BorderKind::Double => DOUBLE,
         BorderKind::Thick => THICK,
+        BorderKind::AsciiDashed => Set {
+            top_left: "┌",
+            top_right: "┐",
+            bottom_left: "└",
+            bottom_right: "┘",
+            vertical_left: "╎",
+            vertical_right: "╎",
+            horizontal_top: "-",
+            horizontal_bottom: "-",
+        },
     }
 }
 
@@ -88,5 +110,6 @@ mod tests {
         assert_eq!(border_chars(BorderKind::Rounded).top_left, "╭");
         assert_eq!(border_chars(BorderKind::Double).top_left, "╔");
         assert_eq!(border_chars(BorderKind::Thick).top_left, "┏");
+        assert_eq!(border_chars(BorderKind::AsciiDashed).horizontal, "-");
     }
 }

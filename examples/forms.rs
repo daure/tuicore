@@ -76,7 +76,7 @@ enum Field {
 }
 
 type InputField = FormField<TextInput<Msg>, Msg>;
-type FormView = PanelHost<Split<Split<InputField, InputField>, Split<Button<Msg>, Paragraph>>>;
+type FormView = PanelHost<Split<Split<InputField, InputField>, Split<Button<Msg>, Paragraph>>, Msg>;
 
 struct FormExample {
     model: FormGroup<Controls, FormError>,

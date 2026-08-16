@@ -27,6 +27,12 @@ pub struct Tab<M = ()> {
     body: Box<dyn TuiNode<M>>,
 }
 
+struct TabsActionHotkey<M> {
+    sequence: String,
+    enabled: bool,
+    on_trigger: Box<dyn Fn(usize) -> M>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalCloseReason {
     CloseKey,
@@ -38,6 +44,13 @@ pub enum TabsSelectionMemory {
     Remember,
     ResetOnOpen,
     ResetOnClose,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TabsBodyBorderStyle {
+    #[default]
+    Solid,
+    Dashed,
 }
 
 pub struct Tabs<M = ()> {
@@ -52,6 +65,7 @@ pub struct Tabs<M = ()> {
     border: Option<BorderKind>,
     edge_borders: Option<Borders>,
     bordered: Option<bool>,
+    body_border_style: TabsBodyBorderStyle,
     animation: Option<AnimationSpec>,
     focused: bool,
     transition: Tween,
@@ -65,6 +79,7 @@ pub struct Tabs<M = ()> {
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     pending_hotkey_prefix: Option<String>,
+    action_hotkeys: Vec<TabsActionHotkey<M>>,
     modal: bool,
     selection_memory: TabsSelectionMemory,
     on_close: Option<Box<dyn Fn(ModalCloseReason) -> M>>,
@@ -131,6 +146,7 @@ where
             border: None,
             edge_borders: None,
             bordered: None,
+            body_border_style: TabsBodyBorderStyle::Solid,
             animation: None,
             focused: false,
             transition: Tween::idle(1.0),
@@ -144,6 +160,7 @@ where
             hotkey: None,
             hotkey_matcher,
             pending_hotkey_prefix: None,
+            action_hotkeys: Vec::new(),
             modal: false,
             selection_memory: TabsSelectionMemory::Remember,
             on_close: None,
@@ -237,6 +254,15 @@ where
         self
     }
 
+    pub fn body_border_style(mut self, style: TabsBodyBorderStyle) -> Self {
+        self.body_border_style = style;
+        self
+    }
+
+    pub fn set_body_border_style(&mut self, style: TabsBodyBorderStyle) {
+        self.body_border_style = style;
+    }
+
     pub fn animation(mut self, animation: AnimationSpec) -> Self {
         self.animation = Some(animation);
         self
@@ -253,6 +279,36 @@ where
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
+    }
+
+    pub fn action_hotkey(
+        mut self,
+        sequence: impl Into<String>,
+        on_trigger: impl Fn(usize) -> M + 'static,
+    ) -> Self {
+        self.action_hotkeys.push(TabsActionHotkey {
+            sequence: sequence.into(),
+            enabled: true,
+            on_trigger: Box::new(on_trigger),
+        });
+        self.rebuild_hotkey_matcher();
+        self
+    }
+
+    pub fn set_action_hotkey_enabled(&mut self, sequence: &str, enabled: bool) {
+        let normalized = crate::hotkey::normalize_hotkey(sequence);
+        let Some(action) = self
+            .action_hotkeys
+            .iter_mut()
+            .find(|action| crate::hotkey::normalize_hotkey(&action.sequence) == normalized)
+        else {
+            return;
+        };
+        if action.enabled == enabled {
+            return;
+        }
+        action.enabled = enabled;
+        self.rebuild_hotkey_matcher();
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -411,13 +467,21 @@ where
             };
         }
 
-        if variant == TabsVariant::Minimal && bordered {
-            return Block::default().borders(Borders::ALL).inner(area);
+        if bordered {
+            let borders = match variant {
+                TabsVariant::Minimal => Borders::ALL,
+                TabsVariant::OneRow => Borders::TOP,
+                TabsVariant::Underline | TabsVariant::Boxed => Borders::NONE,
+            };
+            if !borders.is_empty() {
+                return Block::default().borders(borders).inner(area);
+            }
         }
 
         let edge_borders = self.resolved_edge_borders(bordered);
         let header_height = match variant {
             TabsVariant::Minimal => 1,
+            TabsVariant::OneRow => 1,
             TabsVariant::Underline if bordered => 1,
             TabsVariant::Underline => 2,
             TabsVariant::Boxed => Self::boxed_header_height(bordered, edge_borders),
@@ -472,7 +536,7 @@ where
     fn panel_borders(&self, variant: TabsVariant, edge_borders: Borders) -> Borders {
         match variant {
             TabsVariant::Boxed => edge_borders & (Borders::LEFT | Borders::RIGHT | Borders::BOTTOM),
-            TabsVariant::Minimal | TabsVariant::Underline => edge_borders,
+            TabsVariant::Minimal | TabsVariant::OneRow | TabsVariant::Underline => edge_borders,
         }
     }
 
@@ -487,8 +551,13 @@ where
             return;
         }
 
-        if variant == TabsVariant::Minimal {
-            self.render_minimal(frame, area, selected, bordered, border);
+        if matches!(variant, TabsVariant::Minimal | TabsVariant::OneRow) {
+            let borders = match variant {
+                TabsVariant::Minimal => Borders::ALL,
+                TabsVariant::OneRow => Borders::TOP,
+                TabsVariant::Underline | TabsVariant::Boxed => unreachable!(),
+            };
+            self.render_minimal(frame, area, selected, bordered, border, borders);
             return;
         }
 
@@ -497,7 +566,7 @@ where
             TabsVariant::Underline if bordered => 1,
             TabsVariant::Underline => 2,
             TabsVariant::Boxed => Self::boxed_header_height(bordered, edge_borders),
-            TabsVariant::Minimal => unreachable!(),
+            TabsVariant::Minimal | TabsVariant::OneRow => unreachable!(),
         };
         let [tabs_area, body_area] = Layout::default()
             .direction(Direction::Vertical)
@@ -513,17 +582,21 @@ where
             TabsVariant::Underline => {
                 self.render_underline_header(frame, tabs_area, selected, bordered)
             }
-            TabsVariant::Minimal => unreachable!(),
+            TabsVariant::Minimal | TabsVariant::OneRow => unreachable!(),
         }
 
         if !panel_borders.is_empty() {
+            let panel_border = match self.body_border_style {
+                TabsBodyBorderStyle::Solid => border,
+                TabsBodyBorderStyle::Dashed => BorderKind::AsciiDashed,
+            };
             let block = Block::default()
                 .borders(panel_borders)
-                .border_set(border_set(border))
+                .border_set(border_set(panel_border))
                 .border_style(self.border_style());
             frame.render_widget(block, body_area);
             if panel_borders.contains(Borders::BOTTOM) {
-                self.render_hotkey(frame, body_area, border);
+                self.render_hotkey(frame, body_area, panel_border);
             }
             if variant == TabsVariant::Underline {
                 frame.render_widget(
@@ -556,15 +629,25 @@ where
         selected: usize,
         bordered: bool,
         border: BorderKind,
+        borders: Borders,
     ) {
         if bordered {
             let block = Block::default()
-                .borders(Borders::ALL)
+                .borders(borders)
                 .border_set(border_set(border))
                 .border_style(self.border_style())
-                .title(self.minimal_title_line(selected, area.width.saturating_sub(2)));
+                .title(
+                    self.minimal_title_line(
+                        selected,
+                        area.width
+                            .saturating_sub(borders.contains(Borders::LEFT) as u16)
+                            .saturating_sub(borders.contains(Borders::RIGHT) as u16),
+                    ),
+                );
             frame.render_widget(block, area);
-            self.render_hotkey(frame, area, border);
+            if borders.contains(Borders::BOTTOM) {
+                self.render_hotkey(frame, area, border);
+            }
         } else {
             let [tabs_area, _] = Layout::default()
                 .direction(Direction::Vertical)
@@ -598,7 +681,7 @@ where
             Rect::new(area.x, middle_y, area.width, 1),
         );
         frame.render_widget(
-            Paragraph::new(if bordered { bottom } else { bottom }),
+            Paragraph::new(bottom),
             Rect::new(area.x, middle_y + 1, area.width, 1),
         );
     }
@@ -852,7 +935,13 @@ where
 
         let mut spans = vec![
             Span::styled(chars.top_left, border_style),
-            Span::styled(chars.horizontal, border_style),
+            Span::styled(
+                match self.body_border_style {
+                    TabsBodyBorderStyle::Solid => chars.horizontal,
+                    TabsBodyBorderStyle::Dashed => "-",
+                },
+                border_style,
+            ),
         ];
         spans.extend(inner.spans);
         if self.focused {
@@ -901,9 +990,13 @@ where
         let before = start.min(width);
         let segment_end = start.saturating_add(segment_width).min(width);
         let mut spans = Vec::new();
+        let inactive = match self.body_border_style {
+            TabsBodyBorderStyle::Solid => "─",
+            TabsBodyBorderStyle::Dashed => "-",
+        };
         if before > 0 {
             spans.push(Span::styled(
-                "─".repeat(before),
+                inactive.repeat(before),
                 Style::default().fg(theme.border_fg()),
             ));
         }
@@ -915,7 +1008,7 @@ where
         }
         if width > segment_end {
             spans.push(Span::styled(
-                "─".repeat(width - segment_end),
+                inactive.repeat(width - segment_end),
                 Style::default().fg(theme.border_fg()),
             ));
         }
@@ -1004,7 +1097,7 @@ where
                 }
                 middle.push(Span::styled(chars.vertical, border_style));
                 if !has_hotkey {
-                    bottom.push(Span::styled(chars.horizontal, border_style));
+                    bottom.push(Span::styled(chars.bottom_join, border_style));
                 }
                 if fill > 0 {
                     if top_border {
@@ -1026,7 +1119,7 @@ where
                 }
                 middle.push(Span::styled(chars.vertical, border_style));
                 if !has_hotkey {
-                    bottom.push(Span::styled(chars.horizontal, border_style));
+                    bottom.push(Span::styled(chars.bottom_join, border_style));
                 }
             }
         }
@@ -1171,7 +1264,7 @@ where
     }
 
     fn render_hotkey(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        let Some(ref hotkey) = self.hotkey else {
+        let Some(hotkey) = self.display_hotkey() else {
             return;
         };
         if area.width <= 4 || area.height == 0 {
@@ -1179,13 +1272,13 @@ where
         }
 
         let border_style = self.border_style();
-        let width = hotkey_badge_width(hotkey).min(u16::MAX as usize) as u16;
+        let width = hotkey_badge_width(&hotkey).min(u16::MAX as usize) as u16;
         if width == 0 {
             return;
         }
         let line = Line::from(hotkey_edge_spans(
-            hotkey,
-            self.active_component_hotkey_prefix().as_deref(),
+            &hotkey,
+            self.active_footer_hotkey_prefix().as_deref(),
             border,
             border_style,
             self.selected_tab_style(),
@@ -1204,8 +1297,29 @@ where
         self.hotkey
             .iter()
             .chain(self.tab_hotkeys.iter().flatten())
+            .chain(
+                self.action_hotkeys
+                    .iter()
+                    .filter(|action| action.enabled)
+                    .map(|action| &action.sequence),
+            )
             .cloned()
             .collect()
+    }
+
+    fn display_hotkey(&self) -> Option<String> {
+        let hotkeys = self
+            .hotkey
+            .iter()
+            .cloned()
+            .chain(
+                self.action_hotkeys
+                    .iter()
+                    .filter(|action| action.enabled)
+                    .map(|action| action.sequence.clone()),
+            )
+            .collect::<Vec<_>>();
+        (!hotkeys.is_empty()).then(|| hotkeys.join("·"))
     }
 
     fn active_hotkey_prefix(&self, index: usize) -> Option<String> {
@@ -1224,7 +1338,7 @@ where
             .map(|_| prefix.to_string())
     }
 
-    fn active_component_hotkey_prefix(&self) -> Option<String> {
+    fn active_footer_hotkey_prefix(&self) -> Option<String> {
         let prefix = if self.hotkey_matcher.prefix().is_empty() {
             self.pending_hotkey_prefix.as_deref().unwrap_or("")
         } else {
@@ -1234,9 +1348,26 @@ where
             return None;
         }
         self.hotkey
-            .as_deref()
-            .filter(|hotkey| crate::hotkey::normalize_hotkey(hotkey).starts_with(prefix))
-            .map(|_| prefix.to_string())
+            .iter()
+            .chain(
+                self.action_hotkeys
+                    .iter()
+                    .filter(|action| action.enabled)
+                    .map(|action| &action.sequence),
+            )
+            .any(|hotkey| crate::hotkey::normalize_hotkey(hotkey).starts_with(prefix))
+            .then(|| prefix.to_string())
+    }
+
+    fn action_for_sequence(&self, sequence: &str) -> Option<&dyn Fn(usize) -> M> {
+        self.action_hotkeys
+            .iter()
+            .filter(|action| action.enabled)
+            .find(|action| {
+                crate::hotkey::normalize_hotkey(&action.sequence)
+                    == crate::hotkey::normalize_hotkey(sequence)
+            })
+            .map(|action| action.on_trigger.as_ref())
     }
 
     fn hotkey_index_for_sequence(&self, sequence: &str) -> Option<usize> {
@@ -1251,6 +1382,27 @@ where
         tab_hotkey_entries(&self.tab_hotkeys)
             .get(match_index)
             .map(|(index, _)| *index)
+    }
+
+    fn action_for_hotkey_match(&self, match_index: usize) -> Option<&dyn Fn(usize) -> M> {
+        let action_index = match_index.checked_sub(tab_hotkey_entries(&self.tab_hotkeys).len())?;
+        self.action_hotkeys
+            .iter()
+            .filter(|action| action.enabled)
+            .nth(action_index)
+            .map(|action| action.on_trigger.as_ref())
+    }
+
+    fn rebuild_hotkey_matcher(&mut self) {
+        let tab_hotkeys = tab_hotkey_entries(&self.tab_hotkeys)
+            .into_iter()
+            .map(|(_, hotkey)| hotkey);
+        let action_hotkeys = self
+            .action_hotkeys
+            .iter()
+            .filter(|action| action.enabled)
+            .map(|action| action.sequence.clone());
+        self.hotkey_matcher = HotkeySequenceMatcher::new(tab_hotkeys.chain(action_hotkeys));
     }
 
     fn tab_label(&self, index: usize) -> String {
@@ -1475,19 +1627,26 @@ where
         } else {
             match variant {
                 TabsVariant::Minimal => 1,
+                TabsVariant::OneRow => 1,
                 TabsVariant::Underline if bordered => 1,
                 TabsVariant::Underline => 2,
                 TabsVariant::Boxed => 3,
             }
         };
-        let border_pad = (bordered as u16).saturating_mul(2);
+        let (horizontal_border_pad, vertical_border_pad) = match variant {
+            TabsVariant::OneRow => (0, 0),
+            TabsVariant::Minimal | TabsVariant::Underline | TabsVariant::Boxed => {
+                let border_pad = (bordered as u16).saturating_mul(2);
+                (border_pad, border_pad)
+            }
+        };
         LayoutSizeHint::content(
             title_width
                 .max(body.preferred.width)
-                .saturating_add(border_pad),
+                .saturating_add(horizontal_border_pad),
             header_height
                 .saturating_add(body.preferred.height)
-                .saturating_add(border_pad),
+                .saturating_add(vertical_border_pad),
         )
         .normalized(proposal)
     }
@@ -1556,6 +1715,12 @@ where
                 }
                 HotkeyEvent::Commit(sequence) => {
                     self.pending_hotkey_prefix = None;
+                    if let Some(on_trigger) = self.action_for_sequence(sequence) {
+                        ctx.emit(on_trigger(self.selected_index()));
+                        ctx.request_redraw();
+                        ctx.stop_propagation();
+                        return EventOutcome::Handled;
+                    }
                     if let Some(index) = self.hotkey_index_for_sequence(sequence) {
                         self.select_index_from_event(index, ctx);
                         ctx.stop_propagation();
@@ -1570,10 +1735,14 @@ where
         };
         match self.hotkey_matcher.on_key(*key) {
             HotkeyMatch::Matched(index) => {
-                let Some(index) = self.tab_index_for_hotkey_match(index) else {
+                if let Some(on_trigger) = self.action_for_hotkey_match(index) {
+                    ctx.emit(on_trigger(self.selected_index()));
+                    ctx.request_redraw();
+                } else if let Some(index) = self.tab_index_for_hotkey_match(index) {
+                    self.select_index_from_event(index, ctx);
+                } else {
                     return EventOutcome::Ignored;
-                };
-                self.select_index_from_event(index, ctx);
+                }
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
@@ -2209,6 +2378,66 @@ mod tests {
     }
 
     #[test]
+    fn tabs_action_hotkeys_render_register_and_emit_selected_index() {
+        let mut tabs = Tabs::new(vec![Tab::text("One", "Body"), Tab::text("Two", "Body")])
+            .selected(1)
+            .hotkey("t")
+            .action_hotkey("ra", |selected| ("refresh", selected))
+            .action_hotkey("ca", |selected| ("clear", selected));
+        let area = Rect::new(0, 0, 28, 6);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(area, &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(28, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
+            .expect("tabs should render");
+        let bottom = (0..28)
+            .map(|x| terminal.backend().buffer().cell((x, 5)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(
+            layout.focus_targets()[0].hotkey_sequences,
+            vec!["t", "ra", "ca"]
+        );
+        assert!(bottom.ends_with("┤t·ra·ca│"), "{bottom}");
+
+        let mut ctx = EventCtx::default();
+        let outcome = tabs.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("ra".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &[("refresh", 1)]);
+
+        tabs.set_action_hotkey_enabled("ra", false);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(area, &mut layout);
+        assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["t", "ca"]);
+        let mut disabled = EventCtx::default();
+        assert_eq!(
+            tabs.event(
+                &TuiEvent::Hotkey(HotkeyEvent::Commit("ra".to_string())),
+                &mut disabled,
+            ),
+            EventOutcome::Ignored
+        );
+        assert!(disabled.messages().is_empty());
+
+        let mut ctx = EventCtx::default();
+        assert_eq!(
+            tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('c'))), &mut ctx),
+            EventOutcome::Handled
+        );
+        assert_eq!(
+            tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('a'))), &mut ctx),
+            EventOutcome::Handled
+        );
+        assert_eq!(ctx.messages(), &[("clear", 1)]);
+    }
+
+    #[test]
     fn tabs_hotkey_event_is_consumed_when_focused() {
         let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "")]).hotkey("m");
         let mut ctx = EventCtx::default();
@@ -2416,6 +2645,25 @@ mod tests {
     }
 
     #[test]
+    fn boxed_tab_separators_join_the_bottom_border() {
+        let tabs = Tabs::<()>::new(vec![
+            Tab::text("Backlog", "Body"),
+            Tab::text("Sprint", "Body"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
+            .expect("tabs should render");
+
+        let bottom = (0..24)
+            .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(bottom, "├─────────┴────────┴───┤");
+    }
+
+    #[test]
     fn boxed_tab_hotkeys_align_with_tab_boundaries() {
         let tabs = Tabs::<()>::new(vec![
             Tab::text("Intro", "Body").hotkey("i"),
@@ -2496,6 +2744,45 @@ mod tests {
         assert!(!row(1).ends_with('│'), "{}", row(1));
         assert!(row(2).starts_with("Body"), "{}", row(2));
         assert!(!row(5).contains('─'), "{}", row(5));
+    }
+
+    #[test]
+    fn one_row_tabs_render_only_the_top_border() {
+        let mut tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")]).variant(TabsVariant::OneRow);
+        let area = Rect::new(0, 0, 18, 6);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(area, &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(18, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..18)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert_eq!(tabs.body_area, Rect::new(0, 1, 18, 5));
+        assert!(row(0).contains("One"), "{}", row(0));
+        assert!(row(0).contains('─'), "{}", row(0));
+        assert!(row(1).starts_with("Body"), "{}", row(1));
+        assert!(row(1).ends_with(' '), "{}", row(1));
+        assert!(row(5).starts_with(' '), "{}", row(5));
+        assert!(!row(5).contains('─'), "{}", row(5));
+    }
+
+    #[test]
+    fn one_row_tabs_measure_only_one_row_of_chrome() {
+        let tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")])
+            .variant(TabsVariant::OneRow)
+            .bordered(true);
+
+        let hint = tabs.measure(LayoutProposal::unbounded());
+
+        assert_eq!(hint.preferred.height, 1);
     }
 
     #[test]
@@ -2607,6 +2894,26 @@ mod tests {
     }
 
     #[test]
+    fn underline_tabs_can_render_dashed_body_borders() {
+        let tabs = Tabs::<()>::new(vec![Tab::text("One", "Body")])
+            .variant(TabsVariant::Underline)
+            .bordered(true)
+            .body_border_style(TabsBodyBorderStyle::Dashed);
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
+            .expect("tabs should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 2)).unwrap().symbol(), "╎");
+        assert_eq!(buffer.cell((23, 2)).unwrap().symbol(), "╎");
+        assert_eq!(buffer.cell((1, 5)).unwrap().symbol(), "-");
+        assert_eq!(buffer.cell((2, 1)).unwrap().symbol(), "─");
+        assert_eq!(buffer.cell((12, 1)).unwrap().symbol(), "-");
+    }
+
+    #[test]
     fn whole_tabs_bottom_right_hotkey_aligns_with_border_snapshot() {
         let tabs = Tabs::<()>::new(vec![
             Tab::text("Overview", "Body"),
@@ -2632,7 +2939,7 @@ mod tests {
         let expected = [
             "╭──────────┬───────┬───────────────────╮",
             "│ Overview │ Usage │                   │",
-            "├──────────────────────────────────────┤",
+            "├──────────┴───────┴───────────────────┤",
             "│                                      │",
             "│                                      │",
             "╰──────────────────────────────────┤nav│",

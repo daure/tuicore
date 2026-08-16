@@ -102,7 +102,7 @@ pub use status_bar::{
     WeatherReport, WeatherSummary, weather_condition_icon,
 };
 pub use store_debug::StoreDebugView;
-pub use tabs::{ModalCloseReason, Tab, Tabs, TabsSelectionMemory};
+pub use tabs::{ModalCloseReason, Tab, Tabs, TabsBodyBorderStyle, TabsSelectionMemory};
 pub use tag_input::{SelectedTag, TagInput, TagInputEvent};
 pub use text_input::{
     InputChrome, InputOutcome, InputPanelChrome, PasswordInput, TextInput, TextInputKeyBindings,

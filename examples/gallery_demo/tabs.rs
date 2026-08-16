@@ -61,6 +61,7 @@ pub(crate) fn tabs_demo(variant: TabsVariant) -> Tabs<Msg> {
         TabsVariant::Minimal => ["o", "u"],
         TabsVariant::Underline => ["v", "sa"],
         TabsVariant::Boxed => ["w", "e"],
+        TabsVariant::OneRow => ["n", "r"],
     };
     Tabs::new(vec![
         Tab::text("Overview", "Simple tabs component for tuicore.").hotkey(hotkeys[0]),
@@ -150,13 +151,14 @@ pub(crate) fn tab_demo_child_route(route: &EventRoute) -> Option<(usize, EventRo
     Some((index, EventRoute::new(route.path.without_first())))
 }
 
-pub(crate) fn tabs_areas(area: Rect) -> [Rect; 3] {
+pub(crate) fn tabs_areas(area: Rect) -> [Rect; 4] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
         ])
         .areas(area)
 }

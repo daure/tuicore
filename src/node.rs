@@ -705,6 +705,27 @@ impl LayoutCtx {
         (result, inserted)
     }
 
+    pub fn with_focus_fallback_hotkey_sequences_status<R>(
+        &mut self,
+        id: FocusId,
+        area: Rect,
+        hotkeys: impl IntoIterator<Item = String>,
+        layout: impl FnOnce(&mut Self) -> R,
+    ) -> (R, bool) {
+        let hotkeys = hotkeys.into_iter().collect::<Vec<_>>();
+        let focus_count = self.focus_paths.len();
+        let result = layout(self);
+        let inserted = self.focus_paths.len() == focus_count;
+        if inserted {
+            self.register_focusable_with_hotkey_sequences(id, area, true, hotkeys);
+        } else if let Some(target) = self.focus_paths.get_mut(focus_count) {
+            for hotkey in hotkeys {
+                add_focus_hotkey_sequence(target, hotkey);
+            }
+        }
+        (result, inserted)
+    }
+
     pub fn focus_disabled(&self) -> bool {
         self.focus_disabled
     }

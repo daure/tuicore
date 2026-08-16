@@ -12,7 +12,7 @@ pub(crate) struct DiffDemo<M = ()> {
     controls: Flex<M>,
     headers: Toggle<M>,
     wrap: Toggle<M>,
-    panel: PanelHost<DiffViewer>,
+    panel: PanelHost<DiffViewer, M>,
 }
 
 impl<M: 'static> DiffDemo<M> {
@@ -97,7 +97,7 @@ impl<M: 'static> TuiNode<M> for DiffDemo<M> {
             self.wrap.layout(wrap, ctx);
         });
         ctx.push_slot(panel_child_key(), panel, |ctx| {
-            <PanelHost<DiffViewer> as TuiNode<M>>::layout(&mut self.panel, panel, ctx);
+            <PanelHost<DiffViewer, M> as TuiNode<M>>::layout(&mut self.panel, panel, ctx);
         });
         LayoutResult::new(area)
     }
@@ -107,7 +107,7 @@ impl<M: 'static> TuiNode<M> for DiffDemo<M> {
             .render(frame, self.control_region(headers_region_key()));
         self.wrap
             .render(frame, self.control_region(wrap_region_key()));
-        <PanelHost<DiffViewer> as TuiNode<M>>::render(
+        <PanelHost<DiffViewer, M> as TuiNode<M>>::render(
             &self.panel,
             frame,
             self.region(panel_region_key()),
@@ -148,7 +148,7 @@ impl<M: 'static> TuiNode<M> for DiffDemo<M> {
         self.headers
             .tick(dt, settings)
             .merge(self.wrap.tick(dt, settings))
-            .merge(<PanelHost<DiffViewer> as TuiNode<M>>::tick(
+            .merge(<PanelHost<DiffViewer, M> as TuiNode<M>>::tick(
                 &mut self.panel,
                 dt,
                 settings,

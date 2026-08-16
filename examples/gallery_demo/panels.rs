@@ -33,15 +33,15 @@ fn panel_title_choices(position: PanelTitlePosition) -> Vec<PanelTitleChoice> {
     ]
 }
 
-pub(crate) fn panel_demo() -> Panel {
-    Panel::new().border(BorderKind::Plain).content([
+pub(crate) fn panel_demo() -> Panel<Msg> {
+    Panel::new().content([
         "Use dropdowns below to toggle each panel label or hotkey.",
         "Top labels use the standard - label - style.",
         "Bottom labels and hotkeys use the -| label |- inset style.",
     ])
 }
 
-pub(crate) fn panel_join_demo() -> PanelHost<Flex<Msg>> {
+pub(crate) fn panel_join_demo() -> PanelHost<Flex<Msg>, Msg> {
     Panel::new()
         .top_left("Joined separators")
         .bottom_left("Split + Grid + Flex composition")
@@ -54,7 +54,7 @@ pub(crate) fn panel_join_demo() -> PanelHost<Flex<Msg>> {
         )
 }
 
-pub(crate) fn panel_tabs_join_demo() -> PanelHost<Tabs<Msg>> {
+pub(crate) fn panel_tabs_join_demo() -> PanelHost<Tabs<Msg>, Msg> {
     Panel::new()
         .top_left("Tabs + separators")
         .bottom_left("Tab focuses tabs/body, not separator glyphs")
@@ -167,8 +167,8 @@ fn panel_title_control_hotkey(position: PanelTitlePosition) -> &'static str {
     }
 }
 
-pub(crate) fn apply_panel_choice(
-    panel: &mut Panel,
+pub(crate) fn apply_panel_choice<M>(
+    panel: &mut Panel<M>,
     position: PanelTitlePosition,
     selected: Option<&'static str>,
 ) {
@@ -209,6 +209,18 @@ pub(crate) fn panel_separator_preview_layout(area: Rect) -> [Rect; 2] {
         .areas(area)
 }
 
+pub(crate) fn panel_variants_layout(area: Rect) -> [Rect; 4] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(area)
+}
+
 pub(crate) fn panel_title_control_areas(area: Rect) -> [Rect; 4] {
     Layout::default()
         .direction(Direction::Horizontal)
@@ -244,6 +256,24 @@ pub(crate) fn panel_join_demo_child_key() -> ChildKey {
 
 pub(crate) fn panel_tabs_join_demo_child_key() -> ChildKey {
     ChildKey::new("panel-tabs-join-demo")
+}
+
+pub(crate) fn panel_variant_child_key(index: usize) -> ChildKey {
+    ChildKey::new(format!("panel-variant-{index}"))
+}
+
+pub(crate) fn panel_variant_index(key: &ChildKey) -> Option<usize> {
+    key.as_str()
+        .strip_prefix("panel-variant-")?
+        .parse()
+        .ok()
+        .filter(|index| *index < 2)
+}
+
+pub(crate) fn panel_variant_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {
+    let first = route.path.first()?;
+    let index = panel_variant_index(first)?;
+    Some((index, EventRoute::new(route.path.without_first())))
 }
 
 pub(crate) fn panel_title_child_key(index: usize) -> ChildKey {

@@ -326,7 +326,7 @@ where
         let show_legend = title_width + legend_width + 4
             <= usize::from(area.width.saturating_sub(u16::from(self.bordered) * 4));
         if self.bordered {
-            let mut panel = Panel::new().focused(self.focused);
+            let mut panel = Panel::<()>::new().focused(self.focused);
             if !title.is_empty() {
                 panel = panel.top_left(title);
             }

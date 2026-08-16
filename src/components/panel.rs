@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt, rc::Rc, time::Duration};
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -42,15 +42,40 @@ struct PanelTitle {
     line: Option<Line<'static>>,
 }
 
+struct PanelActionHotkey<M> {
+    sequence: String,
+    on_trigger: Rc<dyn Fn() -> M>,
+}
+
+impl<M> Clone for PanelActionHotkey<M> {
+    fn clone(&self) -> Self {
+        Self {
+            sequence: self.sequence.clone(),
+            on_trigger: Rc::clone(&self.on_trigger),
+        }
+    }
+}
+
+impl<M> fmt::Debug for PanelActionHotkey<M> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PanelActionHotkey")
+            .field("sequence", &self.sequence)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct Panel {
+pub struct Panel<M = ()> {
     top_left: Option<PanelTitle>,
     top_right: Option<PanelTitle>,
     bottom_left: Option<PanelTitle>,
     bottom_right: Option<PanelTitle>,
     hotkey: Option<String>,
+    action_hotkeys: Vec<PanelActionHotkey<M>>,
     hotkey_matcher: HotkeySequenceMatcher,
     border: Option<BorderKind>,
+    one_row: bool,
     tone: PanelTone,
     content: Vec<String>,
     scroll: Option<ScrollState>,
@@ -61,19 +86,25 @@ pub struct Panel {
     pending_hotkey_prefix: Option<String>,
 }
 
-pub struct PanelHost<C> {
-    panel: Panel,
+pub struct PanelHost<C, M = ()> {
+    panel: Panel<M>,
     child: C,
     child_area: Rect,
 }
 
-impl Default for Panel {
+impl<M> Default for Panel<M> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Panel {
+impl Panel<()> {
+    pub fn inner_area(area: Rect) -> Rect {
+        panel_inner_area(area)
+    }
+}
+
+impl<M> Panel<M> {
     pub fn new() -> Self {
         let theme = theme();
         Self {
@@ -82,8 +113,10 @@ impl Panel {
             bottom_left: None,
             bottom_right: None,
             hotkey: None,
+            action_hotkeys: Vec::new(),
             hotkey_matcher: HotkeySequenceMatcher::default(),
             border: None,
+            one_row: false,
             tone: PanelTone::Normal,
             content: Vec::new(),
             scroll: None,
@@ -161,12 +194,25 @@ impl Panel {
     pub fn set_hotkey(&mut self, hotkey: impl Into<String>) {
         let hotkey = hotkey.into();
         self.hotkey = Some(hotkey.clone());
-        self.hotkey_matcher = HotkeySequenceMatcher::new([hotkey]);
+        self.rebuild_hotkey_matcher();
     }
 
     pub fn clear_hotkey(&mut self) {
         self.hotkey = None;
-        self.hotkey_matcher = HotkeySequenceMatcher::default();
+        self.rebuild_hotkey_matcher();
+    }
+
+    pub fn action_hotkey(
+        mut self,
+        sequence: impl Into<String>,
+        on_trigger: impl Fn() -> M + 'static,
+    ) -> Self {
+        self.action_hotkeys.push(PanelActionHotkey {
+            sequence: sequence.into(),
+            on_trigger: Rc::new(on_trigger),
+        });
+        self.rebuild_hotkey_matcher();
+        self
     }
 
     pub(crate) fn set_hotkey_badge(&mut self, hotkey: Option<String>) {
@@ -181,6 +227,15 @@ impl Panel {
     pub fn border(mut self, border: BorderKind) -> Self {
         self.border = Some(border);
         self
+    }
+
+    pub fn one_row(mut self, one_row: bool) -> Self {
+        self.one_row = one_row;
+        self
+    }
+
+    pub fn set_one_row(&mut self, one_row: bool) {
+        self.one_row = one_row;
     }
 
     pub fn tone(mut self, tone: PanelTone) -> Self {
@@ -229,7 +284,7 @@ impl Panel {
         self.start_focus_color_transition(focused, settings);
     }
 
-    pub fn host<C>(self, child: C) -> PanelHost<C> {
+    pub fn host<C>(self, child: C) -> PanelHost<C, M> {
         PanelHost {
             panel: self,
             child,
@@ -268,7 +323,7 @@ impl Panel {
     }
 
     pub fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
-        let inner = Self::inner_area(area);
+        let inner = self.content_area(area);
         let content = self.content_size();
         if let Some(scroll) = &self.scroll {
             scroll.geometry(inner, content)
@@ -336,13 +391,17 @@ impl Panel {
         scroll.clamp_to(geometry.viewport, geometry.content, settings)
     }
 
-    pub fn inner_area(area: Rect) -> Rect {
-        Rect::new(
-            area.x.saturating_add(1),
-            area.y.saturating_add(1),
-            area.width.saturating_sub(2),
-            area.height.saturating_sub(2),
-        )
+    fn content_area(&self, area: Rect) -> Rect {
+        if self.one_row {
+            Rect::new(
+                area.x,
+                area.y.saturating_add(1),
+                area.width,
+                area.height.saturating_sub(1),
+            )
+        } else {
+            panel_inner_area(area)
+        }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -354,7 +413,11 @@ impl Panel {
         let border_style = Style::default().fg(self.visible_border_color());
 
         let block = Block::default()
-            .borders(Borders::ALL)
+            .borders(if self.one_row {
+                Borders::TOP
+            } else {
+                Borders::ALL
+            })
             .border_set(border_set(border))
             .border_style(border_style);
         let inner = block.inner(area);
@@ -362,9 +425,11 @@ impl Panel {
 
         self.render_panel_title(frame, area, border, PanelTitlePosition::TopLeft);
         self.render_panel_title(frame, area, border, PanelTitlePosition::TopRight);
-        self.render_panel_title(frame, area, border, PanelTitlePosition::BottomLeft);
-        self.render_panel_title(frame, area, border, PanelTitlePosition::BottomRight);
-        self.render_hotkey(frame, area, border);
+        if !self.one_row {
+            self.render_panel_title(frame, area, border, PanelTitlePosition::BottomLeft);
+            self.render_panel_title(frame, area, border, PanelTitlePosition::BottomRight);
+            self.render_hotkey(frame, area, border);
+        }
 
         if !inner.is_empty() {
             let lines = self
@@ -416,7 +481,7 @@ impl Panel {
     }
 
     fn render_hotkey(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        let Some(ref hotkey) = self.hotkey else {
+        let Some(hotkey) = self.display_hotkey() else {
             return;
         };
         if area.width <= 4 {
@@ -425,11 +490,11 @@ impl Panel {
 
         let border_style = Style::default().fg(self.visible_border_color());
         let title_style = Style::default().fg(self.visible_title_color());
-        let width = hotkey_badge_width(hotkey).min(u16::MAX as usize) as u16;
+        let width = hotkey_badge_width(&hotkey).min(u16::MAX as usize) as u16;
         let x = area.x + area.width.saturating_sub(width);
         let y = title_y(area, PanelTitlePosition::BottomRight);
         let line = Line::from(hotkey_edge_spans(
-            hotkey,
+            &hotkey,
             self.pending_hotkey_prefix.as_deref(),
             border,
             border_style,
@@ -553,7 +618,7 @@ impl PanelTitle {
     }
 }
 
-impl Panel {
+impl<M> Panel<M> {
     fn visible_border_color(&self) -> ratatui::style::Color {
         if self.tone == PanelTone::Error {
             return theme().error_fg();
@@ -608,11 +673,33 @@ impl Panel {
         if position != PanelTitlePosition::BottomRight {
             return 0;
         }
-        self.hotkey
-            .as_ref()
-            .map(|hotkey| hotkey_badge_width(hotkey).min(u16::MAX as usize) as u16)
+        self.display_hotkey()
+            .map(|hotkey| hotkey_badge_width(&hotkey).min(u16::MAX as usize) as u16)
             .unwrap_or(0)
     }
+
+    fn display_hotkey(&self) -> Option<String> {
+        let hotkeys = self
+            .hotkey
+            .iter()
+            .cloned()
+            .chain(
+                self.action_hotkeys
+                    .iter()
+                    .map(|action| action.sequence.clone()),
+            )
+            .collect::<Vec<_>>();
+        (!hotkeys.is_empty()).then(|| hotkeys.join("·"))
+    }
+}
+
+fn panel_inner_area(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
 }
 
 fn title_alignment(position: PanelTitlePosition) -> Alignment {
@@ -631,7 +718,7 @@ fn title_y(area: Rect, position: PanelTitlePosition) -> u16 {
     }
 }
 
-impl Animated for Panel {
+impl<M> Animated for Panel<M> {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let hotkey_tick = if self.hotkey_matcher.tick(dt) {
             TickResult::CHANGED
@@ -651,19 +738,20 @@ impl Animated for Panel {
     }
 }
 
-impl<M> TuiNode<M> for Panel {
+impl<M> TuiNode<M> for Panel<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
         if width_changed && let Some(scroll) = &mut self.scroll {
             scroll.snap_horizontal_to_start();
         }
-        if let Some(hotkey) = self.hotkey.clone() {
+        let hotkeys = self.hotkey_sequences();
+        if !hotkeys.is_empty() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(PANEL_FOCUS),
                 area,
                 true,
-                vec![hotkey],
+                hotkeys,
             );
         } else {
             ctx.register_focusable(FocusId::new(PANEL_FOCUS), area, true);
@@ -707,12 +795,12 @@ impl<M> TuiNode<M> for Panel {
     }
 }
 
-impl<C> PanelHost<C> {
-    pub fn panel(&self) -> &Panel {
+impl<C, M> PanelHost<C, M> {
+    pub fn panel(&self) -> &Panel<M> {
         &self.panel
     }
 
-    pub fn panel_mut(&mut self) -> &mut Panel {
+    pub fn panel_mut(&mut self) -> &mut Panel<M> {
         &mut self.panel
     }
 
@@ -729,15 +817,17 @@ impl<C> PanelHost<C> {
     }
 }
 
-impl<C, M> TuiNode<M> for PanelHost<C>
+impl<C, M> TuiNode<M> for PanelHost<C, M>
 where
     C: TuiNode<M>,
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let child = self.child.measure(proposal);
+        let horizontal_border_pad = if self.panel.one_row { 0 } else { 2 };
+        let vertical_border_pad = if self.panel.one_row { 1 } else { 2 };
         LayoutSizeHint::content(
-            child.preferred.width.saturating_add(2),
-            child.preferred.height.saturating_add(2),
+            child.preferred.width.saturating_add(horizontal_border_pad),
+            child.preferred.height.saturating_add(vertical_border_pad),
         )
         .normalized(proposal)
     }
@@ -748,26 +838,27 @@ where
         if width_changed && let Some(scroll) = &mut self.panel.scroll {
             scroll.snap_horizontal_to_start();
         }
-        let inner = Panel::inner_area(area);
+        let inner = self.panel.content_area(area);
         self.child_area = inner;
-        let fallback_inserted = if let Some(hotkey) = self.panel.hotkey.clone() {
-            ctx.with_focus_fallback_hotkey_sequence_status(
+        let hotkeys = self.panel.hotkey_sequences();
+        let fallback_inserted = if hotkeys.is_empty() {
+            ctx.with_focus_fallback_status(FocusId::new(PANEL_FOCUS), area, |ctx| {
+                ctx.push_slot(ChildKey::body(), inner, |ctx| {
+                    self.child.layout(inner, ctx);
+                });
+            })
+            .1
+        } else {
+            ctx.with_focus_fallback_hotkey_sequences_status(
                 FocusId::new(PANEL_FOCUS),
                 area,
-                hotkey,
+                hotkeys,
                 |ctx| {
                     ctx.push_slot(ChildKey::body(), inner, |ctx| {
                         self.child.layout(inner, ctx);
                     });
                 },
             )
-            .1
-        } else {
-            ctx.with_focus_fallback_status(FocusId::new(PANEL_FOCUS), area, |ctx| {
-                ctx.push_slot(ChildKey::body(), inner, |ctx| {
-                    self.child.layout(inner, ctx);
-                });
-            })
             .1
         };
         if !fallback_inserted {
@@ -802,10 +893,10 @@ where
             return self.event(event, ctx);
         }
 
-        if let TuiEvent::Key(key) = event {
-            if let Some(outcome) = self.panel.handle_hotkey_key(*key, ctx) {
-                return outcome;
-            }
+        if let TuiEvent::Key(key) = event
+            && let Some(outcome) = self.panel.handle_hotkey_key(*key, ctx)
+        {
+            return outcome;
         }
 
         let body = ChildKey::body();
@@ -854,7 +945,7 @@ where
     }
 }
 
-impl Panel {
+impl<M> Panel<M> {
     fn start_focus_color_transition(&mut self, focused: bool, settings: AnimationSettings) {
         let theme = theme();
         self.border_color.start(
@@ -886,13 +977,17 @@ impl Panel {
             .is_some_and(|hotkey| panel_hotkey_matches(hotkey, key))
     }
 
-    fn handle_hotkey_key<M>(
-        &mut self,
-        key: KeyEvent,
-        ctx: &mut EventCtx<M>,
-    ) -> Option<EventOutcome> {
+    fn handle_hotkey_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> Option<EventOutcome> {
         match self.hotkey_matcher.on_key(key) {
-            HotkeyMatch::Matched(_) | HotkeyMatch::Pending | HotkeyMatch::Canceled => {
+            HotkeyMatch::Matched(index) => {
+                if let Some(action) = self.action_for_match_index(index) {
+                    ctx.emit((action.on_trigger)());
+                    ctx.request_redraw();
+                }
+                ctx.stop_propagation();
+                return Some(EventOutcome::Handled);
+            }
+            HotkeyMatch::Pending | HotkeyMatch::Canceled => {
                 ctx.stop_propagation();
                 return Some(EventOutcome::Handled);
             }
@@ -907,7 +1002,7 @@ impl Panel {
         }
     }
 
-    fn on_hotkey_event<M>(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+    fn on_hotkey_event(&mut self, hotkey: &HotkeyEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         match hotkey {
             HotkeyEvent::Pending(prefix) => {
                 if self.hotkey_has_prefix(prefix) {
@@ -924,6 +1019,12 @@ impl Panel {
             }
             HotkeyEvent::Commit(sequence) => {
                 self.pending_hotkey_prefix = None;
+                if let Some(action) = self.action_for_sequence(sequence) {
+                    ctx.emit((action.on_trigger)());
+                    ctx.request_redraw();
+                    ctx.stop_propagation();
+                    return EventOutcome::Handled;
+                }
                 if self.hotkey_matches_sequence(sequence) {
                     ctx.request_redraw();
                     ctx.stop_propagation();
@@ -936,15 +1037,43 @@ impl Panel {
     }
 
     fn hotkey_has_prefix(&self, prefix: &str) -> bool {
-        self.hotkey.as_deref().is_some_and(|hotkey| {
-            crate::hotkey::normalize_hotkey(hotkey)
-                .starts_with(&crate::hotkey::normalize_hotkey(prefix))
-        })
+        let prefix = crate::hotkey::normalize_hotkey(prefix);
+        self.hotkey_sequences()
+            .iter()
+            .any(|hotkey| crate::hotkey::normalize_hotkey(hotkey).starts_with(&prefix))
     }
 
     fn hotkey_matches_sequence(&self, sequence: &str) -> bool {
         self.hotkey.as_deref().is_some_and(|hotkey| {
             crate::hotkey::normalize_hotkey(hotkey) == crate::hotkey::normalize_hotkey(sequence)
+        })
+    }
+
+    fn hotkey_sequences(&self) -> Vec<String> {
+        self.hotkey
+            .iter()
+            .cloned()
+            .chain(
+                self.action_hotkeys
+                    .iter()
+                    .map(|action| action.sequence.clone()),
+            )
+            .collect()
+    }
+
+    fn rebuild_hotkey_matcher(&mut self) {
+        self.hotkey_matcher = HotkeySequenceMatcher::new(self.hotkey_sequences());
+    }
+
+    fn action_for_match_index(&self, index: usize) -> Option<&PanelActionHotkey<M>> {
+        let action_index = index.checked_sub(self.hotkey.is_some() as usize)?;
+        self.action_hotkeys.get(action_index)
+    }
+
+    fn action_for_sequence(&self, sequence: &str) -> Option<&PanelActionHotkey<M>> {
+        self.action_hotkeys.iter().find(|action| {
+            crate::hotkey::normalize_hotkey(&action.sequence)
+                == crate::hotkey::normalize_hotkey(sequence)
         })
     }
 }
@@ -958,7 +1087,7 @@ fn panel_hotkey_matches(hotkey: KeyEvent, key: KeyEvent) -> bool {
         return false;
     }
     match (hotkey.code, key.code) {
-        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (Key::Char(a), Key::Char(b)) => a.eq_ignore_ascii_case(&b),
         (a, b) => a == b,
     }
 }
@@ -1051,7 +1180,7 @@ mod tests {
 
     #[test]
     fn empty_scrollable_panel_still_renders_scrollbars() {
-        let mut panel = Panel::new();
+        let mut panel = Panel::<()>::new();
         panel.scroll = Some(
             ScrollState::new(ScrollAxes::Both).scrollbars(ScrollbarConfig {
                 vertical: ScrollbarVisibility::Always,
@@ -1075,7 +1204,7 @@ mod tests {
         let mut settings = AnimationSettings::default();
         settings.enabled = false;
         let area = Rect::new(0, 0, 10, 5);
-        let mut panel = Panel::new()
+        let mut panel = Panel::<()>::new()
             .content((0..20).map(|line| format!("line {line}")))
             .scrollable(ScrollAxes::Vertical);
 
@@ -1108,7 +1237,7 @@ mod tests {
 
     #[test]
     fn focus_changes_start_color_transitions() {
-        let mut panel = Panel::new().focused(true);
+        let mut panel = Panel::<()>::new().focused(true);
 
         panel.set_focused(false, animation_settings());
 
@@ -1121,7 +1250,7 @@ mod tests {
         let mut animation = AnimationSettings::default();
         animation.enabled = false;
 
-        let mut panel = Panel::new().focused(true);
+        let mut panel = Panel::<()>::new().focused(true);
         panel.start_focus_color_transition(false, animation);
 
         let theme = theme();
@@ -1134,7 +1263,7 @@ mod tests {
     #[test]
     fn render_uses_current_theme_instead_of_stale_idle_colors() {
         let stale_theme = crate::Theme::named(crate::ThemeName::Dracula);
-        let mut panel = Panel::new();
+        let mut panel = Panel::<()>::new();
         panel.border_color.snap_to(stale_theme.border_fg());
         panel.title_color.snap_to(stale_theme.muted_fg());
         let expected = theme().border_fg();
@@ -1152,7 +1281,7 @@ mod tests {
 
     #[test]
     fn error_tone_colors_border_and_title_semantically() {
-        let panel = Panel::new().top_left("Email").tone(PanelTone::Error);
+        let panel = Panel::<()>::new().top_left("Email").tone(PanelTone::Error);
         let mut terminal = Terminal::new(TestBackend::new(16, 3)).expect("terminal should build");
 
         terminal
@@ -1167,7 +1296,7 @@ mod tests {
 
     #[test]
     fn error_tone_overrides_active_focus_animation() {
-        let mut panel = Panel::new().top_left("Email").focused(true);
+        let mut panel = Panel::<()>::new().top_left("Email").focused(true);
         panel.set_focused(false, animation_settings());
         assert!(panel.border_color.is_active());
         panel.set_tone(PanelTone::Error);
@@ -1181,6 +1310,37 @@ mod tests {
         let error = theme().error_fg();
         assert_eq!(buffer.cell((0, 0)).unwrap().fg, error);
         assert_eq!(buffer.cell((2, 0)).unwrap().fg, error);
+    }
+
+    #[test]
+    fn one_row_panel_renders_only_top_border() {
+        let panel = Panel::<()>::new()
+            .one_row(true)
+            .top_left("Title")
+            .bottom_left("Hidden")
+            .hotkey("p")
+            .border(BorderKind::Plain)
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..20)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+
+        assert!(row(0).contains("Title"), "{}", row(0));
+        assert!(row(0).contains('─'), "{}", row(0));
+        assert!(!row(0).contains('┌'), "{}", row(0));
+        assert!(!row(0).contains('┐'), "{}", row(0));
+        assert!(row(1).starts_with("Body"), "{}", row(1));
+        assert!(!row(1).contains('│'), "{}", row(1));
+        assert_eq!(row(3), " ".repeat(20));
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -1224,6 +1384,16 @@ mod tests {
     }
 
     #[test]
+    fn one_row_panel_host_gives_child_full_width_below_top_border() {
+        let mut host = Panel::new().one_row(true).host(StaticBody);
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 20, 4), &mut layout);
+
+        assert_eq!(host.child_area(), Rect::new(0, 1, 20, 3));
+    }
+
+    #[test]
     fn panel_host_preserves_hotkey_on_fallback_focus() {
         let mut host = Panel::new().hotkey("p").host(StaticBody);
         let mut layout = LayoutCtx::new();
@@ -1254,6 +1424,23 @@ mod tests {
         );
         assert_eq!(layout.focus_targets()[1].id.as_str(), "panel");
         assert!(layout.focus_targets()[1].path.is_empty());
+    }
+
+    #[test]
+    fn panel_host_attaches_all_action_hotkeys_to_child_focus_target() {
+        let mut host = Panel::new()
+            .hotkey("p")
+            .action_hotkey("ra", || ())
+            .action_hotkey("ca", || ())
+            .host(TextInput::<()>::new());
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 20, 4), &mut layout);
+
+        assert_eq!(
+            layout.focus_targets()[0].hotkey_sequences,
+            vec!["p", "ra", "ca"]
+        );
     }
 
     #[test]
@@ -1404,7 +1591,7 @@ mod tests {
 
     #[test]
     fn top_titles_always_render_standard() {
-        let panel = Panel::new()
+        let panel = Panel::<()>::new()
             .top_left("Processes")
             .border(BorderKind::Plain)
             .content(["✖ No processes running"]);
@@ -1423,7 +1610,7 @@ mod tests {
 
     #[test]
     fn bottom_left_title_and_bottom_right_hotkey_render_inset() {
-        let panel = Panel::new()
+        let panel = Panel::<()>::new()
             .bottom_left("Left")
             .hotkey("r")
             .border(BorderKind::Plain);
@@ -1442,7 +1629,7 @@ mod tests {
 
     #[test]
     fn panel_bottom_right_title_and_hotkey_align_with_border_snapshot() {
-        let panel = Panel::new()
+        let panel = Panel::<()>::new()
             .top_left("Services")
             .bottom_right("Ready")
             .hotkey("run")
@@ -1477,7 +1664,7 @@ mod tests {
 
     #[test]
     fn panel_bottom_right_title_slot_is_independent_from_hotkey() {
-        let mut panel = Panel::new().bottom_right("State").hotkey("r");
+        let mut panel = Panel::<()>::new().bottom_right("State").hotkey("r");
 
         panel.clear_title(PanelTitlePosition::BottomRight);
 
@@ -1496,6 +1683,52 @@ mod tests {
             ctx.focus_targets()[0].hotkey,
             Some(KeyEvent::from(Key::Char('p')))
         );
+    }
+
+    #[test]
+    fn panel_action_hotkeys_render_register_and_emit_messages() {
+        let mut panel = Panel::new()
+            .hotkey("p")
+            .action_hotkey("ra", || "refresh")
+            .action_hotkey("ca", || "clear")
+            .border(BorderKind::Plain);
+        let area = Rect::new(0, 0, 24, 4);
+        let mut layout = LayoutCtx::new();
+        panel.layout(area, &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(24, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+        let bottom = (0..24)
+            .map(|x| terminal.backend().buffer().cell((x, 3)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(
+            layout.focus_targets()[0].hotkey_sequences,
+            vec!["p", "ra", "ca"]
+        );
+        assert!(bottom.ends_with("┤p·ra·ca│"), "{bottom}");
+
+        let mut ctx = EventCtx::default();
+        let outcome = panel.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("ra".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.messages(), &["refresh"]);
+
+        let mut ctx = EventCtx::default();
+        assert_eq!(
+            panel.event(&TuiEvent::Key(KeyEvent::from(Key::Char('c'))), &mut ctx),
+            EventOutcome::Handled
+        );
+        assert_eq!(
+            panel.event(&TuiEvent::Key(KeyEvent::from(Key::Char('a'))), &mut ctx),
+            EventOutcome::Handled
+        );
+        assert_eq!(ctx.messages(), &["clear"]);
     }
 
     #[test]

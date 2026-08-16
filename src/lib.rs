@@ -51,11 +51,12 @@ pub use components::{
     SpeedReader, SpeedReaderInputMode, SpeedReaderKeyBindings, SpeedReaderOutcome,
     SpeedReaderState, Spinner, Split, Stack, StackAlign, StackItem, StackSize, StatusBar,
     StatusBarKeyBindings, StatusBarMenuItem, StoreDebugView, SyntaxHighlighter, Tab, Tabs,
-    TabsSelectionMemory, TagInput, TagInputEvent, TextInput, TextInputKeyBindings, TextareaInput,
-    TextareaInputKeyBindings, TimeField, TimePicker, TimePrecision, ToastIcons, ToastRack, Toggle,
-    ToggleOutcome, ToggleStyle, TreeAdapter, TreeGlyphs, WeatherFetchError, WeatherForecastDay,
-    WeatherForecastDialog, WeatherForecastError, WeatherIndicator, WeatherProviderConfig,
-    WeatherReport, WeatherSummary, fade_buffer, weather_condition_icon,
+    TabsBodyBorderStyle, TabsSelectionMemory, TagInput, TagInputEvent, TextInput,
+    TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings, TimeField, TimePicker,
+    TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome, ToggleStyle, TreeAdapter,
+    TreeGlyphs, WeatherFetchError, WeatherForecastDay, WeatherForecastDialog, WeatherForecastError,
+    WeatherIndicator, WeatherProviderConfig, WeatherReport, WeatherSummary, fade_buffer,
+    weather_condition_icon,
 };
 pub use components::{AiDock, LlmEvent, LlmEventKind, ToolPolicy};
 

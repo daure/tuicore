@@ -12,6 +12,7 @@ pub enum DropdownSearchMode {
     None,
     Contains,
     Fuzzy,
+    External,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

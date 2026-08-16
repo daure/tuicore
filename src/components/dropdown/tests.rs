@@ -529,6 +529,79 @@ fn dropdown_can_show_a_default_subset_then_search_all_options() {
 }
 
 #[test]
+fn replacing_rows_preserves_open_search_and_filters_new_options() {
+    let mut dropdown = Dropdown::single(
+        ["Old result"],
+        |value| value.to_string(),
+        |value| value.to_string(),
+    );
+    dropdown.open();
+    dropdown.on_key(char_key('a'), AREA);
+    dropdown.on_key(char_key('l'), AREA);
+
+    dropdown.set_rows(["Alpha", "Alpine", "Beta"]);
+
+    assert!(dropdown.is_open());
+    assert_eq!(dropdown.search_query(), "al");
+    assert_eq!(dropdown.filtered, ["Alpha", "Alpine"]);
+}
+
+#[test]
+fn external_search_does_not_filter_or_highlight_stale_rows() {
+    let mut dropdown = single_dropdown().search_mode(DropdownSearchMode::External);
+    dropdown.open();
+
+    dropdown.on_key(char_key('a'), AREA);
+    dropdown.on_key(char_key('l'), AREA);
+
+    assert_eq!(dropdown.filtered, ROWS);
+    let line = highlighted_label_line(
+        "Alpha".into(),
+        dropdown.search_query(),
+        DropdownSearchMode::External,
+    );
+    assert_eq!(line.spans.len(), 1);
+    assert_eq!(line.spans[0].content, "Alpha");
+    assert_eq!(line.spans[0].style, Style::default());
+}
+
+#[test]
+fn search_mode_can_switch_from_external_to_fuzzy_at_runtime() {
+    let mut dropdown = single_dropdown().search_mode(DropdownSearchMode::External);
+    dropdown.open();
+    dropdown.on_key(char_key('m'), AREA);
+    dropdown.on_key(char_key('m'), AREA);
+    assert_eq!(dropdown.filtered, ROWS);
+
+    dropdown.set_search_mode(DropdownSearchMode::Fuzzy);
+
+    assert_eq!(dropdown.filtered, ["Gamma"]);
+}
+
+#[test]
+fn external_search_can_render_custom_loading_spinner() {
+    let dropdown = single_dropdown()
+        .search_mode(DropdownSearchMode::External)
+        .external_loading(true)
+        .external_loading_message("Searching Jira");
+    let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+
+    terminal
+        .draw(|frame| {
+            dropdown.render_popup(frame, frame.area(), DropdownPopupDirection::Down);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..6)
+        .flat_map(|y| (0..24).map(move |x| buffer.cell((x, y)).unwrap().symbol()))
+        .collect::<String>();
+    assert!(rendered.contains(dropdown.external_spinner.glyph()));
+    assert!(rendered.contains("Searching Jira"));
+    assert!(!rendered.contains("No results"));
+}
+
+#[test]
 fn open_popup_highlights_matching_search_characters() {
     let mut dropdown = single_dropdown();
     dropdown.open();

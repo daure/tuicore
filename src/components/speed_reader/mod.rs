@@ -280,7 +280,11 @@ impl SpeedReader {
             self.elapsed = Duration::ZERO;
         }
         if !self.tokens.is_empty() {
-            self.state = SpeedReaderState::Playing;
+            self.state = if self.is_showing_final_word() {
+                SpeedReaderState::Complete
+            } else {
+                SpeedReaderState::Playing
+            };
         }
     }
 
@@ -604,6 +608,13 @@ impl SpeedReader {
             return;
         }
         self.set_position(self.position + 1);
+        if self.is_showing_final_word() {
+            self.state = SpeedReaderState::Complete;
+        }
+    }
+
+    fn is_showing_final_word(&self) -> bool {
+        self.position + 1 >= self.tokens.len()
     }
 
     fn set_position(&mut self, position: usize) {
@@ -852,7 +863,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn starts_paused_and_completes_after_final_dwell() {
+    fn completes_as_soon_as_the_final_word_is_shown() {
         let mut reader = SpeedReader::new("one two").wpm(300);
         reader.play();
 
@@ -862,14 +873,16 @@ mod tests {
             AnimationSettings::default(),
         );
         assert_eq!(reader.current_word(), Some("two"));
-        assert_eq!(reader.state(), SpeedReaderState::Playing);
+        assert_eq!(reader.state(), SpeedReaderState::Complete);
+    }
 
-        Animated::tick(
-            &mut reader,
-            Duration::from_millis(450),
-            AnimationSettings::default(),
-        );
-        assert_eq!(reader.current_word(), Some("two"));
+    #[test]
+    fn single_word_reader_completes_when_played() {
+        let mut reader = SpeedReader::new("one");
+
+        reader.play();
+
+        assert_eq!(reader.current_word(), Some("one"));
         assert_eq!(reader.state(), SpeedReaderState::Complete);
     }
 
@@ -914,8 +927,8 @@ mod tests {
         );
 
         assert_eq!(reader.current_word(), Some("three"));
-        assert_eq!(reader.state(), SpeedReaderState::Playing);
-        assert_eq!(tick.next_tick, Some(Duration::from_millis(150)));
+        assert_eq!(reader.state(), SpeedReaderState::Complete);
+        assert_eq!(tick.next_tick, None);
     }
 
     #[test]
@@ -930,7 +943,7 @@ mod tests {
 
     #[test]
     fn layout_pauses_playback_on_an_oversized_word() {
-        let mut reader = SpeedReader::new("extraordinary");
+        let mut reader = SpeedReader::new("extraordinary next");
         reader.play();
         let mut layout = LayoutCtx::new();
 

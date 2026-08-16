@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 
 use crate::animation::Easing;
-use crate::components::{Column, DataView, SelectionMode, TextInput};
+use crate::components::{Column, DataView, SelectionMode, Spinner, TextInput};
 use crate::event::{Key, KeyEvent};
 use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
@@ -47,7 +47,12 @@ fn highlighted_label_line(
     query: &str,
     search_mode: DropdownSearchMode,
 ) -> Line<'static> {
-    if query.is_empty() || search_mode == DropdownSearchMode::None {
+    if query.is_empty()
+        || matches!(
+            search_mode,
+            DropdownSearchMode::None | DropdownSearchMode::External
+        )
+    {
         return Line::from(label);
     }
 
@@ -65,6 +70,7 @@ fn search_mode_for_highlight(search_mode: DropdownSearchMode) -> Option<SearchMo
         DropdownSearchMode::None => None,
         DropdownSearchMode::Contains => Some(SearchMode::Contains),
         DropdownSearchMode::Fuzzy => Some(SearchMode::Fuzzy),
+        DropdownSearchMode::External => None,
     }
 }
 
@@ -100,6 +106,8 @@ fn search_match_style() -> Style {
 
 pub struct Dropdown<T, Id> {
     data_view: DataView<T, Id>,
+    row_id: Rc<dyn Fn(&T) -> Id>,
+    row_label: Rc<dyn Fn(&T) -> String>,
     search_input: TextInput,
     search_render_query: Rc<RefCell<String>>,
     search_render_mode: Rc<Cell<DropdownSearchMode>>,
@@ -112,6 +120,9 @@ pub struct Dropdown<T, Id> {
     multi: bool,
     open: bool,
     search_mode: DropdownSearchMode,
+    external_loading: bool,
+    external_loading_message: String,
+    external_spinner: Spinner,
     min_search_chars: usize,
     max_filtered_items: Option<usize>,
     visible_without_search: Option<Vec<Id>>,
@@ -174,8 +185,8 @@ where
         multi: bool,
     ) -> Self {
         let rows = rows.into_iter().collect::<Vec<_>>();
-        let row_id = Rc::new(row_id);
-        let label = Rc::new(label);
+        let row_id: Rc<dyn Fn(&T) -> Id> = Rc::new(row_id);
+        let label: Rc<dyn Fn(&T) -> String> = Rc::new(label);
         let ids = rows.iter().map(|row| row_id(row)).collect::<Vec<_>>();
         let labels = rows.iter().map(|row| label(row)).collect::<Vec<_>>();
         let data_view_row_id = Rc::clone(&row_id);
@@ -207,6 +218,8 @@ where
 
         Self {
             data_view,
+            row_id,
+            row_label: label,
             search_input: TextInput::new().placeholder("Search..."),
             search_render_query,
             search_render_mode,
@@ -219,6 +232,9 @@ where
             multi,
             open: false,
             search_mode: DropdownSearchMode::Fuzzy,
+            external_loading: false,
+            external_loading_message: "Loading…".into(),
+            external_spinner: Spinner::new(),
             min_search_chars: 0,
             max_filtered_items: None,
             visible_without_search: None,
@@ -255,10 +271,32 @@ where
     }
 
     pub fn search_mode(mut self, mode: DropdownSearchMode) -> Self {
+        self.set_search_mode(mode);
+        self
+    }
+
+    pub fn set_search_mode(&mut self, mode: DropdownSearchMode) {
         self.search_mode = mode;
         self.search_render_mode.set(mode);
         self.refresh_filter();
+    }
+
+    pub fn external_loading(mut self, loading: bool) -> Self {
+        self.external_loading = loading;
         self
+    }
+
+    pub fn set_external_loading(&mut self, loading: bool) {
+        self.external_loading = loading;
+    }
+
+    pub fn external_loading_message(mut self, message: impl Into<String>) -> Self {
+        self.external_loading_message = message.into();
+        self
+    }
+
+    pub fn set_external_loading_message(&mut self, message: impl Into<String>) {
+        self.external_loading_message = message.into();
     }
 
     pub fn min_search_chars(mut self, count: usize) -> Self {
@@ -465,6 +503,24 @@ where
 
     pub fn search_query(&self) -> &str {
         self.search_input.current_value()
+    }
+
+    pub fn set_search_query(&mut self, query: impl Into<String>) {
+        self.search_input.set_value(query);
+        self.refresh_filter();
+    }
+
+    pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) {
+        let rows = rows.into_iter().collect::<Vec<_>>();
+        self.ids = rows.iter().map(|row| (self.row_id)(row)).collect();
+        self.labels = rows.iter().map(|row| (self.row_label)(row)).collect();
+        self.committed.retain(|id| self.ids.contains(id));
+        self.opened_committed.retain(|id| self.ids.contains(id));
+        self.draft.retain(|id| self.ids.contains(id));
+        self.data_view.set_rows(rows);
+        self.refresh_filter();
+        self.sync_view_selection();
+        self.highlight_committed();
     }
 
     pub fn is_open(&self) -> bool {
@@ -957,6 +1013,7 @@ where
                 DropdownSearchMode::None => self.ids.clone(),
                 DropdownSearchMode::Contains if query_empty => self.ids.clone(),
                 DropdownSearchMode::Fuzzy if query_empty => self.ids.clone(),
+                DropdownSearchMode::External => self.ids.clone(),
                 DropdownSearchMode::Contains => self.search(SearchMode::Contains),
                 DropdownSearchMode::Fuzzy => self.search(SearchMode::Fuzzy),
             }
@@ -1580,11 +1637,18 @@ where
         } else {
             TickResult::IDLE
         };
+        let spinner_tick =
+            if self.search_mode == DropdownSearchMode::External && self.external_loading {
+                Animated::tick(&mut self.external_spinner, dt, settings)
+            } else {
+                TickResult::IDLE
+            };
         Animated::tick(&mut self.data_view, dt, settings)
             .merge(Animated::tick(&mut self.search_input, dt, settings))
             .merge(self.backdrop_tween.tick(dt, settings))
             .merge(self.press_feedback.tick(dt, settings))
             .merge(hotkey_tick)
+            .merge(spinner_tick)
     }
 }
 

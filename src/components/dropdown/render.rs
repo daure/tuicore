@@ -10,7 +10,7 @@ use super::super::text_input::placeholder_line;
 use super::util::{bounded_title, connected_popup_border_set, truncate_cells};
 use super::{
     DROPDOWN_ARROW_DOWN, DROPDOWN_ARROW_UP, Dropdown, DropdownLabelPosition,
-    DropdownPopupDirection, DropdownVariant, highlighted_label_line,
+    DropdownPopupDirection, DropdownSearchMode, DropdownVariant, highlighted_label_line,
 };
 use crate::{
     BorderKind, HotkeyLabelMode, OverlayLayer, border_set, hotkey_badge_width, hotkey_edge_spans,
@@ -382,7 +382,9 @@ where
             self.render_no_selection_row(frame, no_selection_area, popup_content_style);
         }
 
-        if self.filtered.is_empty() {
+        if self.search_mode == DropdownSearchMode::External && self.external_loading {
+            self.render_external_loading(frame, rows_area, popup_content_style);
+        } else if self.filtered.is_empty() {
             let line = Line::styled(
                 "No results",
                 popup_content_style
@@ -398,6 +400,30 @@ where
             self.data_view
                 .render_with_row_style(frame, rows_area, popup_content_style);
         }
+    }
+
+    fn render_external_loading(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        popup_content_style: Option<Style>,
+    ) {
+        if area.is_empty() {
+            return;
+        }
+        let spinner_area = Rect::new(area.x, area.y, area.width.min(1), area.height.min(1));
+        self.external_spinner.render(frame, spinner_area);
+        let message_area = Rect::new(
+            area.x.saturating_add(2),
+            area.y,
+            area.width.saturating_sub(2),
+            area.height.min(1),
+        );
+        frame.render_widget(
+            Paragraph::new(self.external_loading_message.as_str())
+                .style(popup_content_style.unwrap_or_default()),
+            message_area,
+        );
     }
 
     pub(super) fn inline_filled_line(&self, base_style: Style) -> Line<'static> {

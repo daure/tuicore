@@ -1139,7 +1139,23 @@ fn disabled_text_input_allows_cursor_navigation() {
 }
 
 #[test]
-fn disabled_text_input_still_submits_on_enter() {
+fn disabled_text_input_bubbles_tab_for_focus_navigation() {
+    let mut input = TextInput::<()>::new()
+        .value("locked")
+        .focused(true)
+        .disabled(true);
+    input.insert_mode = true;
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
+    assert!(!input.insert_mode());
+}
+
+#[test]
+fn disabled_text_input_does_not_enter_insert_mode_or_submit() {
     let mut input = TextInput::new()
         .value("locked")
         .focused(true)
@@ -1149,21 +1165,14 @@ fn disabled_text_input_still_submits_on_enter() {
 
     let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
 
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert_eq!(ctx.messages(), &["submit:locked".to_string()]);
-    assert!(input.insert_mode());
-    assert_eq!(input.current_value(), "locked");
-
-    let mut exit = EventCtx::default();
-    assert_eq!(
-        input.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut exit),
-        EventOutcome::Handled
-    );
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert!(ctx.messages().is_empty());
     assert!(!input.insert_mode());
+    assert_eq!(input.current_value(), "locked");
 }
 
 #[test]
-fn disabled_text_input_dims_content_and_panel_border() {
+fn disabled_text_input_uses_dashed_panel_border() {
     let input = TextInput::<()>::new()
         .value("locked")
         .panel("Name")
@@ -1175,35 +1184,17 @@ fn disabled_text_input_dims_content_and_panel_border() {
         .expect("input should render");
 
     let buffer = terminal.backend().buffer();
-    assert!(
-        buffer
-            .cell((0, 0))
-            .unwrap()
-            .modifier
-            .contains(Modifier::DIM)
-    );
-    assert!(
-        buffer
-            .cell((1, 1))
-            .unwrap()
-            .modifier
-            .contains(Modifier::DIM)
-    );
-    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "┌");
+    assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "╎");
+    assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), "-");
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().border_fg());
     assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
     assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
-    assert!(
-        !buffer
-            .cell((3, 0))
-            .unwrap()
-            .modifier
-            .contains(Modifier::DIM)
-    );
     assert_ne!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
 }
 
 #[test]
-fn focused_disabled_text_input_uses_local_cursor_focus() {
+fn focused_disabled_text_input_uses_dimmed_highlight_without_cursor() {
     let input = TextInput::<()>::new()
         .value("locked")
         .panel("Name")
@@ -1216,11 +1207,12 @@ fn focused_disabled_text_input_uses_local_cursor_focus() {
         .expect("input should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
-    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
-    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
-    assert_ne!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
-    assert_eq!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().highlight_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().bg, disabled_input_background());
+    assert_eq!(buffer.cell((7, 1)).unwrap().bg, disabled_input_background());
+    assert_ne!(buffer.cell((7, 1)).unwrap().modifier, Modifier::REVERSED);
 }
 
 fn line_text(line: &Line<'_>) -> String {

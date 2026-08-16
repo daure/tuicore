@@ -13,9 +13,9 @@ use crate::event::{
 use crate::hotkey::normalize_hotkey;
 use crate::theme;
 use crate::{
-    EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, HotkeyLabelMode, KeySpec, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, Notification, TuiNode, hotkey_label_spans,
-    hotkey_underline_style, line_width,
+    BorderKind, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, HotkeyLabelMode, KeySpec,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, Notification, TuiNode,
+    hotkey_label_spans, hotkey_underline_style, line_width,
 };
 
 use super::Panel;
@@ -371,7 +371,7 @@ impl<M> TextInput<M> {
     }
 
     fn cursor_visible(&self) -> bool {
-        self.focused && (self.insert_mode || self.disabled)
+        self.focused && self.insert_mode && !self.disabled
     }
 
     pub fn style(mut self, chrome: InputChrome) -> Self {
@@ -394,6 +394,9 @@ impl<M> TextInput<M> {
             InputChrome::Plain => Panel::new(),
             InputChrome::Panel(panel) => panel.panel_badge(self.focused, self.display_hotkey()),
         };
+        if self.disabled {
+            panel = panel.border(BorderKind::AsciiDashed);
+        }
         panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
         self.panel = panel;
     }
@@ -525,10 +528,12 @@ impl<M> TextInput<M> {
             return true;
         }
 
-        self.insert_mode = true;
-        self.cursor_fade.reset();
-        ctx.request_layout();
-        ctx.request_redraw();
+        if !self.disabled {
+            self.insert_mode = true;
+            self.cursor_fade.reset();
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
         ctx.stop_propagation();
         true
     }
@@ -556,7 +561,7 @@ impl<M> TextInput<M> {
     }
 
     pub(crate) fn set_insert_mode(&mut self, insert_mode: bool) {
-        self.insert_mode = insert_mode;
+        self.insert_mode = insert_mode && !self.disabled;
         self.cursor_fade.reset();
     }
 
@@ -770,15 +775,8 @@ impl<M> TextInput<M> {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let outer_area = area;
         let area = self.render_chrome(frame, area);
         self.render_with_style(frame, area, Style::default());
-        if self.disabled {
-            dim_buffer_area(frame, outer_area, theme().subtle_fg());
-            if self.is_panel_mode() {
-                restore_disabled_chrome_labels(frame, outer_area, theme().muted_fg());
-            }
-        }
     }
 
     fn content_area(&self, area: Rect) -> Rect {
@@ -810,8 +808,12 @@ impl<M> TextInput<M> {
         if area.is_empty() {
             return;
         }
-        let style = if self.focused && !self.insert_mode && !self.disabled {
-            selected_input_style(style)
+        let style = if self.focused && !self.insert_mode {
+            if self.disabled {
+                disabled_input_style(style)
+            } else {
+                selected_input_style(style)
+            }
         } else {
             style
         };
@@ -828,24 +830,36 @@ impl<M> TextInput<M> {
         }
 
         let theme = theme();
-        let selected = self.focused && !self.insert_mode && !self.disabled;
+        let selected = self.focused && !self.insert_mode;
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
             theme.subtle_fg()
         });
         let value_style = if selected {
-            selected_input_style(value_style)
+            if self.disabled {
+                disabled_input_style(value_style)
+            } else {
+                selected_input_style(value_style)
+            }
         } else {
             value_style
         };
         let placeholder_style = if selected {
-            selected_input_style(Style::default().fg(theme.muted_fg()))
+            if self.disabled {
+                disabled_input_style(Style::default().fg(theme.muted_fg()))
+            } else {
+                selected_input_style(Style::default().fg(theme.muted_fg()))
+            }
         } else {
             Style::default().fg(theme.muted_fg())
         };
         let hotkey_style = if selected {
-            selected_input_style(Style::default())
+            if self.disabled {
+                disabled_input_style(Style::default())
+            } else {
+                selected_input_style(Style::default())
+            }
         } else {
             Style::default().fg(theme.muted_fg())
         };
@@ -1513,40 +1527,15 @@ impl<M> TuiNode<M> for TextInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.disabled && self.insert_mode {
+            self.insert_mode = false;
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
+        if (self.disabled || !self.insert_mode) && focus_navigation_key(*key) {
+            return EventOutcome::Ignored;
+        }
         if self.disabled {
-            if !self.insert_mode && control_enter_key(*key) {
-                return EventOutcome::Ignored;
-            }
-            if self.external_editor_key_matches(*key) {
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
-            if self.insert_mode && matches_any(&self.keys.cancel, *key) {
-                self.insert_mode = false;
-                self.cursor_fade.reset();
-                ctx.request_layout();
-                ctx.request_redraw();
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
-            let outcome = self.on_key(*key);
-            if outcome.submitted
-                && self.focused
-                && let Some(on_submit) = &self.on_submit
-            {
-                ctx.emit(on_submit(self.value.clone()));
-            }
-            if outcome.submitted {
-                self.insert_mode = !self.insert_mode;
-                ctx.request_layout();
-            }
-            if outcome.needs_redraw() {
-                ctx.request_redraw();
-            }
-            if outcome.handled {
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
             return EventOutcome::Ignored;
         }
         if self.external_editor_key_matches(*key) {
@@ -1577,9 +1566,6 @@ impl<M> TuiNode<M> for TextInput<M> {
             }
         }
         if !self.insert_mode {
-            if focus_navigation_key(*key) {
-                return EventOutcome::Ignored;
-            }
             if inactive_activation_key_matches(&self.keys.submit, *key) {
                 if self.focused
                     && let Some(on_submit) = &self.on_submit
@@ -1880,49 +1866,18 @@ pub(crate) fn selected_input_style(style: Style) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-pub(crate) fn dim_buffer_area(frame: &mut Frame, area: Rect, color: Color) {
-    let area = area.intersection(frame.area());
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            let cell = frame
-                .buffer_mut()
-                .cell_mut((x, y))
-                .expect("coordinates are inside the frame");
-            cell.set_fg(color);
-            cell.modifier.insert(Modifier::DIM);
-        }
+pub(crate) fn disabled_input_background() -> Color {
+    match theme().highlight_bg() {
+        Color::Rgb(red, green, blue) => Color::Rgb(red / 2, green / 2, blue / 2),
+        color => color,
     }
 }
 
-pub(crate) fn restore_disabled_chrome_labels(frame: &mut Frame, area: Rect, color: Color) {
-    let area = area.intersection(frame.area());
-    if area.is_empty() {
-        return;
-    }
-    for x in area.x..area.right() {
-        restore_disabled_chrome_label_cell(frame, x, area.y, color);
-        if area.height > 1 {
-            restore_disabled_chrome_label_cell(frame, x, area.bottom() - 1, color);
-        }
-    }
-    for y in area.y.saturating_add(1)..area.bottom().saturating_sub(1) {
-        restore_disabled_chrome_label_cell(frame, area.x, y, color);
-        if area.width > 1 {
-            restore_disabled_chrome_label_cell(frame, area.right() - 1, y, color);
-        }
-    }
-}
-
-fn restore_disabled_chrome_label_cell(frame: &mut Frame, x: u16, y: u16, color: Color) {
-    let cell = frame
-        .buffer_mut()
-        .cell_mut((x, y))
-        .expect("coordinates are inside the frame");
-    if !cell.symbol().chars().any(char::is_alphanumeric) {
-        return;
-    }
-    cell.set_fg(color);
-    cell.modifier.remove(Modifier::DIM);
+pub(crate) fn disabled_input_style(style: Style) -> Style {
+    style
+        .fg(theme().highlight_fg())
+        .bg(disabled_input_background())
+        .add_modifier(Modifier::BOLD)
 }
 
 pub(crate) fn focus_navigation_key(key: KeyEvent) -> bool {

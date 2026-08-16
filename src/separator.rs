@@ -235,7 +235,7 @@ fn draw_line(frame: &mut Frame, rect: Rect, symbol: &str, style: Style) {
 
 pub(crate) fn cross(kind: BorderKind) -> &'static str {
     match kind {
-        BorderKind::Plain | BorderKind::Rounded => "┼",
+        BorderKind::Plain | BorderKind::Rounded | BorderKind::AsciiDashed => "┼",
         BorderKind::Double => "╬",
         BorderKind::Thick => "╋",
     }

@@ -16,17 +16,17 @@ use crate::event::{
 };
 use crate::hotkey::normalize_hotkey;
 use crate::{
-    AxisProposal, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec, LayoutCtx,
-    LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, ThemeName, TuiNode, line_width,
+    AxisProposal, BorderKind, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec,
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, ThemeName, TuiNode,
+    line_width,
 };
 use crate::{ScrollAxes, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui::keybindings};
 
 use super::syntax_highlighter::highlight_text;
 use super::text_input::{
-    CursorFade, InputChrome, InputOutcome, append_unfocused_hotkey, cell_width, dim_buffer_area,
-    display_char, focus_navigation_key, label_with_visible_hotkey, placeholder_label,
-    placeholder_line, restore_disabled_chrome_labels, selected_input_style, text_char,
-    visible_start_for_cursor,
+    CursorFade, InputChrome, InputOutcome, append_unfocused_hotkey, cell_width,
+    disabled_input_style, display_char, focus_navigation_key, label_with_visible_hotkey,
+    placeholder_label, placeholder_line, selected_input_style, text_char, visible_start_for_cursor,
 };
 use super::{Language, Panel};
 
@@ -240,7 +240,7 @@ impl<M> TextareaInput<M> {
     }
 
     fn cursor_visible(&self) -> bool {
-        self.focused && (self.insert_mode || self.disabled)
+        self.focused && self.insert_mode && !self.disabled
     }
 
     pub fn style(mut self, chrome: InputChrome) -> Self {
@@ -263,6 +263,9 @@ impl<M> TextareaInput<M> {
             InputChrome::Plain => Panel::new(),
             InputChrome::Panel(panel) => panel.panel_badge(self.focused, self.display_hotkey()),
         };
+        if self.disabled {
+            panel = panel.border(BorderKind::AsciiDashed);
+        }
         panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
         self.panel = panel;
     }
@@ -411,11 +414,13 @@ impl<M> TextareaInput<M> {
             return true;
         }
 
-        self.begin_insert_mode();
-        self.scroll_cursor_into_view(disabled_animation_settings());
-        self.cursor_fade.reset();
-        ctx.request_layout();
-        ctx.request_redraw();
+        if !self.disabled {
+            self.begin_insert_mode();
+            self.scroll_cursor_into_view(disabled_animation_settings());
+            self.cursor_fade.reset();
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
         ctx.stop_propagation();
         true
     }
@@ -439,7 +444,7 @@ impl<M> TextareaInput<M> {
     }
 
     pub fn set_insert_mode(&mut self, insert_mode: bool) {
-        self.insert_mode = insert_mode;
+        self.insert_mode = insert_mode && !self.disabled;
         self.cursor_fade.reset();
     }
 
@@ -569,6 +574,10 @@ impl<M> TextareaInput<M> {
         self.invalidate_syntax_cache();
         self.clamp_lines();
         self.cursor = self.cursor.min(self.len_chars());
+    }
+
+    pub fn move_cursor_to_end(&mut self) {
+        self.cursor = self.len_chars();
     }
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> InputOutcome {
@@ -713,14 +722,10 @@ impl<M> TextareaInput<M> {
             return;
         }
 
-        let outer_area = Rect::new(
-            area.x,
-            area.y,
-            area.width,
-            self.visible_outer_height(area.width, area.height),
-        );
-        let navigation_focused = self.focused && !self.insert_mode && !self.disabled;
-        let style = if navigation_focused && self.language.is_some() {
+        let navigation_focused = self.focused && !self.insert_mode;
+        let style = if navigation_focused && self.disabled {
+            disabled_input_style(Style::default())
+        } else if navigation_focused && self.language.is_some() {
             syntax_navigation_focus_style(Style::default())
         } else if navigation_focused {
             selected_input_style(Style::default())
@@ -740,12 +745,6 @@ impl<M> TextareaInput<M> {
         );
         self.scroll
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
-        if self.disabled {
-            dim_buffer_area(frame, outer_area, theme().subtle_fg());
-            if self.is_panel_mode() {
-                restore_disabled_chrome_labels(frame, outer_area, theme().muted_fg());
-            }
-        }
     }
 
     fn content_area(&self, area: Rect) -> Rect {
@@ -809,8 +808,10 @@ impl<M> TextareaInput<M> {
         }
 
         let theme = theme();
-        let selected = self.focused && !self.insert_mode && !self.disabled;
-        let placeholder_style = if selected && self.language.is_some() {
+        let selected = self.focused && !self.insert_mode;
+        let placeholder_style = if selected && self.disabled {
+            disabled_input_style(Style::default().fg(theme.muted_fg()))
+        } else if selected && self.language.is_some() {
             syntax_navigation_focus_style(Style::default().fg(theme.muted_fg()))
         } else if selected {
             selected_input_style(Style::default().fg(theme.muted_fg()))
@@ -872,21 +873,25 @@ impl<M> TextareaInput<M> {
     ) -> VisibleLines {
         let theme = theme();
         let theme_name = theme.name();
-        let selected = self.focused && !self.insert_mode && !self.disabled;
+        let selected = self.focused && !self.insert_mode;
         let syntax_navigation_focused = selected && self.language.is_some();
         let value_style = Style::default().fg(if self.focused {
             theme.text_fg()
         } else {
             theme.subtle_fg()
         });
-        let value_style = if syntax_navigation_focused {
+        let value_style = if selected && self.disabled {
+            disabled_input_style(value_style)
+        } else if syntax_navigation_focused {
             syntax_navigation_focus_style(value_style)
         } else if selected {
             selected_input_style(value_style)
         } else {
             value_style
         };
-        let hotkey_style = if syntax_navigation_focused {
+        let hotkey_style = if selected && self.disabled {
+            disabled_input_style(Style::default())
+        } else if syntax_navigation_focused {
             syntax_navigation_focus_style(Style::default().fg(theme.muted_fg()))
         } else if selected {
             selected_input_style(Style::default())
@@ -1860,10 +1865,15 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.disabled && self.insert_mode {
+            self.insert_mode = false;
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
         if self.scroll_navigation_key(*key) && self.handle_scroll_key(*key, ctx) {
             return EventOutcome::Handled;
         }
-        if !self.insert_mode {
+        if self.disabled || !self.insert_mode {
             let bindings = keybindings();
             let focus = bindings.focus();
             if focus_navigation_key(*key)
@@ -1877,37 +1887,6 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         if self.disabled {
-            if self.external_editor_key_matches(*key) {
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
-            if self.insert_mode && matches_any(&self.keys.cancel, *key) {
-                self.insert_mode = false;
-                self.cursor_fade.reset();
-                ctx.request_layout();
-                ctx.request_redraw();
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
-            let outcome = self.on_key(*key);
-            if outcome.submitted
-                && self.focused
-                && let Some(on_submit) = &self.on_submit
-            {
-                ctx.emit(on_submit(self.value.clone()));
-            }
-            if outcome.submitted {
-                self.insert_mode = !self.insert_mode;
-                ctx.request_layout();
-            }
-            let scrolled = self.scroll_cursor_into_view(disabled_animation_settings());
-            if outcome.needs_redraw() || scrolled {
-                ctx.request_redraw();
-            }
-            if outcome.handled {
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
             return EventOutcome::Ignored;
         }
         if self.external_editor_key_matches(*key) {

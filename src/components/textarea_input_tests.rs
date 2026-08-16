@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::text_input::disabled_input_background;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
 use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
@@ -259,6 +260,35 @@ fn tab_bubbles_for_focus_navigation_before_insert_mode() {
 
     assert_eq!(outcome, EventOutcome::Ignored);
     assert_eq!(input.current_value(), "left");
+    assert_eq!(ctx.propagation(), Propagation::Continue);
+
+    let mut input = TextareaInput::<()>::new()
+        .value("locked")
+        .focused(true)
+        .disabled(true);
+    input.insert_mode = true;
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Tab)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(input.current_value(), "locked");
+    assert_eq!(ctx.propagation(), Propagation::Continue);
+    assert!(!input.insert_mode());
+}
+
+#[test]
+fn disabled_textarea_does_not_enter_insert_mode() {
+    let mut input = TextareaInput::<()>::new()
+        .value("locked")
+        .focused(true)
+        .disabled(true);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert!(!input.insert_mode());
     assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
@@ -1549,7 +1579,7 @@ fn disabled_textarea_allows_horizontal_vertical_and_shortcut_navigation() {
 }
 
 #[test]
-fn disabled_textarea_dims_content_and_panel_border() {
+fn disabled_textarea_uses_dashed_panel_border() {
     let input = TextareaInput::<()>::new()
         .value("locked")
         .panel("Notes")
@@ -1561,35 +1591,17 @@ fn disabled_textarea_dims_content_and_panel_border() {
         .expect("textarea should render");
 
     let buffer = terminal.backend().buffer();
-    assert!(
-        buffer
-            .cell((0, 0))
-            .unwrap()
-            .modifier
-            .contains(Modifier::DIM)
-    );
-    assert!(
-        buffer
-            .cell((1, 1))
-            .unwrap()
-            .modifier
-            .contains(Modifier::DIM)
-    );
-    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "┌");
+    assert_eq!(buffer.cell((0, 1)).unwrap().symbol(), "╎");
+    assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), "-");
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().border_fg());
     assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
     assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
-    assert!(
-        !buffer
-            .cell((3, 0))
-            .unwrap()
-            .modifier
-            .contains(Modifier::DIM)
-    );
     assert_ne!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
 }
 
 #[test]
-fn focused_disabled_textarea_uses_local_cursor_focus() {
+fn focused_disabled_textarea_uses_dimmed_highlight_without_cursor() {
     let mut input = TextareaInput::<()>::new()
         .value("locked")
         .panel("Notes")
@@ -1603,11 +1615,11 @@ fn focused_disabled_textarea_uses_local_cursor_focus() {
         .expect("textarea should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().subtle_fg());
-    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().muted_fg());
-    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().subtle_fg());
-    assert_ne!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
-    assert_eq!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((3, 0)).unwrap().fg, theme().accent_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, theme().highlight_fg());
+    assert_eq!(buffer.cell((1, 1)).unwrap().bg, disabled_input_background());
+    assert_eq!(buffer.cell((7, 1)).unwrap().bg, disabled_input_background());
 }
 
 fn line_text(line: &Line<'_>) -> String {
