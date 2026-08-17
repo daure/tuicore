@@ -14,10 +14,13 @@ use crate::{
 
 const TRIGGER_SLOT: &str = "trigger";
 const MENU_SLOT: &str = "menu";
+const MENU_ARROW_DOWN: &str = "";
+const MENU_ARROW_UP: &str = "";
 
 pub struct MenuButton<Id, M = ()> {
     button: Button<M>,
     menu: Menu<Id>,
+    trigger_label: String,
 }
 
 impl<Id, M> MenuButton<Id, M>
@@ -28,9 +31,13 @@ where
         trigger_label: impl Into<String>,
         items: impl IntoIterator<Item = MenuItem<Id>>,
     ) -> Self {
+        let trigger_label = trigger_label.into();
+        let mut button = Button::new(trigger_label.clone());
+        button.set_trailing_label(MENU_ARROW_DOWN);
         Self {
-            button: Button::new(trigger_label),
+            button,
             menu: Menu::new(items),
+            trigger_label,
         }
     }
 
@@ -47,7 +54,9 @@ where
     }
 
     pub fn set_label(&mut self, label: impl Into<String>) {
-        self.button.set_label(label);
+        self.trigger_label = label.into();
+        self.button.set_label(self.trigger_label.clone());
+        self.sync_trigger_label();
     }
 
     pub fn visible_items(mut self, count: u16) -> Self {
@@ -76,6 +85,15 @@ where
         ChildKey::new(MENU_SLOT)
     }
 
+    fn sync_trigger_label(&mut self) {
+        let arrow = if self.menu.is_open() {
+            MENU_ARROW_UP
+        } else {
+            MENU_ARROW_DOWN
+        };
+        self.button.set_trailing_label(arrow);
+    }
+
     fn dispatch_trigger(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome
     where
         M: 'static,
@@ -83,6 +101,7 @@ where
         let (outcome, pressed) = self.button.dispatch_event_with_press(event, ctx);
         if pressed {
             self.menu.toggle_with_context(ctx);
+            self.sync_trigger_label();
         }
         outcome
     }
@@ -117,7 +136,9 @@ where
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if self.menu.is_open() {
-            self.menu.event(event, ctx)
+            let outcome = self.menu.event(event, ctx);
+            self.sync_trigger_label();
+            outcome
         } else {
             self.dispatch_trigger(event, ctx)
         }
@@ -139,13 +160,16 @@ where
             let (outcome, pressed) = self.button.dispatch_event_with_press(event, ctx);
             if pressed {
                 self.menu.toggle_with_context(ctx);
+                self.sync_trigger_label();
             }
             return outcome;
         }
         let Some(path) = route.path.without_first_if(&Self::menu_key()) else {
             return EventOutcome::Ignored;
         };
-        self.menu.dispatch_event(&EventRoute::new(path), event, ctx)
+        let outcome = self.menu.dispatch_event(&EventRoute::new(path), event, ctx);
+        self.sync_trigger_label();
+        outcome
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
@@ -161,6 +185,7 @@ where
             self.button.dispatch_focus(&target, focused, ctx);
         } else if let Some(target) = target.for_child(&Self::menu_key()) {
             self.menu.dispatch_focus(&target, focused, ctx);
+            self.sync_trigger_label();
         }
     }
 

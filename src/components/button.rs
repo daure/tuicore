@@ -38,6 +38,7 @@ impl ButtonOutcome {
 
 pub struct Button<M = ()> {
     label: String,
+    trailing_label: Option<String>,
     hotkey: Option<String>,
     hotkey_focus_enabled: bool,
     hotkey_label_mode: HotkeyLabelMode,
@@ -57,6 +58,7 @@ impl<M> Button<M> {
         let theme = theme();
         Self {
             label: label.into(),
+            trailing_label: None,
             hotkey: None,
             hotkey_focus_enabled: true,
             hotkey_label_mode: HotkeyLabelMode::PreferMnemonic,
@@ -79,6 +81,10 @@ impl<M> Button<M> {
 
     pub fn set_label(&mut self, label: impl Into<String>) {
         self.label = label.into();
+    }
+
+    pub(super) fn set_trailing_label(&mut self, label: impl Into<String>) {
+        self.trailing_label = Some(label.into());
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -265,6 +271,9 @@ impl<M> Button<M> {
             text_style,
             hotkey_style,
         ));
+        if let Some(label) = &self.trailing_label {
+            spans.push(Span::styled(label.clone(), text_style));
+        }
         spans.push(Span::styled(" ", text_style));
 
         Line::from(spans)
