@@ -1652,7 +1652,7 @@ where
         event: &TuiEvent,
         ctx: &mut EventCtx<M>,
     ) -> EventOutcome {
-        if !route.path.is_empty() {
+        if route.path.keys().len() > 1 {
             return EventOutcome::Ignored;
         }
         self.event(event, ctx)

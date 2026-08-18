@@ -2001,6 +2001,19 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         }
     }
 
+    fn dispatch_event(
+        &mut self,
+        route: &crate::EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if route.path.keys().len() <= 1 {
+            self.event(event, ctx)
+        } else {
+            EventOutcome::Ignored
+        }
+    }
+
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         let was_editing = self.insert_mode;
         self.set_focused(focused);

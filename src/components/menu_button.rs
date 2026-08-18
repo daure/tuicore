@@ -53,6 +53,23 @@ where
         self
     }
 
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.button.set_disabled(disabled);
+        if disabled {
+            self.menu.close();
+        }
+        self.sync_trigger_label();
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.button.is_disabled()
+    }
+
     pub fn set_label(&mut self, label: impl Into<String>) {
         self.trigger_label = label.into();
         self.button.set_label(self.trigger_label.clone());
@@ -318,6 +335,28 @@ mod tests {
         );
         assert_eq!(completed, EventOutcome::Handled);
         assert!(menu_button.is_open());
+    }
+
+    #[test]
+    fn disabled_menu_button_is_skipped_by_focus_and_cannot_open() {
+        let mut menu_button = menu_button("m").disabled(true);
+        let layout = layout(&mut menu_button);
+        let target = &layout.focus_targets()[0];
+
+        assert!(menu_button.is_disabled());
+        assert!(!target.enabled);
+        assert!(!target.tab_stop);
+        assert!(target.hotkey_sequences.is_empty());
+
+        let mut ctx = EventCtx::default();
+        let outcome = menu_button.dispatch_event(
+            &route(TRIGGER_SLOT),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert!(!menu_button.is_open());
     }
 
     #[test]

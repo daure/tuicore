@@ -560,7 +560,7 @@ impl<M> TextInput<M> {
         (self.value.clone(), 1, self.cursor + 1)
     }
 
-    pub(crate) fn set_insert_mode(&mut self, insert_mode: bool) {
+    pub fn set_insert_mode(&mut self, insert_mode: bool) {
         self.insert_mode = insert_mode && !self.disabled;
         self.cursor_fade.reset();
     }
@@ -1620,6 +1620,19 @@ impl<M> TuiNode<M> for TextInput<M> {
         }
     }
 
+    fn dispatch_event(
+        &mut self,
+        route: &crate::EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if route.path.keys().len() <= 1 {
+            self.event(event, ctx)
+        } else {
+            EventOutcome::Ignored
+        }
+    }
+
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         let was_editing = self.insert_mode;
         self.set_focused(focused);
@@ -1782,6 +1795,19 @@ impl<M> TuiNode<M> for PasswordInput<M> {
         if outcome.handled {
             ctx.stop_propagation();
             EventOutcome::Handled
+        } else {
+            EventOutcome::Ignored
+        }
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &crate::EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if route.path.keys().len() <= 1 {
+            self.event(event, ctx)
         } else {
             EventOutcome::Ignored
         }

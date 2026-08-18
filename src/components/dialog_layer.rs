@@ -45,6 +45,7 @@ pub struct DialogLayer<Base, Layer> {
     restore_focus_on_close: bool,
     layer_focus_origin: Option<(TreePath, FocusId)>,
     base_overlays_visible: bool,
+    child_overlays_use_base_bounds: bool,
     initialized: bool,
     mounted: bool,
 }
@@ -205,6 +206,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             restore_focus_on_close: true,
             layer_focus_origin: None,
             base_overlays_visible: false,
+            child_overlays_use_base_bounds: false,
             initialized: false,
             mounted: false,
         }
@@ -323,6 +325,11 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
 
     pub fn base_overlays_visible(mut self, visible: bool) -> Self {
         self.base_overlays_visible = visible;
+        self
+    }
+
+    pub fn child_overlays_use_base_bounds(mut self, enabled: bool) -> Self {
+        self.child_overlays_use_base_bounds = enabled;
         self
     }
 
@@ -508,7 +515,12 @@ where
             ctx.register_overlay(overlay);
 
             ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
-            ctx.with_overlay_bounds(self.layer_rect, |ctx| {
+            let child_overlay_bounds = if self.child_overlays_use_base_bounds {
+                self.base_rect
+            } else {
+                self.layer_rect
+            };
+            ctx.with_overlay_bounds(child_overlay_bounds, |ctx| {
                 ctx.push_slot(ChildKey::second(), self.layer_rect, |ctx| {
                     self.layer.layout(self.layer_rect, ctx);
                 });

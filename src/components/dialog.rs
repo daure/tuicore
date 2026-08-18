@@ -115,7 +115,7 @@ impl<M> Dialog<M> {
             wrap: true,
             scroll: None,
             on_close: None,
-            close_on_unfocus_from_descendants: false,
+            close_on_unfocus_from_descendants: true,
             focused: false,
             border_color: ColorTween::idle(theme.border_fg()),
             title_color: ColorTween::idle(theme.muted_fg()),
@@ -1899,8 +1899,9 @@ mod tests {
     }
 
     #[test]
-    fn escape_from_nested_child_blurs_instead_of_closing_dialog() {
+    fn opt_out_dialog_ignores_unfocus_keys_from_nested_focus_mode() {
         let mut host = Dialog::new()
+            .close_on_unfocus_from_descendants(false)
             .on_close(|reason| reason)
             .host(NestedFocusableBody::new());
         let mut layout = LayoutCtx::new();
@@ -1925,7 +1926,7 @@ mod tests {
     }
 
     #[test]
-    fn opted_in_dialog_closes_from_nested_focus_mode_on_unfocus_keys() {
+    fn dialog_closes_from_nested_focus_mode_on_unfocus_keys_by_default() {
         let keys = [
             KeyEvent::from(Key::Esc),
             KeyEvent {
@@ -1936,7 +1937,6 @@ mod tests {
 
         for key in keys {
             let mut host = Dialog::new()
-                .close_on_unfocus_from_descendants(true)
                 .on_close(|reason| reason)
                 .host(NestedFocusableBody::new());
             let mut layout = LayoutCtx::new();
