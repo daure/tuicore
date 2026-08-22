@@ -84,7 +84,7 @@ where
         if inner.is_empty() {
             return;
         }
-        let mut lines = vec![self.month_day_line(date)];
+        let mut lines = vec![self.date_day_line(date, date.month() != self.cursor.month())];
         let event_capacity = usize::from(inner.height.saturating_sub(1));
         let entries = self.entries_on(date);
         self.append_event_lines(
@@ -158,10 +158,7 @@ where
                 weekday_short(date),
                 Style::default().fg(theme().muted_fg()),
             )),
-            Line::from(Span::styled(
-                format!("{}", date.day()),
-                self.date_style(date, false),
-            )),
+            self.date_day_line(date, false),
         ];
         let event_capacity = usize::from(inner.height.saturating_sub(2));
         let entries = self.entries_on(date);
@@ -390,10 +387,10 @@ where
         }
     }
 
-    fn month_day_line(&self, date: Date) -> Line<'static> {
-        let style = self.date_style(date, date.month() != self.cursor.month());
+    fn date_day_line(&self, date: Date, muted: bool) -> Line<'static> {
+        let style = self.date_style(date, muted);
         let label = date.day().to_string();
-        if !self.month_quick_jump_matches(date) {
+        if !self.quick_jump_matches(date) {
             return Line::from(Span::styled(label, style));
         }
         Line::from(vec![
@@ -405,12 +402,12 @@ where
         ])
     }
 
-    fn month_quick_jump_matches(&self, date: Date) -> bool {
+    fn quick_jump_matches(&self, date: Date) -> bool {
         let Some(digit) = self.quick_jump_digit else {
             return false;
         };
-        date.year() == self.cursor.year()
-            && date.month() == self.cursor.month()
+        (self.view != CalendarView::Month
+            || (date.year() == self.cursor.year() && date.month() == self.cursor.month()))
             && (date.day() == digit || date.day() / 10 == digit)
     }
 

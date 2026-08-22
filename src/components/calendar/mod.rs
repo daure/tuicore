@@ -33,7 +33,7 @@ use crate::{
     TuiNode, animation_settings, preset, theme,
 };
 
-use super::{Column, DataView, Panel};
+use super::{Column, DataView, Panel, SelectionMode};
 
 const CALENDAR_FOCUS: &str = "calendar";
 const MONTH_EVENT_LINES: usize = 2;
@@ -60,6 +60,7 @@ struct CalendarDayRow {
 
 fn day_entry_data_view() -> DataView<CalendarDayRow, usize> {
     DataView::new([], |row: &CalendarDayRow| row.entry_index)
+        .selection_mode(SelectionMode::Single)
         .column(Column::rich(
             "entry",
             "",
@@ -481,7 +482,7 @@ where
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
-        if let Some(outcome) = self.handle_month_quick_jump(key) {
+        if let Some(outcome) = self.handle_date_quick_jump(key) {
             return outcome;
         }
         if matches_key_specs(&self.keybindings.top_prefix, key) {
@@ -635,20 +636,20 @@ where
         self.set_view(view, None)
     }
 
-    fn handle_month_quick_jump(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
-        if self.view != CalendarView::Month {
+    fn handle_date_quick_jump(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
+        if !matches!(self.view, CalendarView::Month | CalendarView::Week) {
             return None;
         }
         if let Some(first) = self.quick_jump_digit {
             if quick_jump_accepts(key) {
                 self.clear_quick_jump();
-                return Some(self.complete_month_quick_jump(first));
+                return Some(self.complete_date_quick_jump(first));
             }
             if let Some(second) = plain_digit(key) {
                 self.clear_quick_jump();
                 let day = first * 10 + second;
                 return Some(if day <= self.cursor.month().length(self.cursor.year()) {
-                    self.complete_month_quick_jump(day)
+                    self.complete_date_quick_jump(day)
                 } else {
                     CalendarOutcome::CHANGED
                 });
@@ -659,21 +660,46 @@ where
         if digit == 0 {
             return Some(CalendarOutcome::HANDLED);
         }
+        if self.view == CalendarView::Week
+            && let Some(date) = self.unique_week_quick_jump_date(digit)
+        {
+            return Some(self.complete_quick_jump_date(date));
+        }
         if digit <= 3 && digit * 10 <= self.cursor.month().length(self.cursor.year()) {
             self.quick_jump_digit = Some(digit);
             self.quick_jump_elapsed = StdDuration::ZERO;
             return Some(CalendarOutcome::CHANGED);
         }
-        Some(self.complete_month_quick_jump(digit))
+        Some(self.complete_date_quick_jump(digit))
     }
 
-    fn complete_month_quick_jump(&mut self, day: u8) -> CalendarOutcome {
+    fn complete_date_quick_jump(&mut self, day: u8) -> CalendarOutcome {
         let date = self
             .cursor
             .replace_day(day)
             .expect("quick-jump day is valid in cursor month");
+        self.complete_quick_jump_date(date)
+    }
+
+    fn complete_quick_jump_date(&mut self, date: Date) -> CalendarOutcome {
         self.set_cursor(date);
-        self.drill_to(CalendarView::Week)
+        self.drill_to(match self.view {
+            CalendarView::Month => CalendarView::Week,
+            CalendarView::Week => CalendarView::Day,
+            CalendarView::Day | CalendarView::EventDetail => {
+                unreachable!("quick jumps only apply to month and week views")
+            }
+        })
+    }
+
+    fn unique_week_quick_jump_date(&self, digit: u8) -> Option<Date> {
+        let (start, _) = week_range(self.cursor, self.first_day_of_week);
+        let mut matches = (0..7)
+            .map(|offset| start + Duration::days(offset))
+            .filter(|date| self.show_weekends || !is_weekend(*date))
+            .filter(|date| date.day() == digit || date.day() / 10 == digit);
+        let date = matches.next()?;
+        matches.next().is_none().then_some(date)
     }
 
     fn clear_quick_jump(&mut self) {
@@ -953,6 +979,9 @@ where
         self.highlighted_entry = index;
         if let Some(index) = index {
             self.day_entries.highlight_id(&index);
+            self.day_entries.select_id(index);
+        } else {
+            self.day_entries.clear_selection();
         }
         self.day_entries.take_events();
         self.push_event(CalendarTypedEvent::EntryHighlighted {
@@ -990,6 +1019,7 @@ where
         self.day_entries.set_focused(self.focused);
         if let Some(index) = self.highlighted_entry {
             self.day_entries.highlight_id(&index);
+            self.day_entries.select_id(index);
         }
         self.day_entries
             .snap_highlight_centered(self.content_area(self.area));

@@ -213,12 +213,64 @@ fn month_quick_jump_underlines_matching_days_in_current_month() {
 }
 
 #[test]
-fn week_view_does_not_quick_jump_on_digits() {
+fn week_quick_jump_waits_for_a_second_digit_then_drills_to_day() {
     let mut calendar = demo_calendar().view(CalendarView::Week);
 
-    assert_eq!(calendar.on_key(Key::Char('1')), CalendarOutcome::IDLE);
+    assert_eq!(calendar.on_key(Key::Char('2')), CalendarOutcome::CHANGED);
     assert_eq!(calendar.cursor_date(), date(2026, Month::June, 22));
     assert_eq!(calendar.current_view(), CalendarView::Week);
+
+    assert_eq!(calendar.on_key(Key::Char('3')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 23));
+    assert_eq!(calendar.current_view(), CalendarView::Day);
+    assert!(
+        calendar
+            .take_events()
+            .contains(&CalendarTypedEvent::DrillDown {
+                from: CalendarView::Week,
+                to: CalendarView::Day,
+            })
+    );
+}
+
+#[test]
+fn week_quick_jump_enter_accepts_a_pending_single_digit() {
+    let mut calendar = demo_calendar().view(CalendarView::Week);
+
+    assert_eq!(calendar.on_key(Key::Char('1')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.on_key(Key::Enter), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 1));
+    assert_eq!(calendar.current_view(), CalendarView::Day);
+}
+
+#[test]
+fn week_quick_jump_commits_a_digit_that_matches_one_day() {
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Week)
+        .cursor(date(2026, Month::June, 1));
+
+    assert_eq!(calendar.on_key(Key::Char('2')), CalendarOutcome::CHANGED);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 2));
+    assert_eq!(calendar.current_view(), CalendarView::Day);
+}
+
+#[test]
+fn week_quick_jump_underlines_matching_day_prefixes() {
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Week)
+        .cursor(date(2026, Month::June, 21));
+    calendar.on_key(Key::Char('2'));
+    let mut terminal = Terminal::new(TestBackend::new(11, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            calendar.render_week_column(frame, frame.area(), date(2026, Month::June, 21));
+        })
+        .expect("week column should render");
+
+    let prefix = terminal.backend().buffer().cell((0, 1)).unwrap();
+    assert_eq!(prefix.symbol(), "2");
+    assert!(prefix.modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]
@@ -447,6 +499,28 @@ fn selected_day_entry_highlight_fills_the_view_width() {
             buffer.cell((x, inner.y)).unwrap().bg,
             crate::theme().highlight_bg(),
             "highlight should fill cell at x={x}"
+        );
+    }
+}
+
+#[test]
+fn selected_day_entry_remains_visually_selected_when_unfocused() {
+    let mut calendar = demo_calendar().view(CalendarView::Day);
+    calendar.set_focused(false);
+    let area = Rect::new(0, 0, 30, 6);
+    let inner = Panel::inner_area(area);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    for x in inner.x..inner.right() {
+        assert_eq!(
+            buffer.cell((x, inner.y)).unwrap().bg,
+            crate::theme().selected_bg(),
+            "selected style should fill cell at x={x}"
         );
     }
 }
