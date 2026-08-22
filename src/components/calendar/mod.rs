@@ -49,6 +49,13 @@ type EventMarkerFn<T> = dyn Fn(&T) -> char;
 type EntryRenderFn<T> = dyn Fn(&T) -> Line<'static>;
 type DetailRenderFn<T> = dyn Fn(&T) -> Text<'static>;
 type EntryOrderFn<T> = dyn Fn(&T, &T) -> Ordering;
+type ReorderGroupFn<T> = dyn Fn(&T, &T) -> bool;
+
+struct CalendarReorderState {
+    moving_entry: usize,
+    staged: Vec<usize>,
+    pending_top_prefix: bool,
+}
 
 #[derive(Clone)]
 struct CalendarDayRow {
@@ -111,6 +118,9 @@ pub struct Calendar<T, Id = String, M = ()> {
     render_entry: Option<Box<EntryRenderFn<T>>>,
     render_detail: Option<Box<DetailRenderFn<T>>>,
     entry_order: Option<Box<EntryOrderFn<T>>>,
+    reorder_group: Option<Box<ReorderGroupFn<T>>>,
+    reordering: Option<CalendarReorderState>,
+    committed_reorder: Option<Vec<usize>>,
     event_detail_on_activate: bool,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
     view: CalendarView,
@@ -151,6 +161,7 @@ pub struct CalendarKeyBindings {
     pub end: Vec<KeySpec>,
     pub top_prefix: Vec<KeySpec>,
     pub bottom: Vec<KeySpec>,
+    pub reorder: Vec<KeySpec>,
 }
 
 impl Default for CalendarKeyBindings {
@@ -185,6 +196,10 @@ impl Default for CalendarKeyBindings {
             end: vec![KeySpec::key(Key::End)],
             top_prefix: vec![KeySpec::plain('g')],
             bottom: vec![KeySpec::shifted('g')],
+            reorder: vec![KeySpec::key_with_modifiers(
+                Key::Char('m'),
+                KeyModifiers::CONTROL,
+            )],
         }
     }
 }
@@ -215,6 +230,11 @@ impl CalendarKeyBindings {
         self.bottom = keys.into_iter().collect();
         self
     }
+
+    pub fn reorder(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.reorder = keys.into_iter().collect();
+        self
+    }
 }
 
 impl<T, Id, M> Calendar<T, Id, M>
@@ -239,6 +259,9 @@ where
             render_entry: None,
             render_detail: None,
             entry_order: None,
+            reorder_group: None,
+            reordering: None,
+            committed_reorder: None,
             event_detail_on_activate: false,
             on_event: None,
             view: CalendarView::Month,
@@ -396,6 +419,11 @@ where
         self
     }
 
+    pub fn reorderable(mut self, group: impl Fn(&T, &T) -> bool + 'static) -> Self {
+        self.reorder_group = Some(Box::new(group));
+        self
+    }
+
     pub fn event_detail_on_activate(mut self, enabled: bool) -> Self {
         self.set_event_detail_on_activate(enabled);
         self
@@ -430,6 +458,9 @@ where
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
+        self.committed_reorder = None;
+        self.day_entries.clear_reorder_highlight_immediately();
+        self.cancel_reorder_immediately();
         let highlighted_id = self.highlighted_entry_id();
         self.entries = entries.into_iter().collect();
         self.highlighted_entry = highlighted_id
@@ -446,6 +477,7 @@ where
         self.focused = focused;
         self.day_entries.set_focused(focused);
         if !focused {
+            self.cancel_reorder_immediately();
             self.pending_top_prefix = false;
             self.clear_quick_jump();
         }
@@ -462,6 +494,10 @@ where
     pub fn highlighted_entry_id(&self) -> Option<Id> {
         self.highlighted_entry
             .map(|index| (self.id)(&self.entries[index]))
+    }
+
+    pub fn is_reordering(&self) -> bool {
+        self.reordering.is_some()
     }
 
     pub fn current_range(&self) -> (Date, Date) {
@@ -482,6 +518,9 @@ where
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
+        if let Some(outcome) = self.handle_reorder_key(key) {
+            return outcome;
+        }
         if let Some(outcome) = self.handle_date_quick_jump(key) {
             return outcome;
         }
@@ -503,6 +542,182 @@ where
             return self.apply_key_action(action);
         }
         CalendarOutcome::IDLE
+    }
+
+    fn handle_reorder_key(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
+        if self.reordering.is_none() {
+            if !matches_key_specs(&self.keybindings.reorder, key)
+                || self.view != CalendarView::Day
+                || self.reorder_group.is_none()
+            {
+                return None;
+            }
+            self.begin_reorder();
+            return Some(CalendarOutcome::HANDLED);
+        }
+
+        let top_prefix = matches_key_specs(&self.keybindings.top_prefix, key);
+        if !top_prefix && let Some(state) = &mut self.reordering {
+            state.pending_top_prefix = false;
+        }
+        let outcome = if matches_key_specs(&self.keybindings.reorder, key)
+            || matches!(key.code, Key::Enter | Key::Char(' '))
+                && key.modifiers == KeyModifiers::NONE
+        {
+            self.commit_reorder()
+        } else if matches!(key.code, Key::Esc)
+            || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
+        {
+            self.cancel_reorder()
+        } else if matches_key_specs(&self.keybindings.up, key) {
+            self.move_reorder(-1)
+        } else if matches_key_specs(&self.keybindings.down, key) {
+            self.move_reorder(1)
+        } else if matches_key_specs(&self.keybindings.page_up, key) {
+            let page = self
+                .day_entries
+                .visible_page_step(self.content_area(self.area));
+            self.move_reorder(-(page as isize))
+        } else if matches_key_specs(&self.keybindings.page_down, key) {
+            let page = self
+                .day_entries
+                .visible_page_step(self.content_area(self.area));
+            self.move_reorder(page as isize)
+        } else if matches_key_specs(&self.keybindings.home, key) {
+            self.move_reorder_to(0)
+        } else if matches_key_specs(&self.keybindings.end, key)
+            || matches_key_specs(&self.keybindings.bottom, key)
+        {
+            self.move_reorder_to(usize::MAX)
+        } else if top_prefix {
+            self.handle_reorder_top_prefix()
+        } else {
+            CalendarOutcome::HANDLED
+        };
+        Some(outcome)
+    }
+
+    fn begin_reorder(&mut self) {
+        let Some(moving_entry) = self.highlighted_entry else {
+            return;
+        };
+        let Some(group) = &self.reorder_group else {
+            return;
+        };
+        let staged = self
+            .entries_on(self.cursor)
+            .into_iter()
+            .filter(|entry| group(&self.entries[moving_entry], &self.entries[*entry]))
+            .collect::<Vec<_>>();
+        if staged.len() < 2 {
+            return;
+        }
+        self.committed_reorder = None;
+        self.day_entries
+            .start_reorder_highlight(moving_entry, animation_settings());
+        self.reordering = Some(CalendarReorderState {
+            moving_entry,
+            staged,
+            pending_top_prefix: false,
+        });
+    }
+
+    fn move_reorder(&mut self, delta: isize) -> CalendarOutcome {
+        let Some(state) = &self.reordering else {
+            return CalendarOutcome::HANDLED;
+        };
+        let Some(index) = state
+            .staged
+            .iter()
+            .position(|entry| *entry == state.moving_entry)
+        else {
+            return CalendarOutcome::HANDLED;
+        };
+        let target = index
+            .saturating_add_signed(delta)
+            .min(state.staged.len().saturating_sub(1));
+        self.move_reorder_to(target)
+    }
+
+    fn move_reorder_to(&mut self, target: usize) -> CalendarOutcome {
+        let Some(state) = &mut self.reordering else {
+            return CalendarOutcome::HANDLED;
+        };
+        let Some(index) = state
+            .staged
+            .iter()
+            .position(|entry| *entry == state.moving_entry)
+        else {
+            return CalendarOutcome::HANDLED;
+        };
+        let target = target.min(state.staged.len().saturating_sub(1));
+        if target == index {
+            return CalendarOutcome::HANDLED;
+        }
+        let moving_entry = state.staged.remove(index);
+        state.staged.insert(target, moving_entry);
+        self.refresh_day_entries();
+        CalendarOutcome::CHANGED
+    }
+
+    fn handle_reorder_top_prefix(&mut self) -> CalendarOutcome {
+        let Some(state) = &mut self.reordering else {
+            return CalendarOutcome::HANDLED;
+        };
+        if !state.pending_top_prefix {
+            state.pending_top_prefix = true;
+            return CalendarOutcome::HANDLED;
+        }
+        state.pending_top_prefix = false;
+        self.move_reorder_to(0)
+    }
+
+    fn commit_reorder(&mut self) -> CalendarOutcome {
+        let Some(state) = self.reordering.take() else {
+            return CalendarOutcome::HANDLED;
+        };
+        self.day_entries
+            .clear_reorder_highlight(animation_settings());
+        let changed = self.default_reorder_scope(&state.moving_entry) != state.staged;
+        self.committed_reorder = changed.then(|| state.staged.clone());
+        self.refresh_day_entries();
+        if changed {
+            self.push_event(CalendarTypedEvent::EntriesReordered {
+                entry_ids: state
+                    .staged
+                    .into_iter()
+                    .map(|entry| (self.id)(&self.entries[entry]))
+                    .collect(),
+            });
+        }
+        CalendarOutcome::CHANGED
+    }
+
+    fn cancel_reorder(&mut self) -> CalendarOutcome {
+        if self.reordering.take().is_none() {
+            return CalendarOutcome::HANDLED;
+        }
+        self.day_entries
+            .clear_reorder_highlight(animation_settings());
+        self.refresh_day_entries();
+        CalendarOutcome::CHANGED
+    }
+
+    fn cancel_reorder_immediately(&mut self) {
+        if self.reordering.take().is_some() {
+            self.day_entries.clear_reorder_highlight_immediately();
+            self.refresh_day_entries();
+        }
+    }
+
+    fn default_reorder_scope(&self, moving_entry: &usize) -> Vec<usize> {
+        let Some(group) = &self.reorder_group else {
+            return Vec::new();
+        };
+        self.sorted_entries_on(self.cursor)
+            .into_iter()
+            .filter(|entry| group(&self.entries[*moving_entry], &self.entries[*entry]))
+            .collect()
     }
 
     fn key_action(&self, key: KeyEvent) -> Option<CalendarKeyAction> {
@@ -999,6 +1214,12 @@ where
     }
 
     fn entries_on(&self, date: Date) -> Vec<usize> {
+        let mut entries = self.sorted_entries_on(date);
+        self.apply_staged_reorder(&mut entries);
+        entries
+    }
+
+    fn sorted_entries_on(&self, date: Date) -> Vec<usize> {
         let mut entries = self
             .entries
             .iter()
@@ -1007,6 +1228,28 @@ where
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| self.compare_entries(*left, *right));
         entries
+    }
+
+    fn apply_staged_reorder(&self, entries: &mut [usize]) {
+        let Some(staged) = self
+            .reordering
+            .as_ref()
+            .map(|state| &state.staged)
+            .or(self.committed_reorder.as_ref())
+        else {
+            return;
+        };
+        let positions = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(position, entry)| staged.contains(entry).then_some(position))
+            .collect::<Vec<_>>();
+        if positions.len() != staged.len() {
+            return;
+        }
+        for (position, entry) in positions.into_iter().zip(staged) {
+            entries[position] = *entry;
+        }
     }
 
     fn refresh_day_entries(&mut self) {

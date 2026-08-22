@@ -224,7 +224,13 @@ where
 
             self.layout_if_pending(flags, focus_manager, layout_engine, dispatcher, terminal)?;
 
-            self.apply_pending_focus(flags, focus_manager, layout_engine, dispatcher);
+            self.apply_pending_focus(
+                flags,
+                focus_manager,
+                layout_engine,
+                dispatcher,
+                Some(terminal),
+            );
 
             self.layout_if_pending(flags, focus_manager, layout_engine, dispatcher, terminal)?;
 
@@ -293,6 +299,9 @@ where
                     .merge(self.terminal_focus_dim.tick(dt, self.animation_settings));
                 let notification_tick = self.notifications.tick(dt, self.animation_settings);
                 apply_tick_results(flags, scheduler, tick, notification_tick);
+                if flags.focus_request.is_none() {
+                    flags.focus_request = self.root.take_pending_focus_request();
+                }
             }
         }
 
@@ -454,6 +463,7 @@ where
         focus_manager: &mut FocusManager,
         layout_engine: &LayoutEngine,
         dispatcher: &mut TreeDispatcher,
+        terminal: Option<&mut TerminalGuard>,
     ) {
         let Some(request) = flags.focus_request.take() else {
             return;
@@ -463,16 +473,31 @@ where
         if let Some(transition) =
             focus_manager.apply_request(&request, layout_engine.focus_targets())
         {
+            let route = transition
+                .current
+                .as_ref()
+                .map(|target| EventRoute::new(target.path.clone()));
             let effects =
                 dispatcher.dispatch_focus(&mut self.root, transition, self.animation_settings);
+            let external_editor = effects.external_editor.clone();
             flags.merge(self.handle_effects(effects));
+            if let (Some(terminal), Some(route), Some(request)) =
+                (terminal, route, external_editor)
+            {
+                self.handle_external_editor(flags, dispatcher, terminal, route, request);
+            }
         } else if let Some(target) = focus_manager.reassert_replaced_focus(
             layout_engine.focus_targets(),
             layout_engine.replaced_subtrees(),
         ) {
+            let route = EventRoute::new(target.path.clone());
             let effects =
                 dispatcher.dispatch_focus_gain(&mut self.root, target, self.animation_settings);
+            let external_editor = effects.external_editor.clone();
             flags.merge(self.handle_effects(effects));
+            if let (Some(terminal), Some(request)) = (terminal, external_editor) {
+                self.handle_external_editor(flags, dispatcher, terminal, route, request);
+            }
         }
     }
 
@@ -632,8 +657,7 @@ where
                 );
                 let external_editor = effects.external_editor.clone();
                 let clipboard = effects.clipboard.clone();
-                let focus_request =
-                    focus_request_from_event(&event, &effects, suppress_global_hotkeys);
+                let focus_request = focus_request_from_event(&event, &effects);
                 let handled = effects.outcome.handled();
                 flags.merge(self.handle_effects(effects));
                 if flags.focus_request.is_none() {
@@ -722,6 +746,7 @@ where
                                     focus_manager,
                                     layout_engine,
                                     dispatcher,
+                                    terminal.as_deref_mut(),
                                 );
                             }
                         }
@@ -803,10 +828,7 @@ where
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
         let external_editor = effects.external_editor.clone();
         let clipboard = effects.clipboard.clone();
-        let suppress_global_hotkeys = focus_manager
-            .current()
-            .is_some_and(|target| target.suppress_global_hotkeys);
-        let focus_request = focus_request_from_event(&event, &effects, suppress_global_hotkeys);
+        let focus_request = focus_request_from_event(&event, &effects);
         flags.merge(self.handle_effects(effects));
         if flags.focus_request.is_none() {
             flags.focus_request = focus_request;
@@ -903,6 +925,7 @@ where
             &mut focus_manager,
             &layout_engine,
             &mut dispatcher,
+            None,
         );
 
         for event in events {
@@ -923,6 +946,7 @@ where
                 &mut focus_manager,
                 &layout_engine,
                 &mut dispatcher,
+                None,
             );
             if flags.wake_animations {
                 scheduler.wake();
@@ -948,6 +972,9 @@ where
                     .merge(self.terminal_focus_dim.tick(dt, self.animation_settings));
                 let notification_tick = self.notifications.tick(dt, self.animation_settings);
                 apply_tick_results(&mut flags, &mut scheduler, tick, notification_tick);
+                if flags.focus_request.is_none() {
+                    flags.focus_request = self.root.take_pending_focus_request();
+                }
             }
         }
 
@@ -1070,7 +1097,7 @@ fn edit_in_external_editor(
             let (line, col) =
                 editor_exit_position(temp_files.pos_path(), request.line, request.col);
             Some(crate::ExternalEditorResponse {
-                value: content,
+                value: strip_editor_terminal_newline(content),
                 line,
                 col,
             })
@@ -1084,6 +1111,14 @@ fn complete_external_editor_response(
     result: std::io::Result<Option<crate::ExternalEditorResponse>>,
 ) -> crate::ExternalEditorResponse {
     result.ok().flatten().unwrap_or(fallback)
+}
+
+fn strip_editor_terminal_newline(content: String) -> String {
+    content
+        .strip_suffix("\r\n")
+        .or_else(|| content.strip_suffix('\n'))
+        .unwrap_or(&content)
+        .to_owned()
 }
 
 fn write_clipboard_osc52(terminal: &mut TerminalGuard, value: &str) -> std::io::Result<()> {
@@ -1303,22 +1338,14 @@ fn editor_exit_position(
 fn focus_request_from_event<M>(
     event: &TuiEvent,
     effects: &DispatchEffects<M>,
-    suppress_global_hotkeys: bool,
 ) -> Option<FocusRequest> {
-    let bindings = keybindings();
-    focus_request_from_event_with_bindings(
-        event,
-        effects,
-        bindings.focus(),
-        suppress_global_hotkeys,
-    )
+    focus_request_from_event_with_bindings(event, effects, keybindings().focus())
 }
 
 fn focus_request_from_event_with_bindings<M>(
     event: &TuiEvent,
     effects: &DispatchEffects<M>,
     focus: &FocusKeyBindings,
-    suppress_global_hotkeys: bool,
 ) -> Option<FocusRequest> {
     if effects.outcome.handled()
         || effects.propagation == Propagation::Stopped
@@ -1336,10 +1363,6 @@ fn focus_request_from_event_with_bindings<M>(
         Some(FocusRequest::Previous)
     } else if focus.unfocus_matches(*key) {
         Some(FocusRequest::Unfocus)
-    } else if !suppress_global_hotkeys && focus.next_control_matches(*key) {
-        Some(FocusRequest::NextControl)
-    } else if !suppress_global_hotkeys && focus.previous_control_matches(*key) {
-        Some(FocusRequest::PreviousControl)
     } else {
         None
     }
@@ -2400,6 +2423,7 @@ mod tests {
             &mut focus_manager,
             &layout_engine,
             &mut dispatcher,
+            None,
         );
 
         assert_eq!(flags.focus_repair, None);
@@ -2744,7 +2768,6 @@ mod tests {
                 &next,
                 &effects(Propagation::Continue),
                 &bindings,
-                false,
             ),
             Some(FocusRequest::Next)
         );
@@ -2753,7 +2776,6 @@ mod tests {
                 &previous,
                 &effects(Propagation::Continue),
                 &bindings,
-                false,
             ),
             Some(FocusRequest::Previous)
         );
@@ -2762,7 +2784,6 @@ mod tests {
                 &esc_unfocus,
                 &effects(Propagation::Continue),
                 &bindings,
-                false,
             ),
             Some(FocusRequest::Unfocus)
         );
@@ -2771,7 +2792,6 @@ mod tests {
                 &ctrl_left_bracket_unfocus,
                 &effects(Propagation::Continue),
                 &bindings,
-                false,
             ),
             Some(FocusRequest::Unfocus)
         );
@@ -2796,7 +2816,6 @@ mod tests {
                 &next,
                 &effects(Propagation::Continue),
                 &bindings,
-                false,
             ),
             Some(FocusRequest::Next)
         );
@@ -2805,7 +2824,6 @@ mod tests {
                 &previous,
                 &effects(Propagation::Continue),
                 &bindings,
-                false,
             ),
             Some(FocusRequest::Previous)
         );
@@ -2821,7 +2839,6 @@ mod tests {
                 &event,
                 &effects(Propagation::Stopped),
                 &bindings,
-                false,
             ),
             None
         );
@@ -2943,70 +2960,31 @@ mod tests {
         effects.propagation = Propagation::Stopped;
 
         assert_eq!(
-            focus_request_from_event_with_bindings(&event, &effects, &bindings, false),
+            focus_request_from_event_with_bindings(&event, &effects, &bindings),
             None
         );
     }
 
     #[test]
-    fn unhandled_control_chords_enqueue_bounded_control_requests() {
-        let bindings = FocusKeyBindings::default();
-        let ctrl = |value| {
-            TuiEvent::Key(KeyEvent {
-                code: Key::Char(value),
-                modifiers: KeyModifiers::CONTROL,
-            })
-        };
-
-        for (key, request) in [
-            ('h', FocusRequest::PreviousControl),
-            ('j', FocusRequest::NextControl),
-            ('k', FocusRequest::PreviousControl),
-            ('l', FocusRequest::NextControl),
-        ] {
-            assert_eq!(
-                focus_request_from_event_with_bindings(
-                    &ctrl(key),
-                    &effects(Propagation::Continue),
-                    &bindings,
-                    false,
-                ),
-                Some(request)
-            );
-        }
-    }
-
-    #[test]
-    fn suppressed_focus_target_blocks_control_chord_fallback() {
-        let bindings = FocusKeyBindings::default();
-        let event = TuiEvent::Key(KeyEvent {
-            code: Key::Char('j'),
-            modifiers: KeyModifiers::CONTROL,
-        });
-
+    fn terminal_editor_newline_is_not_returned_as_an_empty_line() {
+        assert_eq!(strip_editor_terminal_newline("edited\n".into()), "edited");
+        assert_eq!(strip_editor_terminal_newline("edited\r\n".into()), "edited");
         assert_eq!(
-            focus_request_from_event_with_bindings(
-                &event,
-                &effects(Propagation::Continue),
-                &bindings,
-                true,
-            ),
-            None
+            strip_editor_terminal_newline("edited\n\n".into()),
+            "edited\n"
         );
     }
 
     #[test]
-    fn explicit_focus_request_wins_over_control_chord_fallback() {
+    #[test]
+    fn explicit_focus_request_wins_over_tab_traversal() {
         let bindings = FocusKeyBindings::default();
-        let event = TuiEvent::Key(KeyEvent {
-            code: Key::Char('j'),
-            modifiers: KeyModifiers::CONTROL,
-        });
+        let event = TuiEvent::Key(KeyEvent::from(Key::Tab));
         let mut effects = effects(Propagation::Continue);
         effects.focus_request = Some(FocusRequest::Unfocus);
 
         assert_eq!(
-            focus_request_from_event_with_bindings(&event, &effects, &bindings, false),
+            focus_request_from_event_with_bindings(&event, &effects, &bindings),
             None
         );
     }

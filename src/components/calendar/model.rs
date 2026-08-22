@@ -45,6 +45,9 @@ pub enum CalendarTypedEvent<Id> {
     EntryActivated {
         entry_id: Id,
     },
+    EntriesReordered {
+        entry_ids: Vec<Id>,
+    },
     DrillDown {
         from: CalendarView,
         to: CalendarView,

@@ -88,7 +88,7 @@ impl TreeDispatcher {
             focus_repair: None,
             propagation: Propagation::Continue,
             clear: false,
-            external_editor: None,
+            external_editor: ctx.take_external_editor_request(),
             clipboard: None,
             notifications: Vec::new(),
         }
@@ -237,6 +237,9 @@ mod tests {
         animation_enabled: Option<bool>,
     }
 
+    #[derive(Default)]
+    struct ExternalEditorFocusLeaf;
+
     impl TuiNode<&'static str> for FocusContainer {
         fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
             LayoutResult::new(area)
@@ -263,6 +266,20 @@ mod tests {
 
         fn focus(&mut self, _target: Option<&FocusId>, _focused: bool, ctx: &mut FocusCtx<()>) {
             self.animation_enabled = Some(ctx.animation().enabled);
+        }
+    }
+
+    impl TuiNode<()> for ExternalEditorFocusLeaf {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+
+        fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<()>) {
+            if focused {
+                ctx.request_external_editor_with_extension("draft", 1, 2, "md");
+            }
         }
     }
 
@@ -360,5 +377,39 @@ mod tests {
         dispatcher.dispatch_focus(&mut root, transition, settings);
 
         assert_eq!(root.animation_enabled, Some(false));
+    }
+
+    #[test]
+    fn dispatcher_forwards_external_editor_requests_from_focus() {
+        let mut root = ExternalEditorFocusLeaf;
+        let transition = FocusTransition {
+            previous: None,
+            current: Some(FocusTarget {
+                id: FocusId::new("input"),
+                path: TreePath::new(),
+                area: Rect::default(),
+                enabled: true,
+                tab_stop: true,
+                control: false,
+                hotkey: None,
+                hotkeys: Vec::new(),
+                hotkey_sequences: Vec::new(),
+                suppress_global_hotkeys: false,
+                focused_events_before_global_hotkeys: false,
+            }),
+        };
+        let mut dispatcher = TreeDispatcher::new();
+
+        let effects =
+            dispatcher.dispatch_focus(&mut root, transition, AnimationSettings::default());
+
+        assert!(matches!(
+            effects.external_editor,
+            Some(request)
+                if request.value == "draft"
+                    && request.line == 1
+                    && request.col == 2
+                    && request.file_extension.as_deref() == Some("md")
+        ));
     }
 }

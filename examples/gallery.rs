@@ -3897,6 +3897,9 @@ fn calendar_event_status(event: CalendarTypedEvent<&'static str>) -> String {
             format!("highlight {}", entry_id.unwrap_or("none"))
         }
         CalendarTypedEvent::EntryActivated { entry_id } => format!("activated {entry_id}"),
+        CalendarTypedEvent::EntriesReordered { entry_ids } => {
+            format!("reordered {entry_ids:?}")
+        }
         CalendarTypedEvent::DrillDown { from, to } => format!("drill {from:?}->{to:?}"),
         CalendarTypedEvent::Back { from, to } => format!("back {from:?}->{to:?}"),
     }

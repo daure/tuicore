@@ -228,6 +228,10 @@ pub(crate) fn highlight_text(
     language: Language,
     theme_name: ThemeName,
 ) -> Text<'static> {
+    let append_terminal_newline = language == Language::Markdown && !code.ends_with('\n');
+    let source = append_terminal_newline
+        .then(|| format!("{code}\n"))
+        .unwrap_or_else(|| code.to_owned());
     let lumis_theme_name = match theme_name {
         ThemeName::Amoled => "matte_black",
         ThemeName::Aura => "aura_dark",
@@ -277,9 +281,14 @@ pub(crate) fn highlight_text(
         .unwrap();
 
     let mut output = Vec::new();
-    if formatter.format(code, &mut output).is_ok() {
+    if formatter.format(&source, &mut output).is_ok() {
         if let Ok(ansi_str) = String::from_utf8(output) {
             if let Ok(mut text) = ansi_str.into_text() {
+                if append_terminal_newline
+                    && text.lines.last().is_some_and(|line| line.spans.is_empty())
+                {
+                    text.lines.pop();
+                }
                 for line in &mut text.lines {
                     for span in &mut line.spans {
                         if span.style.bg == Some(ratatui::style::Color::Reset) {

@@ -113,16 +113,6 @@ impl FocusManager {
             FocusRequest::Previous => {
                 self.set_current(self.previous_target(targets), targets, true)
             }
-            FocusRequest::NextControl => self.set_current_if_found(
-                self.adjacent_control_target(targets, true),
-                targets,
-                false,
-            ),
-            FocusRequest::PreviousControl => self.set_current_if_found(
-                self.adjacent_control_target(targets, false),
-                targets,
-                false,
-            ),
             FocusRequest::Unfocus => {
                 self.set_current_if_found(self.parent_target(targets), targets, false)
             }
@@ -251,27 +241,6 @@ impl FocusManager {
         } else {
             Some(traversal[0].clone())
         }
-    }
-
-    fn adjacent_control_target(
-        &self,
-        targets: &[FocusTarget],
-        forward: bool,
-    ) -> Option<FocusTarget> {
-        let current = self.current.as_ref()?;
-        let tab_stops = targets
-            .iter()
-            .filter(|target| target.enabled && target.tab_stop)
-            .collect::<Vec<_>>();
-        let index = tab_stops
-            .iter()
-            .position(|target| same_focus(target, current))?;
-        let adjacent = if forward {
-            tab_stops.get(index + 1)
-        } else {
-            index.checked_sub(1).and_then(|index| tab_stops.get(index))
-        }?;
-        adjacent.control.then(|| (*adjacent).clone())
     }
 
     fn set_current(
@@ -641,13 +610,6 @@ mod tests {
         FocusTarget { area, ..target(id) }
     }
 
-    fn control_target(id: &str) -> FocusTarget {
-        FocusTarget {
-            control: true,
-            ..target(id)
-        }
-    }
-
     fn target_with_path(id: &str, path: TreePath, area: Rect) -> FocusTarget {
         FocusTarget {
             id: FocusId::new(id),
@@ -673,83 +635,6 @@ mod tests {
         manager.next(&targets);
 
         assert_eq!(manager.current().unwrap().id.as_str(), "two");
-    }
-
-    #[test]
-    fn control_navigation_moves_to_immediately_adjacent_control() {
-        let targets = [control_target("one"), control_target("two")];
-        let mut manager = FocusManager::new();
-        manager.validate(&targets);
-
-        manager.apply_request(&FocusRequest::NextControl, &targets);
-
-        assert_eq!(manager.current().unwrap().id.as_str(), "two");
-    }
-
-    #[test]
-    fn control_navigation_stays_put_before_non_control_and_at_boundary() {
-        let targets = [
-            control_target("one"),
-            target("content"),
-            control_target("two"),
-        ];
-        let mut manager = FocusManager::new();
-        manager.validate(&targets);
-
-        assert!(
-            manager
-                .apply_request(&FocusRequest::NextControl, &targets)
-                .is_none()
-        );
-        assert_eq!(manager.current().unwrap().id.as_str(), "one");
-
-        manager.apply_request(&FocusRequest::Target(FocusId::new("two")), &targets);
-        assert!(
-            manager
-                .apply_request(&FocusRequest::NextControl, &targets)
-                .is_none()
-        );
-        assert_eq!(manager.current().unwrap().id.as_str(), "two");
-    }
-
-    #[test]
-    fn control_navigation_does_not_wrap() {
-        let targets = [control_target("one"), control_target("two")];
-        let mut manager = FocusManager::new();
-        manager.validate(&targets);
-
-        assert!(
-            manager
-                .apply_request(&FocusRequest::PreviousControl, &targets)
-                .is_none()
-        );
-        manager.apply_request(&FocusRequest::Target(FocusId::new("two")), &targets);
-        assert!(
-            manager
-                .apply_request(&FocusRequest::NextControl, &targets)
-                .is_none()
-        );
-        assert_eq!(manager.current().unwrap().id.as_str(), "two");
-    }
-
-    #[test]
-    fn control_navigation_ignores_wrapper_depth_for_adjacent_controls() {
-        let nested_path = TreePath::default()
-            .child(ChildKey::new("container"))
-            .child(ChildKey::new("control"));
-        let mut targets = [
-            target_with_path("nested", nested_path, Rect::default()),
-            control_target("outside"),
-        ];
-        targets[0].control = true;
-        let mut manager = FocusManager::new();
-        manager.validate(&targets);
-
-        manager.apply_request(&FocusRequest::NextControl, &targets);
-        assert_eq!(manager.current().unwrap().id.as_str(), "outside");
-        manager.apply_request(&FocusRequest::Target(FocusId::new("outside")), &targets);
-        manager.apply_request(&FocusRequest::PreviousControl, &targets);
-        assert_eq!(manager.current().unwrap().id.as_str(), "nested");
     }
 
     #[test]

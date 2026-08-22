@@ -805,10 +805,6 @@ where
             } else {
                 return None;
             }
-        } else if crate::keybindings().focus().next_control_matches(key) {
-            ctx.focus_next_control();
-        } else if crate::keybindings().focus().previous_control_matches(key) {
-            ctx.focus_previous_control();
         } else if let Some(changed) = self.handle_quick_tree_move(key) {
             if changed {
                 ctx.request_layout();

@@ -184,6 +184,10 @@ impl ScrollState {
         ScrollOffset::new(self.x.target, self.y.target)
     }
 
+    pub(crate) fn page_step(&self, viewport: ScrollSize) -> usize {
+        self.behavior.page_step(viewport.height)
+    }
+
     pub fn is_active(&self) -> bool {
         self.x.is_active() || self.y.is_active()
     }

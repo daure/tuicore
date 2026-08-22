@@ -1578,10 +1578,7 @@ fn confirmation_opens_without_removing_and_renders_selected_row_details() {
         &mut navigation_ctx,
     );
     assert!(control.is_confirming_remove());
-    assert_ne!(
-        navigation_ctx.focus_request(),
-        Some(&FocusRequest::NextControl)
-    );
+    assert!(navigation_ctx.focus_request().is_none());
 
     let mut layout = LayoutCtx::new();
     control.layout(area, &mut layout);
@@ -1771,75 +1768,6 @@ fn custom_confirmation_bindings_confirm_and_cancel_removal() {
         );
         assert_eq!(control.take_events(), expected_events);
     }
-}
-
-#[test]
-fn browsing_control_navigation_requests_control_specific_focus() {
-    let mut list = control([]);
-    for (character, expected) in [
-        ('j', FocusRequest::NextControl),
-        ('l', FocusRequest::NextControl),
-        ('h', FocusRequest::PreviousControl),
-        ('k', FocusRequest::PreviousControl),
-    ] {
-        let mut ctx = EventCtx::default();
-        list.dispatch_event(
-            &data_route(),
-            &key(Key::Char(character), KeyModifiers::CONTROL),
-            &mut ctx,
-        );
-        assert_eq!(ctx.focus_request(), Some(&expected));
-    }
-
-    list.dispatch_event(&data_route(), &add_key(), &mut EventCtx::default());
-    let mut editing_ctx = EventCtx::default();
-    list.dispatch_event(
-        &input_route(),
-        &key(Key::Char('j'), KeyModifiers::CONTROL),
-        &mut editing_ctx,
-    );
-    assert_ne!(
-        editing_ctx.focus_request(),
-        Some(&FocusRequest::NextControl)
-    );
-}
-
-#[test]
-fn focus_manager_stops_before_non_control_tabbable_between_list_controls() {
-    let mut first = control([]);
-    let mut second = control([]);
-    let mut layout = LayoutCtx::new();
-    layout.push_slot(ChildKey::new("first"), Rect::new(0, 0, 20, 3), |ctx| {
-        first.layout(Rect::new(0, 0, 20, 3), ctx);
-    });
-    layout.push_slot(ChildKey::new("middle"), Rect::new(0, 3, 20, 1), |ctx| {
-        ctx.register_focusable(
-            tuicore::FocusId::new("middle-tab-stop"),
-            Rect::new(0, 3, 20, 1),
-            true,
-        );
-    });
-    layout.push_slot(ChildKey::new("second"), Rect::new(0, 4, 20, 3), |ctx| {
-        second.layout(Rect::new(0, 4, 20, 3), ctx);
-    });
-    let mut focus = FocusManager::new();
-    focus.apply_request(
-        &FocusRequest::TargetAt {
-            path: TreePath::from_keys([ChildKey::new("first"), ChildKey::new("data")]),
-            id: tuicore::FocusId::new("data-view"),
-        },
-        layout.focus_targets(),
-    );
-
-    assert!(
-        focus
-            .apply_request(&FocusRequest::NextControl, layout.focus_targets())
-            .is_none()
-    );
-    assert_eq!(
-        focus.current().expect("first control remains focused").path,
-        TreePath::from_keys([ChildKey::new("first"), ChildKey::new("data")])
-    );
 }
 
 #[test]

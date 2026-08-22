@@ -100,6 +100,14 @@ where
         self.scroll.target_offset()
     }
 
+    pub fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+
     pub fn scroll_by(&mut self, delta: ScrollDelta, settings: AnimationSettings) -> bool {
         let outcome = self.scroll.scroll_by(
             delta,

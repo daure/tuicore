@@ -4,29 +4,6 @@ use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, 
 use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
 
-struct KeyBindingsGuard {
-    previous: crate::KeyBindings,
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-impl KeyBindingsGuard {
-    fn replace(next: crate::KeyBindings) -> Self {
-        let lock = crate::ENV_LOCK.lock().expect("test env lock should lock");
-        let previous = crate::keybindings();
-        crate::set_keybindings(next);
-        Self {
-            previous,
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for KeyBindingsGuard {
-    fn drop(&mut self) {
-        crate::set_keybindings(self.previous.clone());
-    }
-}
-
 fn finish_syntax(input: &mut TextareaInput<()>) -> TickResult {
     for _ in 0..2_000 {
         let result = Animated::tick(input, Duration::ZERO, AnimationSettings::default());
@@ -51,46 +28,6 @@ fn plain_character_bubbles_before_insert_mode() {
 
     assert_eq!(outcome, EventOutcome::Ignored);
     assert_eq!(ctx.propagation(), Propagation::Continue);
-}
-
-#[test]
-fn control_navigation_keys_bubble_before_insert_mode() {
-    let custom_key = KeySpec::key_with_modifiers(Key::Char('n'), KeyModifiers::CONTROL);
-    let bindings = crate::KeyBindings::default()
-        .with_focus_next_control([
-            KeySpec::key_with_modifiers(Key::Char('j'), KeyModifiers::CONTROL),
-            custom_key.clone(),
-        ])
-        .with_focus_previous_control([KeySpec::key_with_modifiers(
-            Key::Char('p'),
-            KeyModifiers::CONTROL,
-        )]);
-    let _guard = KeyBindingsGuard::replace(bindings);
-    let mut keys = TextareaInputKeyBindings::default();
-    keys.insert_newline.push(custom_key);
-    let mut input = TextareaInput::<()>::new().focused(true).keybindings(keys);
-
-    for key in [
-        KeyEvent {
-            code: Key::Char('j'),
-            modifiers: KeyModifiers::CONTROL,
-        },
-        KeyEvent {
-            code: Key::Char('n'),
-            modifiers: KeyModifiers::CONTROL,
-        },
-        KeyEvent {
-            code: Key::Char('p'),
-            modifiers: KeyModifiers::CONTROL,
-        },
-    ] {
-        let mut ctx = EventCtx::<()>::default();
-        let outcome = input.event(&TuiEvent::Key(key), &mut ctx);
-
-        assert_eq!(outcome, EventOutcome::Ignored);
-        assert!(!input.insert_mode);
-        assert_eq!(ctx.propagation(), Propagation::Continue);
-    }
 }
 
 #[test]
@@ -308,6 +245,19 @@ fn textarea_marks_focus_as_text_entry_while_typing() {
     assert_eq!(target.hotkey_sequences, vec!["ds"]);
     assert!(target.suppress_global_hotkeys);
     assert!(target.focused_events_before_global_hotkeys);
+}
+
+#[test]
+fn textarea_can_receive_focused_events_before_global_hotkeys_outside_edit_mode() {
+    let mut input = TextareaInput::<()>::new()
+        .focused(true)
+        .focused_events_before_global_hotkeys(true);
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 10, 1), &mut ctx);
+
+    assert!(ctx.focus_targets()[0].focused_events_before_global_hotkeys);
+    assert!(!input.insert_mode());
 }
 
 #[test]
@@ -711,6 +661,81 @@ fn page_down_uses_scroll_state_when_content_overflows() {
 }
 
 #[test]
+fn ctrl_page_keys_move_the_editing_cursor_with_the_scroll() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour");
+    input.insert_mode = true;
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+
+    let ctrl = |value| KeyEvent {
+        code: Key::Char(value),
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    let mut down = EventCtx::default();
+    assert_eq!(
+        input.event(&TuiEvent::Key(ctrl('d')), &mut down),
+        EventOutcome::Handled
+    );
+    assert_eq!(input.cursor, "one\n".chars().count());
+    assert_eq!(input.scroll.target_offset().y, 1);
+
+    let mut up = EventCtx::default();
+    assert_eq!(
+        input.event(&TuiEvent::Key(ctrl('u')), &mut up),
+        EventOutcome::Handled
+    );
+    assert_eq!(input.cursor, 0);
+    assert_eq!(input.scroll.target_offset().y, 0);
+}
+
+#[test]
+fn ctrl_page_up_moves_editing_cursor_when_scroll_is_already_at_top() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour");
+    input.insert_mode = true;
+    input.cursor = "one\ntwo\nth".chars().count();
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 3), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        input.event(
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(input.cursor, 0);
+    assert_eq!(input.scroll.target_offset().y, 0);
+}
+
+#[test]
+fn ctrl_page_down_moves_editing_cursor_to_the_end_of_the_last_line() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree");
+    input.insert_mode = true;
+    input.cursor = "one\ntw".chars().count();
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        input.event(
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(input.cursor, input.value.chars().count());
+    assert_eq!(input.scroll.target_offset().y, 1);
+}
+
+#[test]
 fn focused_navigation_mode_scrolls_down_one_line_for_j_and_down() {
     for key in [Key::Char('j'), Key::Down] {
         let mut input = TextareaInput::<()>::new()
@@ -1037,6 +1062,25 @@ fn textarea_composes_and_registers_repeatable_action_hotkeys_in_badge_order() {
 }
 
 #[test]
+fn textarea_hotkeys_can_be_reconfigured_without_recreating_the_input() {
+    let mut input = TextareaInput::<()>::new()
+        .hotkey("dd")
+        .editor_hotkey("do")
+        .action_hotkey("ds", |_| ());
+    input.set_hotkey("2");
+    input.set_hotkey_enters_edit(false);
+    input.clear_editor_hotkey();
+    input.clear_action_hotkeys();
+    input.set_hotkey_badge("2");
+    let mut ctx = LayoutCtx::new();
+
+    input.layout(Rect::new(0, 0, 20, 2), &mut ctx);
+
+    assert_eq!(ctx.focus_targets()[0].hotkey_sequences, vec!["2"]);
+    assert_eq!(line_text(&input.visible_lines(20, 1).lines[0]), " |2|");
+}
+
+#[test]
 fn textarea_action_hotkey_emits_current_value_without_entering_insert_mode() {
     let mut input = TextareaInput::new()
         .value("current draft")
@@ -1191,6 +1235,54 @@ fn textarea_highlights_initial_content_without_blocking_layout() {
 
     assert!(input.syntax_cache.is_none());
     assert!(finish_syntax(&mut input).changed);
+}
+
+#[test]
+fn short_markdown_heading_receives_syntax_styles() {
+    let source = "# ewf ewf";
+    let highlighted = highlight_text(source, Language::Markdown, theme().name());
+
+    assert_eq!(highlighted.lines.len(), 1);
+    assert_ne!(syntax_styles(source, &highlighted)[0], Style::default());
+}
+
+#[test]
+fn markdown_edits_request_ticks_for_syntax_refresh() {
+    let mut input = TextareaInput::<()>::new()
+        .value("# Draft")
+        .language(Language::Markdown);
+    finish_syntax(&mut input);
+    input.insert_mode = true;
+    input.move_cursor_to_end();
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('!'))), &mut ctx),
+        EventOutcome::Handled
+    );
+    assert!(ctx.tick_requested());
+}
+
+#[test]
+fn shared_syntax_cache_styles_recreated_textarea_before_first_tick() {
+    let source = "# Shared rebuild cache 6f9c2";
+    let mut original = TextareaInput::<()>::new()
+        .value(source)
+        .shared_syntax_cache(true)
+        .language(Language::Markdown);
+    assert!(finish_syntax(&mut original).changed);
+    let expected = original.visible_lines(40, 1).lines[0].spans[0].style;
+
+    let recreated = TextareaInput::<()>::new()
+        .value(source)
+        .shared_syntax_cache(true)
+        .language(Language::Markdown);
+
+    assert!(recreated.syntax_cache.is_some());
+    assert_eq!(
+        recreated.visible_lines(40, 1).lines[0].spans[0].style,
+        expected
+    );
 }
 
 #[test]
@@ -1495,6 +1587,19 @@ fn disabled_textarea_suppresses_editor_hotkey() {
         "locked |pa|"
     );
     assert!(event.external_editor_request().is_none());
+    assert!(!input.insert_mode());
+}
+
+#[test]
+fn textarea_focus_hotkey_can_skip_insert_mode() {
+    let mut input = TextareaInput::<()>::new()
+        .hotkey("2")
+        .hotkey_enters_edit(false);
+    let mut ctx = EventCtx::default();
+
+    let outcome = input.event(&TuiEvent::Hotkey(HotkeyEvent::Commit("2".into())), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
     assert!(!input.insert_mode());
 }
 

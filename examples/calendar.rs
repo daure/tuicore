@@ -61,6 +61,9 @@ fn event_status(event: &CalendarTypedEvent<u8>) -> String {
         CalendarTypedEvent::DrillDown { from, to } => format!("{from:?} → {to:?}"),
         CalendarTypedEvent::Back { from, to } => format!("{from:?} → {to:?}"),
         CalendarTypedEvent::EntryHighlighted { entry_id } => format!("entry: {entry_id:?}"),
+        CalendarTypedEvent::EntriesReordered { entry_ids } => {
+            format!("reordered: {entry_ids:?}")
+        }
         CalendarTypedEvent::RangeChanged { start, end } => format!("{start} – {end}"),
     }
 }

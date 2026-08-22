@@ -37,6 +37,10 @@ pub trait TuiNode<M = ()> {
         TickResult::IDLE
     }
 
+    fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        None
+    }
+
     fn focus(&mut self, _target: Option<&FocusId>, _focused: bool, _ctx: &mut FocusCtx<M>) {}
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
@@ -93,6 +97,10 @@ where
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.as_mut().tick(dt, settings)
+    }
+
+    fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        self.as_mut().take_pending_focus_request()
     }
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
@@ -251,6 +259,7 @@ pub struct FocusCtx<M> {
     redraw: bool,
     layout: bool,
     animation: AnimationSettings,
+    external_editor: Option<ExternalEditorRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,8 +298,6 @@ pub struct FocusTarget {
 pub enum FocusRequest {
     Next,
     Previous,
-    NextControl,
-    PreviousControl,
     Unfocus,
     FirstChild,
     FirstChildOf { path: TreePath, id: FocusId },
@@ -439,14 +446,6 @@ impl<M> EventCtx<M> {
 
     pub fn focus_previous(&mut self) {
         self.focus(FocusRequest::Previous);
-    }
-
-    pub fn focus_next_control(&mut self) {
-        self.focus(FocusRequest::NextControl);
-    }
-
-    pub fn focus_previous_control(&mut self) {
-        self.focus(FocusRequest::PreviousControl);
     }
 
     pub fn unfocus(&mut self) {
@@ -1294,6 +1293,7 @@ impl<M> FocusCtx<M> {
             redraw: false,
             layout: false,
             animation,
+            external_editor: None,
         }
     }
 
@@ -1311,6 +1311,32 @@ impl<M> FocusCtx<M> {
 
     pub fn request_layout(&mut self) {
         self.layout = true;
+    }
+
+    pub fn request_external_editor(&mut self, value: impl Into<String>, line: usize, col: usize) {
+        self.external_editor = Some(ExternalEditorRequest {
+            value: value.into(),
+            line,
+            col,
+            file_extension: None,
+        });
+        self.redraw = true;
+    }
+
+    pub fn request_external_editor_with_extension(
+        &mut self,
+        value: impl Into<String>,
+        line: usize,
+        col: usize,
+        file_extension: impl Into<String>,
+    ) {
+        self.external_editor = Some(ExternalEditorRequest {
+            value: value.into(),
+            line,
+            col,
+            file_extension: Some(file_extension.into()),
+        });
+        self.redraw = true;
     }
 
     pub fn messages(&self) -> &[M] {
@@ -1335,6 +1361,14 @@ impl<M> FocusCtx<M> {
 
     pub fn animation(&self) -> AnimationSettings {
         self.animation
+    }
+
+    pub fn external_editor_request(&self) -> Option<&ExternalEditorRequest> {
+        self.external_editor.as_ref()
+    }
+
+    pub(crate) fn take_external_editor_request(&mut self) -> Option<ExternalEditorRequest> {
+        self.external_editor.take()
     }
 }
 
