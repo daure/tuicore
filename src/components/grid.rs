@@ -281,13 +281,25 @@ impl<M> TuiNode<M> for Grid<M> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let padding_width = self.padding.left.saturating_add(self.padding.right);
         let padding_height = self.padding.top.saturating_add(self.padding.bottom);
-        let columns = self.measure_tracks(&self.columns, proposal.width, padding_width, true);
-        let rows = self.measure_tracks(&self.rows, proposal.height, padding_height, false);
+        let columns = self.measure_tracks(&self.columns, proposal.width, padding_width, true, None);
+        let min_columns =
+            self.measure_min_tracks(&self.columns, proposal.width, padding_width, true, None);
+        let rows = self.measure_tracks(
+            &self.rows,
+            proposal.height,
+            padding_height,
+            false,
+            Some(&columns),
+        );
         let width = sum_with_gaps(&columns, self.track_spacing(true)).saturating_add(padding_width);
         let height = sum_with_gaps(&rows, self.track_spacing(false)).saturating_add(padding_height);
-        let min_columns =
-            self.measure_min_tracks(&self.columns, proposal.width, padding_width, true);
-        let min_rows = self.measure_min_tracks(&self.rows, proposal.height, padding_height, false);
+        let min_rows = self.measure_min_tracks(
+            &self.rows,
+            proposal.height,
+            padding_height,
+            false,
+            Some(&min_columns),
+        );
         let min_width =
             sum_with_gaps(&min_columns, self.track_spacing(true)).saturating_add(padding_width);
         let min_height =
@@ -312,8 +324,8 @@ impl<M> TuiNode<M> for Grid<M> {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let inner = inner_area(area, self.padding);
-        let columns = self.resolve_tracks(&self.columns, inner.width, true);
-        let rows = self.resolve_tracks(&self.rows, inner.height, false);
+        let columns = self.resolve_tracks(&self.columns, inner.width, true, None);
+        let rows = self.resolve_tracks(&self.rows, inner.height, false, Some(&columns));
         record_track_overflow(
             ctx,
             LayoutAxis::Width,
@@ -564,30 +576,46 @@ impl<M> Grid<M> {
         proposal: AxisProposal,
         padding: u16,
         columns: bool,
+        cross_tracks: Option<&[u16]>,
     ) -> Vec<u16> {
         match proposal {
             AxisProposal::AtMost(available) | AxisProposal::Exact(available) => {
-                self.resolve_tracks(tracks, available.saturating_sub(padding), columns)
+                self.resolve_tracks(
+                    tracks,
+                    available.saturating_sub(padding),
+                    columns,
+                    cross_tracks,
+                )
             }
             AxisProposal::Unbounded => tracks
                 .iter()
                 .enumerate()
                 .map(|(index, track)| match *track {
                     GridTrack::Fixed(size) => size,
-                    GridTrack::FitContent => self.fit_content_track(index, columns, u16::MAX),
+                    GridTrack::FitContent => {
+                        self.fit_content_track(index, columns, u16::MAX, cross_tracks)
+                    }
                     GridTrack::Percent(_) | GridTrack::Fill(_) => 0,
                 })
                 .collect(),
         }
     }
 
-    fn min_fit_content_track(&self, index: usize, columns: bool, available: u16) -> u16 {
+    fn min_fit_content_track(
+        &self,
+        index: usize,
+        columns: bool,
+        available: u16,
+        cross_tracks: Option<&[u16]>,
+    ) -> u16 {
         self.items
             .iter()
             .filter(|child| single_span_on_track(child, index, columns))
             .filter_map(|child| {
-                self.children
-                    .measure_child(&child.key, LayoutProposal::at_most(available, available))
+                self.children.measure_child(
+                    &child.key,
+                    self.track_measure_proposal(child, columns, available, cross_tracks),
+                )
             })
             .map(|hint| {
                 if hint.source == HintSource::LegacyUnmeasured {
@@ -609,6 +637,7 @@ impl<M> Grid<M> {
         proposal: AxisProposal,
         padding: u16,
         columns: bool,
+        cross_tracks: Option<&[u16]>,
     ) -> Vec<u16> {
         let available = match proposal {
             AxisProposal::AtMost(value) | AxisProposal::Exact(value) => {
@@ -621,13 +650,21 @@ impl<M> Grid<M> {
             .enumerate()
             .map(|(index, track)| match *track {
                 GridTrack::Fixed(size) => size,
-                GridTrack::FitContent => self.min_fit_content_track(index, columns, available),
+                GridTrack::FitContent => {
+                    self.min_fit_content_track(index, columns, available, cross_tracks)
+                }
                 GridTrack::Percent(_) | GridTrack::Fill(_) => 0,
             })
             .collect()
     }
 
-    fn resolve_tracks(&self, tracks: &[GridTrack], available: u16, columns: bool) -> Vec<u16> {
+    fn resolve_tracks(
+        &self,
+        tracks: &[GridTrack],
+        available: u16,
+        columns: bool,
+        cross_tracks: Option<&[u16]>,
+    ) -> Vec<u16> {
         let gap = if columns {
             self.column_gap
         } else {
@@ -651,7 +688,8 @@ impl<M> Grid<M> {
                     fill_weight = fill_weight.saturating_add(u32::from(weight))
                 }
                 GridTrack::FitContent => {
-                    lengths[index] = u32::from(self.fit_content_track(index, columns, available));
+                    lengths[index] =
+                        u32::from(self.fit_content_track(index, columns, available, cross_tracks));
                 }
             }
         }
@@ -684,13 +722,21 @@ impl<M> Grid<M> {
         lengths.into_iter().map(clamp_u32_to_u16).collect()
     }
 
-    fn fit_content_track(&self, index: usize, columns: bool, available: u16) -> u16 {
+    fn fit_content_track(
+        &self,
+        index: usize,
+        columns: bool,
+        available: u16,
+        cross_tracks: Option<&[u16]>,
+    ) -> u16 {
         self.items
             .iter()
             .filter(|child| single_span_on_track(child, index, columns))
             .filter_map(|child| {
-                self.children
-                    .measure_child(&child.key, LayoutProposal::at_most(available, available))
+                self.children.measure_child(
+                    &child.key,
+                    self.track_measure_proposal(child, columns, available, cross_tracks),
+                )
             })
             .map(|hint| {
                 if hint.source == HintSource::LegacyUnmeasured {
@@ -704,6 +750,28 @@ impl<M> Grid<M> {
             .max()
             .unwrap_or(0)
             .min(available)
+    }
+
+    fn track_measure_proposal(
+        &self,
+        child: &GridChild,
+        columns: bool,
+        available: u16,
+        cross_tracks: Option<&[u16]>,
+    ) -> LayoutProposal {
+        let width = if columns {
+            available
+        } else {
+            cross_tracks.map_or(available, |tracks| {
+                span_length(
+                    tracks,
+                    child.item.column,
+                    child.item.column_span,
+                    self.track_spacing(true),
+                )
+            })
+        };
+        LayoutProposal::at_most(width, available)
     }
 
     fn calculate_rects(&self, area: Rect, columns: &[u16], rows: &[u16]) -> Vec<(ChildKey, Rect)> {
@@ -945,6 +1013,12 @@ fn sum_span(lengths: &[u16], gap: u16) -> u16 {
     base.saturating_add(total_gap(lengths.len(), gap))
 }
 
+fn span_length(lengths: &[u16], start: usize, span: usize, gap: u16) -> u16 {
+    let start = start.min(lengths.len());
+    let end = start.saturating_add(span).min(lengths.len());
+    sum_span(&lengths[start..end], gap)
+}
+
 fn total_gap(count: usize, gap: u16) -> u16 {
     gap.saturating_mul(count.saturating_sub(1).min(usize::from(u16::MAX)) as u16)
 }
@@ -1042,6 +1116,38 @@ mod tests {
             grid.child_rect(&ChildKey::from("fill")),
             Some(Rect::new(15, 9, 15, 3))
         );
+    }
+
+    #[test]
+    fn grid_measures_fit_content_rows_at_resolved_column_width() {
+        let value = "This note wraps when the grid resolves its fill column.";
+        let expected = crate::TextareaInput::<()>::new()
+            .value(value)
+            .style(crate::InputChrome::panel_chrome(
+                crate::InputPanelChrome::new(),
+            ))
+            .measure(LayoutProposal::at_most(20, u16::MAX))
+            .preferred
+            .height;
+        let grid = Grid::new()
+            .columns([GridTrack::fill(1)])
+            .rows([GridTrack::fit_content()])
+            .child(
+                "note",
+                crate::TextareaInput::<()>::new()
+                    .value(value)
+                    .style(crate::InputChrome::panel_chrome(
+                        crate::InputPanelChrome::new(),
+                    )),
+                GridItem::new(0, 0),
+            );
+
+        let hint = grid.measure(LayoutProposal {
+            width: AxisProposal::AtMost(20),
+            height: AxisProposal::Unbounded,
+        });
+
+        assert_eq!(hint.preferred.height, expected);
     }
 
     #[test]
