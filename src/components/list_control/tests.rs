@@ -97,6 +97,61 @@ fn removing_tree_row_removes_its_complete_subtree() {
     );
 }
 
+#[test]
+fn tree_reorder_inverts_the_moving_row_highlight() {
+    let mut control: ListControl<TreeRow, usize> = ListControl::list(
+        [
+            TreeRow {
+                id: 1,
+                parent: None,
+            },
+            TreeRow {
+                id: 2,
+                parent: Some(1),
+            },
+            TreeRow {
+                id: 3,
+                parent: Some(1),
+            },
+        ],
+        |row: &TreeRow| row.id,
+        |row| row.id.to_string(),
+        |_, _| unreachable!("tree reorder test does not add rows"),
+    )
+    .tree(TreeAdapter::mutable_parent_id(
+        |row: &TreeRow| row.parent,
+        |row, parent| row.parent = parent,
+    ))
+    .expanded([1]);
+    control.data_view_mut().highlight_id(&3);
+    control.data_view_mut().set_focused(true);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut ctx = EventCtx::new(settings);
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+
+    assert_eq!(control.data_view().highlighted_id(), Some(3));
+    assert!(control.data_view().row_has_reorder_highlight(&3));
+
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal should build");
+    terminal
+        .draw(|frame| {
+            control.data_view().render(frame, Rect::new(0, 0, 20, 3));
+        })
+        .expect("tree should render");
+    let cell = terminal.backend().buffer().cell((0, 1)).unwrap();
+    let theme = crate::theme();
+    assert_eq!(cell.fg, theme.highlight_bg());
+    assert_eq!(cell.bg, theme.highlight_fg());
+}
+
 fn layout_adding(control: &mut ListControl<Row, usize>, area: Rect) {
     control.begin_add(None);
     control.layout(area, &mut LayoutCtx::new());

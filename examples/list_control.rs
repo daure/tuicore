@@ -7,8 +7,8 @@ use ratatui::{
 use tuicore::{
     AnimationSettings, Column, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx,
     FocusId, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx,
-    ListControl, ListControlField, RenderCtx, SortDirection, Tab, Tabs, TickResult, TuiEvent,
-    TuiNode,
+    ListControl, ListControlField, RenderCtx, SortDirection, Tab, Tabs, TickResult, TreeAdapter,
+    TuiEvent, TuiNode,
 };
 
 const FIRST: &str = "first";
@@ -18,6 +18,7 @@ const THIRD: &str = "third";
 #[derive(Debug, Clone)]
 pub(crate) struct ListDemoRow {
     pub(crate) id: usize,
+    pub(crate) parent_id: Option<usize>,
     pub(crate) name: String,
     pub(crate) owner: String,
     pub(crate) state: String,
@@ -189,6 +190,10 @@ pub(crate) fn reorder_mode<M: 'static>() -> ListControlShowcase<M> {
         )
 }
 
+pub(crate) fn reorder_mode_tree<M: 'static>() -> ListControlShowcase<M> {
+    showcase([tree_reorder_control()])
+}
+
 pub(crate) fn reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
     reorder_list(
         rows([
@@ -230,6 +235,36 @@ fn short_reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
         "7 items in a 10-row viewport · PageDown from Alpha",
         "ls",
     )
+}
+
+fn tree_reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
+    let tree_rows = vec![
+        tree_row(1, None, "Roadmap"),
+        tree_row(2, Some(1), "Discovery"),
+        tree_row(3, Some(2), "Interview users"),
+        tree_row(4, Some(2), "Map workflows"),
+        tree_row(5, Some(1), "Delivery"),
+        tree_row(6, Some(5), "Build prototype"),
+        tree_row(7, Some(5), "Run validation"),
+        tree_row(8, None, "Operations"),
+        tree_row(9, Some(8), "Monitor rollout"),
+        tree_row(10, Some(8), "Collect feedback"),
+    ];
+    let mut next_id = next_id(&tree_rows);
+    ListControl::list(
+        tree_rows,
+        |row| row.id,
+        |row| row.name.clone(),
+        move |name, _| new_row(&mut next_id, name),
+    )
+    .tree(TreeAdapter::mutable_parent_id(
+        |row: &ListDemoRow| row.parent_id,
+        |row, parent_id| row.parent_id = parent_id,
+    ))
+    .expanded([1, 2, 5, 8])
+    .title("Ctrl+M move · ↑↓ sibling · ←→ reparent · Enter commit · Esc cancel")
+    .hotkey("lrt")
+    .max_rows(12)
 }
 
 fn reorder_list<M: 'static>(
@@ -276,6 +311,7 @@ fn people_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
     .enumerate()
     .map(|(index, (name, surname))| ListDemoRow {
         id: index + 1,
+        parent_id: None,
         name: name.to_string(),
         owner: surname.to_string(),
         state: format!("{name} {surname}"),
@@ -296,6 +332,7 @@ fn people_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
             let owner = values.next().expect("surname exists");
             let row = ListDemoRow {
                 id: next_id,
+                parent_id: None,
                 state: format!("{name} {owner}"),
                 rank: next_id * 10,
                 name,
@@ -396,6 +433,7 @@ fn entity_control<M: 'static>(
             let mut values = values.into_iter();
             let row = ListDemoRow {
                 id: next_id,
+                parent_id: None,
                 name: values.next().expect("entity field exists"),
                 owner: values.next().expect("owner field exists"),
                 state: values.next().expect("state field exists"),
@@ -468,6 +506,7 @@ fn entity_columns() -> [Column<ListDemoRow, usize>; 4] {
 fn new_row(next_id: &mut usize, name: String) -> ListDemoRow {
     let row = ListDemoRow {
         id: *next_id,
+        parent_id: None,
         name,
         owner: "You".to_string(),
         state: "Active".to_string(),
@@ -483,12 +522,24 @@ fn rows<const N: usize>(names: [&str; N]) -> Vec<ListDemoRow> {
         .enumerate()
         .map(|(index, name)| ListDemoRow {
             id: index + 1,
+            parent_id: None,
             name: name.to_string(),
             owner: ["Ada", "Grace", "Linus", "Mina"][index % 4].to_string(),
             state: ["Active", "Ready", "Paused", "Running"][index % 4].to_string(),
             rank: (index + 1) * 10,
         })
         .collect()
+}
+
+fn tree_row(id: usize, parent_id: Option<usize>, name: &str) -> ListDemoRow {
+    ListDemoRow {
+        id,
+        parent_id,
+        name: name.to_string(),
+        owner: "Gallery".to_string(),
+        state: "Ready".to_string(),
+        rank: id * 10,
+    }
 }
 
 fn next_id(rows: &[ListDemoRow]) -> usize {

@@ -58,7 +58,9 @@ use gallery_demo::tabs::{
     modal_tabs_preview_layout, tab_demo_child_key, tab_demo_child_route, tab_demo_index,
     tabs_areas, tabs_demo,
 };
-use list_control::{ListControlShowcase, compact_names, entity_table, reorder_mode};
+use list_control::{
+    ListControlShowcase, compact_names, entity_table, reorder_mode, reorder_mode_tree,
+};
 #[cfg(test)]
 use list_control::{compact_name_controls, entity_controls, reorder_control};
 use ratatui::Frame;
@@ -829,6 +831,7 @@ struct PreviewState {
     list_compact: ListControlShowcase<Msg>,
     list_entity_table: ListControlShowcase<Msg>,
     list_reorder: ListControlShowcase<Msg>,
+    list_reorder_tree: ListControlShowcase<Msg>,
     checklist: ChecklistShowcase,
     panel_top_left: Dropdown<PanelTitleChoice, &'static str>,
     panel_top_right: Dropdown<PanelTitleChoice, &'static str>,
@@ -1060,6 +1063,7 @@ impl PreviewState {
             list_compact: compact_names(),
             list_entity_table: entity_table(),
             list_reorder: reorder_mode(),
+            list_reorder_tree: reorder_mode_tree(),
             checklist: release_checklist(),
             panel_top_left: panel_title_dropdown(PanelTitlePosition::TopLeft),
             panel_top_right: panel_title_dropdown(PanelTitlePosition::TopRight),
@@ -1399,10 +1403,10 @@ impl PreviewState {
             | PreviewKind::DataChecklistTree
             | PreviewKind::DataActivateOnNavigate
             | PreviewKind::DataJiraTickets => self.render_data_view(preview, frame, area),
-            preview @ (PreviewKind::ListCompact | PreviewKind::ListEntityTable) => {
-                self.active_list_control(preview).render(frame, area, ctx);
-            }
-            PreviewKind::ListReorder => {
+            preview @ (PreviewKind::ListCompact
+            | PreviewKind::ListEntityTable
+            | PreviewKind::ListReorder
+            | PreviewKind::ListReorderTree) => {
                 self.active_list_control(preview).render(frame, area, ctx);
             }
             PreviewKind::Checklist => self.checklist.render(frame, area, ctx),
@@ -2187,6 +2191,7 @@ impl PreviewState {
             .merge(self.list_compact.tick(dt, settings))
             .merge(self.list_entity_table.tick(dt, settings))
             .merge(self.list_reorder.tick(dt, settings))
+            .merge(self.list_reorder_tree.tick(dt, settings))
             .merge(self.checklist.tick(dt, settings))
             .merge(Animated::tick(&mut self.panel_demo, dt, settings))
             .merge(self.panel_join_demo.tick(dt, settings))
@@ -2259,6 +2264,7 @@ impl PreviewState {
         self.list_compact.init(ctx);
         self.list_entity_table.init(ctx);
         self.list_reorder.init(ctx);
+        self.list_reorder_tree.init(ctx);
         self.checklist.init(ctx);
         self.menu_button.init(ctx);
         self.diff_side_by_side.init(ctx);
@@ -2276,6 +2282,7 @@ impl PreviewState {
         self.list_compact.mount(ctx);
         self.list_entity_table.mount(ctx);
         self.list_reorder.mount(ctx);
+        self.list_reorder_tree.mount(ctx);
         self.checklist.mount(ctx);
         self.menu_button.mount(ctx);
         self.diff_side_by_side.mount(ctx);
@@ -2296,6 +2303,7 @@ impl PreviewState {
         TuiNode::<Msg>::unmount(&mut self.syntax_highlighting, ctx);
         self.diff_side_by_side.unmount(ctx);
         self.menu_button.unmount(ctx);
+        self.list_reorder_tree.unmount(ctx);
         self.list_reorder.unmount(ctx);
         self.checklist.unmount(ctx);
         self.list_entity_table.unmount(ctx);
@@ -2313,6 +2321,7 @@ impl PreviewState {
         TuiNode::<Msg>::destroy(&mut self.syntax_highlighting, ctx);
         self.diff_side_by_side.destroy(ctx);
         self.menu_button.destroy(ctx);
+        self.list_reorder_tree.destroy(ctx);
         self.list_reorder.destroy(ctx);
         self.checklist.destroy(ctx);
         self.list_entity_table.destroy(ctx);
@@ -2421,6 +2430,7 @@ impl PreviewState {
         match preview {
             PreviewKind::ListEntityTable => &self.list_entity_table,
             PreviewKind::ListReorder => &self.list_reorder,
+            PreviewKind::ListReorderTree => &self.list_reorder_tree,
             _ => &self.list_compact,
         }
     }
@@ -2429,6 +2439,7 @@ impl PreviewState {
         match preview {
             PreviewKind::ListEntityTable => &mut self.list_entity_table,
             PreviewKind::ListReorder => &mut self.list_reorder,
+            PreviewKind::ListReorderTree => &mut self.list_reorder_tree,
             _ => &mut self.list_compact,
         }
     }
@@ -4146,6 +4157,7 @@ enum ComponentKind {
     ListCompact,
     ListEntityTable,
     ListReorder,
+    ListReorderTree,
     Checklist,
     DiffViewer,
     DiffSideBySide,
@@ -4156,7 +4168,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 57] = [
+    const ALL: [Self; 58] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelVariants,
@@ -4207,6 +4219,7 @@ impl ComponentKind {
         Self::ListCompact,
         Self::ListEntityTable,
         Self::ListReorder,
+        Self::ListReorderTree,
         Self::Checklist,
         Self::DiffViewer,
         Self::DiffSideBySide,
@@ -4268,6 +4281,7 @@ impl ComponentKind {
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
             Self::ListReorder => "Reorder mode",
+            Self::ListReorderTree => "Reorder mode tree",
             Self::Checklist => "Checklist",
             Self::DiffViewer => "Diff viewer",
             Self::DiffSideBySide => "Side-by-side / Split",
@@ -4289,9 +4303,10 @@ impl ComponentKind {
             | Self::DataViewChecklistTree
             | Self::DataViewActivateOnNavigate
             | Self::DataViewJiraTickets => Some(Self::DataView),
-            Self::ListCompact | Self::ListEntityTable | Self::ListReorder => {
-                Some(Self::ListControl)
-            }
+            Self::ListCompact
+            | Self::ListEntityTable
+            | Self::ListReorder
+            | Self::ListReorderTree => Some(Self::ListControl),
             Self::Button
             | Self::Chip
             | Self::TagInput
@@ -4371,6 +4386,7 @@ impl ComponentKind {
             Self::ListControl | Self::ListCompact => PreviewKind::ListCompact,
             Self::ListEntityTable => PreviewKind::ListEntityTable,
             Self::ListReorder => PreviewKind::ListReorder,
+            Self::ListReorderTree => PreviewKind::ListReorderTree,
             Self::Checklist => PreviewKind::Checklist,
             Self::DiffViewer | Self::DiffSideBySide => PreviewKind::DiffSideBySide,
             Self::DiffInline => PreviewKind::DiffInline,
@@ -4428,6 +4444,7 @@ enum PreviewKind {
     ListCompact,
     ListEntityTable,
     ListReorder,
+    ListReorderTree,
     Checklist,
     DiffSideBySide,
     DiffInline,
@@ -4484,6 +4501,7 @@ impl PreviewKind {
             Self::ListCompact => "Compact names",
             Self::ListEntityTable => "Entity table",
             Self::ListReorder => "Reorder mode",
+            Self::ListReorderTree => "Reorder mode tree",
             Self::Checklist => "Checklist",
             Self::DiffSideBySide => "Side-by-side / Split",
             Self::DiffInline => "Inline / Unified",
@@ -4511,7 +4529,7 @@ impl PreviewKind {
     fn is_list_control(self) -> bool {
         matches!(
             self,
-            Self::ListCompact | Self::ListEntityTable | Self::ListReorder
+            Self::ListCompact | Self::ListEntityTable | Self::ListReorder | Self::ListReorderTree
         )
     }
 
@@ -4694,6 +4712,52 @@ mod tests {
             control.panel_ref().title_text(PanelTitlePosition::TopLeft),
             Some(guidance)
         );
+    }
+
+    #[test]
+    fn tree_reorder_gallery_animates_the_move_highlight() {
+        let mut state = PreviewState::new();
+        let area = Rect::new(0, 0, 40, 14);
+        state.layout(
+            PreviewKind::ListReorderTree,
+            area,
+            area,
+            &mut LayoutCtx::new(),
+        );
+        let route = EventRoute::new(TreePath::from_keys([
+            ChildKey::new("first"),
+            ChildKey::new("data"),
+        ]));
+        state.dispatch_event(
+            PreviewKind::ListReorderTree,
+            &route,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('m'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut EventCtx::default(),
+        );
+        for _ in 0..5 {
+            state.tick(Duration::from_millis(100), AnimationSettings::default());
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 14)).expect("terminal should build");
+        terminal
+            .draw(|frame| {
+                let mut render_ctx = RenderCtx::new();
+                state.render(PreviewKind::ListReorderTree, frame, area, &mut render_ctx);
+            })
+            .expect("tree reorder gallery should render");
+
+        let cell = (0..area.width)
+            .find_map(|x| {
+                let cell = terminal.backend().buffer().cell((x, 1))?;
+                (cell.symbol() == "R").then_some(cell)
+            })
+            .expect("roadmap row should render");
+        let theme = tuicore::theme();
+        assert_eq!(cell.fg, theme.highlight_bg());
+        assert_eq!(cell.bg, theme.highlight_fg());
     }
 
     #[test]
