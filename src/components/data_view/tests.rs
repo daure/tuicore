@@ -307,6 +307,7 @@ fn reorder_view(rows: impl IntoIterator<Item = ReorderRow>) -> DataView<ReorderR
         Column::text("rank", "Rank", Constraint::Fill(1), |row: &ReorderRow| {
             row.rank.to_string()
         })
+        .search_key(|row| row.id.to_string())
         .filter_key(|row| row.group.to_string())
         .reorderable(|row| row.rank, |row, rank| row.rank = rank),
     );
@@ -330,24 +331,29 @@ fn reorder_rows() -> [ReorderRow; 2] {
 }
 
 #[test]
-fn reorder_rejects_search_and_filters_in_local_and_external_modes() {
-    for mode in [
-        DataViewTransformMode::Local,
-        DataViewTransformMode::External,
-    ] {
-        let mut searched = reorder_view(reorder_rows());
-        searched.set_transform_mode(mode);
-        searched.set_search_query("1");
-        assert_eq!(
-            searched.reorder_snapshot("rank").err(),
-            Some(ReorderUnavailableReason::TransformActive)
-        );
+fn reorder_allows_local_transforms_and_rejects_external_transforms() {
+    let mut searched = reorder_view(reorder_rows());
+    searched.set_search_query("1");
+    assert_eq!(searched.reorder_snapshot("rank").unwrap().ids, vec![1, 2]);
 
-        let mut filtered = reorder_view(reorder_rows());
-        filtered.set_transform_mode(mode);
-        filtered.set_filter("rank", "a");
+    let mut filtered = reorder_view(reorder_rows());
+    filtered.set_filter("rank", "a");
+    assert_eq!(filtered.reorder_snapshot("rank").unwrap().ids, vec![1, 2]);
+
+    let transforms: [fn(&mut DataView<ReorderRow, usize>); 2] = [
+        |view: &mut DataView<ReorderRow, usize>| {
+            view.set_search_query("1");
+        },
+        |view: &mut DataView<ReorderRow, usize>| {
+            view.set_filter("rank", "a");
+        },
+    ];
+    for configure_transform in transforms {
+        let mut view = reorder_view(reorder_rows());
+        view.set_transform_mode(DataViewTransformMode::External);
+        configure_transform(&mut view);
         assert_eq!(
-            filtered.reorder_snapshot("rank").err(),
+            view.reorder_snapshot("rank").err(),
             Some(ReorderUnavailableReason::TransformActive)
         );
     }

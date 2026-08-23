@@ -21,7 +21,9 @@ use crate::{
     LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, ThemeName, TuiNode,
     line_width,
 };
-use crate::{ScrollAxes, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui::keybindings};
+use crate::{
+    ScrollAxes, ScrollDelta, ScrollOffset, ScrollSize, ScrollState, preset, theme, ui::keybindings,
+};
 
 use super::syntax_highlighter::highlight_text;
 use super::text_input::{
@@ -51,6 +53,8 @@ pub struct TextareaInput<M = ()> {
     editor_hotkey: Option<String>,
     action_hotkeys: Vec<(String, Box<dyn Fn(String) -> M>)>,
     cursor: usize,
+    cursor_reset_on_edit: bool,
+    preserve_scroll_position: bool,
     focused: bool,
     insert_mode: bool,
     max_lines: Option<usize>,
@@ -197,6 +201,8 @@ impl<M> TextareaInput<M> {
             editor_hotkey: None,
             action_hotkeys: Vec::new(),
             cursor: 0,
+            cursor_reset_on_edit: true,
+            preserve_scroll_position: false,
             focused: false,
             insert_mode: false,
             max_lines: None,
@@ -457,7 +463,7 @@ impl<M> TextareaInput<M> {
                     if let Some(on_submit) = &self.on_submit {
                         ctx.emit(on_submit(self.value.clone()));
                     }
-                    self.begin_insert_mode();
+                    self.begin_external_editor_mode();
                     ctx.request_layout();
                     ctx.request_redraw();
                 }
@@ -481,8 +487,9 @@ impl<M> TextareaInput<M> {
         }
 
         if !self.disabled && self.hotkey_enters_edit {
-            self.begin_insert_mode();
-            self.scroll_cursor_into_view(disabled_animation_settings());
+            if self.begin_insert_mode() {
+                self.scroll_cursor_into_view(disabled_animation_settings());
+            }
             self.cursor_fade.reset();
             ctx.request_layout();
             ctx.request_redraw();
@@ -510,12 +517,29 @@ impl<M> TextareaInput<M> {
     }
 
     pub fn set_insert_mode(&mut self, insert_mode: bool) {
-        self.insert_mode = insert_mode && !self.disabled;
+        if insert_mode && !self.disabled && !self.insert_mode {
+            self.begin_insert_mode();
+        } else {
+            self.insert_mode = insert_mode && !self.disabled;
+        }
         self.cursor_fade.reset();
     }
 
-    fn begin_insert_mode(&mut self) {
+    fn begin_insert_mode(&mut self) -> bool {
+        let reset_cursor = self.cursor_reset_on_edit;
+        if reset_cursor {
+            self.cursor = 0;
+        }
+        self.cursor_reset_on_edit = false;
+        self.preserve_scroll_position = !reset_cursor;
+        self.insert_mode = true;
+        reset_cursor
+    }
+
+    fn begin_external_editor_mode(&mut self) {
         self.cursor = self.len_chars();
+        self.cursor_reset_on_edit = false;
+        self.preserve_scroll_position = false;
         self.insert_mode = true;
     }
 
@@ -649,11 +673,17 @@ impl<M> TextareaInput<M> {
     }
 
     pub fn set_value(&mut self, value: impl Into<String>) {
-        self.value = value.into();
+        let value = value.into();
+        let changed = self.value != value;
+        self.value = value;
         self.invalidate_syntax_cache();
         self.restore_shared_syntax_cache();
         self.clamp_lines();
         self.cursor = self.cursor.min(self.len_chars());
+        if changed {
+            self.cursor_reset_on_edit = true;
+            self.preserve_scroll_position = false;
+        }
     }
 
     pub fn move_cursor_to_end(&mut self) {
@@ -1547,6 +1577,19 @@ impl<M> TextareaInput<M> {
         bindings.page_up_matches(key) || bindings.page_down_matches(key)
     }
 
+    fn scroll_page_delta(key: KeyEvent, viewport: ScrollSize) -> Option<isize> {
+        let page_step = viewport.height.saturating_mul(70) / 100;
+        let page_step = page_step.max(1) as isize;
+        let bindings = keybindings();
+        if bindings.page_up_matches(key) {
+            Some(-page_step)
+        } else if bindings.page_down_matches(key) {
+            Some(page_step)
+        } else {
+            None
+        }
+    }
+
     fn scroll_navigation_key(&self, key: KeyEvent) -> bool {
         let bindings = keybindings();
         self.focused
@@ -1561,32 +1604,30 @@ impl<M> TextareaInput<M> {
 
     fn handle_scroll_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
         if self.area.is_empty()
-            || !self.has_vertical_overflow()
             || !(Self::scroll_page_key(key) || self.scroll_navigation_key(key))
+            || (!self.has_vertical_overflow() && !(self.insert_mode && Self::scroll_page_key(key)))
         {
             return false;
         }
 
         let geometry = self.scroll_geometry(self.area);
-        let previous_scroll_y = self.scroll.target_offset().y;
         let previous_cursor = self.cursor;
-        let outcome = self
-            .scroll
-            .on_key(key, geometry.viewport, geometry.content, ctx.animation());
+        let page_delta = Self::scroll_page_delta(key, geometry.viewport);
+        let outcome = if let Some(delta) = page_delta {
+            self.scroll.scroll_by(
+                ScrollDelta::new(0, delta),
+                geometry.viewport,
+                geometry.content,
+                ctx.animation(),
+            )
+        } else {
+            self.scroll
+                .on_key(key, geometry.viewport, geometry.content, ctx.animation())
+        };
         if outcome.handled {
-            if self.insert_mode && Self::scroll_page_key(key) {
-                let scroll_delta =
-                    self.scroll.target_offset().y as isize - previous_scroll_y as isize;
-                let cursor_delta = if scroll_delta == 0 {
-                    let page_step = self.scroll.page_step(geometry.viewport) as isize;
-                    if keybindings().page_up_matches(key) {
-                        -page_step
-                    } else {
-                        page_step
-                    }
-                } else {
-                    scroll_delta
-                };
+            if self.insert_mode
+                && let Some(cursor_delta) = page_delta
+            {
                 self.move_vertical(cursor_delta);
                 let ranges = self.line_ranges();
                 let (line, _) = self.cursor_line_col(&ranges);
@@ -1705,6 +1746,7 @@ impl<M> TextareaInput<M> {
     }
 
     fn apply_external_editor_response(&mut self, response: &crate::ExternalEditorResponse) {
+        let changed = self.value != response.value;
         self.value = response.value.clone();
         self.invalidate_syntax_cache();
         self.clamp_lines();
@@ -1716,6 +1758,10 @@ impl<M> TextareaInput<M> {
         let range = ranges[line_idx];
         let col = response.col.saturating_sub(1).min(range.len());
         self.cursor = (range.start + col).min(self.len_chars());
+        if changed {
+            self.cursor_reset_on_edit = true;
+            self.preserve_scroll_position = false;
+        }
     }
 
     fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
@@ -1915,7 +1961,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.outer_area = area;
         self.area = self.content_area(area);
-        if self.insert_mode {
+        if self.insert_mode && !self.preserve_scroll_position {
             self.scroll_cursor_into_view(disabled_animation_settings());
         }
         let mut hotkeys = self.hotkey.clone().into_iter().collect::<Vec<_>>();
@@ -2029,8 +2075,6 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         if self.disabled || !self.insert_mode {
-            let bindings = keybindings();
-            let focus = bindings.focus();
             if focus_navigation_key(*key) {
                 return EventOutcome::Ignored;
             }
@@ -2046,7 +2090,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 if let Some(on_submit) = &self.on_submit {
                     ctx.emit(on_submit(self.value.clone()));
                 }
-                self.begin_insert_mode();
+                self.begin_external_editor_mode();
                 ctx.request_layout();
                 ctx.request_redraw();
             }
@@ -2057,6 +2101,8 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         }
         if delete_forward_key(*key) {
             self.insert_mode = true;
+            self.cursor_reset_on_edit = false;
+            self.preserve_scroll_position = false;
             let previous_value = self.value.clone();
             let outcome = self.on_key(*key);
             self.emit_change_if_needed(&previous_value, ctx);
@@ -2081,8 +2127,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 {
                     ctx.emit(on_submit(self.value.clone()));
                 }
-                self.begin_insert_mode();
-                self.scroll_cursor_into_view(disabled_animation_settings());
+                if self.begin_insert_mode() {
+                    self.scroll_cursor_into_view(disabled_animation_settings());
+                }
                 self.cursor_fade.reset();
                 ctx.request_layout();
                 ctx.request_redraw();

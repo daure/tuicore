@@ -129,15 +129,77 @@ fn enter_switches_focused_textarea_into_insert_mode() {
 }
 
 #[test]
-fn entering_insert_mode_moves_cursor_after_existing_text() {
+fn entering_insert_mode_positions_cursor_at_first_character() {
     let mut input = TextareaInput::<()>::new().value("abcd").focused(true);
     input.cursor = 3;
     let mut ctx = EventCtx::<()>::default();
 
     input.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
-    input.event(&TuiEvent::Key(KeyEvent::from(Key::Backspace)), &mut ctx);
+    input.event(&TuiEvent::Key(KeyEvent::from(Key::Char('x'))), &mut ctx);
 
-    assert_eq!(input.current_value(), "abc");
+    assert_eq!(input.cursor, 1);
+    assert_eq!(input.current_value(), "xabcd");
+}
+
+#[test]
+fn reentering_insert_mode_restores_cursor_and_scroll_position() {
+    let mut input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .max_rows(2)
+        .focused(true);
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut EventCtx::default(),
+    );
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Down)),
+        &mut EventCtx::default(),
+    );
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Down)),
+        &mut EventCtx::default(),
+    );
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+        &mut EventCtx::default(),
+    );
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut EventCtx::default(),
+    );
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+
+    assert_eq!(input.cursor, "one\ntwo\n".chars().count());
+    assert_eq!(input.scroll.target_offset().y, 1);
+}
+
+#[test]
+fn external_value_changes_reset_cursor_and_scroll_for_next_edit() {
+    let mut input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .max_rows(2)
+        .focused(true);
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+    input.scroll.scroll_to(
+        ScrollOffset::new(0, 1),
+        input.scroll_geometry(input.area).viewport,
+        input.scroll_geometry(input.area).content,
+        disabled_animation_settings(),
+    );
+    input.set_value("new\nvalue\nfrom\noutside");
+
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut EventCtx::default(),
+    );
+    input.layout(Rect::new(0, 0, 20, 2), &mut layout);
+
+    assert_eq!(input.cursor, 0);
+    assert_eq!(input.scroll.target_offset().y, 0);
 }
 
 #[test]
@@ -661,6 +723,63 @@ fn page_down_uses_scroll_state_when_content_overflows() {
 }
 
 #[test]
+fn page_keys_advance_seventy_percent_of_the_textarea_viewport() {
+    let value = ["line"; 20].join("\n");
+
+    let mut focused = TextareaInput::<()>::new()
+        .value(value.clone())
+        .focused(true);
+    focused.layout(Rect::new(0, 0, 20, 10), &mut LayoutCtx::new());
+    assert_eq!(
+        focused.event(
+            &TuiEvent::Key(KeyEvent::from(Key::PageDown)),
+            &mut EventCtx::default(),
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(focused.scroll.target_offset().y, 7);
+
+    let mut editing = TextareaInput::<()>::new().value(value);
+    editing.insert_mode = true;
+    editing.layout(Rect::new(0, 0, 20, 10), &mut LayoutCtx::new());
+    assert_eq!(
+        editing.event(
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut EventCtx::default(),
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(editing.scroll.target_offset().y, 7);
+    assert_eq!(editing.cursor, "line\n".chars().count() * 7);
+}
+
+#[test]
+fn ctrl_page_down_moves_editing_cursor_without_vertical_overflow() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree");
+    input.insert_mode = true;
+    input.cursor = "one\n".chars().count();
+    input.layout(Rect::new(0, 0, 20, 10), &mut LayoutCtx::new());
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        input.event(
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+
+    assert_eq!(input.cursor, input.value.chars().count());
+    assert_eq!(input.scroll.target_offset().y, 0);
+}
+
+#[test]
 fn ctrl_page_keys_move_the_editing_cursor_with_the_scroll() {
     let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour");
     input.insert_mode = true;
@@ -733,6 +852,37 @@ fn ctrl_page_down_moves_editing_cursor_to_the_end_of_the_last_line() {
     );
     assert_eq!(input.cursor, input.value.chars().count());
     assert_eq!(input.scroll.target_offset().y, 1);
+}
+
+#[test]
+fn ctrl_page_down_keeps_cursor_page_step_when_scroll_clamps_at_bottom() {
+    let mut input = TextareaInput::<()>::new().value("one\ntwo\nthree\nfour\nfive");
+    input.insert_mode = true;
+    input.cursor = "one\ntwo\n".chars().count();
+    let mut layout = LayoutCtx::new();
+    input.layout(Rect::new(0, 0, 20, 3), &mut layout);
+    let geometry = input.scroll_geometry(input.area);
+    input.scroll.scroll_to(
+        ScrollOffset::new(0, 1),
+        geometry.viewport,
+        geometry.content,
+        disabled_animation_settings(),
+    );
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        input.event(
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+
+    assert_eq!(input.cursor, input.value.chars().count());
+    assert_eq!(input.scroll.target_offset().y, 2);
 }
 
 #[test]
@@ -1497,13 +1647,9 @@ fn syntax_insert_mode_keeps_highlighting_without_navigation_background_and_shows
 
     let line = &input.visible_lines(20, 1).lines[0];
 
-    assert_eq!(line.spans[0].style.fg, keyword_fg);
-    assert_ne!(line.spans[0].style.bg, Some(theme().highlight_bg()));
-    assert_eq!(line.spans.last().unwrap().content.as_ref(), " ");
-    assert_eq!(
-        line.spans.last().unwrap().style.bg,
-        Some(theme().highlight_bg())
-    );
+    assert_eq!(line.spans[0].content.as_ref(), "f");
+    assert_ne!(line.spans[0].style.fg, keyword_fg);
+    assert_eq!(line.spans[0].style.bg, Some(theme().highlight_bg()));
 }
 
 #[test]
@@ -1662,7 +1808,7 @@ fn growing_panel_textarea_keeps_new_cursor_row_visible_after_layout() {
 }
 
 #[test]
-fn entering_insert_mode_scrolls_to_cursor() {
+fn entering_insert_mode_shows_first_row() {
     let mut input = TextareaInput::<()>::new()
         .value("one\ntwo\nthree\nfour")
         .max_rows(2);
@@ -1675,7 +1821,8 @@ fn entering_insert_mode_scrolls_to_cursor() {
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(input.insert_mode);
-    assert_eq!(input.scroll.target_offset().y, 2);
+    assert_eq!(input.cursor, 0);
+    assert_eq!(input.scroll.target_offset().y, 0);
 }
 
 #[test]

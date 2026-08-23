@@ -284,15 +284,16 @@ where
     }
 
     fn move_reorder(&mut self, delta: isize, settings: crate::AnimationSettings) -> bool {
+        let visible_ids = self.data_view.reorder_visible_ids();
         let Some(state) = &self.reorder else {
             return false;
         };
-        let Some(index) = state.staged.iter().position(|id| id == &state.moving_id) else {
+        let Some(index) = visible_ids.iter().position(|id| id == &state.moving_id) else {
             return false;
         };
         let target = index
             .saturating_add_signed(delta)
-            .min(state.staged.len().saturating_sub(1));
+            .min(visible_ids.len().saturating_sub(1));
         self.move_reorder_to(target, settings)
     }
 
@@ -302,18 +303,35 @@ where
     }
 
     fn move_reorder_to(&mut self, target: usize, settings: crate::AnimationSettings) -> bool {
+        let visible_ids = self.data_view.reorder_visible_ids();
         let Some(state) = &mut self.reorder else {
             return false;
         };
-        let Some(index) = state.staged.iter().position(|id| id == &state.moving_id) else {
+        let Some(index) = visible_ids.iter().position(|id| id == &state.moving_id) else {
             return false;
         };
-        let target = target.min(state.staged.len().saturating_sub(1));
+        let target = target.min(visible_ids.len().saturating_sub(1));
         if target == index {
             return false;
         }
-        let moving_id = state.staged.remove(index);
-        state.staged.insert(target, moving_id);
+        let moving_index = state
+            .staged
+            .iter()
+            .position(|id| id == &state.moving_id)
+            .expect("reorder snapshot contains moving row");
+        let moving_id = state.staged.remove(moving_index);
+        let anchor_id = &visible_ids[target];
+        let anchor_index = state
+            .staged
+            .iter()
+            .position(|id| id == anchor_id)
+            .expect("reorder snapshot contains visible anchor");
+        let insertion_index = if target < index {
+            anchor_index
+        } else {
+            anchor_index + 1
+        };
+        state.staged.insert(insertion_index, moving_id);
         self.data_view
             .set_derived_row_order(Some(state.staged.clone()));
         self.data_view

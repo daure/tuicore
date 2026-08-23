@@ -863,8 +863,9 @@ where
         if self.visible_row_indices.is_some() {
             return Err(ReorderUnavailableReason::VisibleSubset);
         }
-        if !self.transform_state.search.trim().is_empty()
-            || !self.transform_state.filters.is_empty()
+        if self.transform_mode == DataViewTransformMode::External
+            && (!self.transform_state.search.trim().is_empty()
+                || !self.transform_state.filters.is_empty())
         {
             return Err(ReorderUnavailableReason::TransformActive);
         }
@@ -901,6 +902,10 @@ where
 
     pub(crate) fn set_derived_row_order(&mut self, ids: Option<Vec<Id>>) {
         self.derived_row_order = ids;
+    }
+
+    pub(crate) fn reorder_visible_ids(&self) -> Vec<Id> {
+        self.visible_rows().into_iter().map(|row| row.id).collect()
     }
 
     pub(crate) fn reposition_highlight_silently(&mut self, id: &Id) -> bool {
