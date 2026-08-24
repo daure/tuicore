@@ -1,7 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use super::{DataView, ReorderUnavailableReason, TreeAdapter};
+#[cfg(test)]
+use super::DisplayRow;
+use super::{
+    DataView, ReorderUnavailableReason, SelectionOverlay, SelectionOverlayPosition, TreeAdapter,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TreeEditSnapshot<Id> {
@@ -21,6 +25,127 @@ where
 {
     pub(crate) fn tree_is_mutable(&self) -> bool {
         matches!(self.tree, Some(TreeAdapter::MutableParentId { .. }))
+    }
+
+    pub(crate) fn set_selection_overlay(
+        &mut self,
+        selected: Vec<Id>,
+        position: Option<SelectionOverlayPosition<Id>>,
+        placeholder_depth: usize,
+        placeholder_focused: bool,
+    ) {
+        self.selection_overlay = Some(SelectionOverlay {
+            selected,
+            position,
+            placeholder_depth,
+            placeholder_focused,
+        });
+    }
+
+    pub(crate) fn clear_selection_overlay(&mut self) {
+        self.selection_overlay = None;
+    }
+
+    pub(crate) fn tree_siblings(&self, id: &Id) -> Option<(Option<Id>, Vec<Id>)> {
+        let parent_id = self.tree_parent_id(id)?;
+        Some((parent_id.clone(), self.tree_children(parent_id.as_ref())))
+    }
+
+    pub(crate) fn tree_children_for_parent(&self, parent_id: Option<&Id>) -> Vec<Id> {
+        self.tree_children(parent_id)
+    }
+
+    pub(crate) fn move_tree_sibling_block(
+        &mut self,
+        ids: &[Id],
+        source_parent_id: Option<Id>,
+        target_parent_id: Option<Id>,
+        sibling_index: usize,
+    ) -> Option<TreeMoveResult<Id>> {
+        let Some(TreeAdapter::MutableParentId {
+            parent_id: get_parent_id,
+            set_parent_id,
+        }) = self.tree.as_ref()
+        else {
+            return None;
+        };
+        let siblings = self.tree_children(source_parent_id.as_ref());
+        if ids.len() < 2 || !ids.iter().all(|id| siblings.contains(id)) {
+            return None;
+        }
+        let subtree_ids = ids
+            .iter()
+            .flat_map(|id| std::iter::once(id.clone()).chain(self.descendant_ids(id)))
+            .collect::<HashSet<_>>();
+        if target_parent_id
+            .as_ref()
+            .is_some_and(|parent_id| subtree_ids.contains(parent_id))
+        {
+            return None;
+        }
+        for row in &mut self.rows {
+            let id = (self.row_id)(row);
+            if ids.contains(&id) {
+                set_parent_id(row, target_parent_id.clone());
+                assert!(
+                    (self.row_id)(row) == id,
+                    "TreeAdapter parent setter must preserve the row ID"
+                );
+                assert!(
+                    get_parent_id(row) == target_parent_id,
+                    "TreeAdapter parent setter must apply the requested parent ID"
+                );
+            }
+        }
+        let mut moving = Vec::new();
+        let mut remaining = Vec::new();
+        for row in std::mem::take(&mut self.rows) {
+            if subtree_ids.contains(&(self.row_id)(&row)) {
+                moving.push(row);
+            } else {
+                remaining.push(row);
+            }
+        }
+        let remaining_siblings = self
+            .tree_children_in(
+                &remaining,
+                target_parent_id.as_ref(),
+                get_parent_id.as_ref(),
+            )
+            .iter()
+            .filter(|id| !subtree_ids.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let target = sibling_index.min(remaining_siblings.len());
+        let insertion = if let Some(next) = remaining_siblings.get(target) {
+            remaining
+                .iter()
+                .position(|row| &(self.row_id)(row) == next)
+                .unwrap_or(remaining.len())
+        } else if let Some(last) = remaining_siblings.last() {
+            let last_subtree = std::iter::once(last.clone())
+                .chain(self.descendant_ids_in(&remaining, last, get_parent_id.as_ref()))
+                .collect::<HashSet<_>>();
+            remaining
+                .iter()
+                .rposition(|row| last_subtree.contains(&(self.row_id)(row)))
+                .map_or(remaining.len(), |index| index + 1)
+        } else if let Some(parent) = target_parent_id.as_ref() {
+            remaining
+                .iter()
+                .position(|row| &(self.row_id)(row) == parent)
+                .map_or(remaining.len(), |index| index + 1)
+        } else {
+            remaining.len()
+        };
+        remaining.splice(insertion..insertion, moving);
+        self.rows = remaining;
+        self.clamp_visible_state();
+        self.reposition_highlight_silently(&ids[0]);
+        Some(TreeMoveResult {
+            parent_id: target_parent_id,
+            sibling_index: target,
+        })
     }
 
     pub(crate) fn tree_edit_snapshot(&self) -> Option<TreeEditSnapshot<Id>> {
@@ -91,6 +216,14 @@ where
 
     pub(crate) fn expand_tree_row(&mut self, id: Id) {
         self.expanded.insert(id);
+    }
+
+    pub(crate) fn tree_expansion_snapshot(&self) -> HashSet<Id> {
+        self.expanded.clone()
+    }
+
+    pub(crate) fn restore_tree_expansion(&mut self, expanded: HashSet<Id>) {
+        self.expanded = expanded;
     }
 
     pub(crate) fn move_tree_sibling(
@@ -194,6 +327,28 @@ where
             .map(|row| parent_id(row).filter(|parent| self.contains_row_id(parent)))
     }
 
+    pub(crate) fn tree_depth(&self, id: &Id) -> Option<usize> {
+        let mut depth = 0;
+        let Some(mut parent) = self.tree_parent_id(id)? else {
+            return Some(depth);
+        };
+        loop {
+            depth += 1;
+            match self.tree_parent_id(&parent)? {
+                Some(next) => parent = next,
+                None => return Some(depth),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selection_placeholder_depth_for_test(&self) -> Option<usize> {
+        self.display_rows().into_iter().find_map(|row| match row {
+            DisplayRow::SelectionPlaceholder { depth, .. } => Some(depth),
+            DisplayRow::Data(_) => None,
+        })
+    }
+
     fn tree_children(&self, parent: Option<&Id>) -> Vec<Id> {
         let parent_id = match self.tree.as_ref() {
             Some(TreeAdapter::ParentId(parent_id))
@@ -205,6 +360,27 @@ where
             .filter(|row| {
                 parent_id(row)
                     .filter(|candidate| self.contains_row_id(candidate))
+                    .as_ref()
+                    == parent
+            })
+            .map(|row| (self.row_id)(row))
+            .collect()
+    }
+
+    fn tree_children_in(
+        &self,
+        rows: &[T],
+        parent: Option<&Id>,
+        parent_id: &dyn Fn(&T) -> Option<Id>,
+    ) -> Vec<Id> {
+        let known_ids = rows
+            .iter()
+            .map(|row| (self.row_id)(row))
+            .collect::<HashSet<_>>();
+        rows.iter()
+            .filter(|row| {
+                parent_id(row)
+                    .filter(|candidate| known_ids.contains(candidate))
                     .as_ref()
                     == parent
             })

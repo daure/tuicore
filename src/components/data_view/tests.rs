@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span, Text};
 
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
-    FocusRequest, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation, TreePath,
-    TuiEvent, TuiNode, lerp_color, theme,
+    FocusRequest, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation,
+    ScrollOffset, TreePath, TuiEvent, TuiNode, lerp_color, line_width, preset, theme,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -1491,6 +1491,200 @@ fn horizontal_scroll_offsets_rendered_cells() {
         .map(|x| buffer.cell((x, 0)).unwrap().symbol())
         .collect::<String>();
     assert_eq!(visible, "BCDEFGHIJK");
+}
+
+#[test]
+fn tree_selection_placeholder_sizes_and_scrolls_its_first_cell() {
+    let mut view = DataView::new(
+        [Row::new(1, "A"), Row::new(2, "B"), Row::new(3, "C")],
+        |row| row.id,
+    )
+    .column(Column::text(
+        "name",
+        "Name",
+        Constraint::Fill(1),
+        |row: &Row| row.name.to_string(),
+    ));
+    view.set_selection_overlay(
+        vec![1, 2],
+        Some(SelectionOverlayPosition::After(2)),
+        0,
+        false,
+    );
+    let area = Rect::new(0, 0, 10, 10);
+    let geometry = view.scroll_geometry(area);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+
+    assert!(geometry.content.width >= "2 items selected".len());
+    view.scroll.scroll_to(
+        ScrollOffset::new(2, 0),
+        geometry.viewport,
+        geometry.content,
+        settings,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(10, 10)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, area))
+        .expect("data view should render");
+
+    let visible = (0..10)
+        .map(|x| terminal.backend().buffer().cell((x, 2)).unwrap().symbol())
+        .collect::<String>();
+    assert_eq!(visible, "items sele");
+}
+
+#[test]
+fn focused_tree_selection_placeholder_uses_target_depth_and_reorder_style() {
+    let mut view = DataView::new(
+        [
+            Row::new(1, "parent"),
+            Row {
+                id: 2,
+                parent: Some(1),
+                name: "child",
+            },
+        ],
+        |row| row.id,
+    )
+    .column(Column::text(
+        "name",
+        "Name",
+        Constraint::Fill(1),
+        |row: &Row| row.name.to_string(),
+    ))
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .expanded([1]);
+    view.set_focused(true);
+    view.set_selection_overlay(vec![2], Some(SelectionOverlayPosition::After(2)), 1, true);
+    let mut terminal = Terminal::new(TestBackend::new(30, 4)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 30, 4)))
+        .expect("tree placeholder should render");
+
+    let prefix_width = preset()
+        .data_view()
+        .tree_indent_width()
+        .saturating_add(line_width(&Line::from(format!(
+            "{} ",
+            view.tree_glyphs.leaf
+        ))));
+    let cell = terminal
+        .backend()
+        .buffer()
+        .cell((prefix_width as u16, 2))
+        .expect("placeholder label should be indented");
+    let theme = theme();
+    assert_eq!(cell.symbol(), "1");
+    assert_eq!(cell.fg, theme.highlight_bg());
+    assert_eq!(cell.bg, theme.highlight_fg());
+}
+
+#[test]
+fn tree_selection_placeholder_without_columns_has_no_rendered_widths() {
+    let mut view = DataView::new([Row::new(1, "A")], |row| row.id);
+    view.set_selection_overlay(vec![1], Some(SelectionOverlayPosition::After(1)), 0, false);
+
+    assert_eq!(view.rendered_column_widths(), Vec::<usize>::new());
+    assert_eq!(
+        view.scroll_geometry(Rect::new(0, 0, 10, 10)).content.width,
+        0
+    );
+}
+
+#[test]
+fn block_move_uses_dangling_parent_rows_as_root_insertion_anchors() {
+    let mut view = DataView::new(
+        [
+            Row::new(3, "three"),
+            Row::new(4, "four"),
+            Row {
+                id: 1,
+                parent: Some(99),
+                name: "dangling",
+            },
+            Row::new(2, "two"),
+        ],
+        |row| row.id,
+    )
+    .tree(TreeAdapter::mutable_parent_id(
+        |row: &Row| row.parent,
+        |row, parent| row.parent = parent,
+    ));
+
+    assert_eq!(
+        view.move_tree_sibling_block(&[3, 4], None, None, 1)
+            .map(|result| (result.parent_id, result.sibling_index)),
+        Some((None, 1))
+    );
+    assert_eq!(
+        view.rows().iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![1, 3, 4, 2]
+    );
+}
+
+#[test]
+fn block_move_reparents_only_selected_roots_and_rejects_selected_subtree_targets() {
+    let rows = [
+        Row::new(1, "one"),
+        Row {
+            id: 2,
+            parent: Some(1),
+            name: "one child",
+        },
+        Row::new(3, "three"),
+        Row {
+            id: 4,
+            parent: Some(3),
+            name: "three child",
+        },
+        Row::new(5, "target"),
+        Row {
+            id: 6,
+            parent: Some(5),
+            name: "target child",
+        },
+        Row::new(7, "seven"),
+    ];
+    let mut view = DataView::new(rows.clone(), |row: &Row| row.id).tree(
+        TreeAdapter::mutable_parent_id(|row: &Row| row.parent, |row, parent| row.parent = parent),
+    );
+
+    assert_eq!(
+        view.move_tree_sibling_block(&[1, 3], None, Some(2), 0),
+        None
+    );
+    assert_eq!(
+        view.rows()
+            .iter()
+            .map(|row| (row.id, row.parent))
+            .collect::<Vec<_>>(),
+        rows.iter()
+            .map(|row| (row.id, row.parent))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(
+        view.move_tree_sibling_block(&[1, 3], None, Some(5), 1)
+            .map(|result| (result.parent_id, result.sibling_index)),
+        Some((Some(5), 1))
+    );
+    assert_eq!(
+        view.rows()
+            .iter()
+            .map(|row| (row.id, row.parent))
+            .collect::<Vec<_>>(),
+        vec![
+            (5, None),
+            (6, Some(5)),
+            (1, Some(5)),
+            (2, Some(1)),
+            (3, Some(5)),
+            (4, Some(3)),
+            (7, None),
+        ]
+    );
 }
 
 #[test]

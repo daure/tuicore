@@ -203,19 +203,19 @@ fn text_input_panel_click_requests_input_focus() {
 }
 
 #[test]
-fn focused_text_input_uses_strong_selection_highlight_before_insert_mode() {
+fn focused_text_input_uses_the_subtle_selection_background_before_insert_mode() {
     let input = TextInput::<()>::new().value("search").focused(true);
     let line = input.line(20);
 
     assert!(
         line.spans
             .iter()
-            .all(|span| span.style.bg == Some(theme().highlight_bg()))
+            .all(|span| span.style.bg == Some(theme().selected_bg()))
     );
     assert!(
         line.spans
             .iter()
-            .all(|span| span.style.fg == Some(theme().highlight_fg()))
+            .all(|span| span.style.fg == Some(theme().selected_fg()))
     );
 }
 

@@ -208,6 +208,8 @@ where
         self.handle_visual_hotkey(event, ctx);
         if let TuiEvent::Key(key) = event
             && self.is_reordering()
+            && !self.confirmation_dialog.is_some()
+            && !self.data_view.has_active_interaction()
             && let Some(outcome) = self.handle_reorder_key(*key, ctx)
         {
             return outcome;
@@ -226,6 +228,12 @@ where
         if self.data_view.has_active_interaction() {
             return EventOutcome::Ignored;
         }
+        if let Some(outcome) = self.handle_flat_range_selection_key(*key, ctx) {
+            return outcome;
+        }
+        if let Some(outcome) = self.handle_tree_selection_key(*key, ctx) {
+            return outcome;
+        }
         if let Some(outcome) = self.handle_reorder_key(*key, ctx) {
             return outcome;
         }
@@ -242,6 +250,8 @@ where
         self.handle_visual_hotkey(event, ctx);
         if let TuiEvent::Key(key) = event
             && self.is_reordering()
+            && !self.confirmation_dialog.is_some()
+            && !self.data_view.has_active_interaction()
             && let Some(outcome) = self.handle_reorder_key(*key, ctx)
         {
             return outcome;
@@ -296,6 +306,18 @@ where
                 return self
                     .data_view
                     .dispatch_event(&EventRoute::new(path), event, ctx);
+            }
+            if !self.editor_active()
+                && let TuiEvent::Key(key) = event
+                && let Some(outcome) = self.handle_flat_range_selection_key(*key, ctx)
+            {
+                return outcome;
+            }
+            if !self.editor_active()
+                && let TuiEvent::Key(key) = event
+                && let Some(outcome) = self.handle_tree_selection_key(*key, ctx)
+            {
+                return outcome;
             }
             if !self.editor_active()
                 && let TuiEvent::Key(key) = event
@@ -382,6 +404,15 @@ where
             self.data_view.dispatch_focus(&target, focused, ctx);
             if !focused && self.is_reordering() {
                 self.cancel_reorder_for_focus_loss(ctx.animation());
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
+            if !focused && self.tree_selection.is_some() {
+                self.clear_tree_selection();
+                ctx.request_redraw();
+            }
+            if !focused && self.flat_range_selection.is_some() {
+                self.clear_flat_range_selection();
                 ctx.request_redraw();
             }
         }
@@ -415,6 +446,11 @@ where
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+        self.cancel_reorder_for_focus_loss(settings);
+        self.clear_tree_selection();
+        self.clear_flat_range_selection();
         self.data_view.unmount(ctx);
         for input in &mut self.inputs {
             match input {

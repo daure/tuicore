@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::hash::Hash;
 
 mod confirmation;
@@ -213,6 +214,14 @@ pub enum ListControlEvent<Id> {
         parent_id: Option<Id>,
         sibling_index: usize,
     },
+    TreeBlockMoved {
+        row_ids: Vec<Id>,
+        parent_id: Option<Id>,
+        sibling_index: usize,
+    },
+    TreeBlockMoveCancelled {
+        row_ids: Vec<Id>,
+    },
     ReorderCancelled {
         row_id: Id,
     },
@@ -327,6 +336,38 @@ struct TreeReorderState<Id> {
     changed: bool,
 }
 
+struct TreeSelectionState<Id> {
+    selected: Vec<Id>,
+    anchor: Option<Id>,
+    range_mode: bool,
+}
+
+struct FlatRangeSelectionState<Id> {
+    selected: Vec<Id>,
+    anchor: Id,
+    range_mode: bool,
+}
+
+struct FlatBlockMoveState<Id> {
+    snapshot: ReorderSnapshot<Id>,
+    scroll_snapshot: DataViewScrollSnapshot,
+    selected: Vec<Id>,
+    target_index: usize,
+    highlighted_id: Id,
+    pending_g: bool,
+}
+
+struct TreeBlockMoveState<Id> {
+    snapshot: super::data_view::TreeEditSnapshot<Id>,
+    scroll_snapshot: DataViewScrollSnapshot,
+    expanded_before: HashSet<Id>,
+    source_parent_id: Option<Id>,
+    parent_id: Option<Id>,
+    selected: Vec<Id>,
+    sibling_index: usize,
+    pending_g: bool,
+}
+
 pub struct ListControl<T, Id, M = ()> {
     data_view: DataView<T, Id>,
     panel: Panel,
@@ -357,6 +398,10 @@ pub struct ListControl<T, Id, M = ()> {
     reorder_column: Option<String>,
     reorder: Option<ReorderState<Id>>,
     tree_reorder: Option<TreeReorderState<Id>>,
+    tree_selection: Option<TreeSelectionState<Id>>,
+    flat_range_selection: Option<FlatRangeSelectionState<Id>>,
+    flat_block_move: Option<FlatBlockMoveState<Id>>,
+    tree_block_move: Option<TreeBlockMoveState<Id>>,
 }
 
 impl<T, Id, M: 'static> ListControl<T, Id, M>
@@ -479,6 +524,10 @@ where
             reorder_column: None,
             reorder: None,
             tree_reorder: None,
+            tree_selection: None,
+            flat_range_selection: None,
+            flat_block_move: None,
+            tree_block_move: None,
         }
     }
 
@@ -692,6 +741,12 @@ where
     }
 
     pub fn data_view_mut(&mut self) -> &mut DataView<T, Id> {
+        let mut settings = crate::AnimationSettings::default();
+        settings.enabled = false;
+        self.cancel_flat_block_move(settings);
+        self.cancel_tree_block_move(settings);
+        self.clear_tree_selection();
+        self.clear_flat_range_selection();
         &mut self.data_view
     }
 
@@ -712,7 +767,10 @@ where
     }
 
     pub fn is_reordering(&self) -> bool {
-        self.reorder.is_some() || self.tree_reorder.is_some()
+        self.reorder.is_some()
+            || self.tree_reorder.is_some()
+            || self.flat_block_move.is_some()
+            || self.tree_block_move.is_some()
     }
 
     pub fn take_events(&mut self) -> Vec<ListControlEvent<Id>> {
@@ -728,6 +786,8 @@ where
     }
 
     fn remove_highlighted(&mut self) -> bool {
+        self.clear_tree_selection();
+        self.clear_flat_range_selection();
         let Some(row_id) = self.data_view.highlighted_id() else {
             return false;
         };

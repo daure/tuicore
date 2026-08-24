@@ -1321,7 +1321,6 @@ impl<M> PasswordInput<M> {
         } else {
             style
         };
-
         frame.render_widget(
             Paragraph::new(self.line(area.width as usize)).style(style),
             area,
@@ -1886,10 +1885,7 @@ pub(crate) fn placeholder_line(
 
 pub(crate) fn selected_input_style(style: Style) -> Style {
     let theme = theme();
-    style
-        .fg(theme.highlight_fg())
-        .bg(theme.highlight_bg())
-        .add_modifier(Modifier::BOLD)
+    style.fg(theme.selected_fg()).bg(theme.selected_bg())
 }
 
 pub(crate) fn disabled_input_background() -> Color {

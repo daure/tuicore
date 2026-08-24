@@ -1605,7 +1605,7 @@ fn textarea_renders_rust_keyword_with_highlighter_style() {
 }
 
 #[test]
-fn syntax_navigation_focus_keeps_keyword_foreground_and_adds_focus_background() {
+fn syntax_navigation_focus_keeps_keyword_foreground_with_a_subtle_selection_background() {
     let mut unfocused = TextareaInput::<()>::new()
         .value("fn main() {}")
         .language(Language::Rust);
@@ -1616,12 +1616,12 @@ fn syntax_navigation_focus_keeps_keyword_foreground_and_adds_focus_background() 
     let line = &focused.visible_lines(20, 1).lines[0];
 
     assert_eq!(line.spans[0].style.fg, keyword_fg);
-    assert_eq!(line.spans[0].style.bg, Some(theme().highlight_bg()));
+    assert_eq!(line.spans[0].style.bg, Some(theme().selected_bg()));
     assert!(!line.spans[0].style.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]
-fn syntax_navigation_focus_styles_empty_placeholder_background_only() {
+fn syntax_navigation_focus_uses_a_subtle_selection_background_for_empty_placeholders() {
     let input = TextareaInput::<()>::new()
         .placeholder("Write Rust")
         .language(Language::Rust)
@@ -1629,8 +1629,8 @@ fn syntax_navigation_focus_styles_empty_placeholder_background_only() {
 
     let style = input.visible_lines(20, 1).lines[0].spans[0].style;
 
-    assert_eq!(style.fg, Some(theme().muted_fg()));
-    assert_eq!(style.bg, Some(theme().highlight_bg()));
+    assert_eq!(style.fg, Some(theme().selected_fg()));
+    assert_eq!(style.bg, Some(theme().selected_bg()));
     assert!(!style.add_modifier.contains(Modifier::BOLD));
 }
 
@@ -1653,7 +1653,8 @@ fn syntax_insert_mode_keeps_highlighting_without_navigation_background_and_shows
 }
 
 #[test]
-fn borderless_syntax_textarea_fills_content_area_with_focus_background() {
+fn borderless_syntax_textarea_fills_its_content_area_with_a_subtle_selection_background_when_focused()
+ {
     let mut input = TextareaInput::<()>::new()
         .value("fn")
         .min_rows(2)
@@ -1667,20 +1668,20 @@ fn borderless_syntax_textarea_fills_content_area_with_focus_background() {
         .expect("textarea should render");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().highlight_bg());
-    assert_eq!(buffer.cell((7, 0)).unwrap().bg, theme().highlight_bg());
-    assert_eq!(buffer.cell((7, 1)).unwrap().bg, theme().highlight_bg());
+    assert_eq!(buffer.cell((0, 0)).unwrap().bg, theme().selected_bg());
+    assert_eq!(buffer.cell((7, 0)).unwrap().bg, theme().selected_bg());
+    assert_eq!(buffer.cell((7, 1)).unwrap().bg, theme().selected_bg());
 }
 
 #[test]
-fn plain_textarea_navigation_focus_keeps_selected_style() {
+fn plain_textarea_navigation_focus_uses_the_subtle_selection_background() {
     let input = TextareaInput::<()>::new().value("plain").focused(true);
 
     let style = input.visible_lines(10, 1).lines[0].spans[0].style;
 
-    assert_eq!(style.fg, Some(theme().highlight_fg()));
-    assert_eq!(style.bg, Some(theme().highlight_bg()));
-    assert!(style.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(style.fg, Some(theme().selected_fg()));
+    assert_eq!(style.bg, Some(theme().selected_bg()));
+    assert!(!style.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]

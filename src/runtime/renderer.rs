@@ -1,4 +1,9 @@
-use ratatui::{Terminal, backend::Backend, layout::Rect, style::Style};
+use ratatui::{
+    Terminal,
+    backend::Backend,
+    layout::Rect,
+    style::{Color, Style},
+};
 
 use crate::{RenderCtx, ToastRack, TuiNode, fade_buffer, theme};
 
@@ -83,6 +88,7 @@ where
     let mut ctx = RenderCtx::new();
     root.render(frame, area, &mut ctx);
     ctx.flush(frame);
+    restore_theme_background(frame, area);
 }
 
 fn render_frame_with_toasts_and_fade<N, M>(
@@ -96,8 +102,21 @@ fn render_frame_with_toasts_and_fade<N, M>(
 {
     render_frame(frame, root, area);
     toasts.render(frame, area);
+    restore_theme_background(frame, area);
     if fade_amount > 0.0 {
         fade_buffer(frame, area, fade_amount);
+    }
+}
+
+fn restore_theme_background(frame: &mut ratatui::Frame<'_>, area: Rect) {
+    let background = theme().background_bg();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            if cell.bg == Color::Reset {
+                cell.set_bg(background);
+            }
+        }
     }
 }
 
@@ -111,7 +130,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::{EventCtx, EventOutcome, LayoutCtx, LayoutResult, OverlayLayer, TuiEvent};
+    use crate::{
+        Calendar, EventCtx, EventOutcome, LayoutCtx, LayoutResult, OverlayLayer, Panel, TuiEvent,
+    };
 
     struct EmptyNode;
 
@@ -137,6 +158,46 @@ mod tests {
         assert_eq!(buffer.cell((1, 1)).unwrap().bg, expected);
         assert_eq!(buffer.cell((3, 2)).unwrap().bg, expected);
         assert_eq!(buffer.cell((0, 0)).unwrap().bg, Color::Reset);
+    }
+
+    #[test]
+    fn panels_preserve_the_theme_background_inside_their_borders() {
+        let area = Rect::new(0, 0, 8, 3);
+        let panel = Panel::<()>::new();
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_frame(frame, &panel, frame.area()))
+            .expect("frame should render");
+
+        assert_eq!(
+            terminal.backend().buffer().cell((1, 1)).unwrap().bg,
+            theme().background_bg()
+        );
+    }
+
+    #[test]
+    fn calendars_preserve_the_theme_background_inside_their_panels() {
+        let mut calendar = Calendar::<(), (), ()>::new(
+            Vec::new(),
+            |_| (),
+            |_| unreachable!("calendar spans are not needed without entries"),
+            |_| String::new(),
+        );
+        let area = Rect::new(0, 0, 20, 12);
+        calendar.layout(area, &mut LayoutCtx::new());
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_frame(frame, &calendar, frame.area()))
+            .expect("frame should render");
+
+        assert_eq!(
+            terminal.backend().buffer().cell((1, 1)).unwrap().bg,
+            theme().background_bg()
+        );
     }
 
     struct PortalColorNode;

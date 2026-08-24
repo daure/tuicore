@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use super::model::{LevelFn, ParentIdFn, SortFn};
-use super::{DataView, DataViewTransformMode, SortDirection, TreeAdapter, VisibleRow};
+use super::{
+    DataView, DataViewTransformMode, DisplayRow, SelectionOverlay, SelectionOverlayPosition,
+    SortDirection, TreeAdapter, VisibleRow,
+};
 use crate::search::search_match;
 
 impl<T, Id> DataView<T, Id>
@@ -11,6 +14,65 @@ where
 {
     pub(super) fn visible_rows(&self) -> Vec<VisibleRow<'_, T, Id>> {
         self.paginated_rows(self.all_visible_rows())
+    }
+
+    pub(super) fn display_rows(&self) -> Vec<DisplayRow<'_, T, Id>> {
+        let rows = self.visible_rows();
+        let Some(overlay) = self.valid_selection_overlay(&rows) else {
+            return rows.into_iter().map(DisplayRow::Data).collect();
+        };
+        let Some(position) = &overlay.position else {
+            return rows.into_iter().map(DisplayRow::Data).collect();
+        };
+        let placeholder = match position {
+            SelectionOverlayPosition::Before(id) => rows.iter().position(|row| &row.id == id),
+            SelectionOverlayPosition::After(id) => {
+                rows.iter().position(|row| &row.id == id).map(|index| {
+                    let depth = rows[index].depth;
+                    rows.iter()
+                        .enumerate()
+                        .skip(index + 1)
+                        .find(|(_, row)| row.depth <= depth)
+                        .map(|(index, _)| index)
+                        .unwrap_or(rows.len())
+                })
+            }
+        };
+        let Some(placeholder) = placeholder else {
+            return rows.into_iter().map(DisplayRow::Data).collect();
+        };
+        let mut output = Vec::with_capacity(rows.len() + 1);
+        for (index, row) in rows.into_iter().enumerate() {
+            if index == placeholder {
+                output.push(DisplayRow::SelectionPlaceholder {
+                    count: overlay.selected.len(),
+                    depth: overlay.placeholder_depth,
+                    focused: overlay.placeholder_focused,
+                });
+            }
+            output.push(DisplayRow::Data(row));
+        }
+        if placeholder == output.len() {
+            output.push(DisplayRow::SelectionPlaceholder {
+                count: overlay.selected.len(),
+                depth: overlay.placeholder_depth,
+                focused: overlay.placeholder_focused,
+            });
+        }
+        output
+    }
+
+    fn valid_selection_overlay<'a>(
+        &'a self,
+        rows: &[VisibleRow<'_, T, Id>],
+    ) -> Option<&'a SelectionOverlay<Id>> {
+        let overlay = self.selection_overlay.as_ref()?;
+        (!overlay.selected.is_empty()
+            && overlay
+                .selected
+                .iter()
+                .all(|id| rows.iter().any(|row| &row.id == id)))
+        .then_some(overlay)
     }
 
     pub(super) fn all_visible_rows(&self) -> Vec<VisibleRow<'_, T, Id>> {
@@ -77,7 +139,12 @@ where
     }
 
     pub(super) fn shows_tree_gutter(&self) -> bool {
-        self.tree.is_some() && self.expandable_ids().next().is_some()
+        self.tree.is_some()
+            && (self.expandable_ids().next().is_some()
+                || self
+                    .selection_overlay
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.position.is_some()))
     }
 
     pub(super) fn row_ids(&self) -> Vec<Id> {

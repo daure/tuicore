@@ -57,6 +57,8 @@ where
     }
 
     pub(super) fn begin_add(&mut self, parent_id: Option<Id>) {
+        self.clear_tree_selection();
+        self.clear_flat_range_selection();
         self.adding = true;
         self.adding_parent = Some(parent_id);
         self.editing = None;
@@ -90,6 +92,8 @@ where
     }
 
     pub(super) fn begin_edit(&mut self) -> bool {
+        self.clear_tree_selection();
+        self.clear_flat_range_selection();
         let Some(editable) = &self.editable else {
             return false;
         };
@@ -152,6 +156,7 @@ where
     }
 
     fn submit(&mut self, settings: AnimationSettings) -> bool {
+        self.clear_tree_selection();
         let values = self.values();
         let visible = self.visible_fields();
         if values

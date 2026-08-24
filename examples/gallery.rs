@@ -4694,7 +4694,7 @@ mod tests {
     #[test]
     fn reorder_gallery_control_enters_reorder_mode() {
         let mut control = reorder_control::<Msg>();
-        let guidance = "Ctrl+M move · ↑↓/gg/G/Home/End/Pg/Ctrl+U,D · Enter commit · Esc cancel";
+        let guidance = "Shift+J/K range · Ctrl+J/K navigate + Space select · Ctrl+M move block · ↑↓ move target · Enter commit · Esc clear/cancel";
         assert_eq!(
             control.panel_ref().title_text(PanelTitlePosition::TopLeft),
             Some(guidance)

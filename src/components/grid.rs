@@ -579,14 +579,13 @@ impl<M> Grid<M> {
         cross_tracks: Option<&[u16]>,
     ) -> Vec<u16> {
         match proposal {
-            AxisProposal::AtMost(available) | AxisProposal::Exact(available) => {
-                self.resolve_tracks(
+            AxisProposal::AtMost(available) | AxisProposal::Exact(available) => self
+                .resolve_tracks(
                     tracks,
                     available.saturating_sub(padding),
                     columns,
                     cross_tracks,
-                )
-            }
+                ),
             AxisProposal::Unbounded => tracks
                 .iter()
                 .enumerate()
@@ -1134,11 +1133,9 @@ mod tests {
             .rows([GridTrack::fit_content()])
             .child(
                 "note",
-                crate::TextareaInput::<()>::new()
-                    .value(value)
-                    .style(crate::InputChrome::panel_chrome(
-                        crate::InputPanelChrome::new(),
-                    )),
+                crate::TextareaInput::<()>::new().value(value).style(
+                    crate::InputChrome::panel_chrome(crate::InputPanelChrome::new()),
+                ),
                 GridItem::new(0, 0),
             );
 

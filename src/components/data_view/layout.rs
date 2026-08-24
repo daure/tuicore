@@ -5,8 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 
 use super::{
-    CELL_RIGHT_PADDING, CellContext, Column, DataView, DataViewInteraction, FILTER_DROPDOWN_SLOT,
-    SEARCH_SLOT, SelectionMode, SortDirection, VisibleRow, column_key,
+    CELL_RIGHT_PADDING, CellContext, Column, DataView, DataViewInteraction, DisplayRow,
+    FILTER_DROPDOWN_SLOT, SEARCH_SLOT, SelectionMode, SortDirection, VisibleRow, column_key,
 };
 use crate::{
     ChildKey, LayoutCtx, ScrollGeometry, ScrollOffset, ScrollSize, TuiNode, line_width, preset,
@@ -162,11 +162,10 @@ where
     }
 
     pub(super) fn visible_row_geometry(&self) -> VisibleRowGeometry {
-        VisibleRowGeometry::new(
-            self.visible_rows()
-                .into_iter()
-                .map(|row| self.row_height_for(row.row)),
-        )
+        VisibleRowGeometry::new(self.display_rows().into_iter().map(|row| match row {
+            DisplayRow::Data(row) => self.row_height_for(row.row),
+            DisplayRow::SelectionPlaceholder { .. } => self.row_height,
+        }))
     }
 
     pub(super) fn highlighted_row_area(&self) -> Rect {
@@ -298,16 +297,32 @@ where
 
         let selection_descendants = self.selection_descendants_by_id();
         let show_tree_gutter = self.shows_tree_gutter();
-        for (row_index, row) in self.visible_rows().into_iter().enumerate() {
-            for (index, column) in columns.iter().enumerate() {
-                widths[index] = widths[index].max(self.rendered_cell_width(
-                    index,
-                    column,
-                    &row,
-                    row_index == self.highlighted,
-                    &selection_descendants,
-                    show_tree_gutter,
-                ));
+        for row in self.display_rows() {
+            match row {
+                DisplayRow::Data(row) => {
+                    for (index, column) in columns.iter().enumerate() {
+                        widths[index] = widths[index].max(self.rendered_cell_width(
+                            index,
+                            column,
+                            &row,
+                            self.highlighted_id().as_ref() == Some(&row.id),
+                            &selection_descendants,
+                            show_tree_gutter,
+                        ));
+                    }
+                }
+                DisplayRow::SelectionPlaceholder { count, depth, .. } => {
+                    if let Some(width) = widths.first_mut() {
+                        *width =
+                            (*width).max(
+                                line_width(&Line::from(format!("{count} items selected")))
+                                    .saturating_add(self.selection_placeholder_prefix_width(
+                                        depth,
+                                        show_tree_gutter,
+                                    )),
+                            );
+                    }
+                }
             }
         }
 
@@ -409,5 +424,18 @@ where
             width += line_width(&Line::from(format!("{glyph} ")));
         }
         width
+    }
+
+    fn selection_placeholder_prefix_width(&self, depth: usize, show_tree_gutter: bool) -> usize {
+        show_tree_gutter
+            .then(|| {
+                depth
+                    .saturating_mul(preset().data_view().tree_indent_width())
+                    .saturating_add(line_width(&Line::from(format!(
+                        "{} ",
+                        self.tree_glyphs.leaf
+                    ))))
+            })
+            .unwrap_or(0)
     }
 }

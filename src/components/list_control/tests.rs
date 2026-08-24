@@ -2,8 +2,8 @@ use super::*;
 use std::time::Duration;
 
 use crate::{
-    Animated, AnimationSettings, FocusCtx, KeyModifiers, LayoutCtx, LayoutProposal, ScrollOffset,
-    TreeAdapter, TuiNode,
+    Animated, AnimationSettings, FocusCtx, KeyModifiers, LayoutCtx, LayoutProposal, LifecycleCtx,
+    Propagation, ScrollOffset, TreeAdapter, TuiNode,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -754,6 +754,495 @@ fn unmodified_space_commits_reorder_but_modified_space_does_not() {
 }
 
 #[test]
+fn flat_shift_range_selection_survives_only_shift_line_extension() {
+    let mut control = ranked_control(ranked_rows(4));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+        &mut ctx,
+    );
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+        &mut ctx,
+    );
+
+    assert_eq!(
+        control
+            .flat_range_selection
+            .as_ref()
+            .expect("range should remain active")
+            .selected,
+        vec![1, 2, 3]
+    );
+    assert!(control.take_events().is_empty());
+}
+
+#[test]
+fn flat_ctrl_navigation_selects_the_origin_and_ctrl_space_toggles_current_rows() {
+    let mut control = ranked_control(ranked_rows(5));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(control.data_view.highlighted_id(), Some(3));
+    assert_eq!(
+        control
+            .flat_range_selection
+            .as_ref()
+            .expect("ctrl selection should remain active")
+            .selected,
+        vec![1, 3]
+    );
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        control
+            .flat_block_move
+            .as_ref()
+            .expect("ctrl selection should start a flat block move")
+            .selected,
+        vec![1, 3]
+    );
+}
+
+#[test]
+fn flat_shift_range_selection_clears_for_every_data_view_navigation() {
+    let navigation = [
+        ("up", vec![KeyEvent::from(Key::Up)]),
+        ("down", vec![KeyEvent::from(Key::Down)]),
+        ("left", vec![KeyEvent::from(Key::Left)]),
+        ("right", vec![KeyEvent::from(Key::Right)]),
+        ("page up", vec![KeyEvent::from(Key::PageUp)]),
+        ("page down", vec![KeyEvent::from(Key::PageDown)]),
+        (
+            "control u",
+            vec![modified_key(Key::Char('u'), KeyModifiers::CONTROL)],
+        ),
+        (
+            "control d",
+            vec![modified_key(Key::Char('d'), KeyModifiers::CONTROL)],
+        ),
+        ("home", vec![KeyEvent::from(Key::Home)]),
+        ("end", vec![KeyEvent::from(Key::End)]),
+        (
+            "gg",
+            vec![
+                KeyEvent::from(Key::Char('g')),
+                KeyEvent::from(Key::Char('g')),
+            ],
+        ),
+        ("G", vec![modified_key(Key::Char('G'), KeyModifiers::SHIFT)]),
+    ];
+
+    for (name, keys) in navigation {
+        let mut control = ranked_control(ranked_rows(4));
+        control.data_view.highlight_id(&1);
+        let mut ctx = EventCtx::default();
+        control.handle_flat_range_selection_key(
+            modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+            &mut ctx,
+        );
+
+        for key in keys {
+            control.handle_flat_range_selection_key(key, &mut ctx);
+        }
+
+        assert!(
+            control.flat_range_selection.is_none(),
+            "{name} should clear range"
+        );
+        assert!(
+            !control.data_view.selection_overlay_active_for_test(),
+            "{name} should clear overlay"
+        );
+    }
+}
+
+fn seed_stale_flat_range(control: &mut ListControl<RankedRow, usize>) {
+    control.flat_range_selection = Some(FlatRangeSelectionState {
+        selected: vec![1, 2],
+        anchor: 1,
+        range_mode: true,
+    });
+    control
+        .data_view
+        .set_selection_overlay(vec![1, 2], None, 0, false);
+}
+
+fn assert_flat_range_cleared(control: &ListControl<RankedRow, usize>) {
+    assert!(control.flat_range_selection.is_none());
+    assert!(!control.data_view.selection_overlay_active_for_test());
+}
+
+fn start_flat_block_move(control: &mut ListControl<RankedRow, usize>, first_id: usize) {
+    control.data_view.highlight_id(&first_id);
+    let mut ctx = EventCtx::default();
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+}
+
+fn assert_flat_block_cleared(control: &ListControl<RankedRow, usize>) {
+    assert!(control.flat_block_move.is_none());
+    assert_flat_range_cleared(control);
+}
+
+#[test]
+fn flat_range_ctrl_m_starts_block_move_instead_of_single_reorder() {
+    let mut control = ranked_control(ranked_rows(5));
+
+    start_flat_block_move(&mut control, 1);
+
+    let block = control
+        .flat_block_move
+        .as_ref()
+        .expect("flat block move should be active");
+    assert_eq!(block.selected, vec![1, 2]);
+    assert_eq!(block.target_index, 1);
+    assert!(control.reorder.is_none());
+    assert_eq!(
+        control.data_view.selection_placeholder_depth_for_test(),
+        Some(0)
+    );
+}
+
+#[test]
+fn flat_block_move_moves_the_pseudo_target_through_unselected_gaps() {
+    let mut control = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut control, 1);
+
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut EventCtx::default());
+
+    assert_eq!(
+        control
+            .flat_block_move
+            .as_ref()
+            .expect("flat block move should remain active")
+            .target_index,
+        2
+    );
+    assert_eq!(
+        control.data_view.selection_placeholder_depth_for_test(),
+        Some(0)
+    );
+}
+
+#[test]
+fn flat_block_move_supports_page_and_edge_navigation_keys() {
+    for (keys, expected_target) in [
+        (vec![KeyEvent::from(Key::Home)], 0),
+        (
+            vec![
+                KeyEvent::from(Key::Char('g')),
+                KeyEvent::from(Key::Char('g')),
+            ],
+            0,
+        ),
+        (vec![modified_key(Key::Char('u'), KeyModifiers::CONTROL)], 0),
+        (vec![KeyEvent::from(Key::PageUp)], 0),
+        (vec![KeyEvent::from(Key::End)], 3),
+        (vec![modified_key(Key::Char('G'), KeyModifiers::SHIFT)], 3),
+        (vec![modified_key(Key::Char('d'), KeyModifiers::CONTROL)], 2),
+        (vec![KeyEvent::from(Key::PageDown)], 2),
+    ] {
+        let mut control = ranked_control(ranked_rows(5));
+        start_flat_block_move(&mut control, 1);
+        let mut ctx = EventCtx::default();
+
+        for key in keys {
+            control.handle_reorder_key(key, &mut ctx);
+        }
+
+        assert_eq!(
+            control
+                .flat_block_move
+                .as_ref()
+                .expect("flat block move should remain active")
+                .target_index,
+            expected_target
+        );
+    }
+}
+
+#[test]
+fn flat_block_move_commit_preserves_selected_source_order() {
+    let mut control = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut control, 1);
+    let mut ctx = EventCtx::default();
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+
+    control.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+
+    assert_eq!(control.data_view.reorder_visible_ids(), vec![0, 3, 1, 2, 4]);
+    assert_flat_block_cleared(&control);
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Reordered {
+            row_ids: vec![0, 3, 1, 2, 4]
+        }]
+    );
+}
+
+#[test]
+fn flat_block_move_commit_keeps_highlight_visible_in_narrow_viewport() {
+    let mut control = ranked_control(ranked_rows(6));
+    control.layout(Rect::new(0, 0, 30, 1), &mut LayoutCtx::new());
+    control.data_view.highlight_id(&0);
+    let mut settings = AnimationSettings::default();
+    settings.enabled = false;
+    let mut ctx = EventCtx::new(settings);
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    control.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+
+    assert_eq!(control.data_view.highlighted_id(), Some(2));
+    assert_eq!(control.data_view.vertical_scroll_offset_for_test(), 2);
+}
+
+#[test]
+fn flat_block_move_cancel_keeps_rows_unchanged() {
+    let mut control = ranked_control(ranked_rows(5));
+    let before = control.items().to_vec();
+    start_flat_block_move(&mut control, 1);
+    let mut ctx = EventCtx::default();
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+
+    control.handle_reorder_key(KeyEvent::from(Key::Esc), &mut ctx);
+
+    assert_eq!(control.items(), before);
+    assert_flat_block_cleared(&control);
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::ReorderCancelled { row_id: 2 }]
+    );
+}
+
+#[test]
+fn flat_block_start_keeps_zero_selection_single_reorder_and_consumes_one_selection() {
+    let mut zero_selection = ranked_control(ranked_rows(5));
+    zero_selection.data_view.highlight_id(&3);
+    zero_selection.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut EventCtx::default(),
+    );
+    assert!(zero_selection.reorder.is_some());
+    assert!(zero_selection.flat_block_move.is_none());
+
+    let mut one_selection = ranked_control(ranked_rows(5));
+    one_selection.flat_range_selection = Some(FlatRangeSelectionState {
+        selected: vec![1],
+        anchor: 1,
+        range_mode: false,
+    });
+    one_selection
+        .data_view
+        .set_selection_overlay(vec![1], None, 0, false);
+    one_selection.data_view.highlight_id(&3);
+    for key in [
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        KeyEvent::from(Key::Char(' ')),
+    ] {
+        let mut ctx = EventCtx::default();
+        assert_eq!(
+            one_selection.handle_reorder_key(key, &mut ctx),
+            Some(EventOutcome::Handled)
+        );
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+    assert!(one_selection.reorder.is_none());
+    assert!(one_selection.flat_block_move.is_none());
+    assert_eq!(
+        one_selection.data_view.reorder_visible_ids(),
+        vec![0, 1, 2, 3, 4]
+    );
+}
+
+#[test]
+fn local_search_rejects_flat_block_move_and_clears_selection() {
+    let mut control = ranked_control(ranked_rows(12));
+    control.data_view.set_search_query("1");
+    let selected = control.data_view.reorder_visible_ids();
+    assert_eq!(selected, vec![1, 10, 11]);
+    control.flat_range_selection = Some(FlatRangeSelectionState {
+        selected: selected[..2].to_vec(),
+        anchor: selected[0],
+        range_mode: true,
+    });
+    control
+        .data_view
+        .set_selection_overlay(selected[..2].to_vec(), None, 0, false);
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        control.handle_reorder_key(
+            modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+            &mut ctx,
+        ),
+        Some(EventOutcome::Handled)
+    );
+
+    assert!(!control.is_reordering());
+    assert_flat_range_cleared(&control);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn starting_editor_clears_flat_range_selection() {
+    let mut adding = ranked_control(ranked_rows(4));
+    seed_stale_flat_range(&mut adding);
+    adding.begin_add(None);
+    assert_flat_range_cleared(&adding);
+
+    let mut editing =
+        ranked_control(ranked_rows(4)).editable(|row| vec![row.rank.to_string()], |_, _| {});
+    editing.data_view.highlight_id(&1);
+    seed_stale_flat_range(&mut editing);
+
+    assert!(editing.begin_edit());
+    assert_flat_range_cleared(&editing);
+}
+
+#[test]
+fn flat_block_move_clears_state_for_focus_loss_unmount_mutation_and_conflict() {
+    let settings = AnimationSettings::default();
+
+    let mut focus_loss = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut focus_loss, 1);
+    let mut layout = LayoutCtx::new();
+    focus_loss.layout(Rect::new(0, 0, 30, 5), &mut layout);
+    let data_target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.path == TreePath::from_keys([ChildKey::new(DATA_SLOT)]))
+        .expect("data focus target should exist")
+        .clone();
+    focus_loss.dispatch_focus(&data_target, false, &mut FocusCtx::new(settings));
+    assert_flat_block_cleared(&focus_loss);
+
+    let mut unmounted = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut unmounted, 1);
+    unmounted.unmount(&mut LifecycleCtx::default());
+    assert_flat_block_cleared(&unmounted);
+
+    let mut mutable = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut mutable, 1);
+    let _ = mutable.data_view_mut();
+    assert_flat_block_cleared(&mutable);
+
+    let mut conflicted = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut conflicted, 1);
+    conflicted.data_view.set_rows(ranked_rows(6));
+    conflicted.handle_reorder_key(KeyEvent::from(Key::Down), &mut EventCtx::default());
+    assert_flat_block_cleared(&conflicted);
+    assert!(matches!(
+        conflicted.take_events().as_slice(),
+        [ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DataChanged
+        }]
+    ));
+}
+
+#[test]
+fn flat_range_stays_visible_during_block_move_and_clears_when_reorder_exits() {
+    let mut entering = ranked_control(ranked_rows(4));
+    entering.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    entering.handle_flat_range_selection_key(
+        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+        &mut ctx,
+    );
+    entering.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert!(entering.flat_block_move.is_some());
+    assert!(entering.flat_range_selection.is_some());
+    assert!(entering.data_view.selection_overlay_active_for_test());
+
+    let mut committed = ranked_control(ranked_rows(4));
+    start_reordering(&mut committed, 1);
+    seed_stale_flat_range(&mut committed);
+    committed.handle_reorder_key(KeyEvent::from(Key::Enter), &mut EventCtx::default());
+    assert_flat_range_cleared(&committed);
+
+    let mut cancelled = ranked_control(ranked_rows(4));
+    start_reordering(&mut cancelled, 1);
+    seed_stale_flat_range(&mut cancelled);
+    cancelled.handle_reorder_key(KeyEvent::from(Key::Esc), &mut EventCtx::default());
+    assert_flat_range_cleared(&cancelled);
+
+    let mut focus_lost = ranked_control(ranked_rows(4));
+    start_reordering(&mut focus_lost, 1);
+    seed_stale_flat_range(&mut focus_lost);
+    focus_lost.cancel_reorder_for_focus_loss(AnimationSettings::default());
+    assert_flat_range_cleared(&focus_lost);
+
+    let mut unmounted = ranked_control(ranked_rows(4));
+    start_reordering(&mut unmounted, 1);
+    seed_stale_flat_range(&mut unmounted);
+    unmounted.unmount(&mut LifecycleCtx::default());
+    assert_flat_range_cleared(&unmounted);
+}
+
+#[test]
+fn confirmed_remove_clears_flat_range_when_confirmation_opens_and_closes() {
+    let mut control = ranked_control(ranked_rows(4)).confirm_remove("Remove", |_| String::new());
+    control.data_view.highlight_id(&1);
+    seed_stale_flat_range(&mut control);
+    let mut ctx = EventCtx::default();
+
+    assert!(control.request_remove_confirmation(&mut ctx));
+    assert_flat_range_cleared(&control);
+
+    seed_stale_flat_range(&mut control);
+    control.confirmation_event(
+        &EventRoute::new(TreePath::new()),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
+        &mut ctx,
+    );
+
+    assert!(!control.is_confirming_remove());
+    assert_flat_range_cleared(&control);
+}
+
+#[test]
+fn cancelled_remove_clears_flat_range_when_confirmation_closes() {
+    let mut control = ranked_control(ranked_rows(4)).confirm_remove("Remove", |_| String::new());
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    assert!(control.request_remove_confirmation(&mut ctx));
+    seed_stale_flat_range(&mut control);
+    control.confirmation_event(
+        &EventRoute::new(TreePath::new()),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('c'))),
+        &mut ctx,
+    );
+
+    assert!(!control.is_confirming_remove());
+    assert_flat_range_cleared(&control);
+}
+
+#[test]
 fn reorder_highlight_eases_in_stays_active_and_eases_out_after_commit() {
     let mut control =
         ranked_control([RankedRow { id: 1, rank: 10 }, RankedRow { id: 2, rank: 20 }]);
@@ -1062,6 +1551,626 @@ fn measure_reserves_height_for_horizontal_scrollbar() {
     let geometry = control.data_view.scroll_geometry(control.data_area);
     assert!(geometry.layout.horizontal_bar.is_some());
     assert!(geometry.layout.vertical_bar.is_none());
+}
+
+fn mutable_tree_control(rows: impl IntoIterator<Item = TreeRow>) -> ListControl<TreeRow, usize> {
+    ListControl::list(
+        rows,
+        |row: &TreeRow| row.id,
+        |row| row.id.to_string(),
+        |_, _| unreachable!("tree selection test does not add rows"),
+    )
+    .tree(TreeAdapter::mutable_parent_id(
+        |row: &TreeRow| row.parent,
+        |row, parent| row.parent = parent,
+    ))
+}
+
+fn tree_block_move_control() -> ListControl<TreeRow, usize> {
+    let mut control = tree_selection_control();
+    let mut ctx = EventCtx::default();
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control
+}
+
+fn tree_selection_control() -> ListControl<TreeRow, usize> {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control
+}
+
+#[test]
+fn ctrl_navigation_does_not_clear_tree_selection_without_quick_move() {
+    let mut control = tree_block_move_control();
+    let selected = control
+        .tree_selection
+        .as_ref()
+        .expect("selection should be active")
+        .selected
+        .clone();
+
+    assert_eq!(
+        control.handle_quick_tree_move(modified_key(Key::Down, KeyModifiers::CONTROL)),
+        None
+    );
+    assert_eq!(
+        control
+            .tree_selection
+            .as_ref()
+            .expect("selection should remain active")
+            .selected,
+        selected
+    );
+}
+
+#[test]
+fn block_move_start_does_not_start_single_row_reorder() {
+    let control = tree_block_move_control();
+
+    assert!(control.tree_block_move.is_some());
+    assert!(control.tree_reorder.is_none());
+    assert!(control.reorder.is_none());
+}
+
+#[test]
+fn tree_block_move_supports_page_and_edge_navigation_keys() {
+    for (keys, expected_target) in [
+        (vec![KeyEvent::from(Key::Home)], 0),
+        (
+            vec![
+                KeyEvent::from(Key::Char('g')),
+                KeyEvent::from(Key::Char('g')),
+            ],
+            0,
+        ),
+        (vec![modified_key(Key::Char('u'), KeyModifiers::CONTROL)], 0),
+        (vec![KeyEvent::from(Key::PageUp)], 0),
+        (vec![KeyEvent::from(Key::End)], 1),
+        (vec![modified_key(Key::Char('G'), KeyModifiers::SHIFT)], 1),
+    ] {
+        let mut control = tree_block_move_control();
+        let mut ctx = EventCtx::default();
+
+        for key in keys {
+            control.handle_reorder_key(key, &mut ctx);
+        }
+
+        assert_eq!(
+            control
+                .tree_block_move
+                .as_ref()
+                .expect("tree block move should remain active")
+                .sibling_index,
+            expected_target
+        );
+    }
+
+    for key in [
+        modified_key(Key::Char('d'), KeyModifiers::CONTROL),
+        KeyEvent::from(Key::PageDown),
+    ] {
+        let mut control = tree_block_move_control();
+        let mut ctx = EventCtx::default();
+        control.handle_reorder_key(KeyEvent::from(Key::Home), &mut ctx);
+        control.handle_reorder_key(key, &mut ctx);
+
+        assert_eq!(
+            control
+                .tree_block_move
+                .as_ref()
+                .expect("tree block move should remain active")
+                .sibling_index,
+            1
+        );
+    }
+}
+
+#[test]
+fn one_item_tree_range_consumes_block_commands() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+    ]);
+    control.tree_selection = Some(TreeSelectionState {
+        selected: vec![1],
+        anchor: None,
+        range_mode: true,
+    });
+
+    for key in [
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        KeyEvent::from(Key::Char(' ')),
+    ] {
+        let mut ctx = EventCtx::default();
+
+        assert_eq!(
+            control.handle_reorder_key(key, &mut ctx),
+            Some(EventOutcome::Handled)
+        );
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+        assert!(!control.is_reordering());
+    }
+}
+
+#[test]
+fn block_move_commit_and_cancel_clear_reorder_state() {
+    for finish in [Key::Enter, Key::Esc] {
+        let mut control = tree_block_move_control();
+
+        control.handle_reorder_key(KeyEvent::from(finish), &mut EventCtx::default());
+
+        assert!(!control.is_reordering());
+    }
+}
+
+#[test]
+fn tree_block_move_teardown_clears_modal_state() {
+    let settings = AnimationSettings::default();
+    let mut focus_control = tree_block_move_control();
+    let mut layout = LayoutCtx::new();
+    focus_control.layout(Rect::new(0, 0, 30, 5), &mut layout);
+    let data_target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.path == TreePath::from_keys([ChildKey::new(DATA_SLOT)]))
+        .expect("data focus target should exist")
+        .clone();
+    let mut focus = FocusCtx::new(settings);
+
+    focus_control.dispatch_focus(&data_target, false, &mut focus);
+
+    assert!(!focus_control.is_reordering());
+    assert!(focus.layout_requested());
+
+    let mut mutable_control = tree_block_move_control();
+    let _ = mutable_control.data_view_mut();
+    assert!(!mutable_control.is_reordering());
+    assert!(matches!(
+        mutable_control.take_events().as_slice(),
+        [ListControlEvent::TreeBlockMoveCancelled { .. }]
+    ));
+
+    let mut unmounted_control = tree_block_move_control();
+    unmounted_control.unmount(&mut LifecycleCtx::default());
+    assert!(!unmounted_control.is_reordering());
+}
+
+#[test]
+fn tree_block_move_h_and_l_reparent_selected_roots() {
+    let mut outdent = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: Some(1),
+        },
+        TreeRow {
+            id: 3,
+            parent: Some(1),
+        },
+        TreeRow {
+            id: 4,
+            parent: None,
+        },
+    ]);
+    outdent.data_view_mut().expand_tree_row(1);
+    outdent.data_view.highlight_id(&2);
+    let mut ctx = EventCtx::default();
+    outdent.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    outdent.handle_tree_selection_key(KeyEvent::from(Key::Char(' ')), &mut ctx);
+    outdent.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    outdent.handle_reorder_key(KeyEvent::from(Key::Char('h')), &mut ctx);
+    assert_eq!(
+        outdent
+            .tree_block_move
+            .as_ref()
+            .expect("block move should remain active")
+            .parent_id,
+        None
+    );
+    outdent.handle_reorder_key(KeyEvent::from(Key::Char('j')), &mut ctx);
+    outdent.handle_reorder_key(KeyEvent::from(Key::Char('k')), &mut ctx);
+    outdent.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+    assert_eq!(
+        outdent.take_events(),
+        vec![ListControlEvent::TreeBlockMoved {
+            row_ids: vec![2, 3],
+            parent_id: None,
+            sibling_index: 1,
+        }]
+    );
+    assert_eq!(
+        outdent
+            .items()
+            .iter()
+            .map(|row| (row.id, row.parent))
+            .collect::<Vec<_>>(),
+        vec![(1, None), (2, None), (3, None), (4, None)]
+    );
+
+    let mut indent = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+    ]);
+    indent.data_view.highlight_id(&2);
+    indent.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    indent.handle_tree_selection_key(KeyEvent::from(Key::Char(' ')), &mut ctx);
+    indent.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    indent.handle_reorder_key(KeyEvent::from(Key::Char('l')), &mut ctx);
+    indent.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+    assert_eq!(
+        indent
+            .items()
+            .iter()
+            .map(|row| (row.id, row.parent))
+            .collect::<Vec<_>>(),
+        vec![(1, None), (2, Some(1)), (3, Some(1))]
+    );
+}
+
+#[test]
+fn tree_block_placeholder_indented_under_root_has_depth_one() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&2);
+    let mut ctx = EventCtx::default();
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(KeyEvent::from(Key::Char(' ')), &mut ctx);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    control.handle_reorder_key(KeyEvent::from(Key::Char('l')), &mut ctx);
+
+    let depth = control
+        .data_view
+        .selection_placeholder_depth_for_test()
+        .expect("tree block move should create a placeholder");
+    assert_eq!(depth, 1);
+}
+
+#[test]
+fn tree_block_indent_expands_collapsed_target_until_commit_or_cancel() {
+    let rows = [
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 4,
+            parent: Some(1),
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+    ];
+    let mut committed = mutable_tree_control(rows.clone());
+    committed.data_view.highlight_id(&2);
+    let mut ctx = EventCtx::default();
+    committed.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    committed.handle_tree_selection_key(KeyEvent::from(Key::Char(' ')), &mut ctx);
+    committed.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    committed.handle_reorder_key(KeyEvent::from(Key::Char('l')), &mut ctx);
+
+    assert!(committed.data_view.tree_expansion_snapshot().contains(&1));
+    assert_eq!(
+        committed
+            .tree_block_move
+            .as_ref()
+            .expect("block move should remain active")
+            .parent_id,
+        Some(1)
+    );
+
+    committed.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+    assert!(committed.data_view.tree_expansion_snapshot().contains(&1));
+    assert_eq!(committed.data_view.highlighted_id(), Some(2));
+
+    let mut cancelled = mutable_tree_control(rows);
+    cancelled.data_view.highlight_id(&2);
+    cancelled.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    cancelled.handle_tree_selection_key(KeyEvent::from(Key::Char(' ')), &mut ctx);
+    cancelled.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    cancelled.handle_reorder_key(KeyEvent::from(Key::Char('l')), &mut ctx);
+    cancelled.handle_reorder_key(KeyEvent::from(Key::Esc), &mut ctx);
+
+    assert!(!cancelled.data_view.tree_expansion_snapshot().contains(&1));
+}
+
+#[test]
+fn mutable_data_view_access_clears_pre_move_tree_selection() {
+    let mut control = tree_selection_control();
+
+    control.data_view_mut().set_visible_row_ids([1]);
+
+    assert!(control.tree_selection.is_none());
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut EventCtx::default(),
+    );
+    assert!(!control.is_reordering());
+}
+
+#[test]
+fn block_move_start_clears_selection_when_it_becomes_unavailable() {
+    for key in [
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        KeyEvent::from(Key::Char(' ')),
+    ] {
+        let mut control = tree_selection_control();
+        control.data_view.set_visible_row_ids([1]);
+
+        control.handle_reorder_key(key, &mut EventCtx::default());
+
+        assert!(
+            control.tree_selection.is_none(),
+            "{key:?} should clear selection"
+        );
+        assert!(
+            !control.is_reordering(),
+            "{key:?} should not start block move"
+        );
+    }
+}
+
+#[test]
+fn tree_ctrl_navigation_selects_the_origin_and_space_toggles_current_siblings() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+        TreeRow {
+            id: 4,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&2);
+    let mut ctx = EventCtx::default();
+
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(KeyEvent::from(Key::Char(' ')), &mut ctx);
+    assert_eq!(control.data_view.highlighted_id(), Some(4));
+    assert_eq!(
+        control
+            .tree_selection
+            .as_ref()
+            .expect("ctrl selection should remain active")
+            .selected,
+        vec![2, 4]
+    );
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+
+    assert_eq!(
+        control.items().iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![1, 3, 2, 4]
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::TreeBlockMoved {
+            row_ids: vec![2, 4],
+            parent_id: None,
+            sibling_index: 2,
+        }]
+    );
+}
+
+#[test]
+fn tree_shift_selection_stays_within_sibling_parent() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: Some(1),
+        },
+        TreeRow {
+            id: 3,
+            parent: Some(1),
+        },
+        TreeRow {
+            id: 4,
+            parent: None,
+        },
+    ])
+    .expanded([1]);
+    control.data_view.highlight_id(&2);
+
+    control.handle_tree_selection_key(
+        modified_key(Key::Down, KeyModifiers::SHIFT),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(
+        control
+            .tree_selection
+            .as_ref()
+            .expect("shift starts selection")
+            .selected,
+        vec![2, 3]
+    );
+    assert_eq!(control.data_view.highlighted_id(), Some(3));
+}
+
+#[test]
+fn plain_data_view_navigation_clears_tree_range_selection() {
+    let navigation_keys = [
+        KeyEvent::from(Key::Up),
+        KeyEvent::from(Key::Down),
+        KeyEvent::from(Key::Left),
+        KeyEvent::from(Key::Right),
+        KeyEvent::from(Key::PageUp),
+        KeyEvent::from(Key::PageDown),
+        KeyEvent::from(Key::Home),
+        KeyEvent::from(Key::End),
+        KeyEvent::from(Key::Char('g')),
+        modified_key(Key::Char('g'), KeyModifiers::SHIFT),
+    ];
+
+    for key in navigation_keys {
+        let mut control = mutable_tree_control([
+            TreeRow {
+                id: 1,
+                parent: None,
+            },
+            TreeRow {
+                id: 2,
+                parent: None,
+            },
+        ]);
+        control.data_view.highlight_id(&1);
+        let mut ctx = EventCtx::default();
+        control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+
+        control.handle_tree_selection_key(key, &mut ctx);
+
+        assert!(
+            control.tree_selection.is_none(),
+            "{key:?} should clear range"
+        );
+    }
+}
+
+#[test]
+fn plain_navigation_keeps_tree_ctrl_selection() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    let selected = control
+        .tree_selection
+        .as_ref()
+        .expect("ctrl selection should be active")
+        .selected
+        .clone();
+
+    control.handle_tree_selection_key(KeyEvent::from(Key::PageDown), &mut ctx);
+
+    assert_eq!(
+        control
+            .tree_selection
+            .as_ref()
+            .expect("ctrl selection should remain active")
+            .selected,
+        selected
+    );
+}
+
+#[test]
+fn escape_clears_tree_selection_after_it_becomes_unavailable() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.data_view.set_visible_row_ids([1]);
+
+    let outcome = control.handle_tree_selection_key(KeyEvent::from(Key::Esc), &mut ctx);
+
+    assert_eq!(outcome, Some(EventOutcome::Handled));
+    assert!(control.tree_selection.is_none());
 }
 
 #[test]

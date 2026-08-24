@@ -29,14 +29,15 @@ use super::{
     DropdownVariant, SeasonalEmptyState, text_input::TextInput,
 };
 
+pub(crate) use model::SelectionOverlayPosition;
 pub use model::{
     ActivationMode, CellContext, CheckState, Column, ColumnSizing, DataViewEvent, DataViewFilter,
     DataViewOutcome, DataViewPagination, DataViewSort, DataViewTransformMode,
     DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
+use model::{DisplayRow, RowIdFn, SelectionOverlay, VisibleRow};
 pub(crate) use model::{ReorderSnapshot, ReorderUnavailableReason};
-use model::{RowIdFn, VisibleRow};
 pub(crate) use tree_edit::TreeEditSnapshot;
 
 const HORIZONTAL_JUMP_PERCENT: usize = 70;
@@ -118,6 +119,7 @@ pub struct DataView<T, Id> {
     reorder_highlight_phase: ReorderHighlightPhase,
     reorder_highlight_crossfades: bool,
     scroll_restoration: Option<DataViewScrollRestoration>,
+    selection_overlay: Option<SelectionOverlay<Id>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -220,6 +222,7 @@ where
             reorder_highlight_phase: ReorderHighlightPhase::Inactive,
             reorder_highlight_crossfades: false,
             scroll_restoration: None,
+            selection_overlay: None,
         }
     }
 
@@ -654,6 +657,11 @@ where
             self.scroll.target_offset(),
             self.scroll.is_active(),
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selection_overlay_active_for_test(&self) -> bool {
+        self.selection_overlay.is_some()
     }
 
     pub fn pagination(mut self, page_size: usize) -> Self {
@@ -1315,6 +1323,24 @@ where
         self.on_key_with_settings_and_bindings(key, area, settings, &keys)
     }
 
+    pub(crate) fn is_navigation_key(&self, key: KeyEvent) -> bool {
+        let keys = keybindings();
+        let data_keys = keys.data_view();
+        horizontal_jump_direction(&keys, key).is_some()
+            || keys.line_up_matches(key)
+            || keys.line_down_matches(key)
+            || keys.line_left_matches(key)
+            || keys.line_right_matches(key)
+            || keys.page_up_matches(key)
+            || keys.page_down_matches(key)
+            || keys.home_matches(key)
+            || keys.end_matches(key)
+            || data_keys.top_prefix_matches(key)
+            || data_keys.bottom_matches(key)
+            || data_keys.next_page_matches(key)
+            || data_keys.previous_page_matches(key)
+    }
+
     fn on_key_with_settings_and_bindings(
         &mut self,
         key: KeyEvent,
@@ -1831,6 +1857,38 @@ where
             row_start
         } else if row_end > current.saturating_add(viewport_height) {
             row_end.saturating_sub(viewport_height)
+        } else {
+            current
+        };
+        self.scroll.scroll_to(
+            ScrollOffset::new(self.scroll.target_offset().x, target),
+            geometry.viewport,
+            geometry.content,
+            settings,
+        )
+    }
+
+    pub(crate) fn ensure_selection_placeholder_visible(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> ScrollOutcome {
+        let geometry = self.scroll_geometry(area);
+        let Some(index) = self
+            .display_rows()
+            .iter()
+            .position(|row| matches!(row, DisplayRow::SelectionPlaceholder { .. }))
+        else {
+            return ScrollOutcome::idle();
+        };
+        let rows = self.visible_row_geometry();
+        let (start, end) = rows.span(index).unwrap_or((0, 0));
+        let viewport = geometry.viewport.height.max(1);
+        let current = self.scroll.target_offset().y;
+        let target = if start < current {
+            start
+        } else if end > current.saturating_add(viewport) {
+            end.saturating_sub(viewport)
         } else {
             current
         };

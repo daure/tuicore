@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
 
 use super::{
-    CELL_RIGHT_PADDING, CellContext, CheckState, DataView, DataViewInteraction, SelectionMode,
-    SortDirection, VisibleRow,
+    CELL_RIGHT_PADDING, CellContext, CheckState, DataView, DataViewInteraction, DisplayRow,
+    SelectionMode, SortDirection, VisibleRow,
 };
 use crate::search::{MatchSpan, SearchMode, search_match};
 use crate::{RenderCtx, keybindings, lerp_color, line_width, preset, theme};
@@ -91,7 +91,7 @@ where
 
         let rendered_widths = self.rendered_column_widths();
         let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
-        let visible = self.visible_rows();
+        let visible = self.display_rows();
         let offset = self.visible_offset(geometry.viewport, geometry.content);
         let column_widths = self
             .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
@@ -132,25 +132,46 @@ where
                 geometry.layout.viewport.width,
                 clipped_end.saturating_sub(clipped_start) as u16,
             );
-            let highlighted = line_index == self.highlighted;
-            let row_style =
-                self.row_style(highlighted, row, &selection_descendants, base_row_style);
+            let highlighted = matches!(row, DisplayRow::Data(row) if self.highlighted_id().as_ref() == Some(&row.id));
+            let row_style = match row {
+                DisplayRow::Data(row) => {
+                    self.row_style(highlighted, row, &selection_descendants, base_row_style)
+                }
+                DisplayRow::SelectionPlaceholder { focused, .. } => Some(if *focused {
+                    self.reorder_placeholder_style()
+                } else {
+                    self.selected_row_style()
+                }),
+            };
             frame.render_widget(
                 Block::default().style(row_style.unwrap_or_default()),
                 row_area,
             );
-            self.render_row(
-                frame,
-                row_area,
-                &column_widths,
-                offset.x,
-                clipped_start.saturating_sub(row_start) as u16,
-                row,
-                highlighted,
-                row_style,
-                &selection_descendants,
-                show_tree_gutter,
-            );
+            match row {
+                DisplayRow::Data(row) => self.render_row(
+                    frame,
+                    row_area,
+                    &column_widths,
+                    offset.x,
+                    clipped_start.saturating_sub(row_start) as u16,
+                    row,
+                    highlighted,
+                    row_style,
+                    &selection_descendants,
+                    show_tree_gutter,
+                ),
+                DisplayRow::SelectionPlaceholder { count, depth, .. } => self
+                    .render_selection_placeholder(
+                        frame,
+                        row_area,
+                        &column_widths,
+                        offset.x,
+                        *count,
+                        *depth,
+                        row_style,
+                        show_tree_gutter,
+                    ),
+            }
         }
 
         self.scroll
@@ -312,6 +333,33 @@ where
         }
     }
 
+    fn render_selection_placeholder(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        column_widths: &[usize],
+        offset_x: usize,
+        count: usize,
+        depth: usize,
+        style: Option<Style>,
+        show_tree_gutter: bool,
+    ) {
+        let cells = self.column_areas(area, column_widths, offset_x);
+        let Some(Some(cell)) = cells.first() else {
+            return;
+        };
+        let text = self.with_selection_placeholder_prefix(
+            Text::from(format!("{count} items selected")),
+            depth,
+            show_tree_gutter,
+        );
+        let mut paragraph = Paragraph::new(text).scroll((0, cell.scroll_x));
+        if let Some(style) = style {
+            paragraph = paragraph.style(style);
+        }
+        frame.render_widget(paragraph, cell.area);
+    }
+
     fn with_row_prefix(
         &self,
         mut text: Text<'static>,
@@ -371,6 +419,36 @@ where
         text
     }
 
+    fn with_selection_placeholder_prefix(
+        &self,
+        mut text: Text<'static>,
+        depth: usize,
+        show_tree_gutter: bool,
+    ) -> Text<'static> {
+        if !show_tree_gutter {
+            return text;
+        }
+        if text.lines.is_empty() {
+            text.lines.push(Line::default());
+        }
+        let prefix = format!(
+            "{}{} ",
+            " ".repeat(depth.saturating_mul(preset().data_view().tree_indent_width())),
+            self.tree_glyphs.leaf
+        );
+        let prefix_width = line_width(&Line::from(prefix.as_str()));
+        for (index, line) in text.lines.iter_mut().enumerate() {
+            let mut spans = if index == 0 {
+                vec![Span::raw(prefix.clone())]
+            } else {
+                vec![Span::raw(" ".repeat(prefix_width))]
+            };
+            spans.append(&mut line.spans);
+            line.spans = spans;
+        }
+        text
+    }
+
     #[cfg(test)]
     pub(super) fn selection_glyph(&self, row: &VisibleRow<'_, T, Id>) -> &'static str {
         let descendants = self.selection_descendants_by_id();
@@ -397,6 +475,12 @@ where
 
         if self.row_has_reorder_highlight(&row.id) {
             Some(self.reorder_highlighted_row_style())
+        } else if self
+            .selection_overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.selected.contains(&row.id))
+        {
+            Some(self.selected_row_style())
         } else if highlighted && self.focused {
             Some(self.highlighted_row_style())
         } else if !self.displays_selection_glyphs()
@@ -432,6 +516,14 @@ where
     fn reorder_highlighted_row_style(&self) -> Style {
         let theme = theme();
         self.reorder_highlighted_row_style_with_colors(theme.highlight_fg(), theme.highlight_bg())
+    }
+
+    fn reorder_placeholder_style(&self) -> Style {
+        let theme = theme();
+        Style::default()
+            .fg(theme.highlight_bg())
+            .bg(theme.highlight_fg())
+            .add_modifier(Modifier::BOLD)
     }
 
     pub(super) fn reorder_highlighted_row_style_with_colors(

@@ -495,3 +495,26 @@ pub(super) struct VisibleRow<'a, T, Id> {
     pub has_children: bool,
     pub expanded: bool,
 }
+
+#[derive(Debug, Clone)]
+pub(crate) enum SelectionOverlayPosition<Id> {
+    Before(Id),
+    After(Id),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SelectionOverlay<Id> {
+    pub selected: Vec<Id>,
+    pub position: Option<SelectionOverlayPosition<Id>>,
+    pub placeholder_depth: usize,
+    pub placeholder_focused: bool,
+}
+
+pub(super) enum DisplayRow<'a, T, Id> {
+    Data(VisibleRow<'a, T, Id>),
+    SelectionPlaceholder {
+        count: usize,
+        depth: usize,
+        focused: bool,
+    },
+}

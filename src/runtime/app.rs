@@ -481,8 +481,7 @@ where
                 dispatcher.dispatch_focus(&mut self.root, transition, self.animation_settings);
             let external_editor = effects.external_editor.clone();
             flags.merge(self.handle_effects(effects));
-            if let (Some(terminal), Some(route), Some(request)) =
-                (terminal, route, external_editor)
+            if let (Some(terminal), Some(route), Some(request)) = (terminal, route, external_editor)
             {
                 self.handle_external_editor(flags, dispatcher, terminal, route, request);
             }

@@ -922,7 +922,7 @@ impl<M> TextareaInput<M> {
         let placeholder_style = if selected && self.disabled {
             disabled_input_style(Style::default().fg(theme.muted_fg()))
         } else if selected && self.language.is_some() {
-            syntax_navigation_focus_style(Style::default().fg(theme.muted_fg()))
+            syntax_navigation_focus_style(Style::default().fg(theme.selected_fg()))
         } else if selected {
             selected_input_style(Style::default().fg(theme.muted_fg()))
         } else {
@@ -1002,7 +1002,7 @@ impl<M> TextareaInput<M> {
         let hotkey_style = if selected && self.disabled {
             disabled_input_style(Style::default())
         } else if syntax_navigation_focused {
-            syntax_navigation_focus_style(Style::default().fg(theme.muted_fg()))
+            syntax_navigation_focus_style(Style::default().fg(theme.selected_fg()))
         } else if selected {
             selected_input_style(Style::default())
         } else {
@@ -1112,7 +1112,6 @@ impl<M> TextareaInput<M> {
         let mut drawn = 0;
         let syntax_navigation_focused =
             self.focused && !self.insert_mode && !self.disabled && self.language.is_some();
-
         for col in horizontal..=range.len() {
             if drawn >= width {
                 break;
@@ -2420,7 +2419,7 @@ fn disabled_animation_settings() -> AnimationSettings {
 }
 
 fn syntax_navigation_focus_style(style: Style) -> Style {
-    style.bg(theme().highlight_bg())
+    style.bg(theme().selected_bg())
 }
 
 fn language_extension(language: Language) -> Option<String> {

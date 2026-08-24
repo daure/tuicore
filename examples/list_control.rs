@@ -222,7 +222,7 @@ pub(crate) fn reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M
             "Archive",
             "Retrospect",
         ]),
-        "Ctrl+M move · ↑↓/gg/G/Home/End/Pg/Ctrl+U,D · Enter commit · Esc cancel",
+        "Shift+J/K range · Ctrl+J/K navigate + Space select · Ctrl+M move block · ↑↓ move target · Enter commit · Esc clear/cancel",
         "lr",
     )
 }
@@ -262,7 +262,7 @@ fn tree_reorder_control<M: 'static>() -> ListControl<ListDemoRow, usize, M> {
         |row, parent_id| row.parent_id = parent_id,
     ))
     .expanded([1, 2, 5, 8])
-    .title("Ctrl+M move · ↑↓ sibling · ←→ reparent · Enter commit · Esc cancel")
+    .title("Shift+J/K range · Ctrl+J/K navigate + Space select · Ctrl+M move block · Esc cancel")
     .hotkey("lrt")
     .max_rows(12)
 }
@@ -287,6 +287,7 @@ fn reorder_list<M: 'static>(
         .hidden(),
     )
     .reorderable_by("rank")
+    .action_bar(true)
     .title(title)
     .hotkey(hotkey)
     .max_rows(10)
