@@ -635,6 +635,193 @@ fn day_reordering_uses_semantic_highlight_and_emits_scoped_order() {
 }
 
 #[test]
+fn day_reordering_moves_a_shift_selected_block() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "a",
+                title: "A",
+                span,
+            },
+            DemoEntry {
+                id: "b",
+                title: "B",
+                span,
+            },
+            DemoEntry {
+                id: "c",
+                title: "C",
+                span,
+            },
+            DemoEntry {
+                id: "d",
+                title: "D",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
+
+    calendar.on_key(Key::Down);
+    calendar.on_key(KeyEvent {
+        code: Key::Char('j'),
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(KeyEvent {
+        code: Key::Char('m'),
+        modifiers: KeyModifiers::CONTROL,
+    });
+    assert!(calendar.day_entries.selected_ids().is_empty());
+    assert!(calendar.day_entries.rows().iter().all(|row| {
+        !calendar
+            .day_entries
+            .row_has_reorder_highlight(&row.entry_index)
+    }));
+    let source_rows = calendar
+        .day_entries
+        .rows()
+        .iter()
+        .map(|row| row.entry_index)
+        .collect::<Vec<_>>();
+    let area = Rect::new(0, 0, 30, 8);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    let position = |text: &str| rendered.find(text).expect("calendar text should render");
+    assert!(
+        position("09:00 B") < position("09:00 C")
+            && position("09:00 C") < position("2 items selected")
+            && position("2 items selected") < position("09:00 D"),
+        "calendar render: {rendered:?}"
+    );
+    calendar.on_key(Key::Down);
+    assert_eq!(
+        calendar
+            .day_entries
+            .rows()
+            .iter()
+            .map(|row| row.entry_index)
+            .collect::<Vec<_>>(),
+        source_rows
+    );
+    calendar.on_key(Key::Enter);
+
+    let events = calendar.take_events();
+    assert!(
+        events.contains(&CalendarTypedEvent::EntriesReordered {
+            entry_ids: vec!["a", "d", "b", "c"],
+        }),
+        "calendar events: {events:?}"
+    );
+}
+
+#[test]
+fn day_reordering_moves_a_ctrl_selected_block() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "1",
+                title: "1",
+                span,
+            },
+            DemoEntry {
+                id: "2",
+                title: "2",
+                span,
+            },
+            DemoEntry {
+                id: "3",
+                title: "3",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
+
+    for key in [
+        KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        KeyEvent {
+            code: Key::Char(' '),
+            modifiers: KeyModifiers::CONTROL,
+        },
+        KeyEvent {
+            code: Key::Char('m'),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ] {
+        calendar.on_key(key);
+    }
+
+    assert!(calendar.day_entries.selected_ids().is_empty());
+    assert!(calendar.day_entries.rows().iter().all(|row| {
+        !calendar
+            .day_entries
+            .row_has_reorder_highlight(&row.entry_index)
+    }));
+    let area = Rect::new(0, 0, 30, 8);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| calendar.render(frame, frame.area()))
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(
+        rendered.find("09:00 3").unwrap() < rendered.find("2 items selected").unwrap(),
+        "calendar render: {rendered:?}"
+    );
+    calendar.on_key(Key::Down);
+    calendar.on_key(Key::Enter);
+
+    assert!(
+        calendar
+            .take_events()
+            .contains(&CalendarTypedEvent::EntriesReordered {
+                entry_ids: vec!["2", "1", "3"],
+            })
+    );
+}
+
+#[test]
 fn day_reordering_ignores_a_scope_with_one_entry() {
     let day = date(2026, Month::June, 22);
     let mut calendar = demo_calendar()

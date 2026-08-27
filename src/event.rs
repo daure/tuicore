@@ -8,6 +8,7 @@ pub enum TuiEvent {
     Hotkey(HotkeyEvent),
     Yank,
     ExternalEditor(ExternalEditorResponse),
+    ExternalEditorUpdated { value: String },
     FocusGained,
     FocusLost,
     Mouse(MouseEvent),

@@ -817,6 +817,53 @@ fn external_editor_emits_change_only_when_accepted_value_differs() {
 }
 
 #[test]
+fn external_editor_updates_keep_editing_and_complete_once() {
+    let mut input = TextInput::new()
+        .value("initial")
+        .max_len(4)
+        .on_change(|value| format!("change:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
+    input.insert_mode = true;
+    let mut update = EventCtx::default();
+
+    input.event(
+        &TuiEvent::ExternalEditorUpdated {
+            value: "saved value".into(),
+        },
+        &mut update,
+    );
+    input.event(
+        &TuiEvent::ExternalEditorUpdated {
+            value: "save later".into(),
+        },
+        &mut update,
+    );
+
+    assert_eq!(input.current_value(), "save");
+    assert!(input.insert_mode());
+    assert_eq!(update.messages(), &["change:save".to_string()]);
+    assert!(!update.clear_requested());
+
+    let mut complete = EventCtx::default();
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "final".into(),
+            line: 1,
+            col: 3,
+        }),
+        &mut complete,
+    );
+
+    assert_eq!(input.current_value(), "fina");
+    assert_eq!(input.cursor, 2);
+    assert!(!input.insert_mode());
+    assert_eq!(
+        complete.messages(),
+        &["change:fina".to_string(), "end:fina".to_string()]
+    );
+}
+
+#[test]
 fn numbers_only_input_rejects_non_digits_from_keys_and_paste() {
     let mut input = TextInput::<()>::new().numbers_only(true).value("12");
     input.insert_mode = true;

@@ -1570,6 +1570,24 @@ fn textarea_edit_uses_stale_highlighting_only_for_unchanged_prefix() {
 }
 
 #[test]
+fn markdown_edit_preserves_unchanged_secondary_heading_highlighting_until_rebuild() {
+    let source = "# Primary\n\n## Secondary";
+    let mut input = TextareaInput::<()>::new()
+        .value(source)
+        .language(Language::Markdown);
+    finish_syntax(&mut input);
+    let secondary_heading = source.find("## Secondary").unwrap();
+    let expected_style = input.syntax_cache.as_ref().unwrap().styles[secondary_heading];
+
+    input.cursor = "# Primary\n".chars().count();
+    input.on_key(Key::Char('x'));
+
+    let line = &input.visible_lines(40, 3).lines[2];
+    assert_eq!(line.spans[0].content, "#");
+    assert_eq!(line.spans[0].style, expected_style);
+}
+
+#[test]
 fn textarea_highlight_styles_stay_aligned_after_wrapping() {
     let mut input = TextareaInput::<()>::new()
         .value("    fn main() {}")
@@ -1772,6 +1790,53 @@ fn external_editor_response_clamps_column_to_selected_line() {
     assert!(ctx.layout_requested());
     assert!(ctx.redraw_requested());
     assert!(ctx.clear_requested());
+}
+
+#[test]
+fn external_editor_updates_keep_editing_and_complete_once() {
+    let mut input = TextareaInput::new()
+        .value("initial")
+        .max_lines(1)
+        .on_change(|value| format!("change:{value}"))
+        .on_edit_end(|value| format!("end:{value}"));
+    input.insert_mode = true;
+    let mut update = EventCtx::default();
+
+    input.event(
+        &TuiEvent::ExternalEditorUpdated {
+            value: "saved\nignored".into(),
+        },
+        &mut update,
+    );
+    input.event(
+        &TuiEvent::ExternalEditorUpdated {
+            value: "saved\nnew ignored".into(),
+        },
+        &mut update,
+    );
+
+    assert_eq!(input.current_value(), "saved");
+    assert!(input.insert_mode());
+    assert_eq!(update.messages(), &["change:saved".to_string()]);
+    assert!(!update.clear_requested());
+
+    let mut complete = EventCtx::default();
+    input.event(
+        &TuiEvent::ExternalEditor(crate::ExternalEditorResponse {
+            value: "final\nignored".into(),
+            line: 1,
+            col: 3,
+        }),
+        &mut complete,
+    );
+
+    assert_eq!(input.current_value(), "final");
+    assert_eq!(input.cursor, 2);
+    assert!(!input.insert_mode());
+    assert_eq!(
+        complete.messages(),
+        &["change:final".to_string(), "end:final".to_string()]
+    );
 }
 
 #[test]

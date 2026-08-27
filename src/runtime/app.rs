@@ -3,7 +3,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -881,8 +881,16 @@ where
             line: request.line,
             col: request.col,
         };
-        let response =
-            complete_external_editor_response(fallback, edit_in_external_editor(terminal, request));
+        let animation_settings = self.animation_settings;
+        let response = complete_external_editor_response(
+            fallback,
+            edit_in_external_editor(terminal, request, |value| {
+                let event = TuiEvent::ExternalEditorUpdated { value };
+                let effects =
+                    dispatcher.dispatch_event(&mut self.root, &route, &event, animation_settings);
+                flags.merge(self.handle_effects(effects));
+            }),
+        );
         let event = TuiEvent::ExternalEditor(response);
         let effects =
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
@@ -1079,30 +1087,70 @@ fn is_global_quit_key(key: crate::KeyEvent, runtime: &RuntimeKeyBindings) -> boo
 fn edit_in_external_editor(
     terminal: &mut TerminalGuard,
     request: crate::ExternalEditorRequest,
+    mut on_update: impl FnMut(String),
 ) -> std::io::Result<Option<crate::ExternalEditorResponse>> {
     let temp_files = create_editor_temp_files(&request.value, request.file_extension.as_deref())?;
 
-    let status = terminal.suspend(|| {
-        run_editor(
-            &temp_files.text_path,
-            temp_files.pos_path(),
-            request.line,
-            request.col,
-        )
-    });
-    Ok(match status {
-        Ok(status) if status.success() => {
-            let content = std::fs::read_to_string(&temp_files.text_path)?;
-            let (line, col) =
-                editor_exit_position(temp_files.pos_path(), request.line, request.col);
-            Some(crate::ExternalEditorResponse {
-                value: strip_editor_terminal_newline(content),
-                line,
-                col,
-            })
+    terminal.suspend(|| monitor_external_editor(&temp_files, &request, &mut on_update))
+}
+
+const EXTERNAL_EDITOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+fn monitor_external_editor(
+    temp_files: &EditorTempFiles,
+    request: &crate::ExternalEditorRequest,
+    on_update: &mut impl FnMut(String),
+) -> std::io::Result<Option<crate::ExternalEditorResponse>> {
+    let mut child = spawn_editor(
+        &temp_files.text_path,
+        temp_files.pos_path(),
+        request.line,
+        request.col,
+    )?;
+    let mut snapshots = EditorFilePoll::new(request.value.clone());
+
+    while child.try_wait()?.is_none() {
+        if let Ok(Some(value)) = snapshots.poll(&temp_files.text_path) {
+            on_update(strip_editor_terminal_newline(value));
         }
-        _ => None,
-    })
+        std::thread::sleep(EXTERNAL_EDITOR_POLL_INTERVAL);
+    }
+
+    let content = std::fs::read_to_string(&temp_files.text_path)
+        .unwrap_or_else(|_| snapshots.emitted.clone());
+    let (line, col) = editor_exit_position(temp_files.pos_path(), request.line, request.col);
+    Ok(Some(crate::ExternalEditorResponse {
+        value: strip_editor_terminal_newline(content),
+        line,
+        col,
+    }))
+}
+
+struct EditorFilePoll {
+    emitted: String,
+    pending: Option<String>,
+}
+
+impl EditorFilePoll {
+    fn new(initial_value: String) -> Self {
+        Self {
+            emitted: initial_value,
+            pending: None,
+        }
+    }
+
+    fn poll(&mut self, path: &Path) -> std::io::Result<Option<String>> {
+        let content = std::fs::read_to_string(path)?;
+        if self.pending.as_deref() != Some(content.as_str()) {
+            self.pending = Some(content);
+            return Ok(None);
+        }
+        if self.emitted == content {
+            return Ok(None);
+        }
+        self.emitted = content.clone();
+        Ok(Some(content))
+    }
 }
 
 fn complete_external_editor_response(
@@ -1210,17 +1258,17 @@ fn create_unique_temp_file(prefix: &str, extension: &str) -> std::io::Result<(Pa
     ))
 }
 
-fn run_editor(
+fn spawn_editor(
     temp_path: &Path,
     pos_path: &Path,
     line: usize,
     col: usize,
-) -> std::io::Result<std::process::ExitStatus> {
+) -> std::io::Result<Child> {
     let editor = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
         .unwrap_or_else(|_| "vi".to_string());
     let mut cmd = editor_command(&editor, temp_path, pos_path, line, col);
-    cmd.status()
+    cmd.spawn()
 }
 
 fn editor_command(
@@ -2972,6 +3020,27 @@ mod tests {
             strip_editor_terminal_newline("edited\n\n".into()),
             "edited\n"
         );
+    }
+
+    #[test]
+    fn editor_file_poll_emits_only_stable_changed_snapshots() {
+        let temp_files =
+            create_editor_temp_files("initial", None).expect("temp files should be created");
+        let mut poll = EditorFilePoll::new("initial".into());
+
+        assert_eq!(poll.poll(&temp_files.text_path).unwrap(), None);
+        assert_eq!(poll.poll(&temp_files.text_path).unwrap(), None);
+
+        std::fs::write(&temp_files.text_path, "").unwrap();
+        assert_eq!(poll.poll(&temp_files.text_path).unwrap(), None);
+
+        std::fs::write(&temp_files.text_path, "saved").unwrap();
+        assert_eq!(poll.poll(&temp_files.text_path).unwrap(), None);
+        assert_eq!(
+            poll.poll(&temp_files.text_path).unwrap(),
+            Some("saved".into())
+        );
+        assert_eq!(poll.poll(&temp_files.text_path).unwrap(), None);
     }
 
     #[test]

@@ -13,9 +13,9 @@ use ratatui::layout::{Constraint, Rect};
 
 use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
 use super::{
-    ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView, Dropdown,
-    DropdownSearchMode, DropdownVariant, Panel, SeasonalEmptyState, SelectionMode,
-    SelectionTrigger, SortDirection, TextInput,
+    ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView,
+    DataViewTypedEvent, Dropdown, DropdownSearchMode, DropdownVariant, Panel, SeasonalEmptyState,
+    SelectionMode, SelectionTrigger, SortDirection, TextInput,
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
@@ -748,6 +748,10 @@ where
         self.clear_tree_selection();
         self.clear_flat_range_selection();
         &mut self.data_view
+    }
+
+    pub fn take_data_view_events(&mut self) -> Vec<DataViewTypedEvent<Id>> {
+        self.data_view.take_events()
     }
 
     pub fn panel_ref(&self) -> &Panel {

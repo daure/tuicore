@@ -34,6 +34,7 @@ use crate::{
 };
 
 use super::{Column, DataView, Panel, SelectionMode};
+use crate::components::data_view::SelectionOverlayPosition;
 
 const CALENDAR_FOCUS: &str = "calendar";
 const MONTH_EVENT_LINES: usize = 2;
@@ -52,9 +53,17 @@ type EntryOrderFn<T> = dyn Fn(&T, &T) -> Ordering;
 type ReorderGroupFn<T> = dyn Fn(&T, &T) -> bool;
 
 struct CalendarReorderState {
-    moving_entry: usize,
+    selected_entries: Vec<usize>,
+    source: Vec<usize>,
     staged: Vec<usize>,
+    target_index: usize,
     pending_top_prefix: bool,
+}
+
+struct CalendarDaySelectionState {
+    selected_entries: Vec<usize>,
+    anchor: usize,
+    range_mode: bool,
 }
 
 #[derive(Clone)]
@@ -120,6 +129,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     entry_order: Option<Box<EntryOrderFn<T>>>,
     reorder_group: Option<Box<ReorderGroupFn<T>>>,
     reordering: Option<CalendarReorderState>,
+    day_selection: Option<CalendarDaySelectionState>,
     committed_reorder: Option<Vec<usize>>,
     event_detail_on_activate: bool,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
@@ -261,6 +271,7 @@ where
             entry_order: None,
             reorder_group: None,
             reordering: None,
+            day_selection: None,
             committed_reorder: None,
             event_detail_on_activate: false,
             on_event: None,
@@ -461,6 +472,7 @@ where
         self.committed_reorder = None;
         self.day_entries.clear_reorder_highlight_immediately();
         self.cancel_reorder_immediately();
+        self.clear_day_selection();
         let highlighted_id = self.highlighted_entry_id();
         self.entries = entries.into_iter().collect();
         self.highlighted_entry = highlighted_id
@@ -478,6 +490,7 @@ where
         self.day_entries.set_focused(focused);
         if !focused {
             self.cancel_reorder_immediately();
+            self.clear_day_selection();
             self.pending_top_prefix = false;
             self.clear_quick_jump();
         }
@@ -519,6 +532,9 @@ where
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
         if let Some(outcome) = self.handle_reorder_key(key) {
+            return outcome;
+        }
+        if let Some(outcome) = self.handle_day_selection_key(key) {
             return outcome;
         }
         if let Some(outcome) = self.handle_date_quick_jump(key) {
@@ -604,38 +620,78 @@ where
         let Some(group) = &self.reorder_group else {
             return;
         };
-        let staged = self
+        let source = self
             .entries_on(self.cursor)
             .into_iter()
             .filter(|entry| group(&self.entries[moving_entry], &self.entries[*entry]))
             .collect::<Vec<_>>();
-        if staged.len() < 2 {
+        if source.len() < 2 {
             return;
         }
+        let selected_entries = self
+            .day_selection
+            .as_ref()
+            .map(|selection| {
+                source
+                    .iter()
+                    .filter(|entry| selection.selected_entries.contains(entry))
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .filter(|selected| selected.len() >= 2)
+            .unwrap_or_else(|| vec![moving_entry]);
+        let target_index = source
+            .iter()
+            .position(|entry| entry == &selected_entries[0])
+            .map(|index| {
+                source[..index]
+                    .iter()
+                    .filter(|entry| !selected_entries.contains(entry))
+                    .count()
+            })
+            .expect("selected calendar entry belongs to reorder scope");
+        let block_move = selected_entries.len() >= 2;
         self.committed_reorder = None;
-        self.day_entries
-            .start_reorder_highlight(moving_entry, animation_settings());
+        if !block_move {
+            self.day_entries
+                .start_reorder_highlight(moving_entry, animation_settings());
+        }
         self.reordering = Some(CalendarReorderState {
-            moving_entry,
-            staged,
+            selected_entries,
+            staged: source.clone(),
+            source,
+            target_index,
             pending_top_prefix: false,
         });
+        self.day_selection = None;
+        if block_move {
+            self.day_entries.clear_selection();
+            self.day_entries.set_selection_overlay(
+                self.reordering
+                    .as_ref()
+                    .expect("calendar reorder state is active")
+                    .selected_entries
+                    .clone(),
+                Some(SelectionOverlayPosition::After(
+                    *self
+                        .reordering
+                        .as_ref()
+                        .expect("calendar reorder state is active")
+                        .selected_entries
+                        .last()
+                        .expect("calendar block selection is not empty"),
+                )),
+                0,
+                true,
+            );
+        }
     }
 
     fn move_reorder(&mut self, delta: isize) -> CalendarOutcome {
         let Some(state) = &self.reordering else {
             return CalendarOutcome::HANDLED;
         };
-        let Some(index) = state
-            .staged
-            .iter()
-            .position(|entry| *entry == state.moving_entry)
-        else {
-            return CalendarOutcome::HANDLED;
-        };
-        let target = index
-            .saturating_add_signed(delta)
-            .min(state.staged.len().saturating_sub(1));
+        let target = state.target_index.saturating_add_signed(delta);
         self.move_reorder_to(target)
     }
 
@@ -643,20 +699,26 @@ where
         let Some(state) = &mut self.reordering else {
             return CalendarOutcome::HANDLED;
         };
-        let Some(index) = state
-            .staged
+        let remaining = state
+            .source
             .iter()
-            .position(|entry| *entry == state.moving_entry)
-        else {
-            return CalendarOutcome::HANDLED;
-        };
-        let target = target.min(state.staged.len().saturating_sub(1));
-        if target == index {
+            .filter(|entry| !state.selected_entries.contains(entry))
+            .copied()
+            .collect::<Vec<_>>();
+        let target = target.min(remaining.len());
+        if target == state.target_index {
             return CalendarOutcome::HANDLED;
         }
-        let moving_entry = state.staged.remove(index);
-        state.staged.insert(target, moving_entry);
-        self.refresh_day_entries();
+        let mut staged = remaining;
+        staged.splice(target..target, state.selected_entries.iter().copied());
+        state.target_index = target;
+        state.staged = staged;
+        if state.selected_entries.len() >= 2 {
+            self.update_reorder_overlay();
+            self.position_reorder_placeholder();
+        } else {
+            self.refresh_day_entries();
+        }
         CalendarOutcome::CHANGED
     }
 
@@ -676,9 +738,12 @@ where
         let Some(state) = self.reordering.take() else {
             return CalendarOutcome::HANDLED;
         };
-        self.day_entries
-            .clear_reorder_highlight(animation_settings());
-        let changed = self.default_reorder_scope(&state.moving_entry) != state.staged;
+        if state.selected_entries.len() == 1 {
+            self.day_entries
+                .clear_reorder_highlight(animation_settings());
+        }
+        self.day_entries.clear_selection_overlay();
+        let changed = state.source != state.staged;
         self.committed_reorder = changed.then(|| state.staged.clone());
         self.refresh_day_entries();
         if changed {
@@ -694,20 +759,222 @@ where
     }
 
     fn cancel_reorder(&mut self) -> CalendarOutcome {
-        if self.reordering.take().is_none() {
+        let Some(state) = self.reordering.take() else {
             return CalendarOutcome::HANDLED;
+        };
+        if state.selected_entries.len() == 1 {
+            self.day_entries
+                .clear_reorder_highlight(animation_settings());
         }
-        self.day_entries
-            .clear_reorder_highlight(animation_settings());
+        self.day_entries.clear_selection_overlay();
         self.refresh_day_entries();
         CalendarOutcome::CHANGED
     }
 
     fn cancel_reorder_immediately(&mut self) {
-        if self.reordering.take().is_some() {
-            self.day_entries.clear_reorder_highlight_immediately();
+        if let Some(state) = self.reordering.take() {
+            if state.selected_entries.len() == 1 {
+                self.day_entries.clear_reorder_highlight_immediately();
+            }
+            self.day_entries.clear_selection_overlay();
             self.refresh_day_entries();
         }
+    }
+
+    fn handle_day_selection_key(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
+        if self.view != CalendarView::Day || self.reorder_group.is_none() {
+            return None;
+        }
+        if matches!(key.code, Key::Esc)
+            || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
+        {
+            if self.day_selection.is_some() {
+                self.clear_day_selection();
+                return Some(CalendarOutcome::CHANGED);
+            }
+            return None;
+        }
+        let shift = key.modifiers == KeyModifiers::SHIFT;
+        let control = key.modifiers == KeyModifiers::CONTROL;
+        if key.code == Key::Char(' ')
+            && (control
+                || key.modifiers == KeyModifiers::NONE
+                    && self
+                        .day_selection
+                        .as_ref()
+                        .is_some_and(|selection| !selection.range_mode))
+        {
+            self.toggle_day_selection_at_highlight();
+            return Some(CalendarOutcome::CHANGED);
+        }
+        let direction = self.day_selection_direction(key, shift || control);
+        let extends_range = shift && direction.is_some();
+        if self
+            .day_selection
+            .as_ref()
+            .is_some_and(|selection| selection.range_mode)
+            && direction.is_some()
+            && !control
+            && !extends_range
+        {
+            self.clear_day_selection();
+            return None;
+        }
+        if !shift && !control {
+            return None;
+        }
+        let Some(delta) = direction else {
+            return None;
+        };
+        let Some(current) = self.highlighted_entry else {
+            return None;
+        };
+        let scope = self.default_reorder_scope(&current);
+        let current_index = scope.iter().position(|entry| *entry == current)?;
+        let destination_index = current_index
+            .saturating_add_signed(delta)
+            .min(scope.len().saturating_sub(1));
+        let destination = scope[destination_index];
+        let selection = self
+            .day_selection
+            .get_or_insert_with(|| CalendarDaySelectionState {
+                selected_entries: Vec::new(),
+                anchor: current,
+                range_mode: shift,
+            });
+        if shift {
+            let anchor_index = scope
+                .iter()
+                .position(|entry| *entry == selection.anchor)
+                .unwrap_or(current_index);
+            let (start, end) = if anchor_index <= destination_index {
+                (anchor_index, destination_index)
+            } else {
+                (destination_index, anchor_index)
+            };
+            selection.selected_entries = scope[start..=end].to_vec();
+            selection.range_mode = true;
+        } else {
+            if selection.selected_entries.is_empty() {
+                selection.selected_entries.push(current);
+            }
+            selection.anchor = current;
+            selection.range_mode = false;
+        }
+        self.day_entries
+            .set_selection_overlay(selection.selected_entries.clone(), None, 0, false);
+        self.set_highlighted_entry(Some(destination));
+        Some(CalendarOutcome::CHANGED)
+    }
+
+    fn day_selection_direction(&self, mut key: KeyEvent, modified: bool) -> Option<isize> {
+        if modified {
+            key.modifiers = KeyModifiers::NONE;
+            if let Key::Char(character) = key.code {
+                key.code = Key::Char(character.to_ascii_lowercase());
+            }
+        }
+        if matches_key_specs(&self.keybindings.up, key) {
+            Some(-1)
+        } else if matches_key_specs(&self.keybindings.down, key) {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
+    fn clear_day_selection(&mut self) {
+        self.day_selection = None;
+        self.day_entries.clear_selection_overlay();
+    }
+
+    fn toggle_day_selection_at_highlight(&mut self) {
+        let Some(current) = self.highlighted_entry else {
+            return;
+        };
+        let scope = self.default_reorder_scope(&current);
+        let selected = {
+            let selection = self
+                .day_selection
+                .get_or_insert_with(|| CalendarDaySelectionState {
+                    selected_entries: Vec::new(),
+                    anchor: current,
+                    range_mode: false,
+                });
+            if selection
+                .selected_entries
+                .iter()
+                .any(|entry| !scope.contains(entry))
+            {
+                selection.selected_entries.clear();
+            }
+            selection.anchor = current;
+            selection.range_mode = false;
+            if let Some(index) = selection
+                .selected_entries
+                .iter()
+                .position(|entry| *entry == current)
+            {
+                selection.selected_entries.remove(index);
+            } else {
+                selection.selected_entries.push(current);
+            }
+            selection
+                .selected_entries
+                .sort_by_key(|entry| scope.iter().position(|candidate| candidate == entry));
+            selection.selected_entries.clone()
+        };
+        if selected.is_empty() {
+            self.clear_day_selection();
+        } else {
+            self.day_entries
+                .set_selection_overlay(selected, None, 0, false);
+        }
+    }
+
+    fn update_reorder_overlay(&mut self) {
+        let Some(state) = self.reordering.as_ref() else {
+            return;
+        };
+        let remaining = state
+            .source
+            .iter()
+            .filter(|entry| !state.selected_entries.contains(entry))
+            .copied()
+            .collect::<Vec<_>>();
+        let position = state
+            .target_index
+            .checked_sub(1)
+            .and_then(|index| remaining.get(index))
+            .copied()
+            .map(SelectionOverlayPosition::After)
+            .or_else(|| {
+                remaining
+                    .first()
+                    .copied()
+                    .map(SelectionOverlayPosition::Before)
+            })
+            .unwrap_or_else(|| {
+                SelectionOverlayPosition::After(
+                    *state
+                        .selected_entries
+                        .last()
+                        .expect("calendar reorder selection is not empty"),
+                )
+            });
+        self.day_entries.set_selection_overlay(
+            state.selected_entries.clone(),
+            Some(position),
+            0,
+            true,
+        );
+    }
+
+    fn position_reorder_placeholder(&mut self) {
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        self.day_entries
+            .ensure_selection_placeholder_visible(self.content_area(self.area), settings);
     }
 
     fn default_reorder_scope(&self, moving_entry: &usize) -> Vec<usize> {
@@ -1194,7 +1461,11 @@ where
         self.highlighted_entry = index;
         if let Some(index) = index {
             self.day_entries.highlight_id(&index);
-            self.day_entries.select_id(index);
+            if self.day_selection.is_some() || self.reordering.is_some() {
+                self.day_entries.clear_selection();
+            } else {
+                self.day_entries.select_id(index);
+            }
         } else {
             self.day_entries.clear_selection();
         }
@@ -1234,6 +1505,7 @@ where
         let Some(staged) = self
             .reordering
             .as_ref()
+            .filter(|state| state.selected_entries.len() == 1)
             .map(|state| &state.staged)
             .or(self.committed_reorder.as_ref())
         else {
@@ -1262,7 +1534,11 @@ where
         self.day_entries.set_focused(self.focused);
         if let Some(index) = self.highlighted_entry {
             self.day_entries.highlight_id(&index);
-            self.day_entries.select_id(index);
+            if self.day_selection.is_some() || self.reordering.is_some() {
+                self.day_entries.clear_selection();
+            } else {
+                self.day_entries.select_id(index);
+            }
         }
         self.day_entries
             .snap_highlight_centered(self.content_area(self.area));

@@ -1145,20 +1145,7 @@ impl<M> TextInput<M> {
         &mut self,
         response: &crate::ExternalEditorResponse,
     ) -> bool {
-        let editor_value = response
-            .value
-            .strip_suffix("\r\n")
-            .or_else(|| response.value.strip_suffix('\n'))
-            .unwrap_or(&response.value);
-        let editor_value = if self.numbers_only {
-            editor_value.trim_matches(' ')
-        } else {
-            editor_value
-        };
-        let value = editor_value.replace('\n', " ");
-        if !self.accepts_value(&value) {
-            return false;
-        }
+        let editor_value = self.external_editor_value(&response.value);
         let mut collapsed_cursor = 0;
         let lines: Vec<&str> = editor_value.split('\n').collect();
         let target_line_idx = response
@@ -1174,10 +1161,35 @@ impl<M> TextInput<M> {
         let target_line_chars = lines[target_line_idx].chars().count();
         collapsed_cursor += col_idx.min(target_line_chars);
 
-        self.value = value;
-        self.clamp_value();
+        if !self.apply_external_editor_value(editor_value) {
+            return false;
+        }
         self.cursor = collapsed_cursor.min(self.len_chars());
         true
+    }
+
+    fn apply_external_editor_value(&mut self, editor_value: &str) -> bool {
+        let value = self.external_editor_value(editor_value).replace('\n', " ");
+        if !self.accepts_value(&value) {
+            return false;
+        }
+        self.value = value;
+        self.clamp_value();
+        self.cursor = self.cursor.min(self.len_chars());
+        true
+    }
+
+    fn external_editor_value<'a>(&self, value: &'a str) -> &'a str {
+        let editor_value = value
+            .strip_suffix("\r\n")
+            .or_else(|| value.strip_suffix('\n'))
+            .unwrap_or(value);
+        let editor_value = if self.numbers_only {
+            editor_value.trim_matches(' ')
+        } else {
+            editor_value
+        };
+        editor_value
     }
 
     fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
@@ -1496,6 +1508,25 @@ impl<M> TuiNode<M> for TextInput<M> {
             }
             self.cursor_fade.reset();
             ctx.request_clear();
+            ctx.request_layout();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if let TuiEvent::ExternalEditorUpdated { value } = event {
+            if self.disabled || !self.insert_mode {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            let previous_value = self.value.clone();
+            if self.apply_external_editor_value(value) {
+                self.emit_change_if_needed(&previous_value, ctx);
+            } else {
+                ctx.notify(Notification::warning(
+                    "Invalid number",
+                    "External editor changes were discarded; only digits 0-9 are allowed.",
+                ));
+            }
             ctx.request_layout();
             ctx.request_redraw();
             ctx.stop_propagation();

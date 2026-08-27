@@ -76,6 +76,7 @@ pub struct TextareaInput<M = ()> {
     syntax_cache: Option<SyntaxCache>,
     shared_syntax_cache: bool,
     stale_syntax_prefix_len: usize,
+    stale_syntax_suffix: Option<StaleSyntaxSuffix>,
     syntax_job: Option<SyntaxJob>,
     keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
@@ -224,6 +225,7 @@ impl<M> TextareaInput<M> {
             syntax_cache: None,
             shared_syntax_cache: false,
             stale_syntax_prefix_len: 0,
+            stale_syntax_suffix: None,
             syntax_job: None,
             keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
@@ -1763,6 +1765,20 @@ impl<M> TextareaInput<M> {
         }
     }
 
+    fn apply_external_editor_value(&mut self, value: &str) -> bool {
+        let previous_value = self.value.clone();
+        self.value = value.to_owned();
+        self.invalidate_syntax_cache();
+        self.clamp_lines();
+        let changed = self.value != previous_value;
+        self.cursor = self.cursor.min(self.len_chars());
+        if changed {
+            self.cursor_reset_on_edit = true;
+            self.preserve_scroll_position = false;
+        }
+        changed
+    }
+
     fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
         if self.value != previous_value
             && let Some(on_change) = &self.on_change
@@ -1784,14 +1800,35 @@ impl<M> TextareaInput<M> {
     }
 
     fn invalidate_syntax_cache(&mut self) {
-        self.stale_syntax_prefix_len = self.syntax_cache.as_ref().map_or(0, |cache| {
-            cache
+        let current_source = self.value.chars().collect::<Vec<_>>();
+        let (prefix_len, suffix) = self.syntax_cache.as_ref().map_or((0, None), |cache| {
+            let prefix_len = cache
                 .source
                 .iter()
-                .zip(self.value.chars())
-                .take_while(|(cached, current)| *cached == current)
-                .count()
+                .zip(&current_source)
+                .take_while(|(cached, current)| *cached == *current)
+                .count();
+            let remaining = cache
+                .source
+                .len()
+                .saturating_sub(prefix_len)
+                .min(current_source.len().saturating_sub(prefix_len));
+            let suffix_len = cache
+                .source
+                .iter()
+                .rev()
+                .zip(current_source.iter().rev())
+                .take(remaining)
+                .take_while(|(cached, current)| *cached == *current)
+                .count();
+            let suffix = (suffix_len > 0).then(|| StaleSyntaxSuffix {
+                current_start: current_source.len() - suffix_len,
+                cache_start: cache.source.len() - suffix_len,
+            });
+            (prefix_len, suffix)
         });
+        self.stale_syntax_prefix_len = prefix_len;
+        self.stale_syntax_suffix = suffix;
         self.syntax_revision = self.syntax_revision.wrapping_add(1);
     }
 
@@ -1811,6 +1848,7 @@ impl<M> TextareaInput<M> {
             ..cache
         });
         self.stale_syntax_prefix_len = 0;
+        self.stale_syntax_suffix = None;
         true
     }
 
@@ -1869,6 +1907,7 @@ impl<M> TextareaInput<M> {
                     }
                     self.syntax_cache = Some(cache);
                     self.stale_syntax_prefix_len = 0;
+                    self.stale_syntax_suffix = None;
                     true
                 } else {
                     false
@@ -1896,15 +1935,23 @@ impl<M> TextareaInput<M> {
         if self.language != Some(cache.language) || cache.theme_name != theme_name {
             return value_style;
         }
-        if cache.revision != self.syntax_revision
-            && (position >= self.stale_syntax_prefix_len
-                || cache.source.get(position) != Some(&value))
+        let cache_position = if cache.revision == self.syntax_revision {
+            position
+        } else if position < self.stale_syntax_prefix_len {
+            position
+        } else if let Some(suffix) = self.stale_syntax_suffix
+            && position >= suffix.current_start
         {
+            suffix.cache_start + position - suffix.current_start
+        } else {
+            return value_style;
+        };
+        if cache.source.get(cache_position) != Some(&value) {
             return value_style;
         }
         let style = cache
             .styles
-            .get(position)
+            .get(cache_position)
             .copied()
             .map_or(value_style, |syntax| value_style.patch(syntax));
         if syntax_navigation_focused {
@@ -2029,6 +2076,23 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             ctx.request_clear();
             ctx.request_layout();
             ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if let TuiEvent::ExternalEditorUpdated { value } = event {
+            if self.disabled || !self.insert_mode {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            let previous_value = self.value.clone();
+            let changed = self.apply_external_editor_value(value);
+            self.emit_change_if_needed(&previous_value, ctx);
+            self.request_syntax_tick_if_changed(changed, ctx);
+            self.scroll_cursor_into_view(disabled_animation_settings());
+            if changed {
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
@@ -2249,6 +2313,12 @@ struct SyntaxCache {
     theme_name: ThemeName,
     source: Vec<char>,
     styles: Vec<Style>,
+}
+
+#[derive(Clone, Copy)]
+struct StaleSyntaxSuffix {
+    current_start: usize,
+    cache_start: usize,
 }
 
 struct SyntaxJob {
