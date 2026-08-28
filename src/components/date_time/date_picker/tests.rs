@@ -1,6 +1,8 @@
 use super::super::KeyBindingsGuard;
 use super::*;
-use crate::{Key, KeyBindings, KeyModifiers, KeySpec};
+use crate::{
+    Key, KeyBindings, KeyModifiers, KeySpec, MouseButton, MouseEvent, MouseEventKind, TreePath,
+};
 use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
 use std::time::Duration as StdDuration;
@@ -102,6 +104,225 @@ fn date_picker_selects_cursor() {
     let outcome = picker.on_key(Key::Enter);
     assert!(outcome.selected);
     assert_eq!(picker.current_value(), Some(date));
+}
+
+#[test]
+fn date_picker_clicks_month_and_year_parts_of_day_header() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let area = Rect::new(0, 0, 23, 10);
+    let mut picker = DatePicker::<()>::new().today(date);
+
+    let month = picker.on_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+    );
+    assert!(month.changed);
+    assert_eq!(picker.view, DatePickerView::Month);
+
+    picker.view = DatePickerView::Day;
+    let year = picker.on_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 13,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+    );
+    assert!(year.changed);
+    assert_eq!(picker.view, DatePickerView::Year);
+}
+
+#[test]
+fn date_picker_mouse_clicks_select_day_month_and_year_cells() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DatePicker::<()>::new().today(date);
+    let day_area = Rect::new(0, 0, 23, 10);
+
+    let day = picker.on_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        },
+        day_area,
+    );
+    assert!(day.selected);
+    assert_eq!(picker.current_value(), Some(date));
+
+    picker.view = DatePickerView::Month;
+    let month = picker.on_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        },
+        day_area,
+    );
+    assert!(month.handled);
+    assert_eq!(picker.cursor().month(), Month::January);
+    assert_eq!(picker.view, DatePickerView::Day);
+
+    picker.view = DatePickerView::Year;
+    let year = picker.on_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        },
+        Rect::new(0, 0, 24, 10),
+    );
+    assert!(year.handled);
+    assert_eq!(picker.cursor().year(), 2016);
+    assert_eq!(picker.view, DatePickerView::Month);
+}
+
+#[test]
+fn date_picker_mouse_action_focuses_picker() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DatePicker::<()>::new().today(date);
+    let mut layout = LayoutCtx::new();
+    picker.layout(Rect::new(0, 0, 23, 10), &mut layout);
+    let mut ctx = EventCtx::new_at_path(crate::animation_settings(), TreePath::new());
+
+    let outcome = picker.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&crate::FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new(DATE_PICKER_FOCUS),
+        })
+    );
+}
+
+#[test]
+fn date_picker_wheel_pages_year_ranges_and_months() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let area = Rect::new(0, 0, 23, 10);
+    let mut picker = DatePicker::<()>::new().today(date);
+    picker.view = DatePickerView::Year;
+
+    assert!(
+        picker
+            .on_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 8,
+                    row: 4,
+                    modifiers: KeyModifiers::NONE,
+                },
+                area,
+            )
+            .changed
+    );
+    assert_eq!(picker.cursor().year(), 2050);
+    assert_eq!(picker.year_page_start, 2040);
+
+    assert!(
+        picker
+            .on_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column: 8,
+                    row: 4,
+                    modifiers: KeyModifiers::NONE,
+                },
+                area,
+            )
+            .changed
+    );
+    assert_eq!(picker.cursor(), date);
+    assert_eq!(picker.year_page_start, 2016);
+
+    picker.view = DatePickerView::Day;
+    assert!(
+        picker
+            .on_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 8,
+                    row: 4,
+                    modifiers: KeyModifiers::NONE,
+                },
+                area,
+            )
+            .changed
+    );
+    assert_eq!(
+        picker.cursor(),
+        Date::from_calendar_date(2026, Month::July, 22).unwrap()
+    );
+
+    assert!(
+        picker
+            .on_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column: 8,
+                    row: 4,
+                    modifiers: KeyModifiers::NONE,
+                },
+                area,
+            )
+            .changed
+    );
+    assert_eq!(picker.cursor(), date);
+}
+
+#[test]
+fn date_picker_focused_border_uses_accent_foreground() {
+    let mut picker = DatePicker::<()>::new();
+    picker.set_focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(23, 10)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| picker.render(frame, frame.area()))
+        .expect("picker should render");
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().fg,
+        theme().accent_fg()
+    );
+}
+
+#[test]
+fn date_picker_month_and_year_headings_have_no_marker() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DatePicker::<()>::new().today(date);
+    let mut terminal = Terminal::new(TestBackend::new(24, 10)).expect("terminal should build");
+
+    for view in [DatePickerView::Month, DatePickerView::Year] {
+        picker.view = view;
+        terminal
+            .draw(|frame| picker.render(frame, frame.area()))
+            .expect("picker should render");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!rendered.contains('▴'));
+    }
 }
 
 #[test]

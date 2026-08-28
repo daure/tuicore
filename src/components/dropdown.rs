@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::animation::Easing;
 use crate::components::{Column, DataView, SelectionMode, Spinner, TextInput};
-use crate::event::{Key, KeyEvent};
+use crate::event::{Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, EventCtx, EventOutcome, EventRoute, FocusCtx,
@@ -880,6 +880,10 @@ where
     fn layout_with_current_bounds<M>(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.field_area = self.field_area(area);
         self.focus_path = ctx.current_path();
+        ctx.register_hit_region(crate::HitRegion::new(
+            self.focus_path.clone(),
+            self.field_area,
+        ));
         let overlay_bounds = ctx.overlay_bounds();
         self.overlay_bounds = overlay_bounds;
         if !self.open {
@@ -1496,6 +1500,47 @@ where
         )
     }
 
+    fn on_mouse<M>(&mut self, mouse: MouseEvent, ctx: &mut EventCtx<M>) -> DropdownOutcome {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return DropdownOutcome::IDLE;
+        }
+        if !self.open {
+            if !rect_contains(self.field_area, mouse.column, mouse.row) {
+                return DropdownOutcome::IDLE;
+            }
+            let outcome = self.open();
+            if outcome.opened {
+                self.request_open_focus(ctx);
+            }
+            return outcome;
+        }
+
+        let popup_area = self.popup_overlay_area(self.overlay_bounds);
+        let [_, list_area] = self.popup_inner_areas(popup_area);
+        let no_selection_area = Rect::new(list_area.x, list_area.y, list_area.width, 1);
+        if self.show_no_selection_row() && rect_contains(no_selection_area, mouse.column, mouse.row)
+        {
+            self.set_no_selection_highlighted(true);
+            return self.select_highlighted();
+        }
+        if !rect_contains(self.popup_rows_area(list_area), mouse.column, mouse.row) {
+            return DropdownOutcome::IDLE;
+        }
+
+        let mut data_ctx = EventCtx::new(ctx.animation());
+        if <DataView<T, Id> as TuiNode<M>>::event(
+            &mut self.data_view,
+            &TuiEvent::Mouse(mouse),
+            &mut data_ctx,
+        ) == EventOutcome::Handled
+        {
+            self.data_view.drain_events();
+            self.set_no_selection_highlighted(false);
+            return self.select_highlighted();
+        }
+        DropdownOutcome::IDLE
+    }
+
     pub(crate) fn event_outcome<M>(
         &mut self,
         event: &TuiEvent,
@@ -1546,6 +1591,10 @@ where
         if matches!(event, TuiEvent::Yank) {
             ctx.copy_to_clipboard(self.yank_value());
             return DropdownOutcome::HANDLED;
+        }
+
+        if let TuiEvent::Mouse(mouse) = event {
+            return self.on_mouse(*mouse, ctx);
         }
 
         let TuiEvent::Key(key) = event else {
@@ -1605,6 +1654,13 @@ where
             });
         }
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
 }
 
 impl<T, Id, M> TuiNode<M> for Dropdown<T, Id>

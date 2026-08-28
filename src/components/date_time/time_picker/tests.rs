@@ -1,6 +1,6 @@
 use super::super::KeyBindingsGuard;
 use super::*;
-use crate::{Key, KeyBindings, KeyModifiers};
+use crate::{Key, KeyBindings, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TreePath};
 
 #[test]
 fn time_picker_arrow_keys_move_minutes_by_one() {
@@ -157,6 +157,36 @@ fn time_picker_registers_and_handles_hotkey() {
     let commit = picker.event(&TuiEvent::Hotkey(HotkeyEvent::Commit("t".into())), &mut ctx);
     assert_eq!(commit, EventOutcome::Handled);
     assert_eq!(picker.pending_hotkey_prefix, None);
+}
+
+#[test]
+fn time_picker_mouse_click_registers_hit_region_and_focuses_picker() {
+    let mut picker = TimePicker::<()>::new();
+    let area = Rect::new(4, 2, 8, 1);
+    let mut layout = LayoutCtx::new();
+    picker.layout(area, &mut layout);
+    let mut ctx = EventCtx::new_at_path(crate::animation_settings(), TreePath::new());
+
+    let outcome = picker.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 4,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(layout.hit_regions().len(), 1);
+    assert_eq!(layout.hit_regions()[0].area, area);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&crate::FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new(TIME_PICKER_FOCUS),
+        })
+    );
 }
 
 #[test]

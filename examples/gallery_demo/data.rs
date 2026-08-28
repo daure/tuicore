@@ -87,9 +87,10 @@ impl DataViewMode {
                 )
             }
             Self::JiraTickets => format!(
-                "5 tickets + 1 relation • {scroll_keys} navigate • {} expands • {} toggles multi-selection • Nerd Font ticket/tree/checkbox glyphs",
+                "5 tickets + 1 relation • {scroll_keys} navigate • {} expands • {} toggles multi-selection • {} selects/clears all tickets • Nerd Font ticket/tree/checkbox glyphs",
                 data_keys.toggle_expansion_label(),
-                data_keys.toggle_selection_label()
+                data_keys.activate_label(),
+                data_keys.toggle_all_selection_label()
             ),
         }
     }
@@ -323,7 +324,8 @@ fn jira_data_view() -> DataView<DemoRow, usize> {
         .tree_glyphs(TreeGlyphs::NERD_FONT)
         .expanded([1, 2])
         .selection_mode(SelectionMode::Multi)
-        .selection_trigger(SelectionTrigger::Manual)
+        .selection_trigger(SelectionTrigger::OnActivate)
+        .selection_propagation(SelectionPropagation::CascadeDescendants)
         .selection_glyphs(SelectionGlyphs::NERD_FONT)
         .row_height_by(|row| match row.kind {
             DemoRowKind::Relation | DemoRowKind::Standard => 1,
@@ -550,4 +552,29 @@ pub(crate) fn data_view_layout(area: Rect) -> [Rect; 2] {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Fill(1)])
         .areas(area)
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::Rect;
+    use tuicore::{AnimationSettings, CheckState, Key};
+
+    use super::DataViewMode;
+
+    #[test]
+    fn jira_tickets_enter_cascades_selection_and_a_selects_all() {
+        let mut view = DataViewMode::JiraTickets.data_view();
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+        let area = Rect::new(0, 0, 80, 10);
+
+        view.on_key_with_settings(Key::Enter, area, settings);
+
+        assert_eq!(view.selected_ids(), vec![1, 2, 3, 4, 5]);
+        assert_eq!(view.check_state(&1), CheckState::Checked);
+
+        view.on_key_with_settings(Key::Char('a'), area, settings);
+
+        assert_eq!(view.selected_ids(), vec![1, 2, 3, 4, 5, 6]);
+    }
 }

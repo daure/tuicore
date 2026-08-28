@@ -311,16 +311,20 @@ where
                         ));
                     }
                 }
-                DisplayRow::SelectionPlaceholder { count, depth, .. } => {
+                DisplayRow::SelectionPlaceholder {
+                    count,
+                    depth,
+                    focused,
+                } => {
                     if let Some(width) = widths.first_mut() {
-                        *width =
-                            (*width).max(
-                                line_width(&Line::from(format!("{count} items selected")))
-                                    .saturating_add(self.selection_placeholder_prefix_width(
-                                        depth,
-                                        show_tree_gutter,
-                                    )),
-                            );
+                        let label = if focused {
+                            format!("Moving {count} tasks")
+                        } else {
+                            format!("{count} items selected")
+                        };
+                        *width = (*width).max(line_width(&Line::from(label)).saturating_add(
+                            self.selection_placeholder_prefix_width(depth, show_tree_gutter),
+                        ));
                     }
                 }
             }

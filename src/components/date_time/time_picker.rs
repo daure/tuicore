@@ -7,7 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use time::Time;
 
-use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{
+    Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
+};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_underline_style, keybindings,
@@ -48,6 +50,7 @@ pub struct TimePicker<M = ()> {
     on_select: Option<Box<dyn Fn(Time) -> M>>,
     chrome: InputChrome,
     panel: Panel,
+    area: Rect,
 }
 
 impl<M> TimePicker<M> {
@@ -67,6 +70,7 @@ impl<M> TimePicker<M> {
             on_select: None,
             chrome: InputChrome::Plain,
             panel: Panel::new(),
+            area: Rect::default(),
         }
     }
 
@@ -274,6 +278,16 @@ impl<M> TimePicker<M> {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let area = self.render_chrome(frame, area);
         frame.render_widget(Paragraph::new(self.time_line()), area);
+    }
+
+    pub(super) fn on_mouse(&self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        if rect_contains(area, mouse.column, mouse.row)
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            PickerOutcome::handled(false)
+        } else {
+            PickerOutcome::IGNORED
+        }
     }
 
     fn sync_panel(&mut self) {
@@ -508,6 +522,8 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let focus_area = self.content_area(area);
+        self.area = focus_area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), focus_area));
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(TIME_PICKER_FOCUS),
@@ -574,6 +590,16 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        if let TuiEvent::Mouse(mouse) = event {
+            let outcome = self.on_mouse(*mouse, self.area);
+            if outcome.handled {
+                ctx.focus(crate::FocusRequest::TargetAt {
+                    path: ctx.current_path(),
+                    id: FocusId::new(TIME_PICKER_FOCUS),
+                });
+            }
+            return finish_event(ctx, outcome);
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -609,6 +635,10 @@ impl<M: 'static> TuiNode<M> for TimePicker<M> {
     fn tick(&mut self, _dt: StdDuration, _settings: crate::AnimationSettings) -> TickResult {
         TickResult::IDLE
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 #[cfg(test)]

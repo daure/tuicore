@@ -185,6 +185,7 @@ pub struct LayoutCtx {
     overlays_disabled: bool,
     path: TreePath,
     focus_disabled: bool,
+    hit_regions_suppressed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -607,6 +608,7 @@ impl Default for LayoutCtx {
             overlays_disabled: false,
             path: TreePath::new(),
             focus_disabled: false,
+            hit_regions_suppressed: false,
         }
     }
 }
@@ -635,9 +637,12 @@ impl LayoutCtx {
         key: ChildKey,
         layout: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        let were_suppressed = self.hit_regions_suppressed;
+        self.hit_regions_suppressed = true;
         self.path.0.push(key);
         let result = layout(self);
         self.path.0.pop();
+        self.hit_regions_suppressed = were_suppressed;
         result
     }
 
@@ -1041,7 +1046,9 @@ impl LayoutCtx {
     }
 
     pub fn register_hit_region(&mut self, region: HitRegion) {
-        self.hit_regions.push(region);
+        if !self.hit_regions_suppressed {
+            self.hit_regions.push(region);
+        }
     }
 
     pub fn record_overflow(
@@ -1538,6 +1545,24 @@ mod tests {
     #[test]
     fn body_child_key_uses_reserved_name() {
         assert_eq!(ChildKey::body().as_str(), ChildKey::BODY);
+    }
+
+    #[test]
+    fn slot_without_hit_region_suppresses_nested_registration_and_restores() {
+        let mut ctx = LayoutCtx::new();
+        let area = Rect::new(0, 0, 10, 1);
+
+        ctx.register_hit_region(HitRegion::new(TreePath::new(), area));
+        ctx.push_slot_without_hit_region(ChildKey::new("outer"), |ctx| {
+            ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
+            ctx.push_slot_without_hit_region(ChildKey::new("inner"), |ctx| {
+                ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
+            });
+            ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
+        });
+        ctx.register_hit_region(HitRegion::new(TreePath::new(), area));
+
+        assert_eq!(ctx.hit_regions().len(), 2);
     }
 
     #[test]

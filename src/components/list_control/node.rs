@@ -407,14 +407,6 @@ where
                 ctx.request_layout();
                 ctx.request_redraw();
             }
-            if !focused && self.tree_selection.is_some() {
-                self.clear_tree_selection();
-                ctx.request_redraw();
-            }
-            if !focused && self.flat_range_selection.is_some() {
-                self.clear_flat_range_selection();
-                ctx.request_redraw();
-            }
         }
     }
 

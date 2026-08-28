@@ -26,18 +26,7 @@ where
         let (mut scroll, geometry) = calendar_scroll(inner, content_width);
         let content_area = Rect::new(0, 0, content_width, geometry.layout.viewport.height);
         let mut buffer = Buffer::empty(content_area);
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-                Constraint::Ratio(1, 6),
-            ])
-            .split(content_area);
+        let rows = calendar_month_rows(content_area);
         self.render_weekday_header(&mut buffer, rows[0]);
         self.render_month_grid_lines(&mut buffer, &rows);
         let start = week_range(first_of_month(self.cursor), self.first_day_of_week).0;
@@ -271,7 +260,7 @@ where
         }
     }
 
-    fn horizontal_offset(&self, cols: &[Rect], viewport_width: u16) -> u16 {
+    pub(super) fn horizontal_offset(&self, cols: &[Rect], viewport_width: u16) -> u16 {
         let visible_offsets = self.visible_weekday_offsets();
         let selected_column = visible_offsets
             .iter()
@@ -367,13 +356,66 @@ where
             .collect()
     }
 
+    pub(super) fn date_at_mouse_position(&self, column: u16, row: u16) -> Option<Date> {
+        let inner = self.content_area(self.area);
+        let visible_offsets = self.visible_weekday_offsets();
+        let content_width = calendar_content_width(inner.width, visible_offsets.len());
+        let (_, geometry) = calendar_scroll(inner, content_width);
+        let content_area = Rect::new(0, 0, content_width, geometry.layout.viewport.height);
+        let cols = calendar_columns(content_area, visible_offsets.len());
+        let horizontal_offset = self.horizontal_offset(&cols, geometry.layout.viewport.width);
+        let (source_column, source_row) =
+            calendar_source_position(geometry.layout.viewport, horizontal_offset, column, row)?;
+        let column = cols.iter().position(|cell| {
+            rect_contains(*cell, source_column, source_row)
+                && rect_contains(
+                    grid_cell_inner(*cell, false, cell.x > 0),
+                    source_column,
+                    source_row,
+                )
+        })?;
+
+        match self.view {
+            CalendarView::Month => {
+                let rows = calendar_month_rows(content_area);
+                let week = rows.iter().skip(1).position(|cell| {
+                    rect_contains(*cell, source_column, source_row)
+                        && rect_contains(
+                            grid_cell_inner(*cell, true, false),
+                            source_column,
+                            source_row,
+                        )
+                })?;
+                let start = week_range(first_of_month(self.cursor), self.first_day_of_week).0;
+                Some(start + Duration::days((week * 7 + visible_offsets[column]) as i64))
+            }
+            CalendarView::Week => {
+                if !rect_contains(
+                    grid_cell_inner(cols[column], true, column > 0),
+                    source_column,
+                    source_row,
+                ) {
+                    return None;
+                }
+                let start = week_range(self.cursor, self.first_day_of_week).0;
+                Some(start + Duration::days(visible_offsets[column] as i64))
+            }
+            CalendarView::Day | CalendarView::EventDetail => None,
+        }
+    }
+
     fn date_style(&self, date: Date, muted: bool) -> Style {
         let t = theme();
-        if self.focused && date == self.cursor {
-            return Style::default()
-                .fg(t.highlight_fg())
-                .bg(t.highlight_bg())
-                .add_modifier(Modifier::BOLD);
+        if date == self.cursor {
+            if self.focused {
+                return Style::default()
+                    .fg(t.highlight_fg())
+                    .bg(t.highlight_bg())
+                    .add_modifier(Modifier::BOLD);
+            }
+            if self.date_has_day_selection(date) {
+                return self.persistent_selection_style();
+            }
         }
         if date == self.today {
             return Style::default()
@@ -412,15 +454,44 @@ where
     }
 
     fn date_cell_style(&self, date: Date) -> Style {
-        if self.focused && date == self.cursor {
-            Style::default().bg(theme().highlight_bg())
+        if date == self.cursor {
+            if self.focused {
+                return Style::default().bg(theme().highlight_bg());
+            }
+            if self.date_has_day_selection(date) {
+                return self.persistent_selection_style();
+            }
+        }
+        Style::default()
+    }
+
+    fn entry_style(&self, index: usize, highlighted: bool) -> Style {
+        if highlighted && self.focused {
+            calendar_entry_style((self.role)(&self.entries[index]), true)
+        } else if self.day_selection_contains(index) {
+            self.persistent_selection_style()
         } else {
-            Style::default()
+            calendar_entry_style((self.role)(&self.entries[index]), false)
         }
     }
 
-    fn entry_style(&self, index: usize, selected: bool) -> Style {
-        calendar_entry_style((self.role)(&self.entries[index]), selected && self.focused)
+    fn date_has_day_selection(&self, date: Date) -> bool {
+        date == self.cursor
+            && self
+                .day_selection
+                .as_ref()
+                .is_some_and(|selection| !selection.selected_entries.is_empty())
+    }
+
+    fn day_selection_contains(&self, index: usize) -> bool {
+        self.day_selection
+            .as_ref()
+            .is_some_and(|selection| selection.selected_entries.contains(&index))
+    }
+
+    fn persistent_selection_style(&self) -> Style {
+        let t = theme();
+        Style::default().fg(t.selected_fg()).bg(t.selected_bg())
     }
 
     fn append_event_lines(
@@ -483,8 +554,14 @@ where
         let on_highlight_background = self.highlighted_entry == Some(index)
             || matches!(kind, EventSummaryKind::Month | EventSummaryKind::Week)
                 && span.covers_date(self.cursor);
-        let marker_style = if self.focused && on_highlight_background {
+        let marker_style = if self.day_selection_contains(index)
+            && !(self.focused && self.highlighted_entry == Some(index))
+        {
+            Style::default().fg(theme().selected_fg())
+        } else if self.focused && on_highlight_background {
             Style::default().fg(theme().highlight_fg())
+        } else if on_highlight_background && self.date_has_day_selection(self.cursor) {
+            Style::default().fg(theme().selected_fg())
         } else {
             Style::default().fg(theme().accent_fg())
         };
@@ -527,11 +604,48 @@ where
     }
 }
 
-fn calendar_scroll(area: Rect, content_width: u16) -> (ScrollState, crate::ScrollGeometry) {
+pub(super) fn calendar_scroll(
+    area: Rect,
+    content_width: u16,
+) -> (ScrollState, crate::ScrollGeometry) {
     let scroll = ScrollState::from_preset(ScrollAxes::Horizontal, preset().scroll());
     let content = ScrollSize::new(content_width.into(), area.height.into());
     let geometry = scroll.geometry(area, content);
     (scroll, geometry)
+}
+
+pub(super) fn calendar_month_rows(area: Rect) -> Vec<Rect> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Ratio(1, 6),
+            Constraint::Ratio(1, 6),
+            Constraint::Ratio(1, 6),
+            Constraint::Ratio(1, 6),
+            Constraint::Ratio(1, 6),
+            Constraint::Ratio(1, 6),
+        ])
+        .split(area)
+        .to_vec()
+}
+
+fn calendar_source_position(
+    viewport: Rect,
+    horizontal_offset: u16,
+    column: u16,
+    row: u16,
+) -> Option<(u16, u16)> {
+    rect_contains(viewport, column, row).then(|| {
+        (
+            horizontal_offset.saturating_add(column - viewport.x),
+            row - viewport.y,
+        )
+    })
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 fn disabled_animation_settings() -> crate::AnimationSettings {

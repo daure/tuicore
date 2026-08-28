@@ -559,8 +559,9 @@ where
         }
     }
 
-    fn event(&mut self, _event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if self.active {
+            self.layer.event(event, ctx);
             ctx.stop_propagation();
             EventOutcome::Handled
         } else {
@@ -995,8 +996,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Button, Dialog, DialogCloseReason, EventRoute, FocusManager, Key, TextInput, TreePath,
-        animation_settings,
+        Button, Dialog, DialogCloseReason, EventRoute, FocusManager, Key, MouseButton, MouseEvent,
+        MouseEventKind, TextInput, TreePath, animation_settings,
     };
 
     fn render_node<M>(node: &impl TuiNode<M>, frame: &mut ratatui::Frame, area: Rect) {
@@ -1781,6 +1782,57 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
         assert_eq!(ctx.messages(), &[DialogCloseReason::Escape]);
+    }
+
+    #[test]
+    fn outside_click_closes_only_the_topmost_nested_dialog() {
+        let closed = Rc::new(RefCell::new(Vec::new()));
+        let inner_closed = Rc::clone(&closed);
+        let inner = DialogLayer::new(
+            StaticBody,
+            Dialog::new().on_close(move |_| {
+                inner_closed.borrow_mut().push("inner");
+            }),
+        )
+        .layer_percent(50)
+        .layer_cross_percent(50);
+        let outer_closed = Rc::clone(&closed);
+        let mut stacked = DialogLayer::new(
+            inner,
+            Dialog::new().on_close(move |_| {
+                outer_closed.borrow_mut().push("outer");
+            }),
+        )
+        .layer_percent(50)
+        .layer_cross_percent(50)
+        .base_overlays_visible(true);
+        let mut layout = LayoutCtx::new();
+        stacked.layout(Rect::new(0, 0, 20, 10), &mut layout);
+        let route = EventRoute::new(
+            layout
+                .hit_regions()
+                .iter()
+                .rev()
+                .find(|region| region.contains(0, 0))
+                .expect("topmost backdrop should receive outside clicks")
+                .path
+                .clone(),
+        );
+        let mut ctx = EventCtx::new(animation_settings());
+
+        let outcome = stacked.dispatch_event(
+            &route,
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 0,
+                row: 0,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(closed.borrow().as_slice(), &["outer"]);
     }
 
     #[test]

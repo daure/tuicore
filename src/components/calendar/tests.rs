@@ -1,5 +1,5 @@
 use super::*;
-use crate::event::{Key, KeyModifiers};
+use crate::event::{Key, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::style::{Color, Modifier};
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 use std::time::Duration as StdDuration;
@@ -274,6 +274,124 @@ fn week_quick_jump_underlines_matching_day_prefixes() {
 }
 
 #[test]
+fn clicking_a_month_cell_sets_the_date_and_drills_to_week() {
+    let area = Rect::new(0, 0, 100, 20);
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Month)
+        .first_day_of_week(Weekday::Sunday);
+    calendar.layout(area, &mut LayoutCtx::new());
+    calendar.take_events();
+
+    let inner = calendar.content_area(area);
+    let visible_offsets = calendar.visible_weekday_offsets();
+    let content_width = calendar_content_width(inner.width, visible_offsets.len());
+    let (_, geometry) = view::calendar_scroll(inner, content_width);
+    let content_area = Rect::new(0, 0, content_width, geometry.layout.viewport.height);
+    let columns = calendar_columns(content_area, visible_offsets.len());
+    let rows = view::calendar_month_rows(content_area);
+    let target = date(2026, Month::June, 23);
+    let start = week_range(first_of_month(target), Weekday::Sunday).0;
+    let days_from_start = (target - start).whole_days() as usize;
+    let source_column = columns[days_from_start % 7].x + 1;
+    let source_row = rows[days_from_start / 7 + 1].y + 1;
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: geometry.layout.viewport.x + source_column,
+                row: geometry.layout.viewport.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Ignored
+    );
+    assert_eq!(calendar.current_view(), CalendarView::Month);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 22));
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: geometry.layout.viewport.x + source_column,
+                row: geometry.layout.viewport.y + source_row,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(calendar.cursor_date(), target);
+    assert_eq!(calendar.current_view(), CalendarView::Week);
+    let events = calendar.take_events();
+    assert!(events.contains(&CalendarTypedEvent::CursorChanged { date: target }));
+    assert!(events.contains(&CalendarTypedEvent::DrillDown {
+        from: CalendarView::Month,
+        to: CalendarView::Week,
+    }));
+}
+
+#[test]
+fn clicking_a_scrolled_week_cell_sets_the_date_and_drills_to_day() {
+    let area = Rect::new(0, 0, 24, 12);
+    let mut calendar = demo_calendar()
+        .view(CalendarView::Week)
+        .cursor(date(2026, Month::June, 26));
+    calendar.layout(area, &mut LayoutCtx::new());
+    calendar.take_events();
+
+    let inner = calendar.content_area(area);
+    let visible_offsets = calendar.visible_weekday_offsets();
+    let content_width = calendar_content_width(inner.width, visible_offsets.len());
+    let (_, geometry) = view::calendar_scroll(inner, content_width);
+    let content_area = Rect::new(0, 0, content_width, geometry.layout.viewport.height);
+    let columns = calendar_columns(content_area, visible_offsets.len());
+    let horizontal_offset = calendar.horizontal_offset(&columns, geometry.layout.viewport.width);
+    assert!(horizontal_offset > 0);
+    let target = date(2026, Month::June, 25);
+    let source_column = columns[3].x + 1;
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: geometry.layout.viewport.x + source_column - horizontal_offset,
+                row: geometry.layout.viewport.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Ignored
+    );
+    assert_eq!(calendar.current_view(), CalendarView::Week);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 26));
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: geometry.layout.viewport.x + source_column - horizontal_offset,
+                row: geometry.layout.viewport.y + 1,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(calendar.cursor_date(), target);
+    assert_eq!(calendar.current_view(), CalendarView::Day);
+    let events = calendar.take_events();
+    assert!(events.contains(&CalendarTypedEvent::CursorChanged { date: target }));
+    assert!(events.contains(&CalendarTypedEvent::DrillDown {
+        from: CalendarView::Week,
+        to: CalendarView::Day,
+    }));
+}
+
+#[test]
 fn narrow_month_and_week_views_scroll_horizontally_to_the_cursor() {
     let week = demo_calendar()
         .view(CalendarView::Week)
@@ -409,6 +527,49 @@ fn navigation_emits_cursor_and_range_events() {
 }
 
 #[test]
+fn day_wheel_navigation_moves_between_months_and_emits_range_changes() {
+    let mut calendar = demo_calendar().view(CalendarView::Day);
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(calendar.current_view(), CalendarView::Day);
+    assert_eq!(calendar.cursor_date(), date(2026, Month::May, 22));
+    assert!(
+        calendar
+            .take_events()
+            .contains(&CalendarTypedEvent::RangeChanged {
+                start: date(2026, Month::May, 22),
+                end: date(2026, Month::May, 22),
+            })
+    );
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 22));
+}
+
+#[test]
 fn day_navigation_highlights_chronological_entries() {
     let mut calendar = demo_calendar().view(CalendarView::Day);
 
@@ -523,6 +684,572 @@ fn selected_day_entry_remains_visually_selected_when_unfocused() {
             "selected style should fill cell at x={x}"
         );
     }
+}
+
+#[test]
+fn month_selection_persists_through_blur_and_refocus() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.set_focused(true);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(KeyEvent {
+        code: Key::Char('m'),
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    calendar.set_focused(false);
+    let mut terminal = Terminal::new(TestBackend::new(20, 4)).unwrap();
+    terminal
+        .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
+        .unwrap();
+    for y in 1..4 {
+        assert_eq!(
+            terminal.backend().buffer().cell((0, y)).unwrap().bg,
+            crate::theme().selected_bg(),
+            "month row {y} should retain selection"
+        );
+    }
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 2)).unwrap().fg,
+        crate::theme().selected_fg()
+    );
+
+    calendar.set_focused(true);
+    terminal
+        .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
+        .unwrap();
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().bg,
+        crate::theme().highlight_bg()
+    );
+}
+
+#[test]
+fn week_selection_persists_through_blur_and_refocus() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.set_focused(true);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(KeyEvent {
+        code: Key::Char('w'),
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    calendar.set_focused(false);
+    let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
+    terminal
+        .draw(|frame| calendar.render_week_column(frame, frame.area(), day))
+        .unwrap();
+    for y in 1..4 {
+        assert_eq!(
+            terminal.backend().buffer().cell((0, y)).unwrap().bg,
+            crate::theme().selected_bg(),
+            "week row {y} should retain selection"
+        );
+    }
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 2)).unwrap().fg,
+        crate::theme().selected_fg()
+    );
+
+    calendar.set_focused(true);
+    terminal
+        .draw(|frame| calendar.render_week_column(frame, frame.area(), day))
+        .unwrap();
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().bg,
+        crate::theme().highlight_bg()
+    );
+}
+
+#[test]
+fn day_selection_survives_focus_loss_and_gain() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.set_focused(true);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    calendar.set_focused(false);
+    calendar.set_focused(true);
+
+    assert_eq!(
+        calendar
+            .day_selection
+            .as_ref()
+            .expect("day selection should remain active")
+            .selected_entries,
+        vec![0, 1]
+    );
+    assert!(calendar.day_entries.selection_overlay_active_for_test());
+    assert!(!calendar.is_reordering());
+}
+
+#[test]
+fn transient_selected_ids_returns_shift_range_in_display_order() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "third",
+                title: "Third",
+                span,
+            },
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .entry_order(|left, right| left.title.cmp(right.title))
+    .reorderable(|left, right| left.span.start == right.span.start);
+
+    assert!(calendar.transient_selected_ids().is_empty());
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    assert_eq!(
+        calendar.transient_selected_ids(),
+        vec!["first", "second", "third"]
+    );
+    calendar.set_focused(false);
+    assert_eq!(
+        calendar.transient_selected_ids(),
+        vec!["first", "second", "third"]
+    );
+}
+
+#[test]
+fn transient_selected_ids_returns_sparse_ctrl_selection_in_display_order() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "third",
+                title: "Third",
+                span,
+            },
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .entry_order(|left, right| left.title.cmp(right.title))
+    .reorderable(|left, right| left.span.start == right.span.start);
+
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::CONTROL,
+    });
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::CONTROL,
+    });
+    calendar.on_key(KeyEvent {
+        code: Key::Char(' '),
+        modifiers: KeyModifiers::CONTROL,
+    });
+
+    assert_eq!(calendar.transient_selected_ids(), vec!["first", "third"]);
+}
+
+#[test]
+fn set_entries_preserves_transient_selection_across_unrelated_refresh() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+            DemoEntry {
+                id: "unrelated",
+                title: "Unrelated",
+                span: CalendarSpan::all_day(day + Duration::days(1)),
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    calendar.set_entries([
+        DemoEntry {
+            id: "unrelated",
+            title: "Updated unrelated",
+            span: CalendarSpan::all_day(day + Duration::days(1)),
+        },
+        DemoEntry {
+            id: "first",
+            title: "First",
+            span,
+        },
+        DemoEntry {
+            id: "second",
+            title: "Second",
+            span,
+        },
+    ]);
+
+    assert_eq!(calendar.transient_selected_ids(), vec!["first", "second"]);
+    assert_eq!(calendar.highlighted_entry_id(), Some("second"));
+    assert!(calendar.day_entries.selection_overlay_active_for_test());
+}
+
+#[test]
+fn set_entries_prunes_removed_transient_selection_and_repairs_anchor() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+
+    calendar.set_entries([DemoEntry {
+        id: "second",
+        title: "Second",
+        span,
+    }]);
+
+    assert_eq!(calendar.transient_selected_ids(), vec!["second"]);
+    let selection = calendar
+        .day_selection
+        .as_ref()
+        .expect("surviving selection should remain active");
+    assert_eq!(calendar.highlighted_entry_id(), Some("second"));
+    assert_eq!(calendar.entries[selection.anchor].id, "second");
+    assert!(calendar.day_entries.selection_overlay_active_for_test());
+}
+
+#[test]
+fn clearing_transient_selection_retains_highlight() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    assert_eq!(calendar.highlighted_entry_id(), Some("second"));
+
+    calendar.clear_transient_selection();
+
+    assert!(calendar.transient_selected_ids().is_empty());
+    assert_eq!(calendar.highlighted_entry_id(), Some("second"));
+    assert!(!calendar.day_entries.selection_overlay_active_for_test());
+}
+
+#[test]
+fn highlighting_entry_id_replaces_only_a_valid_highlight() {
+    let mut calendar = demo_calendar().view(CalendarView::Day);
+
+    assert_eq!(
+        calendar.highlight_entry_id(&"planning"),
+        CalendarOutcome::CHANGED
+    );
+    assert_eq!(calendar.highlighted_entry_id(), Some("planning"));
+
+    assert_eq!(
+        calendar.highlight_entry_id(&"missing"),
+        CalendarOutcome::IDLE
+    );
+    assert_eq!(calendar.highlighted_entry_id(), Some("planning"));
+}
+
+#[test]
+fn month_navigation_clears_day_selection() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(Key::Char('m'));
+    calendar.on_key(Key::Right);
+
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 23));
+    assert!(calendar.day_selection.is_none());
+}
+
+#[test]
+fn week_navigation_clears_day_selection() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(Key::Char('w'));
+    calendar.on_key(Key::Right);
+
+    assert_eq!(calendar.cursor_date(), date(2026, Month::June, 23));
+    assert!(calendar.day_selection.is_none());
+}
+
+#[test]
+fn today_rollover_clears_day_selection_when_cursor_follows_today() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.set_focused(true);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.set_focused(false);
+
+    let tomorrow = day + Duration::days(1);
+    calendar.set_today(tomorrow);
+
+    assert_eq!(calendar.cursor_date(), tomorrow);
+    assert!(calendar.day_selection.is_none());
+    assert!(!calendar.day_entries.selection_overlay_active_for_test());
+}
+
+#[test]
+fn selected_nonhighlighted_month_entry_uses_selected_style() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::all_day(day);
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+            DemoEntry {
+                id: "third",
+                title: "Third",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.set_focused(true);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(Key::Char('m'));
+    let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render_month_cell(frame, frame.area(), day))
+        .unwrap();
+
+    let selected = terminal.backend().buffer().cell((0, 2)).unwrap();
+    assert_eq!(selected.fg, crate::theme().selected_fg());
+    assert_eq!(selected.bg, crate::theme().selected_bg());
+    let highlighted = terminal.backend().buffer().cell((0, 3)).unwrap();
+    assert_eq!(highlighted.fg, crate::theme().highlight_fg());
+    assert_eq!(highlighted.bg, crate::theme().highlight_bg());
+}
+
+#[test]
+fn selected_nonhighlighted_week_entry_uses_selected_style() {
+    let day = date(2026, Month::June, 22);
+    let span = CalendarSpan::timed(
+        datetime(2026, Month::June, 22, 9, 0),
+        datetime(2026, Month::June, 22, 9, 1),
+    );
+    let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
+        [
+            DemoEntry {
+                id: "first",
+                title: "First",
+                span,
+            },
+            DemoEntry {
+                id: "second",
+                title: "Second",
+                span,
+            },
+            DemoEntry {
+                id: "third",
+                title: "Third",
+                span,
+            },
+        ],
+        |entry| entry.id,
+        |entry| entry.span,
+        |entry| entry.title.to_string(),
+    )
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
+    calendar.set_focused(true);
+    calendar.on_key(KeyEvent {
+        code: Key::Down,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    calendar.on_key(Key::Char('w'));
+    let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
+
+    terminal
+        .draw(|frame| calendar.render_week_column(frame, frame.area(), day))
+        .unwrap();
+
+    let selected = terminal.backend().buffer().cell((3, 2)).unwrap();
+    assert_eq!(selected.fg, crate::theme().selected_fg());
+    assert_eq!(selected.bg, crate::theme().selected_bg());
+    let highlighted = terminal.backend().buffer().cell((3, 3)).unwrap();
+    assert_eq!(highlighted.fg, crate::theme().highlight_fg());
+    assert_eq!(highlighted.bg, crate::theme().highlight_bg());
 }
 
 #[test]
@@ -708,8 +1435,8 @@ fn day_reordering_moves_a_shift_selected_block() {
     let position = |text: &str| rendered.find(text).expect("calendar text should render");
     assert!(
         position("09:00 B") < position("09:00 C")
-            && position("09:00 C") < position("2 items selected")
-            && position("2 items selected") < position("09:00 D"),
+            && position("09:00 C") < position("Moving 2 tasks")
+            && position("Moving 2 tasks") < position("09:00 D"),
         "calendar render: {rendered:?}"
     );
     calendar.on_key(Key::Down);
@@ -806,7 +1533,7 @@ fn day_reordering_moves_a_ctrl_selected_block() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(
-        rendered.find("09:00 3").unwrap() < rendered.find("2 items selected").unwrap(),
+        rendered.find("09:00 3").unwrap() < rendered.find("Moving 2 tasks").unwrap(),
         "calendar render: {rendered:?}"
     );
     calendar.on_key(Key::Down);

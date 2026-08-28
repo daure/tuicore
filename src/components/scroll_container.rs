@@ -234,29 +234,25 @@ where
                 ctx.animation(),
             ),
             TuiEvent::Mouse(mouse) => match mouse.kind {
-                crate::MouseEventKind::ScrollUp => self.scroll.scroll_by(
+                crate::MouseEventKind::ScrollUp => self.scroll.scroll_by_immediately(
                     ScrollDelta::new(0, -1),
                     self.geometry.viewport,
                     self.geometry.content,
-                    ctx.animation(),
                 ),
-                crate::MouseEventKind::ScrollDown => self.scroll.scroll_by(
+                crate::MouseEventKind::ScrollDown => self.scroll.scroll_by_immediately(
                     ScrollDelta::new(0, 1),
                     self.geometry.viewport,
                     self.geometry.content,
-                    ctx.animation(),
                 ),
-                crate::MouseEventKind::ScrollLeft => self.scroll.scroll_by(
+                crate::MouseEventKind::ScrollLeft => self.scroll.scroll_by_immediately(
                     ScrollDelta::new(-1, 0),
                     self.geometry.viewport,
                     self.geometry.content,
-                    ctx.animation(),
                 ),
-                crate::MouseEventKind::ScrollRight => self.scroll.scroll_by(
+                crate::MouseEventKind::ScrollRight => self.scroll.scroll_by_immediately(
                     ScrollDelta::new(1, 0),
                     self.geometry.viewport,
                     self.geometry.content,
-                    ctx.animation(),
                 ),
                 _ => crate::ScrollOutcome::idle(),
             },
@@ -266,7 +262,9 @@ where
             return EventOutcome::Ignored;
         }
         ctx.request_redraw();
-        ctx.request_tick();
+        if outcome.active {
+            ctx.request_tick();
+        }
         ctx.request_layout();
         ctx.stop_propagation();
         EventOutcome::Handled
@@ -327,6 +325,10 @@ where
     fn layout(&mut self, area: Rect, ctx: &mut crate::LayoutCtx) -> LayoutResult {
         let inner = self.inner_area(area);
         self.geometry = self.resolve_geometry(inner);
+        ctx.register_hit_region(crate::HitRegion::new(
+            ctx.current_path(),
+            self.geometry.layout.outer,
+        ));
         let _ = self.scroll.clamp_to(
             self.geometry.viewport,
             self.geometry.content,
@@ -544,7 +546,7 @@ mod tests {
     use super::*;
     use crate::{
         ChildKey, ChildSlot, DataView, EventCtx, EventRoute, FocusCtx, FocusId, Key, KeyEvent,
-        LayoutCtx, RenderCtx, TreePath,
+        LayoutCtx, RenderCtx, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility, TreePath,
     };
 
     struct Lines(Vec<&'static str>);
@@ -628,31 +630,70 @@ mod tests {
     }
 
     #[test]
-    fn wheel_scrolls_the_container_after_the_child_ignores_it() {
-        let mut node = ScrollContainer::vertical(Lines(vec!["one", "two", "three"]));
+    fn repeated_wheel_input_snaps_the_container_without_animation() {
+        let mut node = ScrollContainer::vertical(Lines(vec![
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        ]));
         let mut layout = LayoutCtx::new();
         node.layout(Rect::new(0, 0, 8, 2), &mut layout);
-        let settings = AnimationSettings {
-            enabled: false,
-            ..AnimationSettings::default()
-        };
-        let mut ctx = EventCtx::new(settings);
+        let settings = AnimationSettings::default();
         let route = EventRoute::new(TreePath::new().child(ChildKey::body()));
 
+        for wheel in 0..3 {
+            let mut ctx = EventCtx::new(settings);
+            let outcome = node.dispatch_event(
+                &route,
+                &TuiEvent::Mouse(crate::MouseEvent {
+                    kind: crate::MouseEventKind::ScrollDown,
+                    column: 0,
+                    row: 0,
+                    modifiers: crate::KeyModifiers::NONE,
+                }),
+                &mut ctx,
+            );
+
+            assert_eq!(outcome, EventOutcome::Handled, "wheel {wheel}");
+            assert!(ctx.layout_requested());
+            assert!(!ctx.tick_requested());
+        }
+        assert_eq!(node.offset().y, 3);
+        assert_eq!(node.target_offset().y, 3);
+        assert!(!node.scroll.is_active());
+    }
+
+    #[test]
+    fn wheel_scrolls_from_the_vertical_scrollbar_gutter() {
+        let mut node = ScrollContainer::vertical(Lines(vec![
+            "one", "two", "three", "four", "five", "six", "seven", "eight",
+        ]))
+        .scrollbars(ScrollbarConfig {
+            vertical: ScrollbarVisibility::Always,
+            horizontal: ScrollbarVisibility::Never,
+            gutter: ScrollbarGutter::Reserve,
+            style: ScrollbarStyle::ThinTrack,
+        });
+        let mut layout = LayoutCtx::new();
+        node.layout(Rect::new(0, 0, 8, 3), &mut layout);
+        let geometry = node.scroll_geometry();
+        let gutter = geometry.layout.vertical_bar.unwrap();
+        let hit_region = &layout.hit_regions()[0];
+
+        assert_eq!(hit_region.area, geometry.layout.outer);
+        assert!(hit_region.contains(gutter.x, gutter.y));
+
         let outcome = node.dispatch_event(
-            &route,
+            &EventRoute::new(hit_region.path.clone()),
             &TuiEvent::Mouse(crate::MouseEvent {
                 kind: crate::MouseEventKind::ScrollDown,
-                column: 0,
-                row: 0,
+                column: gutter.x,
+                row: gutter.y,
                 modifiers: crate::KeyModifiers::NONE,
             }),
-            &mut ctx,
+            &mut EventCtx::default(),
         );
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(node.offset().y, 1);
-        assert!(ctx.layout_requested());
     }
 
     #[test]

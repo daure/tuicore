@@ -73,6 +73,7 @@ pub struct Tabs<M = ()> {
     tab_color: ColorTween,
     selected_color: ColorTween,
     body_area: Rect,
+    tab_header_area: Rect,
     focus_path: TreePath,
     last_focused_targets: Vec<Option<(TreePath, FocusId)>>,
     body_focus_transfer_pending: bool,
@@ -154,6 +155,7 @@ where
             tab_color: ColorTween::idle(theme.border_fg()),
             selected_color: ColorTween::idle(theme.muted_fg()),
             body_area: Rect::default(),
+            tab_header_area: Rect::default(),
             focus_path: TreePath::default(),
             last_focused_targets,
             body_focus_transfer_pending: false,
@@ -501,6 +503,37 @@ where
         } else {
             body
         }
+    }
+
+    fn tab_at_column(&self, column: u16) -> Option<usize> {
+        let variant = self.variant.unwrap_or_else(|| preset().tabs().variant());
+        let bordered = self.bordered.unwrap_or_else(|| preset().tabs().bordered());
+        let edge_borders = self.resolved_edge_borders(bordered);
+        let mut cursor = usize::from(self.tab_header_area.x)
+            + match variant {
+                TabsVariant::Minimal | TabsVariant::OneRow => 2,
+                TabsVariant::Underline => 2,
+                TabsVariant::Boxed => usize::from(bordered && edge_borders.contains(Borders::LEFT)),
+            };
+        let column = usize::from(column);
+        for index in 0..self.titles.len() {
+            let width = match variant {
+                TabsVariant::Boxed => self.boxed_tab_width(index),
+                TabsVariant::Minimal | TabsVariant::OneRow | TabsVariant::Underline => {
+                    self.rendered_tab_label_width(index)
+                }
+            };
+            if (cursor..cursor.saturating_add(width)).contains(&column) {
+                return Some(index);
+            }
+            cursor = cursor.saturating_add(width);
+            cursor = cursor.saturating_add(match variant {
+                TabsVariant::Minimal | TabsVariant::OneRow => 3,
+                TabsVariant::Underline => 2,
+                TabsVariant::Boxed => 1,
+            });
+        }
+        None
     }
 
     fn panel_inner_area(area: Rect, borders: Borders) -> Rect {
@@ -1658,6 +1691,16 @@ where
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.focus_path = ctx.current_path();
         self.body_area = self.calculate_body_area(area);
+        self.tab_header_area = Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            self.body_area.y.saturating_sub(area.y),
+        );
+        ctx.register_hit_region(crate::HitRegion::new(
+            ctx.current_path(),
+            self.tab_header_area,
+        ));
         let first_body_focus_target = ctx.focus_targets().len();
         if let Some(key) = self.selected_key().cloned() {
             self.bodies.layout_child(&key, self.body_area, ctx);
@@ -1704,6 +1747,23 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Mouse(mouse) = event
+            && matches!(
+                mouse.kind,
+                crate::MouseEventKind::Down(crate::MouseButton::Left)
+            )
+            && mouse.row >= self.tab_header_area.y
+            && mouse.row < self.tab_header_area.bottom()
+            && let Some(index) = self.tab_at_column(mouse.column)
+        {
+            self.select_index_from_event(index, ctx);
+            ctx.focus(FocusRequest::TargetAt {
+                path: ctx.current_path(),
+                id: FocusId::new(TABS_FOCUS),
+            });
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         if let TuiEvent::Hotkey(hotkey) = event {
             match hotkey {
                 HotkeyEvent::Pending(prefix) => {

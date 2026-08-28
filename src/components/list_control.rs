@@ -14,8 +14,8 @@ use ratatui::layout::{Constraint, Rect};
 use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView,
-    DataViewTypedEvent, Dropdown, DropdownSearchMode, DropdownVariant, Panel, SeasonalEmptyState,
-    SelectionMode, SelectionTrigger, SortDirection, TextInput,
+    DataViewOutcome, DataViewTypedEvent, Dropdown, DropdownSearchMode, DropdownVariant, Panel,
+    SeasonalEmptyState, SelectionMode, SelectionTrigger, SortDirection, TextInput,
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
@@ -353,6 +353,7 @@ struct FlatBlockMoveState<Id> {
     scroll_snapshot: DataViewScrollSnapshot,
     selected: Vec<Id>,
     target_index: usize,
+    visual_target_index: Option<usize>,
     highlighted_id: Id,
     pending_g: bool,
 }
@@ -365,6 +366,7 @@ struct TreeBlockMoveState<Id> {
     parent_id: Option<Id>,
     selected: Vec<Id>,
     sibling_index: usize,
+    visual_sibling_index: Option<usize>,
     pending_g: bool,
 }
 
@@ -740,6 +742,29 @@ where
         &self.data_view
     }
 
+    pub fn transient_selected_ids(&self) -> Vec<Id> {
+        self.flat_range_selection
+            .as_ref()
+            .map(|selection| selection.selected.clone())
+            .or_else(|| {
+                self.tree_selection
+                    .as_ref()
+                    .map(|selection| selection.selected.clone())
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn clear_transient_selection(&mut self) {
+        self.clear_tree_selection();
+        self.clear_flat_range_selection();
+    }
+
+    pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
+        let outcome = self.data_view.set_rows(rows);
+        self.restore_transient_selection_after_row_replacement();
+        outcome
+    }
+
     pub fn data_view_mut(&mut self) -> &mut DataView<T, Id> {
         let mut settings = crate::AnimationSettings::default();
         settings.enabled = false;
@@ -748,6 +773,55 @@ where
         self.clear_tree_selection();
         self.clear_flat_range_selection();
         &mut self.data_view
+    }
+
+    fn restore_transient_selection_after_row_replacement(&mut self) {
+        let display_ids = self.data_view.reorder_visible_ids();
+        if let Some(selection) = self.flat_range_selection.as_ref() {
+            let selected = display_ids
+                .iter()
+                .filter(|id| selection.selected.contains(id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if selected.is_empty() {
+                self.clear_flat_range_selection();
+                return;
+            }
+            let selection = self
+                .flat_range_selection
+                .as_mut()
+                .expect("flat selection remains active");
+            if !display_ids.contains(&selection.anchor) {
+                selection.anchor = selected[0].clone();
+            }
+            selection.selected = selected.clone();
+            self.data_view
+                .set_selection_overlay(selected, None, 0, false);
+        } else if let Some(selection) = self.tree_selection.as_ref() {
+            let selected = display_ids
+                .iter()
+                .filter(|id| selection.selected.contains(id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if selected.is_empty() {
+                self.clear_tree_selection();
+                return;
+            }
+            let selection = self
+                .tree_selection
+                .as_mut()
+                .expect("tree selection remains active");
+            if selection
+                .anchor
+                .as_ref()
+                .is_some_and(|anchor| !display_ids.contains(anchor))
+            {
+                selection.anchor = selected.first().cloned();
+            }
+            selection.selected = selected.clone();
+            self.data_view
+                .set_selection_overlay(selected, None, 0, false);
+        }
     }
 
     pub fn take_data_view_events(&mut self) -> Vec<DataViewTypedEvent<Id>> {

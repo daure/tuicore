@@ -6,7 +6,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
 use time::{PrimitiveDateTime, Weekday};
 
-use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{Key, KeyEvent, KeyModifiers, MouseEvent, TuiEvent};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TreePath, TuiNode, border_set, keybindings, preset,
@@ -32,6 +32,7 @@ pub struct DateTimePicker<M = ()> {
     layout: DateTimePickerLayout,
     active: DateTimePart,
     focused: bool,
+    area: Rect,
     focus_path: TreePath,
     on_select: Option<Box<dyn Fn(PrimitiveDateTime) -> M>>,
 }
@@ -50,6 +51,7 @@ impl<M> DateTimePicker<M> {
             layout: DateTimePickerLayout::Horizontal,
             active: DateTimePart::Date,
             focused: false,
+            area: Rect::default(),
             focus_path: TreePath::default(),
             on_select: None,
         }
@@ -203,6 +205,29 @@ impl<M> DateTimePicker<M> {
         outcome
     }
 
+    fn on_mouse(&mut self, mouse: MouseEvent) -> PickerOutcome {
+        match self.layout {
+            DateTimePickerLayout::Stepped => match self.active {
+                DateTimePart::Date => self.date.on_mouse(mouse, self.area),
+                DateTimePart::Time => self.time.on_mouse(mouse, self.stepped_time_area()),
+            },
+            DateTimePickerLayout::Horizontal | DateTimePickerLayout::Vertical => {
+                let [date_area, time_area] = self.areas(self.area);
+                if rect_contains(date_area, mouse.column, mouse.row) {
+                    self.active = DateTimePart::Date;
+                    self.sync_focus(self.focused);
+                    self.date.on_mouse(mouse, date_area)
+                } else if rect_contains(time_area, mouse.column, mouse.row) {
+                    self.active = DateTimePart::Time;
+                    self.sync_focus(self.focused);
+                    self.time.on_mouse(mouse, time_area)
+                } else {
+                    PickerOutcome::IGNORED
+                }
+            }
+        }
+    }
+
     fn areas(&self, area: Rect) -> [Rect; 2] {
         match self.layout {
             DateTimePickerLayout::Horizontal => Layout::default()
@@ -220,6 +245,11 @@ impl<M> DateTimePicker<M> {
             ],
             DateTimePickerLayout::Stepped => [area, area],
         }
+    }
+
+    fn stepped_time_area(&self) -> Rect {
+        let inner = Block::default().borders(Borders::ALL).inner(self.area);
+        centered_time_area(inner, self.time.rendered_width())
     }
 
     fn sync_focus(&mut self, focused: bool) {
@@ -247,7 +277,9 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
         self.focus_path = ctx.current_path();
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if self.layout == DateTimePickerLayout::Stepped {
             let id = FocusId::new("date-time-picker");
             ctx.register_focusable(id.clone(), area, true);
@@ -317,6 +349,45 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
             }
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if let TuiEvent::Mouse(mouse) = event {
+            let mut outcome = self.on_mouse(*mouse);
+            if self.layout == DateTimePickerLayout::Stepped && outcome.selected {
+                outcome = match self.active {
+                    DateTimePart::Date => {
+                        self.active = DateTimePart::Time;
+                        self.sync_focus(true);
+                        PickerOutcome::handled(true)
+                    }
+                    DateTimePart::Time => {
+                        self.active = DateTimePart::Date;
+                        self.sync_focus(true);
+                        outcome
+                    }
+                };
+            }
+            if outcome.handled {
+                let id = match self.layout {
+                    DateTimePickerLayout::Stepped => "date-time-picker",
+                    DateTimePickerLayout::Horizontal | DateTimePickerLayout::Vertical => {
+                        match self.active {
+                            DateTimePart::Date => "date-time-picker-date",
+                            DateTimePart::Time => "date-time-picker-time",
+                        }
+                    }
+                };
+                ctx.focus(FocusRequest::TargetAt {
+                    path: self.focus_path.clone(),
+                    id: FocusId::new(id),
+                });
+            }
+            if outcome.selected
+                && let Some(value) = self.current_value()
+                && let Some(on_select) = &self.on_select
+            {
+                ctx.emit(on_select(value));
+            }
+            return finish_event(ctx, outcome);
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
@@ -389,6 +460,10 @@ impl<M: 'static> TuiNode<M> for DateTimePicker<M> {
             .tick(dt, settings)
             .merge(self.time.tick(dt, settings))
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 fn centered_time_area(area: Rect, content_width: u16) -> Rect {

@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::event::{KeyEvent, TuiEvent};
+use crate::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, AxisProposal, BorderKind, ChildKey, ColorTween,
     EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, KeySpec,
@@ -32,6 +32,8 @@ pub enum DialogTitlePosition {
 pub enum DialogCloseReason {
     CloseKey,
     Escape,
+    CloseChrome,
+    OutsideClick,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +559,19 @@ impl<M> Dialog<M> {
         }
     }
 
+    pub(crate) fn mouse_close_reason(&self, mouse: MouseEvent) -> Option<DialogCloseReason> {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return None;
+        }
+        if self.close_chrome_contains(mouse.column, mouse.row) {
+            Some(DialogCloseReason::CloseChrome)
+        } else if !rect_contains(self.area, mouse.column, mouse.row) {
+            Some(DialogCloseReason::OutsideClick)
+        } else {
+            None
+        }
+    }
+
     fn render_titles(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
         let edge_borders = self.resolved_edge_borders();
         let close_on_bottom =
@@ -722,13 +737,10 @@ impl<M> Dialog<M> {
         border: BorderKind,
         open_end: bool,
     ) {
-        let Some(label) = self.keys.close_label() else {
+        let Some(rect) = self.horizontal_close_chrome_rect(area, y) else {
             return;
         };
-        let width = close_label_width(&label);
-        if area.width <= width + 2 {
-            return;
-        }
+        let label = self.keys.close_label().expect("close chrome has a label");
         let border_style = Style::default().fg(self.visible_border_color());
         let title_style = Style::default()
             .fg(self.visible_title_color())
@@ -746,68 +758,125 @@ impl<M> Dialog<M> {
                 border_style,
             ),
         ]);
-        let x = area.x + area.width.saturating_sub(width);
-        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+        frame.render_widget(Paragraph::new(line), rect);
     }
 
     fn render_left_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        let Some(label) = self.keys.close_label() else {
+        let Some((join_rect, label_rect)) = self.vertical_close_chrome_rect(area, true) else {
             return;
         };
-        let label_width = line_width(&Line::from(label.as_str())).min(u16::MAX as usize) as u16;
-        if area.height < 3 || area.width < label_width {
-            return;
-        }
+        let label = self.keys.close_label().expect("close chrome has a label");
 
         let chars = crate::border_chars(border);
         let border_style = Style::default().fg(self.visible_border_color());
         let title_style = Style::default()
             .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
-        let x = area.x;
-        let y = area.bottom().saturating_sub(3);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(chars.bottom_join, border_style))),
-            Rect::new(x, y, 1, 1),
+            join_rect,
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(label, title_style))),
-            Rect::new(x, y.saturating_add(1), label_width, 1),
+            label_rect,
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(chars.top_join, border_style))),
-            Rect::new(x, y.saturating_add(2), 1, 1),
+            Rect::new(join_rect.x, join_rect.y.saturating_add(2), 1, 1),
         );
     }
 
     fn render_right_close_label(&self, frame: &mut Frame, area: Rect, border: BorderKind) {
-        let Some(label) = self.keys.close_label() else {
+        let Some((join_rect, label_rect)) = self.vertical_close_chrome_rect(area, false) else {
             return;
         };
-        let label_width = line_width(&Line::from(label.as_str())).min(u16::MAX as usize) as u16;
-        if area.height < 3 || area.width < label_width {
-            return;
-        }
+        let label = self.keys.close_label().expect("close chrome has a label");
 
         let chars = crate::border_chars(border);
         let border_style = Style::default().fg(self.visible_border_color());
         let title_style = Style::default()
             .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
-        let x = area.right().saturating_sub(1);
-        let y = area.bottom().saturating_sub(3);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(chars.bottom_join, border_style))),
-            Rect::new(x, y, 1, 1),
+            join_rect,
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(label, title_style))),
-            Rect::new(x, y.saturating_add(1), label_width, 1),
+            label_rect,
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(chars.top_join, border_style))),
-            Rect::new(x, y.saturating_add(2), 1, 1),
+            Rect::new(join_rect.x, join_rect.y.saturating_add(2), 1, 1),
         );
+    }
+
+    fn close_chrome_contains(&self, column: u16, row: u16) -> bool {
+        let borders = self.resolved_edge_borders();
+        if borders.contains(Borders::TOP) {
+            return self
+                .horizontal_close_chrome_rect(self.area, self.area.y)
+                .is_some_and(|rect| rect_contains(rect, column, row));
+        }
+        if borders.contains(Borders::BOTTOM) {
+            return self
+                .horizontal_close_chrome_rect(
+                    self.area,
+                    self.area.y + self.area.height.saturating_sub(1),
+                )
+                .is_some_and(|rect| rect_contains(rect, column, row));
+        }
+        if borders.contains(Borders::LEFT) {
+            return self
+                .vertical_close_chrome_rect(self.area, true)
+                .is_some_and(|(join, label)| {
+                    rect_contains(join, column, row)
+                        || rect_contains(label, column, row)
+                        || rect_contains(
+                            Rect::new(join.x, join.y.saturating_add(2), 1, 1),
+                            column,
+                            row,
+                        )
+                });
+        }
+        if borders.contains(Borders::RIGHT) {
+            return self
+                .vertical_close_chrome_rect(self.area, false)
+                .is_some_and(|(join, label)| {
+                    rect_contains(join, column, row)
+                        || rect_contains(label, column, row)
+                        || rect_contains(
+                            Rect::new(join.x, join.y.saturating_add(2), 1, 1),
+                            column,
+                            row,
+                        )
+                });
+        }
+        false
+    }
+
+    fn horizontal_close_chrome_rect(&self, area: Rect, y: u16) -> Option<Rect> {
+        let label = self.keys.close_label()?;
+        let width = close_label_width(&label);
+        (area.width > width + 2)
+            .then(|| Rect::new(area.x + area.width.saturating_sub(width), y, width, 1))
+    }
+
+    fn vertical_close_chrome_rect(&self, area: Rect, left: bool) -> Option<(Rect, Rect)> {
+        let label = self.keys.close_label()?;
+        let label_width = line_width(&Line::from(label.as_str())).min(u16::MAX as usize) as u16;
+        (area.height >= 3 && area.width >= label_width).then(|| {
+            let x = if left {
+                area.x
+            } else {
+                area.right().saturating_sub(1)
+            };
+            let y = area.bottom().saturating_sub(3);
+            (
+                Rect::new(x, y, 1, 1),
+                Rect::new(x, y.saturating_add(1), label_width, 1),
+            )
+        })
     }
 
     fn visible_border_color(&self) -> ratatui::style::Color {
@@ -962,6 +1031,14 @@ impl<M> TuiNode<M> for Dialog<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Mouse(mouse) = event {
+            if let Some(reason) = self.mouse_close_reason(*mouse) {
+                self.close(reason, ctx);
+            } else {
+                ctx.stop_propagation();
+            }
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             ctx.stop_propagation();
             return EventOutcome::Handled;
@@ -1215,6 +1292,10 @@ fn is_focus_unfocus_event(event: &TuiEvent) -> bool {
     keybindings().focus().unfocus_matches(*key)
 }
 
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    column >= rect.x && column < rect.right() && row >= rect.y && row < rect.bottom()
+}
+
 fn matches_any(bindings: &[KeySpec], key: KeyEvent) -> bool {
     bindings.iter().any(|binding| binding.matches(key))
 }
@@ -1256,7 +1337,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
-    use crate::{Key, TextInput, animation_settings};
+    use crate::{Key, MouseButton, MouseEvent, MouseEventKind, TextInput, animation_settings};
 
     fn render_node<M>(node: &impl TuiNode<M>, frame: &mut ratatui::Frame, area: Rect) {
         let mut ctx = crate::RenderCtx::new();
@@ -1789,6 +1870,69 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.messages(), &[DialogCloseReason::CloseKey]);
         assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
+    fn clicking_rendered_close_chrome_closes_each_dock_variant() {
+        let area = Rect::new(10, 20, 20, 6);
+        let variants = [
+            (Borders::ALL, 27, 20),
+            (Borders::BOTTOM, 27, 25),
+            (Borders::LEFT, 10, 24),
+            (Borders::RIGHT, 29, 24),
+        ];
+
+        for (borders, column, row) in variants {
+            let mut dialog = Dialog::new()
+                .edge_borders(borders)
+                .on_close(|reason| reason);
+            dialog.layout(area, &mut LayoutCtx::new());
+            let mut ctx = EventCtx::new(animation_settings());
+
+            let outcome = dialog.event(
+                &TuiEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column,
+                    row,
+                    modifiers: crate::KeyModifiers::NONE,
+                }),
+                &mut ctx,
+            );
+
+            assert_eq!(outcome, EventOutcome::Handled);
+            assert_eq!(ctx.messages(), &[DialogCloseReason::CloseChrome]);
+        }
+    }
+
+    #[test]
+    fn outside_left_click_closes_but_inside_left_click_does_not() {
+        let area = Rect::new(10, 20, 20, 6);
+        let mut dialog = Dialog::new().on_close(|reason| reason);
+        dialog.layout(area, &mut LayoutCtx::new());
+
+        let mut inside_ctx = EventCtx::new(animation_settings());
+        dialog.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 11,
+                row: 21,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut inside_ctx,
+        );
+        assert!(inside_ctx.messages().is_empty());
+
+        let mut outside_ctx = EventCtx::new(animation_settings());
+        dialog.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 9,
+                row: 20,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut outside_ctx,
+        );
+        assert_eq!(outside_ctx.messages(), &[DialogCloseReason::OutsideClick]);
     }
 
     #[test]

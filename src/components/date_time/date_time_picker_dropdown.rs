@@ -414,6 +414,7 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.field_area = self.content_area(area);
         self.overlay_bounds = ctx.overlay_bounds();
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), self.field_area));
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATE_TIME_PICKER_DROPDOWN_FOCUS),
@@ -506,6 +507,50 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             }
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if let TuiEvent::Mouse(mouse) = event {
+            if !self.open {
+                if rect_contains(self.field_area, mouse.column, mouse.row)
+                    && matches!(
+                        mouse.kind,
+                        crate::MouseEventKind::Down(crate::MouseButton::Left)
+                    )
+                {
+                    self.set_open(true);
+                    ctx.focus(crate::FocusRequest::TargetAt {
+                        path: ctx.current_path(),
+                        id: FocusId::new(DATE_TIME_PICKER_DROPDOWN_FOCUS),
+                    });
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                    ctx.stop_propagation();
+                    return EventOutcome::Handled;
+                }
+                return EventOutcome::Ignored;
+            }
+            let popup = self.popup_area(self.overlay_bounds);
+            let outcome = match self.step {
+                DateTimeDropdownStep::Date => self.date.on_mouse(*mouse, popup),
+                DateTimeDropdownStep::Time => {
+                    let inner = Block::default().borders(Borders::ALL).inner(popup);
+                    self.time.on_mouse(
+                        *mouse,
+                        centered_time_area(inner, self.time.rendered_width()),
+                    )
+                }
+            };
+            if outcome.selected {
+                match self.step {
+                    DateTimeDropdownStep::Date => self.open_time_step(),
+                    DateTimeDropdownStep::Time => {
+                        self.close();
+                        self.emit_selection(ctx);
+                        ctx.request_layout();
+                    }
+                }
+                ctx.request_redraw();
+            }
+            return finish_event(ctx, outcome);
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
@@ -651,6 +696,10 @@ impl<M: 'static> TuiNode<M> for DateTimePickerDropdown<M> {
             .merge(self.date.tick(dt, settings))
             .merge(self.time.tick(dt, settings))
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 fn centered_time_area(area: Rect, content_width: u16) -> Rect {

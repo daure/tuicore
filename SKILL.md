@@ -39,7 +39,10 @@ Measurement vocabulary: `AxisProposal`, `LayoutProposal`, `LayoutSize`, `AxisExp
 `LayoutOverflowDiagnostic`. Runtime registration values are `FocusTarget`, `FocusRepair`, and
 `HitRegion`. Input values are `KeyEvent`, `Key`, `KeyModifiers`, `MouseEvent`, `MouseEventKind`,
 `MouseButton`, `HotkeyEvent`, `ExternalEditorRequest`, `ExternalEditorResponse`, and
-`UnsupportedEvent`.
+`UnsupportedEvent`. Mouse capture is enabled by `TreeApp`: interactive components register hit
+regions during layout, handle state changes in `event`, and keep render pure. Built-in buttons,
+text inputs, toggles, dropdowns, menus, calendars, tabs, DataViews, panels, and scroll containers
+accept basic clicks or wheel scrolling.
 
 Low-level custom-loop exports exist but normal apps should not need them: `TerminalGuard`,
 `EventSource`, `LayoutEngine`, `FocusManager`, `TreeDispatcher`, `Scheduler`, `Renderer`,

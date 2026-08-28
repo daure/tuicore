@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Key, KeyModifiers, LayoutSize};
+use crate::{Key, KeyModifiers, LayoutSize, MouseButton, MouseEvent, MouseEventKind, TreePath};
 use ratatui::{Terminal, backend::TestBackend};
 use time::{Date, Month, Time};
 
@@ -332,4 +332,134 @@ fn date_time_picker_forwards_first_day_of_week_builder_and_setter() {
         picker.date.configured_first_day_of_week(),
         time::Weekday::Monday
     );
+}
+
+#[test]
+fn date_time_picker_forwards_date_header_clicks() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DateTimePicker::<()>::new().value(Some(date.with_time(Time::MIDNIGHT)));
+    let area = ratatui::layout::Rect::new(0, 0, 38, 10);
+    let mut layout = LayoutCtx::new();
+    crate::TuiNode::layout(&mut picker, area, &mut layout);
+    let mut ctx = EventCtx::new_at_path(crate::animation_settings(), TreePath::new());
+
+    let outcome = picker.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(picker.date.is_month_view());
+    assert_eq!(layout.hit_regions().len(), 1);
+    assert_eq!(layout.hit_regions()[0].path, TreePath::new());
+    assert_eq!(layout.hit_regions()[0].area, area);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&crate::FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new("date-time-picker-date"),
+        })
+    );
+}
+
+#[test]
+fn stepped_date_time_picker_mouse_action_focuses_outer_picker() {
+    let date = Date::from_calendar_date(2026, Month::June, 22).unwrap();
+    let mut picker = DateTimePicker::<()>::new()
+        .value(Some(date.with_time(Time::MIDNIGHT)))
+        .layout(DateTimePickerLayout::Stepped);
+    let mut layout = LayoutCtx::new();
+    crate::TuiNode::layout(
+        &mut picker,
+        ratatui::layout::Rect::new(0, 0, 24, 10),
+        &mut layout,
+    );
+    let mut ctx = EventCtx::new_at_path(crate::animation_settings(), TreePath::new());
+
+    let outcome = picker.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&crate::FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new("date-time-picker"),
+        })
+    );
+}
+
+#[test]
+fn date_time_picker_mouse_click_on_time_area_focuses_time_picker() {
+    let mut picker = DateTimePicker::<()>::new();
+    let mut layout = LayoutCtx::new();
+    crate::TuiNode::layout(
+        &mut picker,
+        ratatui::layout::Rect::new(0, 0, 38, 10),
+        &mut layout,
+    );
+    let mut ctx = EventCtx::new_at_path(crate::animation_settings(), TreePath::new());
+
+    let outcome = picker.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 24,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(picker.active, DateTimePart::Time);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&crate::FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new("date-time-picker-time"),
+        })
+    );
+}
+
+#[test]
+fn date_time_picker_mouse_day_selection_emits_combined_value() {
+    let value = Date::from_calendar_date(2026, Month::June, 22)
+        .unwrap()
+        .with_time(Time::from_hms(9, 30, 0).unwrap());
+    let mut picker = DateTimePicker::new()
+        .value(Some(value))
+        .on_select(|selected| selected);
+    let mut layout = LayoutCtx::new();
+    crate::TuiNode::layout(
+        &mut picker,
+        ratatui::layout::Rect::new(0, 0, 38, 10),
+        &mut layout,
+    );
+    let mut ctx = EventCtx::default();
+
+    let outcome = picker.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(picker.current_value(), Some(value));
+    assert_eq!(ctx.messages(), &[value]);
 }

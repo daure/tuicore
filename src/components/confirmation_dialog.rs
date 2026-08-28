@@ -201,15 +201,26 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
-        if let TuiEvent::Key(key) = event {
-            if self.keys.yes.is_some_and(|binding| binding.matches(*key)) {
+        match event {
+            TuiEvent::Key(key) if self.keys.yes.is_some_and(|binding| binding.matches(*key)) => {
                 self.outcomes.push(ConfirmationDialogOutcome::Confirmed);
-            } else if self.keys.no.is_some_and(|binding| binding.matches(*key)) {
-                self.outcomes.push(ConfirmationDialogOutcome::Cancelled);
-            } else if let Some(reason) = self.dialog.close_reason(*key) {
-                self.outcomes
-                    .push(ConfirmationDialogOutcome::Closed(reason));
             }
+            TuiEvent::Key(key) if self.keys.no.is_some_and(|binding| binding.matches(*key)) => {
+                self.outcomes.push(ConfirmationDialogOutcome::Cancelled);
+            }
+            TuiEvent::Key(key) => {
+                if let Some(reason) = self.dialog.close_reason(*key) {
+                    self.outcomes
+                        .push(ConfirmationDialogOutcome::Closed(reason));
+                }
+            }
+            TuiEvent::Mouse(mouse) => {
+                if let Some(reason) = self.dialog.mouse_close_reason(*mouse) {
+                    self.outcomes
+                        .push(ConfirmationDialogOutcome::Closed(reason));
+                }
+            }
+            _ => {}
         }
         self.dialog.event(event, ctx)
     }
@@ -266,7 +277,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
-    use crate::{Key, animation_settings};
+    use crate::{Key, MouseButton, MouseEvent, MouseEventKind, animation_settings};
 
     #[test]
     fn renders_actions_as_bottom_right_text_with_hotkeys() {
@@ -369,6 +380,32 @@ mod tests {
             ctx.messages(),
             &[ConfirmationDialogOutcome::Closed(
                 DialogCloseReason::CloseKey
+            )]
+        );
+    }
+
+    #[test]
+    fn close_chrome_click_emits_closed_outcome() {
+        let mut dialog =
+            ConfirmationDialog::new("Continue?", "Choose an action").on_outcome(|outcome| outcome);
+        let area = Rect::new(0, 0, 40, 5);
+        dialog.layout(area, &mut LayoutCtx::new());
+        let mut ctx = EventCtx::new(animation_settings());
+
+        dialog.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 37,
+                row: 0,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(
+            ctx.messages(),
+            &[ConfirmationDialogOutcome::Closed(
+                DialogCloseReason::CloseChrome
             )]
         );
     }

@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::event::{HotkeyEvent, Key, KeyEvent, TuiEvent};
+use crate::event::{HotkeyEvent, Key, KeyEvent, MouseButton, MouseEventKind, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, BorderKind, ColorTween, ScrollAxes, ScrollBehavior,
     ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome, ScrollSize,
@@ -18,7 +18,7 @@ const PANEL_FOCUS: &str = "panel";
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, HotkeyMatch,
     HotkeySequenceMatcher, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx,
-    TuiNode,
+    TreePath, TuiNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +83,7 @@ pub struct Panel<M = ()> {
     border_color: ColorTween,
     title_color: ColorTween,
     area: Rect,
+    layout_path: TreePath,
     pending_hotkey_prefix: Option<String>,
 }
 
@@ -124,6 +125,7 @@ impl<M> Panel<M> {
             border_color: ColorTween::idle(theme.border_fg()),
             title_color: ColorTween::idle(theme.muted_fg()),
             area: Rect::default(),
+            layout_path: TreePath::new(),
             pending_hotkey_prefix: None,
         }
     }
@@ -750,6 +752,8 @@ impl<M> TuiNode<M> for Panel<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
+        self.layout_path = ctx.current_path();
+        ctx.register_hit_region(crate::HitRegion::new(self.layout_path.clone(), area));
         if width_changed && let Some(scroll) = &mut self.scroll {
             scroll.snap_horizontal_to_start();
         }
@@ -775,13 +779,49 @@ impl<M> TuiNode<M> for Panel<M> {
         if let TuiEvent::Hotkey(hotkey) = event {
             return self.on_hotkey_event(hotkey, ctx);
         }
-        let TuiEvent::Key(key) = event else {
-            return EventOutcome::Ignored;
-        };
-        if let Some(outcome) = self.handle_hotkey_key(*key, ctx) {
+        if let TuiEvent::Key(key) = event
+            && let Some(outcome) = self.handle_hotkey_key(*key, ctx)
+        {
             return outcome;
         }
-        let outcome = self.on_key(*key, self.area, ctx.animation());
+        if let TuiEvent::Mouse(mouse) = event
+            && (mouse.column < self.area.x
+                || mouse.column >= self.area.x.saturating_add(self.area.width)
+                || mouse.row < self.area.y
+                || mouse.row >= self.area.y.saturating_add(self.area.height))
+        {
+            return EventOutcome::Ignored;
+        }
+        if matches!(
+            event,
+            TuiEvent::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        ) {
+            ctx.focus(crate::FocusRequest::TargetAt {
+                path: self.layout_path.clone(),
+                id: FocusId::new(PANEL_FOCUS),
+            });
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        let outcome = match event {
+            TuiEvent::Key(key) => self.on_key(*key, self.area, ctx.animation()),
+            TuiEvent::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll_by(ScrollDelta::new(0, -1), self.area, ctx.animation())
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_by(ScrollDelta::new(0, 1), self.area, ctx.animation())
+                }
+                MouseEventKind::ScrollLeft => {
+                    self.scroll_by(ScrollDelta::new(-1, 0), self.area, ctx.animation())
+                }
+                MouseEventKind::ScrollRight => {
+                    self.scroll_by(ScrollDelta::new(1, 0), self.area, ctx.animation())
+                }
+                _ => return EventOutcome::Ignored,
+            },
+            _ => return EventOutcome::Ignored,
+        };
         if outcome.needs_redraw() {
             ctx.request_redraw();
         }
@@ -843,6 +883,8 @@ where
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let width_changed = self.panel.area.width != 0 && self.panel.area.width != area.width;
         self.panel.area = area;
+        self.panel.layout_path = ctx.current_path();
+        ctx.register_hit_region(crate::HitRegion::new(self.panel.layout_path.clone(), area));
         if width_changed && let Some(scroll) = &mut self.panel.scroll {
             scroll.snap_horizontal_to_start();
         }
@@ -1208,6 +1250,60 @@ mod tests {
     }
 
     #[test]
+    fn mouse_event_outside_layout_is_ignored() {
+        let mut panel = Panel::<()>::new();
+        let mut layout = LayoutCtx::new();
+        panel.layout(Rect::new(4, 2, 10, 3), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = panel.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 0,
+                row: 0,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert_eq!(ctx.focus_request(), None);
+    }
+
+    #[test]
+    fn panel_click_focuses_its_registered_layout_path() {
+        let mut panel = Panel::<()>::new();
+        let host_path = TreePath::from_keys([ChildKey::new("host")]);
+        let mut layout = LayoutCtx::new();
+        layout.push_slot(ChildKey::new("host"), Rect::new(0, 0, 10, 3), |ctx| {
+            panel.layout(Rect::new(0, 0, 10, 3), ctx);
+        });
+        let mut ctx = EventCtx::new_at_path(
+            AnimationSettings::default(),
+            host_path.child(ChildKey::body()),
+        );
+
+        let outcome = panel.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 1,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&crate::FocusRequest::TargetAt {
+                path: host_path,
+                id: FocusId::new(PANEL_FOCUS),
+            })
+        );
+    }
+
+    #[test]
     fn clamp_scroll_clamps_offset_after_content_shrinks() {
         let mut settings = AnimationSettings::default();
         settings.enabled = false;
@@ -1389,6 +1485,41 @@ mod tests {
 
         assert!(host.panel().is_focused());
         assert!(focus.redraw_requested());
+    }
+
+    #[test]
+    fn panel_host_keeps_child_hit_regions_above_its_host_region() {
+        let mut host = Panel::new().host(StaticBody);
+        let host_path = TreePath::from_keys([ChildKey::new("host")]);
+        let child_path = host_path.child(ChildKey::body());
+        let mut layout = LayoutCtx::new();
+        layout.push_slot(ChildKey::new("host"), Rect::new(0, 0, 10, 3), |ctx| {
+            host.layout(Rect::new(0, 0, 10, 3), ctx);
+        });
+
+        assert_eq!(layout.hit_regions()[1].path, host_path);
+        assert_eq!(layout.hit_regions()[2].path, child_path);
+
+        let mut ctx = EventCtx::new_at_path(AnimationSettings::default(), child_path);
+        let outcome = host.dispatch_event(
+            &EventRoute::new(TreePath::from_keys([ChildKey::body()])),
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 1,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&crate::FocusRequest::TargetAt {
+                path: host_path,
+                id: FocusId::new(PANEL_FOCUS),
+            })
+        );
     }
 
     #[test]

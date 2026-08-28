@@ -176,10 +176,47 @@ fn disabled_text_input_suppresses_editor_hotkey() {
 }
 
 #[test]
-fn text_input_panel_click_requests_input_focus() {
-    let mut input = TextInput::<()>::new().panel("Label");
+fn text_input_click_focuses_and_enters_insert_mode_for_all_chrome() {
+    for (mut input, area) in [
+        (TextInput::<()>::new(), Rect::new(2, 3, 12, 1)),
+        (
+            TextInput::<()>::new().panel("Label"),
+            Rect::new(2, 3, 12, 3),
+        ),
+    ] {
+        let mut layout = LayoutCtx::new();
+        input.layout(area, &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(input.insert_mode());
+        assert_eq!(layout.hit_regions().len(), 1);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::new(),
+                id: FocusId::new("input"),
+            })
+        );
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+}
+
+#[test]
+fn password_input_click_focuses_and_enters_insert_mode() {
+    let mut input = PasswordInput::<()>::new();
     let mut layout = LayoutCtx::new();
-    input.layout(Rect::new(2, 3, 12, 3), &mut layout);
+    input.layout(Rect::new(2, 3, 12, 1), &mut layout);
     let mut ctx = EventCtx::default();
 
     let outcome = input.event(
@@ -193,11 +230,13 @@ fn text_input_panel_click_requests_input_focus() {
     );
 
     assert_eq!(outcome, EventOutcome::Handled);
+    assert!(input.insert_mode());
+    assert_eq!(layout.hit_regions().len(), 1);
     assert_eq!(
         ctx.focus_request(),
         Some(&FocusRequest::TargetAt {
             path: TreePath::new(),
-            id: FocusId::new("input"),
+            id: FocusId::new("password-input"),
         })
     );
 }

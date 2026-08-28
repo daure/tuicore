@@ -315,21 +315,24 @@ impl<M> TextareaInput<M> {
         }
     }
 
-    fn is_panel_mode(&self) -> bool {
-        matches!(self.chrome, InputChrome::Panel(_))
-    }
-
-    fn panel_click_focus(&self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> bool {
+    fn click_focus(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> bool {
         let TuiEvent::Mouse(mouse) = event else {
             return false;
         };
-        if !self.is_panel_mode()
-            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             || !rect_contains(self.outer_area, mouse.column, mouse.row)
         {
             return false;
         }
 
+        if !self.disabled && !self.insert_mode {
+            if self.begin_insert_mode() {
+                self.scroll_cursor_into_view(disabled_animation_settings());
+            }
+            self.cursor_fade.reset();
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
         ctx.focus(FocusRequest::TargetAt {
             path: ctx.current_path(),
             id: FocusId::new(TEXTAREA_FOCUS),
@@ -2005,8 +2008,14 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
-        self.outer_area = area;
-        self.area = self.content_area(area);
+        self.outer_area = Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            self.visible_outer_height(area.width, area.height),
+        );
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), self.outer_area));
+        self.area = self.content_area(self.outer_area);
         if self.insert_mode && !self.preserve_scroll_position {
             self.scroll_cursor_into_view(disabled_animation_settings());
         }
@@ -2047,7 +2056,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
-        if self.panel_click_focus(event, ctx) {
+        if self.click_focus(event, ctx) {
             return EventOutcome::Handled;
         }
         if let TuiEvent::Hotkey(hotkey) = event {

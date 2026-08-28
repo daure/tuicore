@@ -814,12 +814,15 @@ where
             }
         }
 
-        let route = EventRoute::new(route_path_for_event(
+        let Some(path) = route_path_for_event(
             &event,
             layout_engine.hit_regions(),
             layout_engine.overlays(),
             focus_manager.current_path(),
-        ));
+        ) else {
+            return;
+        };
+        let route = EventRoute::new(path);
         if matches!(event, TuiEvent::Resize(_, _)) {
             flags.layout = true;
         }
@@ -1013,13 +1016,13 @@ fn route_path_for_event(
     hit_regions: &[HitRegion],
     overlays: &[OverlayLayoutEntry],
     focused_path: TreePath,
-) -> TreePath {
+) -> Option<TreePath> {
     let TuiEvent::Mouse(mouse) = event else {
-        return focused_path;
+        return Some(focused_path);
     };
 
     if let Some(path) = route_path_for_overlay_mouse(mouse.column, mouse.row, overlays, false) {
-        return path;
+        return Some(path);
     }
 
     if let Some(path) = hit_regions
@@ -1028,10 +1031,10 @@ fn route_path_for_event(
         .find(|region| region.contains(mouse.column, mouse.row))
         .map(|region| region.path.clone())
     {
-        return path;
+        return Some(path);
     }
 
-    route_path_for_overlay_mouse(mouse.column, mouse.row, overlays, true).unwrap_or(focused_path)
+    route_path_for_overlay_mouse(mouse.column, mouse.row, overlays, true)
 }
 
 fn route_path_for_overlay_mouse(
@@ -2067,7 +2070,8 @@ mod tests {
     }
 
     impl TuiNode<()> for MouseProbe {
-        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+        fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+            ctx.register_focusable(FocusId::new(self.name), area, true);
             LayoutResult::new(area)
         }
 
@@ -3078,7 +3082,7 @@ mod tests {
 
         let path = route_path_for_event(&event, &hit_regions, &[], TreePath::new());
 
-        assert_eq!(path.keys(), &[ChildKey::from("front")]);
+        assert_eq!(path.unwrap().keys(), &[ChildKey::from("front")]);
     }
 
     #[test]
@@ -3103,7 +3107,7 @@ mod tests {
 
         let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
 
-        assert_eq!(path.keys(), &[ChildKey::from("overlay")]);
+        assert_eq!(path.unwrap().keys(), &[ChildKey::from("overlay")]);
     }
 
     #[test]
@@ -3128,7 +3132,7 @@ mod tests {
 
         let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
 
-        assert_eq!(path.keys(), &[ChildKey::from("owner")]);
+        assert_eq!(path.unwrap().keys(), &[ChildKey::from("owner")]);
     }
 
     #[test]
@@ -3162,7 +3166,7 @@ mod tests {
 
         let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
 
-        assert_eq!(path.keys(), &[ChildKey::from("overlay")]);
+        assert_eq!(path.unwrap().keys(), &[ChildKey::from("overlay")]);
     }
 
     #[test]
@@ -3187,7 +3191,7 @@ mod tests {
 
         let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
 
-        assert_eq!(path.keys(), &[ChildKey::from("dialog-child")]);
+        assert_eq!(path.unwrap().keys(), &[ChildKey::from("dialog-child")]);
     }
 
     #[test]
@@ -3212,7 +3216,7 @@ mod tests {
 
         let path = route_path_for_event(&event, &hit_regions, &overlays, TreePath::new());
 
-        assert_eq!(path.keys(), &[ChildKey::from("dialog-layer")]);
+        assert_eq!(path.unwrap().keys(), &[ChildKey::from("dialog-layer")]);
     }
 
     #[test]
@@ -3239,7 +3243,7 @@ mod tests {
             layout.overlays(),
             TreePath::from_keys([ChildKey::from("focused")]),
         );
-        assert_eq!(popup_route, dropdown_overlay.route_path);
+        assert_eq!(popup_route, Some(dropdown_overlay.route_path.clone()));
 
         let input_target = layout
             .focus_targets()
@@ -3255,7 +3259,7 @@ mod tests {
             layout.overlays(),
             TreePath::from_keys([ChildKey::from("focused")]),
         );
-        assert_eq!(input_route, input_target.path);
+        assert_eq!(input_route, Some(input_target.path.clone()));
 
         let outside_route = route_path_for_event(
             &mouse_down_at(0, 0),
@@ -3263,7 +3267,7 @@ mod tests {
             layout.overlays(),
             TreePath::from_keys([ChildKey::from("focused")]),
         );
-        assert!(outside_route.is_empty());
+        assert_eq!(outside_route, Some(TreePath::new()));
     }
 
     #[test]
@@ -3294,6 +3298,21 @@ mod tests {
         let app = app.run_test_events([event], Rect::new(0, 0, 10, 1));
 
         assert_eq!(app.root.event_log.borrow().as_slice(), ["right"]);
+    }
+
+    #[test]
+    fn mouse_miss_does_not_dispatch_to_the_focused_control() {
+        let app = TreeApp::new(MouseRouteNode::new());
+        let event = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let app = app.run_test_events([event], Rect::new(0, 0, 10, 1));
+
+        assert!(app.root.event_log.borrow().is_empty());
     }
 
     #[test]

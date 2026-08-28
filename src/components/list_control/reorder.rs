@@ -501,19 +501,20 @@ where
     }
 
     fn flat_range_selection_available(&self) -> bool {
-        if self.data_view.tree_is_mutable() || self.reorder.is_some() {
-            return false;
-        }
-        let Some(column) = self.reorder_column.as_deref() else {
-            return false;
-        };
-        self.data_view
-            .reorder_snapshot(column)
-            .is_ok_and(|snapshot| snapshot.ids == self.data_view.reorder_visible_ids())
+        !self.data_view.tree_is_mutable() && self.reorder.is_none()
+    }
+
+    fn flat_block_move_available(&self) -> bool {
+        self.flat_range_selection_available()
+            && self.reorder_column.as_deref().is_some_and(|column| {
+                self.data_view
+                    .reorder_snapshot(column)
+                    .is_ok_and(|snapshot| snapshot.ids == self.data_view.reorder_visible_ids())
+            })
     }
 
     fn begin_flat_block_move(&mut self, settings: crate::AnimationSettings) -> bool {
-        if !self.flat_range_selection_available() {
+        if !self.flat_block_move_available() {
             self.clear_flat_range_selection();
             return false;
         }
@@ -538,17 +539,16 @@ where
             self.clear_flat_range_selection();
             return false;
         }
-        let target_index = snapshot
+        let visual_target_index = snapshot
             .ids
             .iter()
-            .position(|id| id == &selected[0])
-            .map(|index| {
-                snapshot.ids[..index]
-                    .iter()
-                    .filter(|id| !selected.contains(id))
-                    .count()
-            })
+            .rposition(|id| id == selected.last().expect("selected block is not empty"))
+            .map(|index| index + 1)
             .expect("selected row exists in reorder snapshot");
+        let target_index = snapshot.ids[..visual_target_index]
+            .iter()
+            .filter(|id| !selected.contains(id))
+            .count();
         let Some(highlighted_id) = self.data_view.highlighted_id() else {
             self.clear_flat_range_selection();
             return false;
@@ -569,6 +569,7 @@ where
             scroll_snapshot: self.data_view.scroll_snapshot(),
             selected,
             target_index,
+            visual_target_index: Some(visual_target_index),
             highlighted_id,
             pending_g: false,
         });
@@ -623,6 +624,35 @@ where
         self.set_flat_block_target(target_index);
     }
 
+    fn move_flat_block_target_line(&mut self, delta: isize) {
+        let Some(state) = self.flat_block_move.as_ref() else {
+            return;
+        };
+        let visual_target_index = state.visual_target_index.unwrap_or_else(|| {
+            state
+                .snapshot
+                .ids
+                .iter()
+                .filter(|id| !state.selected.contains(id))
+                .nth(state.target_index)
+                .and_then(|target| state.snapshot.ids.iter().position(|id| id == target))
+                .unwrap_or(state.snapshot.ids.len())
+        });
+        let visual_target_index = visual_target_index
+            .saturating_add_signed(delta)
+            .min(state.snapshot.ids.len());
+        let target_index = state.snapshot.ids[..visual_target_index]
+            .iter()
+            .filter(|id| !state.selected.contains(id))
+            .count();
+        let state = self
+            .flat_block_move
+            .as_mut()
+            .expect("flat block move is active");
+        state.visual_target_index = Some(visual_target_index);
+        state.target_index = target_index;
+    }
+
     fn set_flat_block_target(&mut self, target_index: usize) {
         let remaining = self
             .flat_block_move
@@ -634,6 +664,7 @@ where
             .as_mut()
             .expect("flat block move is active");
         state.target_index = target_index.min(remaining);
+        state.visual_target_index = None;
     }
 
     fn handle_flat_block_target_key(&mut self, key: KeyEvent) -> bool {
@@ -645,8 +676,10 @@ where
                 .expect("flat block move is active")
                 .pending_g = false;
         }
-        if let Some(delta) = self.tree_selection_direction(key, false) {
-            self.move_flat_block_target(delta);
+        if let Some(delta) =
+            self.tree_selection_direction(key, key.modifiers == KeyModifiers::CONTROL)
+        {
+            self.move_flat_block_target_line(delta);
         } else if keys.page_up_matches(key) {
             self.move_flat_block_target(
                 -(self.data_view.visible_page_step(self.data_area) as isize),
@@ -686,16 +719,21 @@ where
         };
         let remaining = self.flat_block_remaining_ids(state);
         let position = state
-            .target_index
-            .checked_sub(1)
-            .and_then(|index| remaining.get(index))
+            .visual_target_index
+            .and_then(|index| state.snapshot.ids.get(index))
             .cloned()
-            .map(SelectionOverlayPosition::After)
+            .map(SelectionOverlayPosition::Before)
             .or_else(|| {
                 remaining
-                    .first()
+                    .get(state.target_index)
                     .cloned()
                     .map(SelectionOverlayPosition::Before)
+                    .or_else(|| {
+                        remaining
+                            .last()
+                            .cloned()
+                            .map(SelectionOverlayPosition::After)
+                    })
             })
             .unwrap_or_else(|| {
                 SelectionOverlayPosition::After(
@@ -829,6 +867,7 @@ where
             parent_id,
             selected,
             sibling_index,
+            visual_sibling_index: Some(last_index + 1),
             pending_g: false,
         });
         self.position_tree_block_placeholder(settings);
@@ -847,6 +886,9 @@ where
         } else if self.handle_tree_block_target_key(key) {
             self.update_tree_block_overlay();
             self.position_tree_block_placeholder(ctx.animation());
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return;
         } else {
             let keys = crate::keybindings();
             if keys.line_left_matches(key) || KeySpec::plain('<').matches(key) {
@@ -881,6 +923,46 @@ where
         self.set_tree_block_target(sibling_index);
     }
 
+    fn move_tree_block_target_line(&mut self, delta: isize) {
+        let Some(state) = self.tree_block_move.as_ref() else {
+            return;
+        };
+        if state.parent_id != state.source_parent_id {
+            let sibling_index = state
+                .sibling_index
+                .saturating_add_signed(delta)
+                .min(self.tree_block_target_siblings(state).len());
+            let state = self
+                .tree_block_move
+                .as_mut()
+                .expect("tree block move is active");
+            state.sibling_index = sibling_index;
+            return;
+        }
+        let siblings = self
+            .data_view
+            .tree_children_for_parent(state.source_parent_id.as_ref());
+        let visual_sibling_index = state.visual_sibling_index.unwrap_or_else(|| {
+            self.tree_block_target_siblings(state)
+                .get(state.sibling_index)
+                .and_then(|target| siblings.iter().position(|id| id == target))
+                .unwrap_or(siblings.len())
+        });
+        let visual_sibling_index = visual_sibling_index
+            .saturating_add_signed(delta)
+            .min(siblings.len());
+        let sibling_index = siblings[..visual_sibling_index]
+            .iter()
+            .filter(|id| !state.selected.contains(id))
+            .count();
+        let state = self
+            .tree_block_move
+            .as_mut()
+            .expect("tree block move is active");
+        state.visual_sibling_index = Some(visual_sibling_index);
+        state.sibling_index = sibling_index;
+    }
+
     fn set_tree_block_target(&mut self, sibling_index: usize) {
         let remaining = self
             .tree_block_move
@@ -892,6 +974,7 @@ where
             .as_mut()
             .expect("tree block move is active");
         state.sibling_index = sibling_index.min(remaining);
+        state.visual_sibling_index = None;
     }
 
     fn handle_tree_block_target_key(&mut self, key: KeyEvent) -> bool {
@@ -903,8 +986,10 @@ where
                 .expect("tree block move is active")
                 .pending_g = false;
         }
-        if let Some(delta) = self.tree_selection_direction(key, false) {
-            self.move_tree_block_target(delta);
+        if let Some(delta) =
+            self.tree_selection_direction(key, key.modifiers == KeyModifiers::CONTROL)
+        {
+            self.move_tree_block_target_line(delta);
         } else if keys.page_up_matches(key) {
             self.move_tree_block_target(
                 -(self.data_view.visible_page_step(self.data_area) as isize),
@@ -957,6 +1042,7 @@ where
         };
         state.parent_id = grandparent_id;
         state.sibling_index = parent_index + 1;
+        state.visual_sibling_index = None;
     }
 
     fn indent_tree_block_target(&mut self) {
@@ -981,6 +1067,7 @@ where
             .expect("tree block move is active");
         state.parent_id = Some(new_parent);
         state.sibling_index = sibling_index;
+        state.visual_sibling_index = None;
     }
 
     fn tree_block_target_siblings(&self, state: &TreeBlockMoveState<Id>) -> Vec<Id> {
@@ -1002,25 +1089,43 @@ where
             return;
         };
         let remaining = self.tree_block_target_siblings(state);
-        let position = if let Some(previous) = state
-            .sibling_index
-            .checked_sub(1)
-            .and_then(|index| remaining.get(index))
-        {
-            SelectionOverlayPosition::After(previous.clone())
-        } else if let Some(next) = remaining.first() {
-            SelectionOverlayPosition::Before(next.clone())
-        } else if let Some(parent_id) = state.parent_id.as_ref() {
-            SelectionOverlayPosition::After(parent_id.clone())
-        } else {
-            SelectionOverlayPosition::After(
-                state
-                    .selected
-                    .last()
-                    .expect("selected block is not empty")
-                    .clone(),
-            )
-        };
+        let position = state
+            .visual_sibling_index
+            .filter(|_| state.parent_id == state.source_parent_id)
+            .and_then(|index| {
+                self.data_view
+                    .tree_children_for_parent(state.source_parent_id.as_ref())
+                    .get(index)
+                    .cloned()
+            })
+            .map(SelectionOverlayPosition::Before)
+            .or_else(|| {
+                remaining
+                    .get(state.sibling_index)
+                    .cloned()
+                    .map(SelectionOverlayPosition::Before)
+                    .or_else(|| {
+                        remaining
+                            .last()
+                            .cloned()
+                            .map(SelectionOverlayPosition::After)
+                    })
+                    .or_else(|| {
+                        (state.parent_id != state.source_parent_id)
+                            .then(|| state.parent_id.clone())
+                            .flatten()
+                            .map(SelectionOverlayPosition::After)
+                    })
+            })
+            .unwrap_or_else(|| {
+                SelectionOverlayPosition::After(
+                    state
+                        .selected
+                        .last()
+                        .expect("selected block is not empty")
+                        .clone(),
+                )
+            });
         self.data_view.set_selection_overlay(
             state.selected.clone(),
             Some(position),

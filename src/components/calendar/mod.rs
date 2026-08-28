@@ -26,7 +26,9 @@ use date_math::{
     weekday_short,
 };
 
-use crate::event::{Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{
+    Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
+};
 use crate::{
     Animated, EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, ScrollAxes, ScrollOffset, ScrollSize, ScrollState, TickResult,
@@ -63,6 +65,12 @@ struct CalendarReorderState {
 struct CalendarDaySelectionState {
     selected_entries: Vec<usize>,
     anchor: usize,
+    range_mode: bool,
+}
+
+struct CalendarDaySelectionSnapshot<Id> {
+    selected_ids: Vec<Id>,
+    anchor_id: Id,
     range_mode: bool,
 }
 
@@ -310,6 +318,7 @@ where
         let cursor_followed_today = self.cursor == self.today;
         self.today = today;
         if cursor_followed_today {
+            self.clear_day_selection();
             self.cursor = today;
             self.normalize_hidden_weekend_cursor();
             self.highlighted_entry = self.first_entry_on_cursor();
@@ -469,10 +478,10 @@ where
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
+        let day_selection = self.day_selection_snapshot();
         self.committed_reorder = None;
         self.day_entries.clear_reorder_highlight_immediately();
         self.cancel_reorder_immediately();
-        self.clear_day_selection();
         let highlighted_id = self.highlighted_entry_id();
         self.entries = entries.into_iter().collect();
         self.highlighted_entry = highlighted_id
@@ -482,7 +491,18 @@ where
                 })
             })
             .or_else(|| self.first_entry_on_cursor());
+        self.restore_day_selection_after_entry_replacement(day_selection);
         self.refresh_day_entries();
+        if let Some(selection) = &self.day_selection {
+            self.day_entries.set_selection_overlay(
+                selection.selected_entries.clone(),
+                None,
+                0,
+                false,
+            );
+        } else {
+            self.day_entries.clear_selection_overlay();
+        }
     }
 
     pub fn set_focused(&mut self, focused: bool) {
@@ -490,7 +510,6 @@ where
         self.day_entries.set_focused(focused);
         if !focused {
             self.cancel_reorder_immediately();
-            self.clear_day_selection();
             self.pending_top_prefix = false;
             self.clear_quick_jump();
         }
@@ -507,6 +526,33 @@ where
     pub fn highlighted_entry_id(&self) -> Option<Id> {
         self.highlighted_entry
             .map(|index| (self.id)(&self.entries[index]))
+    }
+
+    pub fn highlight_entry_id(&mut self, entry_id: &Id) -> CalendarOutcome {
+        let Some(index) = self
+            .entries_on(self.cursor)
+            .into_iter()
+            .find(|index| (self.id)(&self.entries[*index]) == *entry_id)
+        else {
+            return CalendarOutcome::IDLE;
+        };
+        self.highlight_entry(index)
+    }
+
+    /// Returns transient Day-view selection IDs in current reorder scope order.
+    pub fn transient_selected_ids(&self) -> Vec<Id> {
+        let Some(selection) = &self.day_selection else {
+            return Vec::new();
+        };
+        self.default_reorder_scope(&selection.anchor)
+            .into_iter()
+            .filter(|entry| selection.selected_entries.contains(entry))
+            .map(|entry| (self.id)(&self.entries[entry]))
+            .collect()
+    }
+
+    pub fn clear_transient_selection(&mut self) {
+        self.clear_day_selection();
     }
 
     pub fn is_reordering(&self) -> bool {
@@ -888,6 +934,55 @@ where
         self.day_entries.clear_selection_overlay();
     }
 
+    fn day_selection_snapshot(&self) -> Option<CalendarDaySelectionSnapshot<Id>> {
+        let selection = self.day_selection.as_ref()?;
+        let anchor_id = (self.id)(self.entries.get(selection.anchor)?);
+        let selected_ids = selection
+            .selected_entries
+            .iter()
+            .filter_map(|entry| self.entries.get(*entry).map(|entry| (self.id)(entry)))
+            .collect();
+        Some(CalendarDaySelectionSnapshot {
+            selected_ids,
+            anchor_id,
+            range_mode: selection.range_mode,
+        })
+    }
+
+    fn restore_day_selection_after_entry_replacement(
+        &mut self,
+        snapshot: Option<CalendarDaySelectionSnapshot<Id>>,
+    ) {
+        self.day_selection = snapshot.and_then(|snapshot| {
+            let entries_on_cursor = self.entries_on(self.cursor);
+            let anchor = entries_on_cursor
+                .iter()
+                .copied()
+                .find(|entry| (self.id)(&self.entries[*entry]) == snapshot.anchor_id)
+                .or_else(|| {
+                    entries_on_cursor.iter().copied().find(|entry| {
+                        snapshot
+                            .selected_ids
+                            .contains(&(self.id)(&self.entries[*entry]))
+                    })
+                })?;
+            let scope = self.default_reorder_scope(&anchor);
+            let selected_entries = scope
+                .into_iter()
+                .filter(|entry| {
+                    snapshot
+                        .selected_ids
+                        .contains(&(self.id)(&self.entries[*entry]))
+                })
+                .collect::<Vec<_>>();
+            (!selected_entries.is_empty()).then_some(CalendarDaySelectionState {
+                selected_entries,
+                anchor,
+                range_mode: snapshot.range_mode,
+            })
+        });
+    }
+
     fn toggle_day_selection_at_highlight(&mut self) {
         let Some(current) = self.highlighted_entry else {
             return;
@@ -1174,6 +1269,20 @@ where
         })
     }
 
+    fn click_date(&mut self, mouse: MouseEvent) -> CalendarOutcome {
+        let Some(date) = self.date_at_mouse_position(mouse.column, mouse.row) else {
+            return CalendarOutcome::IDLE;
+        };
+        self.set_cursor(date);
+        self.drill_to(match self.view {
+            CalendarView::Month => CalendarView::Week,
+            CalendarView::Week => CalendarView::Day,
+            CalendarView::Day | CalendarView::EventDetail => {
+                unreachable!("only month and week cells have clickable dates")
+            }
+        })
+    }
+
     fn unique_week_quick_jump_date(&self, digit: u8) -> Option<Date> {
         let (start, _) = week_range(self.cursor, self.first_day_of_week);
         let mut matches = (0..7)
@@ -1270,6 +1379,7 @@ where
             return CalendarOutcome::HANDLED;
         }
         let before_range = self.current_range();
+        self.clear_day_selection();
         self.cursor = date;
         self.push_event(CalendarTypedEvent::CursorChanged { date });
         if before_range != self.current_range() {
@@ -1316,6 +1426,10 @@ where
             CalendarView::Week | CalendarView::Day => self.move_days(i64::from(delta) * 7),
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
+    }
+
+    fn scroll_month(&mut self, delta: i32) -> CalendarOutcome {
+        self.set_cursor(add_months(self.cursor, delta))
     }
 
     fn home(&mut self) -> CalendarOutcome {
@@ -1406,6 +1520,7 @@ where
         {
             return;
         }
+        self.clear_day_selection();
         self.cursor = previous_friday_if_weekend(self.cursor);
     }
 
@@ -1631,6 +1746,7 @@ where
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if let Some(hotkey) = &self.hotkey {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(CALENDAR_FOCUS),
@@ -1655,11 +1771,21 @@ where
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
-        let TuiEvent::Key(key) = event else {
-            return EventOutcome::Ignored;
-        };
         let event_start = self.events.len();
-        let outcome = self.on_key(*key);
+        let outcome = match event {
+            TuiEvent::Mouse(mouse)
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
+            {
+                self.click_date(*mouse)
+            }
+            TuiEvent::Mouse(mouse) if self.view == CalendarView::Day => match mouse.kind {
+                MouseEventKind::ScrollUp => self.scroll_month(-1),
+                MouseEventKind::ScrollDown => self.scroll_month(1),
+                _ => return EventOutcome::Ignored,
+            },
+            TuiEvent::Key(key) => self.on_key(*key),
+            _ => return EventOutcome::Ignored,
+        };
         if let Some(on_event) = &self.on_event {
             let events = self.events.drain(event_start..).collect::<Vec<_>>();
             for event in events {
@@ -1670,6 +1796,12 @@ where
             ctx.request_redraw();
         }
         if outcome.handled {
+            if matches!(event, TuiEvent::Mouse(_)) {
+                ctx.focus(crate::FocusRequest::TargetAt {
+                    path: ctx.current_path(),
+                    id: FocusId::new(CALENDAR_FOCUS),
+                });
+            }
             ctx.stop_propagation();
             EventOutcome::Handled
         } else {

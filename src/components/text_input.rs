@@ -418,26 +418,21 @@ impl<M> TextInput<M> {
         }
     }
 
-    fn is_panel_mode(&self) -> bool {
-        matches!(self.chrome, InputChrome::Panel(_))
-    }
-
-    fn panel_click_focus(
-        &self,
-        event: &TuiEvent,
-        focus_id: FocusId,
-        ctx: &mut EventCtx<M>,
-    ) -> bool {
+    fn click_focus(&mut self, event: &TuiEvent, focus_id: FocusId, ctx: &mut EventCtx<M>) -> bool {
         let TuiEvent::Mouse(mouse) = event else {
             return false;
         };
-        if !self.is_panel_mode()
-            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             || !rect_contains(self.area, mouse.column, mouse.row)
         {
             return false;
         }
 
+        if !self.disabled && !self.insert_mode {
+            self.set_insert_mode(true);
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
         ctx.focus(FocusRequest::TargetAt {
             path: ctx.current_path(),
             id: focus_id,
@@ -1443,6 +1438,7 @@ impl<M> TuiNode<M> for TextInput<M> {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         let focus_area = self.content_area(area);
         let mut hotkeys = Vec::new();
         if let Some(hotkey) = self.hotkey.clone().filter(|_| self.hotkey_focus_enabled) {
@@ -1477,7 +1473,7 @@ impl<M> TuiNode<M> for TextInput<M> {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
-        if self.panel_click_focus(event, FocusId::new(INPUT_FOCUS), ctx) {
+        if self.click_focus(event, FocusId::new(INPUT_FOCUS), ctx) {
             return EventOutcome::Handled;
         }
         if let TuiEvent::Hotkey(hotkey) = event {
@@ -1703,6 +1699,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.input.area = area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         let focus_area = self.input.content_area(area);
         if let Some(hotkey) = self.input.hotkey.clone() {
             ctx.register_text_entry_focusable_with_hotkey_sequences(
@@ -1730,7 +1727,7 @@ impl<M> TuiNode<M> for PasswordInput<M> {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if self
             .input
-            .panel_click_focus(event, FocusId::new(PASSWORD_INPUT_FOCUS), ctx)
+            .click_focus(event, FocusId::new(PASSWORD_INPUT_FOCUS), ctx)
         {
             return EventOutcome::Handled;
         }

@@ -8,8 +8,9 @@ use ratatui::text::{Line, Span, Text};
 
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
-    FocusRequest, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, Propagation,
-    ScrollOffset, TreePath, TuiEvent, TuiNode, lerp_color, line_width, preset, theme,
+    FocusRequest, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, MouseEvent,
+    MouseEventKind, Propagation, ScrollOffset, TreePath, TuiEvent, TuiNode, lerp_color, line_width,
+    preset, theme,
 };
 
 // Large cohesive behavior suite; private DataView state helpers stay local.
@@ -124,6 +125,58 @@ fn delegated_vertical_scroll_keeps_the_local_offset_at_zero_and_requests_reveal(
         Some(Rect::new(0, 1, 20, 1))
     );
     assert!(!event.layout_requested());
+}
+
+#[test]
+fn repeated_wheel_input_snaps_data_view_without_animation() {
+    let mut view = DataView::list(0..20, |id| *id, |id| id.to_string());
+    let area = Rect::new(0, 0, 20, 5);
+    let mut layout = LayoutCtx::new();
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut layout);
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    for _ in 0..3 {
+        let outcome = <DataView<usize, usize> as TuiNode<()>>::event(
+            &mut view,
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+        assert_eq!(outcome, EventOutcome::Handled);
+    }
+
+    assert_eq!(view.scroll.offset().y, 3);
+    assert_eq!(view.scroll.target_offset().y, 3);
+    assert!(!view.scroll.is_active());
+    assert!(!ctx.tick_requested());
+}
+
+#[test]
+fn parent_delegated_data_view_bubbles_vertical_wheel_input() {
+    let mut view = DataView::list(0..20, |id| *id, |id| id.to_string()).parent_vertical_scroll();
+    let area = Rect::new(0, 0, 20, 5);
+    let mut layout = LayoutCtx::new();
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut layout);
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    let outcome = <DataView<usize, usize> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
+    assert_eq!(view.scroll.offset().y, 0);
 }
 
 #[test]
@@ -1535,6 +1588,40 @@ fn tree_selection_placeholder_sizes_and_scrolls_its_first_cell() {
 }
 
 #[test]
+fn moving_placeholder_spans_visible_columns() {
+    let mut view = DataView::new([Row::new(1, "A"), Row::new(2, "B")], |row| row.id)
+        .headers(false)
+        .column(Column::text("state", "", Constraint::Length(1), |_| {
+            "•".to_string()
+        }))
+        .column(Column::text(
+            "title",
+            "",
+            Constraint::Fill(1),
+            |row: &Row| row.name.to_string(),
+        ));
+    view.set_selection_overlay(
+        vec![1, 2],
+        Some(SelectionOverlayPosition::After(2)),
+        0,
+        true,
+    );
+    let area = Rect::new(0, 0, 30, 10);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    let placeholder = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(placeholder.contains("Moving 2 tasks"), "{placeholder:?}");
+}
+
+#[test]
 fn focused_tree_selection_placeholder_uses_target_depth_and_reorder_style() {
     let mut view = DataView::new(
         [
@@ -1576,7 +1663,7 @@ fn focused_tree_selection_placeholder_uses_target_depth_and_reorder_style() {
         .cell((prefix_width as u16, 2))
         .expect("placeholder label should be indented");
     let theme = theme();
-    assert_eq!(cell.symbol(), "1");
+    assert_eq!(cell.symbol(), "M");
     assert_eq!(cell.fg, theme.highlight_bg());
     assert_eq!(cell.bg, theme.highlight_fg());
 }

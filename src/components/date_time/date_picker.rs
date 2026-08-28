@@ -9,7 +9,10 @@ use time::{Date, Duration, Month, Weekday};
 
 use crate::border_set;
 use crate::components::calendar::date_math::week_range;
-use crate::event::{ExternalEditorResponse, Key, KeyEvent, KeyModifiers, TuiEvent};
+use crate::event::{
+    ExternalEditorResponse, Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    TuiEvent,
+};
 use crate::{
     EventCtx, EventOutcome, FocusCtx, FocusId, HotkeyEvent, LayoutCtx, LayoutProposal,
     LayoutResult, LayoutSizeHint, TickResult, TuiNode, hotkey_badge_width, hotkey_edge_spans,
@@ -35,6 +38,7 @@ pub struct DatePicker<M = ()> {
     max: Option<Date>,
     first_day_of_week: Weekday,
     focused: bool,
+    area: Rect,
     hotkey: Option<String>,
     pending_hotkey_prefix: Option<String>,
     pending_top_prefix: bool,
@@ -66,6 +70,7 @@ impl<M> DatePicker<M> {
             max: None,
             first_day_of_week: Weekday::Monday,
             focused: false,
+            area: Rect::default(),
             hotkey: None,
             pending_hotkey_prefix: None,
             pending_top_prefix: false,
@@ -168,6 +173,11 @@ impl<M> DatePicker<M> {
         self.focused
     }
 
+    #[cfg(test)]
+    pub(super) fn is_month_view(&self) -> bool {
+        self.view == DatePickerView::Month
+    }
+
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> PickerOutcome {
         let key = key.into();
         self.quick_jump_selected = false;
@@ -254,6 +264,20 @@ impl<M> DatePicker<M> {
             return PickerOutcome::canceled(old_cursor != self.cursor || old_view != self.view);
         }
         PickerOutcome::IGNORED
+    }
+
+    pub(super) fn on_mouse(&mut self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        if !rect_contains(area, mouse.column, mouse.row) {
+            return PickerOutcome::IGNORED;
+        }
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.click(mouse, area),
+            MouseEventKind::ScrollUp if self.view == DatePickerView::Day => self.move_months(-1),
+            MouseEventKind::ScrollDown if self.view == DatePickerView::Day => self.move_months(1),
+            MouseEventKind::ScrollUp if self.view == DatePickerView::Year => self.page(-1),
+            MouseEventKind::ScrollDown if self.view == DatePickerView::Year => self.page(1),
+            _ => PickerOutcome::IGNORED,
+        }
     }
 
     pub(super) fn apply_external_editor_response(
@@ -345,7 +369,7 @@ impl<M> DatePicker<M> {
     }
 
     fn render_month_picker(&self, frame: &mut Frame, area: Rect) {
-        let block = self.block(format!(" {} ▴ ", self.cursor.year()));
+        let block = self.block(format!(" {} ", self.cursor.year()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         self.render_hotkey_label(frame, area);
@@ -382,7 +406,7 @@ impl<M> DatePicker<M> {
 
     fn render_year_picker(&self, frame: &mut Frame, area: Rect) {
         let block = self.block(format!(
-            " {} — {} ▴ ",
+            " {} — {} ",
             self.year_page_start,
             self.year_page_start.saturating_add(23)
         ));
@@ -428,7 +452,7 @@ impl<M> DatePicker<M> {
             .border_set(border_set(preset().border()))
             .title(title.into())
             .border_style(Style::default().fg(if self.focused {
-                t.highlight_bg()
+                t.accent_fg()
             } else {
                 t.border_fg()
             }))
@@ -443,7 +467,7 @@ impl<M> DatePicker<M> {
         }
         let border = preset().border();
         let border_style = Style::default().fg(if self.focused {
-            theme().highlight_bg()
+            theme().accent_fg()
         } else {
             theme().border_fg()
         });
@@ -474,6 +498,151 @@ impl<M> DatePicker<M> {
             DatePickerView::Month => self.move_months(-1),
             DatePickerView::Year => self.move_years(-1),
         }
+    }
+
+    fn click_day_header(&mut self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        if self.view != DatePickerView::Day {
+            return PickerOutcome::IGNORED;
+        }
+        let inner = self.block("").inner(area);
+        let month = self.display_month.month().to_string();
+        let title_width = (month.len() + 1 + self.display_month.year().to_string().len()) as u16;
+        let title_x = inner.x + inner.width.saturating_sub(title_width) / 2;
+        if mouse.row != inner.y {
+            return PickerOutcome::IGNORED;
+        }
+        if (title_x..title_x.saturating_add(month.len() as u16)).contains(&mouse.column) {
+            self.view = DatePickerView::Month;
+            return PickerOutcome::handled(true);
+        }
+        let year_x = title_x.saturating_add(month.len() as u16 + 1);
+        if (year_x..year_x.saturating_add(self.display_month.year().to_string().len() as u16))
+            .contains(&mouse.column)
+        {
+            self.view = DatePickerView::Year;
+            self.year_page_start = year_page_start(self.cursor.year());
+            return PickerOutcome::handled(true);
+        }
+        PickerOutcome::IGNORED
+    }
+
+    fn click(&mut self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        match self.view {
+            DatePickerView::Day => {
+                let header = self.click_day_header(mouse, area);
+                if header.handled {
+                    header
+                } else {
+                    self.click_day(mouse, area)
+                }
+            }
+            DatePickerView::Month => self.click_month(mouse, area),
+            DatePickerView::Year => self.click_year(mouse, area),
+        }
+    }
+
+    fn click_day(&mut self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        let inner = self.block("").inner(area);
+        let start = week_range(self.display_month, self.first_day_of_week).0;
+        for offset in 0..42 {
+            let Some(date) = start.checked_add(Duration::days(offset)) else {
+                continue;
+            };
+            let row = offset / 7;
+            if row as u16 + 2 >= inner.height {
+                break;
+            }
+            let column = offset % 7;
+            let x = inner.x + column as u16 * 3;
+            if x >= inner.right() {
+                continue;
+            }
+            let cell = Rect::new(x, inner.y + row as u16 + 2, 3.min(inner.right() - x), 1);
+            if rect_contains(cell, mouse.column, mouse.row) {
+                return self.select_date(date);
+            }
+        }
+        PickerOutcome::IGNORED
+    }
+
+    fn click_month(&mut self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        let inner = self.block(format!(" {} ", self.cursor.year())).inner(area);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(centered_grid(inner, 3, 20));
+        for row in 0..3 {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                ])
+                .split(rows[row]);
+            for col in 0..4 {
+                if rect_contains(cols[col], mouse.column, mouse.row) {
+                    let month = Month::try_from((row * 4 + col + 1) as u8).expect("month in grid");
+                    self.set_cursor(date_in_month(self.cursor.year(), month, self.cursor.day()));
+                    self.view = DatePickerView::Day;
+                    return PickerOutcome::handled(true);
+                }
+            }
+        }
+        PickerOutcome::IGNORED
+    }
+
+    fn click_year(&mut self, mouse: MouseEvent, area: Rect) -> PickerOutcome {
+        let inner = self
+            .block(format!(
+                " {} — {} ",
+                self.year_page_start,
+                self.year_page_start.saturating_add(23)
+            ))
+            .inner(area);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(centered_grid(inner, 6, 24));
+        for row in 0..6 {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                ])
+                .split(rows[row]);
+            for col in 0..4 {
+                if rect_contains(cols[col], mouse.column, mouse.row) {
+                    let year = self.year_page_start + (row * 4 + col) as i32;
+                    self.set_cursor(date_in_month(year, self.cursor.month(), self.cursor.day()));
+                    self.view = DatePickerView::Month;
+                    return PickerOutcome::handled(true);
+                }
+            }
+        }
+        PickerOutcome::IGNORED
+    }
+
+    fn select_date(&mut self, date: Date) -> PickerOutcome {
+        let previous = self.value;
+        let changed = self.set_cursor(date).changed;
+        self.value = Some(self.cursor);
+        PickerOutcome::selected(changed || previous != self.value)
     }
 
     fn move_right(&mut self) -> PickerOutcome {
@@ -746,6 +915,8 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATE_PICKER_FOCUS),
@@ -808,6 +979,21 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        if let TuiEvent::Mouse(mouse) = event {
+            let outcome = self.on_mouse(*mouse, self.area);
+            if outcome.selected
+                && let Some(on_select) = &self.on_select
+            {
+                ctx.emit(on_select(self.cursor));
+            }
+            if outcome.handled {
+                ctx.focus(crate::FocusRequest::TargetAt {
+                    path: ctx.current_path(),
+                    id: FocusId::new(DATE_PICKER_FOCUS),
+                });
+            }
+            return finish_event(ctx, outcome);
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -850,6 +1036,10 @@ impl<M: 'static> TuiNode<M> for DatePicker<M> {
             TickResult::scheduled_after(QUICK_JUMP_TIMEOUT - self.quick_jump_elapsed)
         }
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 fn quick_jump_accepts(key: KeyEvent) -> bool {

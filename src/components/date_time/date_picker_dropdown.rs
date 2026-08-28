@@ -327,6 +327,7 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.field_area = self.content_area(area);
         self.overlay_bounds = ctx.overlay_bounds();
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), self.field_area));
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATE_PICKER_DROPDOWN_FOCUS),
@@ -396,6 +397,41 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
             ctx.copy_to_clipboard(self.picker.cursor().to_string());
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if let TuiEvent::Mouse(mouse) = event {
+            if !self.open {
+                if rect_contains(self.field_area, mouse.column, mouse.row)
+                    && matches!(
+                        mouse.kind,
+                        crate::MouseEventKind::Down(crate::MouseButton::Left)
+                    )
+                {
+                    self.set_open(true);
+                    ctx.focus(crate::FocusRequest::TargetAt {
+                        path: ctx.current_path(),
+                        id: FocusId::new(DATE_PICKER_DROPDOWN_FOCUS),
+                    });
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                    ctx.stop_propagation();
+                    return EventOutcome::Handled;
+                }
+                return EventOutcome::Ignored;
+            }
+            let outcome = self
+                .picker
+                .on_mouse(*mouse, self.popup_area(self.overlay_bounds));
+            if outcome.selected {
+                self.set_open(false);
+                if let Some(value) = self.picker.current_value()
+                    && let Some(on_select) = &self.on_select
+                {
+                    ctx.emit(on_select(value));
+                }
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
+            return finish_event(ctx, outcome);
         }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
@@ -494,6 +530,10 @@ impl<M: 'static> TuiNode<M> for DatePickerDropdown<M> {
         };
         hotkey_tick.merge(self.picker.tick(dt, settings))
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 #[cfg(test)]

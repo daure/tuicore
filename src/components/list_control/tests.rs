@@ -780,6 +780,76 @@ fn flat_shift_range_selection_survives_only_shift_line_extension() {
 }
 
 #[test]
+fn flat_range_selection_survives_focus_loss_and_gain() {
+    let mut control = table(4);
+    control.data_view.highlight_id(&1);
+    let mut event = EventCtx::default();
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Down, KeyModifiers::SHIFT),
+        &mut event,
+    );
+    let mut layout = LayoutCtx::new();
+    control.layout(Rect::new(0, 0, 30, 5), &mut layout);
+    let data_target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.path == TreePath::from_keys([ChildKey::new(DATA_SLOT)]))
+        .expect("data focus target should exist")
+        .clone();
+    let settings = AnimationSettings::default();
+
+    control.dispatch_focus(&data_target, false, &mut FocusCtx::new(settings));
+    control.dispatch_focus(&data_target, true, &mut FocusCtx::new(settings));
+
+    assert_eq!(control.transient_selected_ids(), vec![1, 2]);
+    assert!(control.data_view.selection_overlay_active_for_test());
+    assert!(!control.is_reordering());
+}
+
+#[test]
+fn flat_selection_without_reordering_supports_bulk_actions() {
+    let mut control = table(4);
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+        &mut ctx,
+    );
+
+    assert_eq!(control.transient_selected_ids(), vec![1, 2]);
+
+    let rows = control.items().to_vec();
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert!(!control.is_reordering());
+    assert_eq!(control.items(), rows);
+    assert!(control.take_events().is_empty());
+}
+
+#[test]
+fn transient_selected_ids_returns_shift_range_in_display_order() {
+    let mut control = ranked_control(ranked_rows(4));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+        &mut ctx,
+    );
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+        &mut ctx,
+    );
+
+    assert_eq!(control.transient_selected_ids(), vec![1, 2, 3]);
+    assert_eq!(control.transient_selected_ids(), vec![1, 2, 3]);
+}
+
+#[test]
 fn flat_ctrl_navigation_selects_the_origin_and_ctrl_space_toggles_current_rows() {
     let mut control = ranked_control(ranked_rows(5));
     control.data_view.highlight_id(&1);
@@ -815,6 +885,116 @@ fn flat_ctrl_navigation_selects_the_origin_and_ctrl_space_toggles_current_rows()
             .selected,
         vec![1, 3]
     );
+}
+
+#[test]
+fn transient_selected_ids_returns_sparse_ctrl_selection_in_display_order() {
+    let mut control = ranked_control(ranked_rows(5));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(control.transient_selected_ids(), vec![1, 3]);
+}
+
+#[test]
+fn clearing_transient_selection_retains_highlight() {
+    let mut control = ranked_control(ranked_rows(5));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(control.data_view.highlighted_id(), Some(3));
+
+    control.clear_transient_selection();
+
+    assert!(control.transient_selected_ids().is_empty());
+    assert_eq!(control.data_view.highlighted_id(), Some(3));
+    assert!(!control.data_view.selection_overlay_active_for_test());
+}
+
+#[test]
+fn replacing_rows_preserves_transient_ctrl_selection_in_new_order() {
+    let mut control = ranked_control(ranked_rows(5));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(control.transient_selected_ids(), vec![1, 3, 4]);
+
+    control.set_rows([
+        RankedRow { id: 3, rank: 0 },
+        RankedRow { id: 1, rank: 10 },
+        RankedRow { id: 2, rank: 20 },
+    ]);
+
+    assert_eq!(control.transient_selected_ids(), vec![3, 1]);
+    assert_eq!(control.data_view.highlighted_id(), Some(3));
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        control
+            .flat_block_move
+            .as_ref()
+            .expect("refreshed selection should start a block move")
+            .selected,
+        vec![3, 1]
+    );
+}
+
+#[test]
+fn replacing_rows_retains_surviving_shift_selection_anchor_and_highlight() {
+    let mut control = ranked_control(ranked_rows(4));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.set_rows([
+        RankedRow { id: 2, rank: 0 },
+        RankedRow { id: 1, rank: 10 },
+        RankedRow { id: 3, rank: 20 },
+    ]);
+
+    assert_eq!(control.transient_selected_ids(), vec![2, 1]);
+    assert_eq!(
+        control
+            .flat_range_selection
+            .as_ref()
+            .expect("shift selection should remain active")
+            .anchor,
+        1
+    );
+    assert_eq!(control.data_view.highlighted_id(), Some(2));
 }
 
 #[test]
@@ -939,6 +1119,176 @@ fn flat_block_move_moves_the_pseudo_target_through_unselected_gaps() {
         control.data_view.selection_placeholder_depth_for_test(),
         Some(0)
     );
+}
+
+#[test]
+fn flat_block_move_steps_through_selected_source_rows() {
+    let mut control = ranked_control(ranked_rows(5)).headers(false);
+    start_flat_block_move(&mut control, 1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+
+    assert_eq!(
+        control
+            .flat_block_move
+            .as_ref()
+            .expect("flat block move should remain active")
+            .target_index,
+        1
+    );
+    let mut terminal = Terminal::new(TestBackend::new(30, 6)).expect("terminal should build");
+    terminal
+        .draw(|frame| {
+            control.data_view().render(frame, Rect::new(0, 0, 30, 6));
+        })
+        .expect("flat block move should render");
+    let rows = (0..6)
+        .map(|y| {
+            (0..30)
+                .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(rows, ["0", "1", "Moving 2 tasks", "2", "3", "4"]);
+
+    control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+    assert_eq!(
+        control
+            .flat_block_move
+            .as_ref()
+            .expect("flat block move should remain active")
+            .target_index,
+        1
+    );
+}
+
+#[test]
+fn flat_block_move_steps_through_sparse_selected_source_rows() {
+    let mut control = ranked_control(ranked_rows(6)).headers(false);
+    control.flat_range_selection = Some(FlatRangeSelectionState {
+        selected: vec![0, 2, 4],
+        anchor: 0,
+        range_mode: false,
+    });
+    control
+        .data_view
+        .set_selection_overlay(vec![0, 2, 4], None, 0, false);
+    control.data_view.highlight_id(&4);
+    let mut ctx = EventCtx::default();
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    let render_rows = |control: &ListControl<RankedRow, usize>| {
+        let mut terminal = Terminal::new(TestBackend::new(30, 7)).expect("terminal should build");
+        terminal
+            .draw(|frame| control.data_view().render(frame, Rect::new(0, 0, 30, 7)))
+            .expect("flat block move should render");
+        (0..7)
+            .map(|y| {
+                (0..30)
+                    .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('k'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["0", "1", "2", "3", "Moving 3 tasks", "4", "5"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('k'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["0", "1", "2", "Moving 3 tasks", "3", "4", "5"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('k'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["0", "1", "Moving 3 tasks", "2", "3", "4", "5"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('k'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["0", "Moving 3 tasks", "1", "2", "3", "4", "5"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('k'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["Moving 3 tasks", "0", "1", "2", "3", "4", "5"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('j'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["0", "Moving 3 tasks", "1", "2", "3", "4", "5"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('j'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["0", "1", "Moving 3 tasks", "2", "3", "4", "5"]
+    );
+}
+
+#[test]
+fn flat_block_move_returns_placeholder_before_following_row() {
+    let mut control = ranked_control(ranked_rows(5)).headers(false);
+    start_flat_block_move(&mut control, 1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+    control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+
+    let mut terminal = Terminal::new(TestBackend::new(30, 6)).expect("terminal should build");
+    terminal
+        .draw(|frame| {
+            control.data_view().render(frame, Rect::new(0, 0, 30, 6));
+        })
+        .expect("flat block move should render");
+    let rows = (0..6)
+        .map(|y| {
+            (0..30)
+                .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(rows, ["0", "1", "2", "Moving 2 tasks", "3", "4"]);
 }
 
 #[test]
@@ -1635,6 +1985,17 @@ fn block_move_start_does_not_start_single_row_reorder() {
 }
 
 #[test]
+fn tree_block_line_move_redraws_without_relayout() {
+    let mut control = tree_block_move_control();
+    let mut ctx = EventCtx::default();
+
+    control.handle_reorder_key(KeyEvent::from(Key::Char('j')), &mut ctx);
+
+    assert!(ctx.redraw_requested());
+    assert!(!ctx.layout_requested());
+}
+
+#[test]
 fn tree_block_move_supports_page_and_edge_navigation_keys() {
     for (keys, expected_target) in [
         (vec![KeyEvent::from(Key::Home)], 0),
@@ -1685,6 +2046,86 @@ fn tree_block_move_supports_page_and_edge_navigation_keys() {
             1
         );
     }
+}
+
+#[test]
+fn tree_block_move_steps_before_and_after_a_contiguous_source_block() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+        TreeRow {
+            id: 4,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&2);
+    let mut ctx = EventCtx::default();
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    let render_rows = |control: &ListControl<TreeRow, usize>| {
+        let mut terminal = Terminal::new(TestBackend::new(30, 5)).expect("terminal should build");
+        terminal
+            .draw(|frame| control.data_view().render(frame, Rect::new(0, 0, 30, 5)))
+            .expect("tree block move should render");
+        (0..5)
+            .map(|y| {
+                (0..30)
+                    .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        render_rows(&control),
+        ["1", "2", "3", "Moving 2 tasks", "4"]
+    );
+
+    control.handle_reorder_key(KeyEvent::from(Key::Char('k')), &mut ctx);
+    assert_eq!(
+        render_rows(&control),
+        ["1", "2", "Moving 2 tasks", "3", "4"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('j'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["1", "2", "3", "Moving 2 tasks", "4"]
+    );
+
+    control.handle_reorder_key(KeyEvent::from(Key::Char('k')), &mut ctx);
+    control.handle_reorder_key(KeyEvent::from(Key::Char('k')), &mut ctx);
+    assert_eq!(
+        render_rows(&control),
+        ["1", "Moving 2 tasks", "2", "3", "4"]
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('j'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    assert_eq!(
+        render_rows(&control),
+        ["1", "2", "Moving 2 tasks", "3", "4"]
+    );
 }
 
 #[test]
@@ -1886,6 +2327,21 @@ fn tree_block_placeholder_indented_under_root_has_depth_one() {
         .selection_placeholder_depth_for_test()
         .expect("tree block move should create a placeholder");
     assert_eq!(depth, 1);
+
+    let mut terminal = Terminal::new(TestBackend::new(30, 4)).expect("terminal should build");
+    terminal
+        .draw(|frame| control.data_view().render(frame, Rect::new(0, 0, 30, 4)))
+        .expect("tree block move should render");
+    let rows = (0..4)
+        .map(|y| {
+            (0..30)
+                .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows, ["  1", "    Moving 2 tasks", "  2", "  3"]);
 }
 
 #[test]
@@ -2075,6 +2531,52 @@ fn tree_shift_selection_stays_within_sibling_parent() {
         vec![2, 3]
     );
     assert_eq!(control.data_view.highlighted_id(), Some(3));
+}
+
+#[test]
+fn tree_range_selection_survives_focus_loss_and_gain() {
+    let mut control = mutable_tree_control([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+    ]);
+    control.data_view.highlight_id(&1);
+    control.handle_tree_selection_key(
+        modified_key(Key::Down, KeyModifiers::SHIFT),
+        &mut EventCtx::default(),
+    );
+    let mut layout = LayoutCtx::new();
+    control.layout(Rect::new(0, 0, 30, 5), &mut layout);
+    let data_target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.path == TreePath::from_keys([ChildKey::new(DATA_SLOT)]))
+        .expect("data focus target should exist")
+        .clone();
+    let settings = AnimationSettings::default();
+
+    control.dispatch_focus(&data_target, false, &mut FocusCtx::new(settings));
+    control.dispatch_focus(&data_target, true, &mut FocusCtx::new(settings));
+
+    assert_eq!(
+        control
+            .tree_selection
+            .as_ref()
+            .expect("tree selection should remain active")
+            .selected,
+        vec![1, 2]
+    );
+    assert!(control.data_view.selection_overlay_active_for_test());
+    assert!(!control.is_reordering());
 }
 
 #[test]

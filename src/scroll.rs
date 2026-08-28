@@ -198,6 +198,35 @@ impl ScrollState {
         self.scroll_by_with_snap(delta, viewport, content, settings, false, false)
     }
 
+    pub fn scroll_by_immediately(
+        &mut self,
+        delta: ScrollDelta,
+        viewport: ScrollSize,
+        content: ScrollSize,
+    ) -> ScrollOutcome {
+        let current = self.offset();
+        let target = ScrollOffset::new(
+            if delta.x == 0 {
+                self.x.target
+            } else {
+                apply_delta(current.x, delta.x)
+            },
+            if delta.y == 0 {
+                self.y.target
+            } else {
+                apply_delta(current.y, delta.y)
+            },
+        );
+        self.scroll_to_with_snap(
+            target,
+            viewport,
+            content,
+            AnimationSettings::default(),
+            delta.x != 0,
+            delta.y != 0,
+        )
+    }
+
     fn scroll_by_with_snap(
         &mut self,
         delta: ScrollDelta,
@@ -1122,6 +1151,57 @@ mod tests {
 
         assert_eq!(scroll.offset().y, 10);
         assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn wheel_reversal_uses_visible_offset_during_keyboard_animation() {
+        let mut scroll = ScrollState::new(ScrollAxes::Vertical).behavior(ScrollBehavior {
+            line_step: 1,
+            page_overlap: 1,
+            animation: AnimationSpec {
+                enabled: None,
+                duration: Some(Duration::from_millis(100)),
+                easing: Some(crate::Easing::Linear),
+            },
+        });
+        let viewport = ScrollSize::new(1, 5);
+        let content = ScrollSize::new(1, 20);
+        let settings = AnimationSettings::default();
+
+        scroll.on_key(KeyEvent::from(Key::PageDown), viewport, content, settings);
+        scroll.tick(Duration::from_millis(50), settings);
+
+        let outcome = scroll.scroll_by_immediately(ScrollDelta::new(0, -1), viewport, content);
+
+        assert!(outcome.changed);
+        assert_eq!(scroll.offset().y, 1);
+        assert_eq!(scroll.target_offset().y, 1);
+        assert!(!scroll.is_active());
+    }
+
+    #[test]
+    fn vertical_wheel_preserves_active_horizontal_animation() {
+        let mut scroll = ScrollState::new(ScrollAxes::Both).behavior(ScrollBehavior {
+            line_step: 1,
+            page_overlap: 1,
+            animation: AnimationSpec {
+                enabled: None,
+                duration: Some(Duration::from_millis(100)),
+                easing: Some(crate::Easing::Linear),
+            },
+        });
+        let viewport = ScrollSize::new(5, 5);
+        let content = ScrollSize::new(20, 20);
+        let settings = AnimationSettings::default();
+
+        scroll.scroll_to(ScrollOffset::new(10, 0), viewport, content, settings);
+        scroll.tick(Duration::from_millis(50), settings);
+
+        let outcome = scroll.scroll_by_immediately(ScrollDelta::new(0, 1), viewport, content);
+
+        assert!(outcome.active);
+        assert_eq!(scroll.offset(), ScrollOffset::new(5, 1));
+        assert_eq!(scroll.target_offset(), ScrollOffset::new(10, 1));
     }
 
     #[test]

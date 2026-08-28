@@ -6,10 +6,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::event::{Key, KeyEvent, TuiEvent};
+use crate::event::{Key, KeyEvent, MouseButton, MouseEventKind, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, ColorTween, EventCtx, EventOutcome, FocusCtx,
-    FocusId, HintSource, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx,
+    FocusId, FocusRequest, HintSource, HotkeyEvent, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx,
     LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TuiNode,
     hotkey_sequence_to_event, keybindings, line_width, theme,
 };
@@ -60,6 +60,7 @@ pub struct Toggle<M = ()> {
     text_color: ColorTween,
     hotkey_color: ColorTween,
     pending_hotkey_prefix: Option<String>,
+    area: Rect,
 }
 
 impl<M> Toggle<M> {
@@ -77,6 +78,7 @@ impl<M> Toggle<M> {
             text_color: ColorTween::idle(theme.text_fg()),
             hotkey_color: ColorTween::idle(theme.text_fg()),
             pending_hotkey_prefix: None,
+            area: Rect::default(),
         }
     }
 
@@ -373,6 +375,8 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if let Some(hotkey) = self.hotkey.clone() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(TOGGLE_FOCUS),
@@ -424,6 +428,24 @@ where
                     }
                     return EventOutcome::Ignored;
                 }
+            }
+        }
+        if let TuiEvent::Mouse(mouse) = event {
+            if !rect_contains(self.area, mouse.column, mouse.row) {
+                return EventOutcome::Ignored;
+            }
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.toggle();
+                if let Some(on_change) = &self.on_change {
+                    ctx.emit(on_change(self.value));
+                }
+                ctx.focus(FocusRequest::TargetAt {
+                    path: ctx.current_path(),
+                    id: FocusId::new(TOGGLE_FOCUS),
+                });
+                ctx.request_redraw();
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
             }
         }
         let TuiEvent::Key(key) = event else {
@@ -487,6 +509,10 @@ fn hotkey_matches_sequence(hotkey: &str, sequence: &str) -> bool {
     crate::hotkey::normalize_hotkey(hotkey) == crate::hotkey::normalize_hotkey(sequence)
 }
 
+fn rect_contains(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;
@@ -505,6 +531,58 @@ mod tests {
         assert_eq!(outcome, EventOutcome::Handled);
         assert!(toggle.is_checked());
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn left_click_focuses_and_toggles_within_registered_area() {
+        let mut toggle = Toggle::new("Telemetry").on_change(|value| value);
+        let mut layout = LayoutCtx::new();
+        toggle.layout(Rect::new(4, 2, 12, 1), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = toggle.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 4,
+                row: 2,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(toggle.is_checked());
+        assert_eq!(ctx.drain_messages().collect::<Vec<_>>(), vec![true]);
+        assert_eq!(layout.hit_regions().len(), 1);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: crate::TreePath::new(),
+                id: FocusId::new(TOGGLE_FOCUS),
+            })
+        );
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn left_click_outside_layout_is_ignored() {
+        let mut toggle = Toggle::<()>::new("Telemetry");
+        toggle.layout(Rect::new(4, 2, 12, 1), &mut LayoutCtx::new());
+        let mut ctx = EventCtx::default();
+
+        let outcome = toggle.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 3,
+                row: 2,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert!(!toggle.is_checked());
+        assert_eq!(ctx.propagation(), Propagation::Continue);
     }
 
     #[test]

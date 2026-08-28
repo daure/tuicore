@@ -7,12 +7,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::animation::{Easing, Tween};
-use crate::event::{Key, KeyEvent, TuiEvent};
+use crate::event::{Key, KeyEvent, MouseButton, MouseEventKind, TuiEvent};
 use crate::{
     Animated, AnimationSettings, ColorTween, EventCtx, EventOutcome, FocusCtx, FocusId, HintSource,
-    HotkeyEvent, HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TuiNode, hotkey_label_spans,
-    hotkey_sequence_to_event, keybindings, line_width, theme,
+    HitRegion, HotkeyEvent, HotkeyLabelMode, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx,
+    LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, TickResult, TuiNode,
+    hotkey_label_spans, hotkey_sequence_to_event, keybindings, line_width, theme,
 };
 
 pub(super) const BUTTON_FOCUS: &str = "button";
@@ -51,6 +51,7 @@ pub struct Button<M = ()> {
     background_color: ColorTween,
     text_color: ColorTween,
     press_feedback: Tween,
+    area: Rect,
 }
 
 impl<M> Button<M> {
@@ -71,6 +72,7 @@ impl<M> Button<M> {
             background_color: ColorTween::idle(theme.surface_bg()),
             text_color: ColorTween::idle(theme.text_fg()),
             press_feedback: Tween::idle(0.0),
+            area: Rect::default(),
         }
     }
 
@@ -363,6 +365,30 @@ impl<M> Button<M> {
                 }
             }
         }
+        if let TuiEvent::Mouse(mouse) = event
+            && (mouse.column < self.area.x
+                || mouse.column >= self.area.x.saturating_add(self.area.width)
+                || mouse.row < self.area.y
+                || mouse.row >= self.area.y.saturating_add(self.area.height))
+        {
+            return (EventOutcome::Ignored, false);
+        }
+        if matches!(
+            event,
+            TuiEvent::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        ) {
+            self.press(ctx.animation());
+            if let Some(on_press) = &self.on_press {
+                ctx.emit(on_press());
+            }
+            ctx.focus(crate::FocusRequest::TargetAt {
+                path: ctx.current_path(),
+                id: FocusId::new(BUTTON_FOCUS),
+            });
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return (EventOutcome::Handled, true);
+        }
         let TuiEvent::Key(key) = event else {
             return (EventOutcome::Ignored, false);
         };
@@ -407,6 +433,8 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
         if self.disabled {
             ctx.register_focusable(FocusId::new(BUTTON_FOCUS), area, false);
             ctx.set_focus_tab_stop(FocusId::new(BUTTON_FOCUS), false);
@@ -481,7 +509,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
-    use crate::Propagation;
+    use crate::{Propagation, TreePath};
 
     #[test]
     fn enter_presses_button_and_stops_propagation() {
@@ -492,6 +520,56 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+
+    #[test]
+    fn left_click_presses_and_focuses_button() {
+        let mut button = Button::<&'static str>::new("Run").on_press(|| "run");
+        let mut layout = LayoutCtx::new();
+        button.layout(Rect::new(4, 2, 10, 1), &mut layout);
+        let mut ctx = EventCtx::new_at_path(AnimationSettings::default(), TreePath::new());
+
+        let outcome = button.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 4,
+                row: 2,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.drain_messages().collect::<Vec<_>>(), vec!["run"]);
+        assert_eq!(layout.hit_regions().len(), 1);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&crate::FocusRequest::TargetAt {
+                path: TreePath::new(),
+                id: FocusId::new(BUTTON_FOCUS),
+            })
+        );
+    }
+
+    #[test]
+    fn left_click_outside_layout_is_ignored() {
+        let mut button = Button::<&'static str>::new("Run").on_press(|| "run");
+        let mut layout = LayoutCtx::new();
+        button.layout(Rect::new(4, 2, 10, 1), &mut layout);
+        let mut ctx = EventCtx::new_at_path(AnimationSettings::default(), TreePath::new());
+
+        let outcome = button.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 0,
+                row: 0,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert!(ctx.drain_messages().next().is_none());
     }
 
     #[test]

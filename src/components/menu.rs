@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::components::{Column, DataView, SelectionMode, TextInput};
-use crate::event::KeyEvent;
+use crate::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, EventCtx, EventOutcome, FocusCtx, FocusId,
@@ -112,6 +112,13 @@ fn target_index(current: usize, delta: isize, len: usize) -> usize {
     } else {
         current.saturating_add(delta as usize).min(last)
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
 }
 
 pub struct Menu<Id> {
@@ -560,6 +567,28 @@ where
         outcome
     }
 
+    fn on_mouse<M>(&mut self, mouse: MouseEvent, ctx: &mut EventCtx<M>) -> MenuOutcome {
+        if !self.open
+            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            || !rect_contains(self.list_area(self.overlay_bounds), mouse.column, mouse.row)
+        {
+            return MenuOutcome::IDLE;
+        }
+
+        let mut data_ctx = EventCtx::new(ctx.animation());
+        if <DataView<MenuItem<Id>, Id> as TuiNode<M>>::event(
+            &mut self.data_view,
+            &TuiEvent::Mouse(mouse),
+            &mut data_ctx,
+        ) == EventOutcome::Handled
+        {
+            self.data_view.drain_events();
+            return self.activate_highlighted();
+        }
+
+        MenuOutcome::IDLE
+    }
+
     fn navigate_by(&mut self, delta: isize, area: Rect) -> MenuOutcome {
         if self.filtered.is_empty() {
             return MenuOutcome::HANDLED;
@@ -812,6 +841,16 @@ where
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Mouse(mouse) = event {
+            let outcome = self.on_mouse(*mouse, ctx);
+            self.apply_open_close_context(outcome, ctx);
+            if outcome.handled {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            return EventOutcome::Ignored;
+        }
+
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -944,5 +983,34 @@ mod tests {
         menu.close_with_context(&mut close_ctx);
 
         assert_eq!(close_ctx.focus_request(), Some(&FocusRequest::Last));
+    }
+
+    #[test]
+    fn left_click_on_popup_row_activates_and_closes_menu() {
+        let mut menu = Menu::new([MenuItem::new(1, "Alpha"), MenuItem::new(2, "Beta")]);
+        let bounds = Rect::new(0, 0, 24, 12);
+        menu.open();
+        let mut layout = LayoutCtx::new();
+        layout.with_overlay_bounds(bounds, |ctx| {
+            <Menu<_> as TuiNode<()>>::layout(&mut menu, Rect::new(4, 2, 8, 1), ctx);
+        });
+        let row_area = menu.list_area(bounds);
+        let mut event = EventCtx::<()>::default();
+
+        let outcome = menu.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: crate::MouseEventKind::Down(crate::MouseButton::Left),
+                column: row_area.x,
+                row: row_area.y + 1,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut event,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(menu.take_activated(), vec![2]);
+        assert!(!menu.is_open());
+        assert!(event.layout_requested());
+        assert_eq!(event.propagation(), crate::Propagation::Stopped);
     }
 }

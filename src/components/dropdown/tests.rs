@@ -11,8 +11,9 @@ use super::*;
 use crate::event::KeyModifiers;
 use crate::{
     ChildKey, Dialog, DialogLayer, EventCtx, EventRoute, ExternalEditorResponse, Flex, FlexItem,
-    FocusCtx, FocusId, FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, Propagation,
-    RenderCtx, Tab, Tabs, TuiEvent, TuiNode, border_chars, preset,
+    FocusCtx, FocusId, FocusRequest, KeyBindings, KeySpec, LayoutCtx, LayoutProposal, MouseButton,
+    MouseEvent, MouseEventKind, Propagation, RenderCtx, Tab, Tabs, TuiEvent, TuiNode, border_chars,
+    preset,
 };
 
 fn single_dropdown() -> Dropdown<&'static str, &'static str> {
@@ -782,6 +783,24 @@ fn hotkey_open_requests_search_focus_at_dropdown_path() {
         ctx.focus_request(),
         Some(&FocusRequest::TargetAt {
             path: target.path,
+            id: FocusId::new(SEARCH_FOCUS),
+        })
+    );
+}
+
+#[test]
+fn mouse_open_requests_search_focus() {
+    let mut dropdown = single_dropdown();
+    layout_dropdown(&mut dropdown, AREA, AREA);
+    let mut ctx = EventCtx::<()>::default();
+
+    let outcome = dropdown.event(&mouse_down(AREA.x, AREA.y), &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&FocusRequest::TargetAt {
+            path: TreePath::new(),
             id: FocusId::new(SEARCH_FOCUS),
         })
     );
@@ -2524,6 +2543,43 @@ fn node_event_opens_and_requests_layout() {
 }
 
 #[test]
+fn left_click_on_closed_field_opens_dropdown() {
+    let mut dropdown = single_dropdown();
+    layout_dropdown(
+        &mut dropdown,
+        Rect::new(4, 2, 12, 3),
+        Rect::new(0, 0, 24, 12),
+    );
+    let mut event = EventCtx::<()>::default();
+
+    let outcome = dropdown.event(&mouse_down(4, 2), &mut event);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(dropdown.is_open());
+    assert!(event.layout_requested());
+    assert_eq!(event.propagation(), Propagation::Stopped);
+}
+
+#[test]
+fn left_click_on_popup_row_selects_and_commits_single_dropdown() {
+    let mut dropdown = single_dropdown().search_mode(DropdownSearchMode::None);
+    let bounds = Rect::new(0, 0, 24, 12);
+    dropdown.open();
+    layout_dropdown(&mut dropdown, Rect::new(4, 2, 12, 3), bounds);
+    let popup_area = dropdown.popup_overlay_area(bounds);
+    let row_area = dropdown.popup_rows_area(dropdown.popup_inner_areas(popup_area)[1]);
+    let mut event = EventCtx::<()>::default();
+
+    let outcome = dropdown.event(&mouse_down(row_area.x, row_area.y + 1), &mut event);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(dropdown.selected_id(), Some("Beta"));
+    assert!(!dropdown.is_open());
+    assert!(event.layout_requested());
+    assert_eq!(event.propagation(), Propagation::Stopped);
+}
+
+#[test]
 fn search_event_requests_layout_when_popup_height_and_direction_change() {
     let mut dropdown = single_dropdown();
     dropdown.open();
@@ -2697,6 +2753,15 @@ fn ctrl_enter() -> KeyEvent {
         code: Key::Enter,
         modifiers: KeyModifiers::CONTROL,
     }
+}
+
+fn mouse_down(column: u16, row: u16) -> TuiEvent {
+    TuiEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
 }
 
 fn open_list_area<T, Id>(dropdown: &mut Dropdown<T, Id>, area: Rect) -> Rect

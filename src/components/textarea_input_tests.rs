@@ -669,30 +669,65 @@ fn textarea_panel_style_moves_hotkey_to_panel() {
 }
 
 #[test]
-fn textarea_panel_click_requests_input_focus() {
-    let mut input = TextareaInput::<()>::new().panel("Label");
+fn textarea_click_focuses_and_enters_insert_mode_for_all_chrome() {
+    for (mut input, area) in [
+        (TextareaInput::<()>::new(), Rect::new(2, 3, 20, 1)),
+        (
+            TextareaInput::<()>::new().panel("Label"),
+            Rect::new(2, 3, 20, 3),
+        ),
+    ] {
+        let mut layout = LayoutCtx::new();
+        input.layout(area, &mut layout);
+        let mut ctx = EventCtx::default();
+
+        let outcome = input.event(
+            &TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(input.insert_mode());
+        assert_eq!(layout.hit_regions().len(), 1);
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: TreePath::new(),
+                id: FocusId::new("textarea"),
+            })
+        );
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
+    }
+}
+
+#[test]
+fn textarea_ignores_clicks_below_its_visible_outer_bounds() {
+    let mut input = TextareaInput::<()>::new();
+    let area = Rect::new(2, 3, 20, 6);
     let mut layout = LayoutCtx::new();
-    input.layout(Rect::new(2, 3, 20, 3), &mut layout);
+    input.layout(area, &mut layout);
     let mut ctx = EventCtx::default();
 
     let outcome = input.event(
         &TuiEvent::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 3,
+            column: area.x,
+            row: area.y + 1,
             modifiers: KeyModifiers::NONE,
         }),
         &mut ctx,
     );
 
-    assert_eq!(outcome, EventOutcome::Handled);
-    assert_eq!(
-        ctx.focus_request(),
-        Some(&FocusRequest::TargetAt {
-            path: TreePath::new(),
-            id: FocusId::new("textarea"),
-        })
-    );
+    assert_eq!(layout.hit_regions()[0].area, Rect::new(2, 3, 20, 1));
+    assert_eq!(outcome, EventOutcome::Ignored);
+    assert!(!input.insert_mode());
+    assert_eq!(ctx.focus_request(), None);
+    assert_eq!(ctx.propagation(), Propagation::Continue);
 }
 
 #[test]

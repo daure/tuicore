@@ -160,17 +160,21 @@ where
                     &selection_descendants,
                     show_tree_gutter,
                 ),
-                DisplayRow::SelectionPlaceholder { count, depth, .. } => self
-                    .render_selection_placeholder(
-                        frame,
-                        row_area,
-                        &column_widths,
-                        offset.x,
-                        *count,
-                        *depth,
-                        row_style,
-                        show_tree_gutter,
-                    ),
+                DisplayRow::SelectionPlaceholder {
+                    count,
+                    depth,
+                    focused,
+                } => self.render_selection_placeholder(
+                    frame,
+                    row_area,
+                    &column_widths,
+                    offset.x,
+                    *count,
+                    *depth,
+                    *focused,
+                    row_style,
+                    show_tree_gutter,
+                ),
             }
         }
 
@@ -341,6 +345,7 @@ where
         offset_x: usize,
         count: usize,
         depth: usize,
+        focused: bool,
         style: Option<Style>,
         show_tree_gutter: bool,
     ) {
@@ -348,16 +353,24 @@ where
         let Some(Some(cell)) = cells.first() else {
             return;
         };
-        let text = self.with_selection_placeholder_prefix(
-            Text::from(format!("{count} items selected")),
-            depth,
-            show_tree_gutter,
+        let placeholder_area = Rect::new(
+            cell.area.x,
+            area.y,
+            area.right().saturating_sub(cell.area.x),
+            area.height,
         );
+        let label = if focused {
+            format!("Moving {count} tasks")
+        } else {
+            format!("{count} items selected")
+        };
+        let text =
+            self.with_selection_placeholder_prefix(Text::from(label), depth, show_tree_gutter);
         let mut paragraph = Paragraph::new(text).scroll((0, cell.scroll_x));
         if let Some(style) = style {
             paragraph = paragraph.style(style);
         }
-        frame.render_widget(paragraph, cell.area);
+        frame.render_widget(paragraph, placeholder_area);
     }
 
     fn with_row_prefix(

@@ -11,8 +11,8 @@ use super::{
 };
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusRequest, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, TickResult,
-    TuiNode, keybindings,
+    FocusRequest, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    MouseButton, MouseEventKind, ScrollDelta, TickResult, TuiNode, keybindings,
 };
 
 impl<T, Id> Animated for DataView<T, Id>
@@ -55,6 +55,91 @@ where
     }
 }
 
+impl<T, Id> DataView<T, Id>
+where
+    Id: Clone + Eq + Hash,
+{
+    fn on_mouse<M>(&mut self, mouse: crate::MouseEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let geometry = self.scroll_geometry(self.area);
+        let outcome = match mouse.kind {
+            MouseEventKind::ScrollUp
+                if self.vertical_scroll != DataViewVerticalScroll::ParentDelegated =>
+            {
+                self.scroll.scroll_by_immediately(
+                    ScrollDelta::new(0, -1),
+                    geometry.viewport,
+                    geometry.content,
+                )
+            }
+            MouseEventKind::ScrollDown
+                if self.vertical_scroll != DataViewVerticalScroll::ParentDelegated =>
+            {
+                self.scroll.scroll_by_immediately(
+                    ScrollDelta::new(0, 1),
+                    geometry.viewport,
+                    geometry.content,
+                )
+            }
+            MouseEventKind::ScrollLeft => self.scroll.scroll_by_immediately(
+                ScrollDelta::new(-1, 0),
+                geometry.viewport,
+                geometry.content,
+            ),
+            MouseEventKind::ScrollRight => self.scroll.scroll_by_immediately(
+                ScrollDelta::new(1, 0),
+                geometry.viewport,
+                geometry.content,
+            ),
+            MouseEventKind::Down(MouseButton::Left)
+                if mouse.column >= geometry.layout.viewport.x
+                    && mouse.column < geometry.layout.viewport.right()
+                    && mouse.row >= geometry.layout.viewport.y
+                    && mouse.row < geometry.layout.viewport.bottom() =>
+            {
+                let offset = self.visible_offset(geometry.viewport, geometry.content);
+                let row = offset
+                    .y
+                    .saturating_add(usize::from(mouse.row - geometry.layout.viewport.y));
+                let Some((index, _, _)) = self
+                    .visible_row_geometry()
+                    .intersecting(row, row + 1)
+                    .next()
+                else {
+                    return EventOutcome::Ignored;
+                };
+                let highlight = self.set_highlighted_index(index);
+                let activation = self.activate_highlighted();
+                ctx.focus(FocusRequest::TargetAt {
+                    path: ctx.current_path(),
+                    id: FocusId::new(DATA_VIEW_FOCUS),
+                });
+                if highlight.index_changed
+                    || highlight.selection_changed
+                    || highlight.activated
+                    || activation.changed
+                    || activation.activated
+                {
+                    ctx.request_redraw();
+                }
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
+            _ => return EventOutcome::Ignored,
+        };
+
+        if !outcome.changed && !outcome.active {
+            return EventOutcome::Ignored;
+        }
+        ctx.request_redraw();
+        ctx.request_layout();
+        if outcome.active {
+            ctx.request_tick();
+        }
+        ctx.stop_propagation();
+        EventOutcome::Handled
+    }
+}
+
 impl<T, Id, M> TuiNode<M> for DataView<T, Id>
 where
     Id: Clone + Eq + Hash,
@@ -93,6 +178,7 @@ where
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
+        ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if width_changed {
             self.scroll.snap_horizontal_to_start();
         }
@@ -115,6 +201,7 @@ where
             FocusId::new(DATA_VIEW_FOCUS),
             self.focused_events_before_global_hotkeys,
         );
+        ctx.set_focus_control(FocusId::new(DATA_VIEW_FOCUS), true);
         self.layout_children::<M>(area, ctx);
         LayoutResult::new(area)
     }
@@ -130,6 +217,9 @@ where
             }
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if let crate::TuiEvent::Mouse(mouse) = event {
+            return self.on_mouse(*mouse, ctx);
         }
         let crate::TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;

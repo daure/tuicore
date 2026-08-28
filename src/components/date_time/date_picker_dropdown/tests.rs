@@ -1,4 +1,5 @@
 use super::*;
+use crate::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TreePath};
 use ratatui::style::Modifier;
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -273,4 +274,85 @@ fn inactive_external_editor_session_requests_submit_once_and_closes_on_response(
     );
     assert!(!dropdown.is_open());
     assert_eq!(response.messages(), &["select"]);
+}
+
+#[test]
+fn date_picker_dropdown_forwards_date_header_clicks() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    dropdown.focused = true;
+    dropdown.set_open(true);
+    dropdown.field_area = Rect::new(0, 0, 24, 1);
+    dropdown.overlay_bounds = Rect::new(0, 0, 40, 20);
+    let mut ctx = EventCtx::default();
+
+    let outcome = dropdown.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(dropdown.picker.is_month_view());
+}
+
+#[test]
+fn closed_date_picker_dropdown_mouse_click_opens_and_focuses_field() {
+    let mut dropdown = DatePickerDropdown::<()>::new();
+    let area = Rect::new(4, 2, 24, 1);
+    let mut layout = LayoutCtx::new();
+    dropdown.layout(area, &mut layout);
+    let mut ctx = EventCtx::new_at_path(crate::animation_settings(), TreePath::new());
+
+    let outcome = dropdown.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 4,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(dropdown.is_open());
+    assert_eq!(layout.hit_regions().len(), 1);
+    assert_eq!(layout.hit_regions()[0].area, area);
+    assert_eq!(
+        ctx.focus_request(),
+        Some(&crate::FocusRequest::TargetAt {
+            path: TreePath::new(),
+            id: FocusId::new(DATE_PICKER_DROPDOWN_FOCUS),
+        })
+    );
+}
+
+#[test]
+fn date_picker_dropdown_mouse_day_selection_emits_and_closes() {
+    let date = Date::from_calendar_date(2026, time::Month::June, 22).unwrap();
+    let mut dropdown = DatePickerDropdown::new()
+        .today(date)
+        .on_select(|selected| selected);
+    dropdown.set_open(true);
+    dropdown.field_area = Rect::new(0, 0, 24, 1);
+    dropdown.overlay_bounds = Rect::new(0, 0, 40, 20);
+    let mut ctx = EventCtx::default();
+
+    let outcome = dropdown.event(
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!dropdown.is_open());
+    assert_eq!(dropdown.current_value(), Some(date));
+    assert_eq!(ctx.messages(), &[date]);
 }
