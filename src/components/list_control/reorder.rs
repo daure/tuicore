@@ -181,14 +181,11 @@ where
         let shift = key.modifiers == KeyModifiers::SHIFT;
         let control = key.modifiers == KeyModifiers::CONTROL;
         let direction = self.tree_selection_direction(key, shift || control);
-        let clears_range = self
-            .tree_selection
-            .as_ref()
-            .is_some_and(|state| state.range_mode)
-            && !control
-            && !(shift && direction.is_some())
-            && (direction.is_some() || self.data_view.is_navigation_key(key));
-        if clears_range {
+        let range_extension = shift && direction.is_some();
+        if self.tree_selection.is_some()
+            && self.data_view.is_navigation_key(key)
+            && !range_extension
+        {
             self.clear_tree_selection();
             ctx.request_redraw();
             return None;
@@ -261,6 +258,13 @@ where
             .saturating_add_signed(delta)
             .min(siblings.len().saturating_sub(1));
         let destination = siblings[destination_index].clone();
+        if self
+            .tree_selection
+            .as_ref()
+            .is_some_and(|state| state.range_mode != range)
+        {
+            self.clear_tree_selection();
+        }
         let state = self
             .tree_selection
             .get_or_insert_with(|| TreeSelectionState {
@@ -295,7 +299,7 @@ where
             if state.selected.is_empty() {
                 state.selected.push(current.clone());
             }
-            state.anchor = None;
+            state.anchor = Some(current.clone());
             state.range_mode = false;
         }
         state
@@ -324,7 +328,7 @@ where
                     anchor: None,
                     range_mode: false,
                 });
-            state.anchor = None;
+            state.anchor = Some(current.clone());
             state.range_mode = false;
             if state
                 .selected
@@ -863,7 +867,10 @@ where
                 .highlighted_id()
                 .expect("range selection has a highlighted sibling")
         } else {
-            selected.last().expect("selected sibling exists").clone()
+            selection
+                .anchor
+                .clone()
+                .unwrap_or_else(|| selected.last().expect("selected sibling exists").clone())
         };
         let placement_index = siblings
             .iter()
@@ -885,6 +892,10 @@ where
             self.tree_block_target_depth(parent_id.as_ref()),
             true,
         );
+        let selected_highlight_id = selected
+            .last()
+            .expect("selected block is not empty")
+            .clone();
         self.tree_block_move = Some(TreeBlockMoveState {
             snapshot,
             scroll_snapshot: self.data_view.scroll_snapshot(),
@@ -896,6 +907,8 @@ where
             visual_sibling_index: Some(visual_sibling_index),
             pending_g: false,
         });
+        self.data_view
+            .reposition_highlight_silently(&selected_highlight_id);
         self.position_tree_block_placeholder(settings);
         true
     }

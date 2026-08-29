@@ -2453,6 +2453,89 @@ fn tree_block_move_placeholder_follows_range_selection_direction() {
 }
 
 #[test]
+fn tree_block_move_starts_at_sparse_ctrl_selection_anchor() {
+    let mut control = mutable_tree_control((1..=4).map(|id| TreeRow { id, parent: None }));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_tree_selection_key(modified_key(Key::Up, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(
+        control
+            .tree_selection
+            .as_ref()
+            .expect("ctrl selection should remain active")
+            .anchor,
+        Some(3)
+    );
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(
+        control
+            .tree_block_move
+            .as_ref()
+            .expect("ctrl selection should start a tree block move")
+            .visual_sibling_index,
+        Some(3)
+    );
+}
+
+#[test]
+fn tree_block_move_rehomes_stray_ctrl_navigation_highlight() {
+    let mut control = mutable_tree_control((1..=4).map(|id| TreeRow { id, parent: None }));
+    control.data_view.highlight_id(&1);
+    control.data_view.set_focused(true);
+    let mut ctx = EventCtx::default();
+
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_tree_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+
+    assert_eq!(control.data_view.highlighted_id(), Some(4));
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(control.data_view.highlighted_id(), Some(3));
+    let mut terminal = Terminal::new(TestBackend::new(30, 4)).expect("terminal should build");
+    terminal
+        .draw(|frame| control.data_view().render(frame, Rect::new(0, 0, 30, 4)))
+        .expect("tree block move should render");
+    let theme = crate::theme();
+    for row in [1, 3] {
+        let cell = terminal.backend().buffer().cell((2, row)).unwrap();
+        assert_ne!(
+            (cell.fg, cell.bg),
+            (theme.highlight_fg(), theme.highlight_bg()),
+            "unrelated row {row} should not retain the highlight style"
+        );
+    }
+}
+
+#[test]
 fn tree_block_line_move_redraws_without_relayout() {
     let mut control = tree_block_move_control();
     let mut ctx = EventCtx::default();
@@ -3206,6 +3289,20 @@ fn tree_shift_selection_stays_within_sibling_parent() {
 }
 
 #[test]
+fn tree_ctrl_navigation_replaces_shift_range_selection() {
+    let mut control = mutable_tree_control((1..=5).map(|id| TreeRow { id, parent: None }));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+
+    assert_eq!(control.data_view.highlighted_id(), Some(4));
+    assert_eq!(control.transient_selected_ids(), vec![3]);
+}
+
+#[test]
 fn tree_range_selection_survives_focus_loss_and_gain() {
     let mut control = mutable_tree_control([
         TreeRow {
@@ -3291,37 +3388,46 @@ fn plain_data_view_navigation_clears_tree_range_selection() {
 }
 
 #[test]
-fn plain_navigation_keeps_tree_ctrl_selection() {
-    let mut control = mutable_tree_control([
-        TreeRow {
-            id: 1,
-            parent: None,
-        },
-        TreeRow {
-            id: 2,
-            parent: None,
-        },
-    ]);
-    control.data_view.highlight_id(&1);
-    let mut ctx = EventCtx::default();
-    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
-    let selected = control
-        .tree_selection
-        .as_ref()
-        .expect("ctrl selection should be active")
-        .selected
-        .clone();
+fn routed_plain_navigation_clears_sparse_tree_ctrl_selection() {
+    for (key, expected_highlight) in [
+        (Key::Up, 2),
+        (Key::Char('k'), 2),
+        (Key::Down, 4),
+        (Key::Char('j'), 4),
+    ] {
+        let mut control = mutable_tree_control((1..=5).map(|id| TreeRow { id, parent: None }));
+        control.data_view.highlight_id(&1);
+        control.data_view.set_focused(true);
+        control.layout(Rect::new(0, 0, 30, 6), &mut LayoutCtx::new());
+        let route = EventRoute::new(TreePath::from_keys([ChildKey::new(DATA_SLOT)]));
+        let mut ctx = EventCtx::default();
 
-    control.handle_tree_selection_key(KeyEvent::from(Key::PageDown), &mut ctx);
+        for key in [
+            modified_key(Key::Down, KeyModifiers::CONTROL),
+            modified_key(Key::Down, KeyModifiers::CONTROL),
+            modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        ] {
+            assert_eq!(
+                control.dispatch_event(&route, &TuiEvent::Key(key), &mut ctx),
+                EventOutcome::Handled
+            );
+        }
+        assert_eq!(control.transient_selected_ids(), vec![1, 3]);
+        assert_eq!(control.data_view().highlighted_id(), Some(3));
+        assert!(control.data_view().selection_overlay_active_for_test());
 
-    assert_eq!(
-        control
-            .tree_selection
-            .as_ref()
-            .expect("ctrl selection should remain active")
-            .selected,
-        selected
-    );
+        assert_eq!(
+            control.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(key)), &mut ctx),
+            EventOutcome::Handled
+        );
+
+        assert!(control.transient_selected_ids().is_empty());
+        assert_eq!(
+            control.data_view().highlighted_id(),
+            Some(expected_highlight)
+        );
+        assert!(!control.data_view().selection_overlay_active_for_test());
+    }
 }
 
 #[test]
