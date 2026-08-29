@@ -60,6 +60,7 @@ pub struct TextareaInput<M = ()> {
     max_lines: Option<usize>,
     min_rows: usize,
     max_rows: Option<usize>,
+    fill_height: bool,
     wrap: bool,
     scroll: ScrollState,
     area: Rect,
@@ -209,6 +210,7 @@ impl<M> TextareaInput<M> {
             max_lines: None,
             min_rows: 1,
             max_rows: None,
+            fill_height: false,
             wrap: true,
             scroll: ScrollState::from_preset(ScrollAxes::Vertical, preset().scroll()),
             area: Rect::default(),
@@ -664,6 +666,11 @@ impl<M> TextareaInput<M> {
         self
     }
 
+    pub fn fill_height(mut self, fill_height: bool) -> Self {
+        self.fill_height = fill_height;
+        self
+    }
+
     pub fn wrap(mut self, wrap: bool) -> Self {
         self.set_wrap(wrap);
         self
@@ -901,6 +908,9 @@ impl<M> TextareaInput<M> {
     }
 
     fn visible_outer_height(&self, width: u16, available: u16) -> u16 {
+        if self.fill_height {
+            return available;
+        }
         let content = self.preferred_rows(self.content_rows_for_width(self.inner_width(width)));
         let content = content.min(u16::MAX as usize) as u16;
         let height = match self.chrome {

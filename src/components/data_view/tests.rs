@@ -69,6 +69,19 @@ fn assert_restored_highlight_is_visible(view: &DataView<usize, usize>, area: Rec
     );
 }
 
+fn assert_restored_highlight_is_centered(view: &DataView<usize, usize>, area: Rect) {
+    let (geometry, rows) = view.scroll_geometry_and_row_geometry(area);
+    let (row_start, row_end) = rows
+        .span(view.highlighted)
+        .expect("highlighted row should exist");
+    let row_height = row_end.saturating_sub(row_start);
+    let expected =
+        row_start.saturating_sub(geometry.viewport.height.saturating_sub(row_height) / 2);
+
+    assert_eq!(view.highlighted_id(), Some(7));
+    assert_eq!(view.scroll.target_offset().y, expected);
+}
+
 #[test]
 fn focused_event_precedence_can_be_disabled_for_app_hotkeys() {
     for (view, expected) in [
@@ -574,6 +587,65 @@ fn wrapping_constrained_cells_expand_rows_without_horizontal_scrollbars() {
     assert_ne!(
         terminal.backend().buffer().cell((2, 1)).unwrap().symbol(),
         " "
+    );
+}
+
+#[test]
+fn wrapping_fill_cells_expand_rows_without_horizontal_scrollbars() {
+    let mut view = DataView::new(["A title that wraps at the viewport edge"], |title| *title)
+        .column(Column::multiline(
+            "title",
+            "",
+            Constraint::Fill(1),
+            |title: &&str, _| Text::from(*title),
+        ))
+        .wrap_cells();
+    let area = Rect::new(0, 0, 12, 6);
+    <DataView<_, _> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    let geometry = view.scroll_geometry(area);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    let text = (0..area.height)
+        .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+        .map(|position| terminal.backend().buffer().cell(position).unwrap().symbol())
+        .collect::<String>();
+    assert!(geometry.layout.horizontal_bar.is_none());
+    assert!(geometry.content.height > 1);
+    assert!(text.contains("viewport"));
+    assert!(text.contains("edge"));
+}
+
+#[test]
+fn wrapping_can_align_continuations_after_a_row_prefix() {
+    let mut view = DataView::new([Row::new(1, "alpha bravo charlie")], |row| row.id)
+        .column(
+            Column::rich("title", "", Constraint::Fill(1), |row: &Row, _| {
+                Line::from(vec![
+                    Span::styled("ID-1", Style::default()),
+                    Span::raw(format!(" {}", row.name)),
+                ])
+            })
+            .wrap_continuation_indent_by(|_| 5),
+        )
+        .wrap_cells();
+    let area = Rect::new(0, 0, 12, 4);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        " "
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((4, 1)).unwrap().symbol(),
+        " "
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((5, 1)).unwrap().symbol(),
+        "b"
     );
 }
 
@@ -1283,6 +1355,22 @@ fn tree_search_keeps_matching_child_ancestors_visible() {
 }
 
 #[test]
+fn tree_search_input_expands_all_nodes_only_on_initial_query() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut view = tree_view().action_bar(true);
+
+    view.on_key(KeyEvent::from(Key::Char('/')), area);
+    view.on_key(KeyEvent::from(Key::Char('t')), area);
+
+    assert_eq!(view.expanded, HashSet::from([1, 2, 3]));
+
+    view.collapse_all();
+    view.on_key(KeyEvent::from(Key::Char('a')), area);
+
+    assert!(view.expanded.is_empty());
+}
+
+#[test]
 fn level_tree_search_keeps_matching_child_ancestors_visible() {
     let mut view = DataView::list(level_rows(), |row| row.id, |row| row.name.to_string())
         .tree(TreeAdapter::level(|row: &LevelRow| row.level))
@@ -1617,9 +1705,9 @@ fn clear_search_hotkey_clears_and_enters_insert_mode() {
         .action_bar(true)
         .selection_mode(SelectionMode::Single)
         .selection_trigger(SelectionTrigger::OnNavigate)
-        .selected([12]);
-    view.highlight_id(&12);
-    view.set_search_query("12");
+        .selected([7]);
+    view.highlight_id(&7);
+    view.set_search_query("7");
 
     let outcome = view.on_key(
         KeyEvent {
@@ -1634,8 +1722,8 @@ fn clear_search_hotkey_clears_and_enters_insert_mode() {
     assert!(view.transform_state().search.is_empty());
     assert_eq!(view.interaction, DataViewInteraction::Search);
     assert!(view.search_input.insert_mode());
-    assert_eq!(view.selected_ids(), vec![12]);
-    assert_restored_highlight_is_visible(&view, area);
+    assert_eq!(view.selected_ids(), vec![7]);
+    assert_restored_highlight_is_centered(&view, area);
 }
 
 #[test]

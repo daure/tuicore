@@ -381,6 +381,16 @@ where
         self
     }
 
+    /// Wraps Day-view entry text to the available width and grows rows to keep it visible.
+    pub fn wrap_day_entries(mut self) -> Self {
+        self.set_wrap_day_entries(true);
+        self
+    }
+
+    pub fn set_wrap_day_entries(&mut self, wrap_cells: bool) {
+        self.day_entries.set_wrap_cells(wrap_cells);
+    }
+
     pub fn role(mut self, role: impl Fn(&T) -> Option<CalendarEntryRole> + 'static) -> Self {
         self.role = Box::new(role);
         self.refresh_day_entries();

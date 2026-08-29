@@ -49,7 +49,7 @@ pub struct FlexItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FlexMain {
     Fixed(u16),
-    Fill(u16),
+    Fill { weight: u16, min: u16 },
     Percent(u16),
     FitContent,
 }
@@ -91,7 +91,22 @@ impl FlexItem {
 
     pub fn fill(weight: u16) -> Self {
         Self {
-            main: FlexMain::Fill(weight.max(1)),
+            main: FlexMain::Fill {
+                weight: weight.max(1),
+                min: 0,
+            },
+            shrink: 0,
+            cross: CrossSize::Auto,
+            align_self: None,
+        }
+    }
+
+    pub fn fill_min(weight: u16, min: u16) -> Self {
+        Self {
+            main: FlexMain::Fill {
+                weight: weight.max(1),
+                min,
+            },
             shrink: 0,
             cross: CrossSize::Auto,
             align_self: None,
@@ -278,6 +293,18 @@ where
         Ok(old)
     }
 
+    pub fn set_item(&mut self, key: impl Into<ChildKey>, item: FlexItem) -> bool {
+        let key = key.into();
+        let Some(child) = self.items.iter_mut().find(|child| child.key == key) else {
+            return false;
+        };
+        if child.item == item {
+            return false;
+        }
+        child.item = item;
+        true
+    }
+
     pub fn remove(
         &mut self,
         key: impl Into<ChildKey>,
@@ -343,12 +370,12 @@ impl<M> TuiNode<M> for Flex<M> {
                     && self
                         .items
                         .iter()
-                        .any(|child| matches!(child.item.main, FlexMain::Fill(_))),
+                        .any(|child| matches!(child.item.main, FlexMain::Fill { .. })),
                 height: matches!(self.direction, Direction::Vertical)
                     && self
                         .items
                         .iter()
-                        .any(|child| matches!(child.item.main, FlexMain::Fill(_))),
+                        .any(|child| matches!(child.item.main, FlexMain::Fill { .. })),
             },
         }
         .normalized(proposal)
@@ -519,7 +546,7 @@ impl<M> Flex<M> {
                     let basis = available.saturating_mul(u32::from(percent)) / 100;
                     (basis, basis)
                 }
-                FlexMain::Fill(_) => (0, 0),
+                FlexMain::Fill { min, .. } => (u32::from(min), u32::from(min)),
                 FlexMain::FitContent => self.fit_content_basis(child, proposal, available),
             };
             bases.push(basis);
@@ -536,7 +563,7 @@ impl<M> Flex<M> {
             .items
             .iter()
             .map(|child| match child.item.main {
-                FlexMain::Fill(weight) => u32::from(weight),
+                FlexMain::Fill { weight, .. } => u32::from(weight),
                 _ => 0,
             })
             .fold(0u32, |sum, weight| sum.saturating_add(weight));
@@ -544,11 +571,11 @@ impl<M> Flex<M> {
         let mut lengths = bases;
         let mut distributed = 0u32;
         for (index, child) in self.items.iter().enumerate() {
-            if let FlexMain::Fill(weight) = child.item.main
+            if let FlexMain::Fill { weight, .. } = child.item.main
                 && fill_weight > 0
             {
                 let share = fill_space.saturating_mul(u32::from(weight)) / fill_weight;
-                lengths[index] = share;
+                lengths[index] = lengths[index].saturating_add(share);
                 distributed = distributed.saturating_add(share);
             }
         }
@@ -558,7 +585,7 @@ impl<M> Flex<M> {
             if remainder == 0 {
                 break;
             }
-            if matches!(child.item.main, FlexMain::Fill(_)) {
+            if matches!(child.item.main, FlexMain::Fill { .. }) {
                 lengths[index] = lengths[index].saturating_add(1);
                 remainder -= 1;
             }
@@ -692,7 +719,7 @@ impl<M> Flex<M> {
                         });
                     (basis, basis)
                 }
-                FlexMain::Fill(_) => (0, 0),
+                FlexMain::Fill { min, .. } => (u32::from(min), u32::from(min)),
                 FlexMain::FitContent => {
                     let (preferred, min) =
                         self.fit_content_basis(child, proposal, available.unwrap_or(1));
@@ -732,17 +759,17 @@ impl<M> Flex<M> {
             .items
             .iter()
             .map(|child| match child.item.main {
-                FlexMain::Fill(weight) => u32::from(weight),
+                FlexMain::Fill { weight, .. } => u32::from(weight),
                 _ => 0,
             })
             .fold(0u32, |sum, weight| sum.saturating_add(weight));
         let mut distributed = 0u32;
         for (index, child) in self.items.iter().enumerate() {
-            if let FlexMain::Fill(weight) = child.item.main
+            if let FlexMain::Fill { weight, .. } = child.item.main
                 && fill_weight > 0
             {
                 let share = fill_space.saturating_mul(u32::from(weight)) / fill_weight;
-                lengths[index] = share;
+                lengths[index] = lengths[index].saturating_add(share);
                 distributed = distributed.saturating_add(share);
             }
         }
@@ -751,7 +778,7 @@ impl<M> Flex<M> {
             if remainder == 0 {
                 break;
             }
-            if matches!(child.item.main, FlexMain::Fill(_)) {
+            if matches!(child.item.main, FlexMain::Fill { .. }) {
                 lengths[index] = lengths[index].saturating_add(1);
                 remainder -= 1;
             }
@@ -1051,6 +1078,20 @@ mod tests {
         assert_eq!(
             ctx.focus_targets()[0].path,
             TreePath::from_keys([ChildKey::from("fixed")])
+        );
+    }
+
+    #[test]
+    fn flex_fill_min_reserves_its_minimum_before_distributing_space() {
+        let mut flex = Flex::column()
+            .child("fixed", Probe::default(), FlexItem::fixed(3))
+            .child("fill", Probe::default(), FlexItem::fill_min(1, 2));
+
+        flex.layout(Rect::new(0, 0, 20, 5), &mut LayoutCtx::new());
+
+        assert_eq!(
+            flex.child_rect(&ChildKey::from("fill")),
+            Some(Rect::new(0, 3, 20, 2))
         );
     }
 

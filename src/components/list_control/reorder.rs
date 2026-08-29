@@ -858,19 +858,30 @@ where
         let Some(snapshot) = self.data_view.tree_edit_snapshot() else {
             return false;
         };
-        let last_index = siblings
+        let placement_id = if selection.range_mode {
+            self.data_view
+                .highlighted_id()
+                .expect("range selection has a highlighted sibling")
+        } else {
+            selected.last().expect("selected sibling exists").clone()
+        };
+        let placement_index = siblings
             .iter()
-            .rposition(|id| selected.contains(id))
-            .expect("selected sibling exists");
-        let sibling_index = siblings[..=last_index]
+            .position(|id| id == &placement_id)
+            .expect("selection placement sibling exists");
+        let placement_is_first_selected = selected.first() == Some(&placement_id);
+        let visual_sibling_index = placement_index + usize::from(!placement_is_first_selected);
+        let sibling_index = siblings[..visual_sibling_index]
             .iter()
             .filter(|id| !selected.contains(id))
             .count();
         self.data_view.set_selection_overlay(
             selected.clone(),
-            Some(SelectionOverlayPosition::After(
-                siblings[last_index].clone(),
-            )),
+            Some(if placement_is_first_selected {
+                SelectionOverlayPosition::Before(placement_id)
+            } else {
+                SelectionOverlayPosition::After(placement_id)
+            }),
             self.tree_block_target_depth(parent_id.as_ref()),
             true,
         );
@@ -882,7 +893,7 @@ where
             parent_id,
             selected,
             sibling_index,
-            visual_sibling_index: Some(last_index + 1),
+            visual_sibling_index: Some(visual_sibling_index),
             pending_g: false,
         });
         self.position_tree_block_placeholder(settings);

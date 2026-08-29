@@ -10,6 +10,7 @@ pub(super) type ParentIdFn<T, Id> = dyn Fn(&T) -> Option<Id>;
 pub(super) type ParentIdMutFn<T, Id> = dyn Fn(&mut T, Option<Id>);
 pub(super) type LevelFn<T> = dyn Fn(&T) -> usize;
 type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Text<'static>;
+type ContinuationIndentFn<T> = dyn Fn(&T) -> usize;
 pub(super) type SortFn<T> = dyn Fn(&T, &T) -> Ordering;
 type TransformKeyFn<T> = dyn Fn(&T) -> String;
 
@@ -289,6 +290,7 @@ pub struct Column<T, Id> {
     pub(super) width: Constraint,
     pub(super) sizing: ColumnSizing,
     pub(super) renderer: Box<CellFn<T, Id>>,
+    pub(super) continuation_indent: Option<Box<ContinuationIndentFn<T>>>,
     pub(super) sort_compare: Option<Box<SortFn<T>>>,
     pub(super) reorder: Option<ReorderOps<T>>,
     pub(super) search_key: Option<Box<TransformKeyFn<T>>>,
@@ -312,6 +314,7 @@ impl<T, Id> Column<T, Id> {
             width,
             sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(move |row, _| Text::from(renderer_accessor(row))),
+            continuation_indent: None,
             sort_compare: None,
             reorder: None,
             search_key: Some(Box::new(move |row| search_accessor(row))),
@@ -332,6 +335,7 @@ impl<T, Id> Column<T, Id> {
             width,
             sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(move |row, context| Text::from(renderer(row, context))),
+            continuation_indent: None,
             sort_compare: None,
             reorder: None,
             search_key: None,
@@ -356,6 +360,7 @@ impl<T, Id> Column<T, Id> {
             width,
             sizing: ColumnSizing::Intrinsic,
             renderer: Box::new(move |row, context| renderer(row, context).into()),
+            continuation_indent: None,
             sort_compare: None,
             reorder: None,
             search_key: None,
@@ -365,6 +370,12 @@ impl<T, Id> Column<T, Id> {
 
     pub fn sortable<K: Ord + 'static>(mut self, key: impl Fn(&T) -> K + 'static) -> Self {
         self.sort_compare = Some(Box::new(move |left, right| key(left).cmp(&key(right))));
+        self
+    }
+
+    /// Indents wrapped continuation lines by a row-specific number of cells.
+    pub fn wrap_continuation_indent_by(mut self, indent: impl Fn(&T) -> usize + 'static) -> Self {
+        self.continuation_indent = Some(Box::new(indent));
         self
     }
 

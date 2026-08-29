@@ -249,6 +249,7 @@ where
                 );
                 let text = self.wrapped_cell_text(
                     index,
+                    column,
                     text,
                     self.cell_content_width(index, column_widths),
                     row,
@@ -265,13 +266,14 @@ where
     pub(super) fn wrapped_cell_text(
         &self,
         column_index: usize,
+        column: &Column<T, Id>,
         mut text: Text<'static>,
         width: u16,
         row: &VisibleRow<'_, T, Id>,
         selection_descendants: &HashMap<Id, Vec<Id>>,
         show_tree_gutter: bool,
     ) -> Text<'static> {
-        let continuation_indent = if column_index == 0 {
+        let default_continuation_indent = if column_index == 0 {
             if show_tree_gutter || self.selection_mode == SelectionMode::Multi {
                 text = self.with_row_prefix(text, row, selection_descendants, show_tree_gutter);
             }
@@ -280,6 +282,11 @@ where
         } else {
             2
         };
+        let continuation_indent = column
+            .continuation_indent
+            .as_ref()
+            .map(|indent| indent(row.row))
+            .unwrap_or(default_continuation_indent);
         if self.wrap_cells {
             wrap_text(text, width, continuation_indent)
         } else {
@@ -338,7 +345,7 @@ where
                 } else {
                     CELL_RIGHT_PADDING
                 };
-                if columns[index].sizing == super::ColumnSizing::Constrained {
+                if self.wrap_cells || columns[index].sizing == super::ColumnSizing::Constrained {
                     configured
                 } else {
                     configured.max(rendered.saturating_add(padding))

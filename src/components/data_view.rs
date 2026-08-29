@@ -460,6 +460,9 @@ where
             return DataViewOutcome::IDLE;
         }
         let before_id = self.highlighted_id();
+        if self.transform_state.search.is_empty() && !query.is_empty() {
+            self.expand_all();
+        }
         self.transform_state.search = query;
         self.search_input
             .set_value(self.transform_state.search.clone());
@@ -1998,7 +2001,15 @@ where
         settings: AnimationSettings,
     ) -> DataViewOutcome {
         let outcome = self.clear_search();
-        self.ensure_visible_after_clear(outcome, area, settings)
+        if !outcome.changed {
+            return DataViewOutcome::HANDLED;
+        }
+        let mut scrolled = self
+            .center_highlight(area, settings)
+            .into_data_view_outcome(outcome.handled, outcome.changed);
+        scrolled.active |= outcome.active;
+        scrolled.activated |= outcome.activated;
+        scrolled
     }
 
     fn clear_search_and_enter_insert_mode(

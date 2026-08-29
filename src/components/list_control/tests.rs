@@ -2412,6 +2412,47 @@ fn tree_block_move_centers_the_pseudo_row_after_target_navigation() {
 }
 
 #[test]
+fn tree_block_move_placeholder_follows_range_selection_direction() {
+    for (highlighted_id, key, expected_rows) in [
+        (
+            3,
+            modified_key(Key::Up, KeyModifiers::SHIFT),
+            ["  1", "  Moving 2 tasks", "  2", "  3", "  4"],
+        ),
+        (
+            2,
+            modified_key(Key::Down, KeyModifiers::SHIFT),
+            ["  1", "  2", "  3", "  Moving 2 tasks", "  4"],
+        ),
+    ] {
+        let mut control = mutable_tree_control((1..=4).map(|id| TreeRow { id, parent: None }));
+        control.data_view.highlight_id(&highlighted_id);
+        let mut ctx = EventCtx::default();
+        control.handle_tree_selection_key(key, &mut ctx);
+        control.handle_reorder_key(
+            modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+            &mut ctx,
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(30, 5)).expect("terminal should build");
+        terminal
+            .draw(|frame| control.data_view().render(frame, Rect::new(0, 0, 30, 5)))
+            .expect("tree block move should render");
+        let rows = (0..5)
+            .map(|y| {
+                (0..30)
+                    .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, expected_rows);
+    }
+}
+
+#[test]
 fn tree_block_line_move_redraws_without_relayout() {
     let mut control = tree_block_move_control();
     let mut ctx = EventCtx::default();

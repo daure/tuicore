@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
-    KeyEvent, KeySpec, TreePath, TuiEvent,
+    KeyEvent, KeySpec, SearchMode, TreePath, TuiEvent,
 };
 use confirmation::DynamicChild;
 use input::ListControlInput;
@@ -587,6 +587,11 @@ where
 
     pub fn filter_controls(mut self, enabled: bool) -> Self {
         self.data_view = self.data_view.filter_controls(enabled);
+        self
+    }
+
+    pub fn search_mode(mut self, mode: SearchMode) -> Self {
+        self.data_view = self.data_view.search_mode(mode);
         self
     }
 

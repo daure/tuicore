@@ -65,6 +65,24 @@ where
         self.child
     }
 
+    pub fn replace(&mut self, child: C, ctx: &mut EventCtx<M>) -> C {
+        let was_initialized = self.initialized;
+        let was_mounted = self.mounted;
+        let mut replacement = Self::new(self.key.clone(), child);
+        replacement.focus_reassert_pending = was_mounted;
+        let mut old = std::mem::replace(self, replacement);
+        let mut lifecycle = LifecycleCtx::default();
+        old.destroy(&mut lifecycle);
+        if was_mounted {
+            self.mount(&mut lifecycle);
+        } else if was_initialized {
+            self.init(&mut lifecycle);
+        }
+        merge_lifecycle_effects(ctx, lifecycle);
+        request_tree_update(ctx);
+        old.into_child()
+    }
+
     pub fn init(&mut self, ctx: &mut LifecycleCtx<M>) {
         if !self.initialized {
             self.child.init(ctx);

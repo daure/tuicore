@@ -308,6 +308,7 @@ where
             );
             let mut text = self.wrapped_cell_text(
                 column_index,
+                column,
                 text,
                 self.cell_content_width(column_index, column_widths),
                 row,
