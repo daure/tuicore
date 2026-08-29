@@ -165,7 +165,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `ListControlField::text`/`dropdown`/`dropdown_options`, validation and conditional visibility;
   configure columns,
   edit/remove confirmation/reorder/tree/checking, title/panel/hotkey/row limits, and
-  `ListControlKeyBindings`. Always drain `take_events() -> Vec<ListControlEvent<Id>>`; failures use
+  `ListControlKeyBindings`. Use `allow_horizontal_moving(false)` to prevent indent/outdent during
+  active tree reorders while retaining vertical movement. Always drain
+  `take_events() -> Vec<ListControlEvent<Id>>`; failures use
   `ListControlReorderUnavailable`.
 - `Checklist<T, Id, M>`: `new(items, id, label)` or `from_list_control`; configure tree, expansion,
   checks, cascading, panel/title/hotkey; inspect checked IDs and drain `ListControlEvent`s.

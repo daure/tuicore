@@ -480,13 +480,15 @@ where
             && self
                 .day_selection
                 .as_ref()
-                .is_some_and(|selection| !selection.selected_entries.is_empty())
+                .is_some_and(|selection| !selection.selected.is_empty())
     }
 
     fn day_selection_contains(&self, index: usize) -> bool {
-        self.day_selection
-            .as_ref()
-            .is_some_and(|selection| selection.selected_entries.contains(&index))
+        self.day_selection.as_ref().is_some_and(|selection| {
+            selection
+                .selected
+                .contains(&(self.id)(&self.entries[index]))
+        })
     }
 
     fn persistent_selection_style(&self) -> Style {

@@ -381,10 +381,6 @@ where
         let direction = self.tree_selection_direction(key, shift || control);
         let range_extension = shift && direction.is_some();
         if self.flat_range_selection.is_some()
-            && self
-                .flat_range_selection
-                .as_ref()
-                .is_some_and(|state| state.range_mode)
             && self.data_view.is_navigation_key(key)
             && !range_extension
         {
@@ -417,6 +413,13 @@ where
         let Some(current) = self.data_view.highlighted_id() else {
             return None;
         };
+        if self
+            .flat_range_selection
+            .as_ref()
+            .is_some_and(|state| state.range_mode != shift)
+        {
+            self.clear_flat_range_selection();
+        }
         let ids = self.data_view.reorder_visible_ids();
         let Some(current_index) = ids.iter().position(|id| id == &current) else {
             return None;
@@ -433,23 +436,9 @@ where
                 range_mode: shift,
             });
         if shift {
-            let anchor_index = ids
-                .iter()
-                .position(|id| id == &state.anchor)
-                .unwrap_or(current_index);
-            let (start, end) = if anchor_index <= destination_index {
-                (anchor_index, destination_index)
-            } else {
-                (destination_index, anchor_index)
-            };
-            state.selected = ids[start..=end].to_vec();
-            state.range_mode = true;
+            state.extend_range(&ids, &current, &destination);
         } else {
-            if state.selected.is_empty() {
-                state.selected.push(current.clone());
-            }
-            state.anchor = current.clone();
-            state.range_mode = false;
+            state.move_with_control(current.clone());
         }
         self.data_view
             .set_selection_overlay(state.selected.clone(), None, 0, false);
@@ -479,17 +468,7 @@ where
                     anchor: current.clone(),
                     range_mode: false,
                 });
-            state.anchor = current.clone();
-            state.range_mode = false;
-            if let Some(index) = state.selected.iter().position(|id| id == &current) {
-                state.selected.remove(index);
-            } else {
-                state.selected.push(current);
-            }
-            state
-                .selected
-                .sort_by_key(|id| ids.iter().position(|candidate| candidate == id));
-            state.selected.clone()
+            state.toggle(&ids, current)
         };
         if selected.is_empty() {
             self.clear_flat_range_selection();
@@ -916,6 +895,14 @@ where
             return;
         } else {
             let keys = crate::keybindings();
+            let horizontal_move = keys.line_left_matches(key)
+                || KeySpec::plain('<').matches(key)
+                || keys.line_right_matches(key)
+                || KeySpec::plain('>').matches(key);
+            if !self.allow_horizontal_moving && horizontal_move {
+                ctx.stop_propagation();
+                return;
+            }
             if keys.line_left_matches(key) || KeySpec::plain('<').matches(key) {
                 self.outdent_tree_block_target();
             } else if keys.line_right_matches(key) || KeySpec::plain('>').matches(key) {
@@ -973,12 +960,8 @@ where
                 .and_then(|target| siblings.iter().position(|id| id == target))
                 .unwrap_or(siblings.len())
         });
-        let visual_sibling_index = move_block_visual_boundary(
-            &siblings,
-            &state.selected,
-            visual_sibling_index,
-            delta,
-        );
+        let visual_sibling_index =
+            move_block_visual_boundary(&siblings, &state.selected, visual_sibling_index, delta);
         let sibling_index = siblings[..visual_sibling_index]
             .iter()
             .filter(|id| !state.selected.contains(id))
@@ -1239,6 +1222,14 @@ where
         {
             self.cancel_tree_reorder(ctx.animation(), false);
         } else {
+            let horizontal_move = keys.line_left_matches(key)
+                || KeySpec::plain('<').matches(key)
+                || keys.line_right_matches(key)
+                || KeySpec::plain('>').matches(key);
+            if !self.allow_horizontal_moving && horizontal_move {
+                ctx.stop_propagation();
+                return;
+            }
             let moving_id = self
                 .tree_reorder
                 .as_ref()

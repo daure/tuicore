@@ -12,6 +12,7 @@ mod tests;
 use ratatui::layout::{Constraint, Rect};
 
 use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
+use super::ordered_selection::OrderedSelection;
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView,
     DataViewOutcome, DataViewTypedEvent, Dropdown, DropdownSearchMode, DropdownVariant, Panel,
@@ -342,11 +343,7 @@ struct TreeSelectionState<Id> {
     range_mode: bool,
 }
 
-struct FlatRangeSelectionState<Id> {
-    selected: Vec<Id>,
-    anchor: Id,
-    range_mode: bool,
-}
+type FlatRangeSelectionState<Id> = OrderedSelection<Id>;
 
 struct FlatBlockMoveState<Id> {
     snapshot: ReorderSnapshot<Id>,
@@ -398,6 +395,7 @@ pub struct ListControl<T, Id, M = ()> {
     confirmation_area: Rect,
     confirmation_bounds: Rect,
     reorder_column: Option<String>,
+    allow_horizontal_moving: bool,
     reorder: Option<ReorderState<Id>>,
     tree_reorder: Option<TreeReorderState<Id>>,
     tree_selection: Option<TreeSelectionState<Id>>,
@@ -524,6 +522,7 @@ where
             confirmation_area: Rect::default(),
             confirmation_bounds: Rect::default(),
             reorder_column: None,
+            allow_horizontal_moving: true,
             reorder: None,
             tree_reorder: None,
             tree_selection: None,
@@ -628,6 +627,11 @@ where
 
     pub fn tree(mut self, tree: super::TreeAdapter<T, Id>) -> Self {
         self.data_view = self.data_view.tree(tree);
+        self
+    }
+
+    pub fn allow_horizontal_moving(mut self, allow: bool) -> Self {
+        self.allow_horizontal_moving = allow;
         self
     }
 
@@ -757,6 +761,8 @@ where
     pub fn clear_transient_selection(&mut self) {
         self.clear_tree_selection();
         self.clear_flat_range_selection();
+        self.data_view
+            .reconcile_selection_to_highlight_on_navigate();
     }
 
     pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
@@ -777,26 +783,13 @@ where
 
     fn restore_transient_selection_after_row_replacement(&mut self) {
         let display_ids = self.data_view.reorder_visible_ids();
-        if let Some(selection) = self.flat_range_selection.as_ref() {
-            let selected = display_ids
-                .iter()
-                .filter(|id| selection.selected.contains(id))
-                .cloned()
-                .collect::<Vec<_>>();
-            if selected.is_empty() {
+        if let Some(selection) = self.flat_range_selection.as_mut() {
+            if !selection.reconcile(&display_ids) {
                 self.clear_flat_range_selection();
                 return;
             }
-            let selection = self
-                .flat_range_selection
-                .as_mut()
-                .expect("flat selection remains active");
-            if !display_ids.contains(&selection.anchor) {
-                selection.anchor = selected[0].clone();
-            }
-            selection.selected = selected.clone();
             self.data_view
-                .set_selection_overlay(selected, None, 0, false);
+                .set_selection_overlay(selection.selected.clone(), None, 0, false);
         } else if let Some(selection) = self.tree_selection.as_ref() {
             let selected = display_ids
                 .iter()

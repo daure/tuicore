@@ -18,6 +18,7 @@ mod list_control;
 mod menu;
 mod menu_button;
 mod notifications;
+mod ordered_selection;
 mod overlay;
 mod panel;
 mod scroll_container;

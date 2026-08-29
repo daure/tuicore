@@ -37,6 +37,7 @@ use crate::{
 
 use super::{Column, DataView, Panel, SelectionMode};
 use crate::components::data_view::SelectionOverlayPosition;
+use crate::components::ordered_selection::OrderedSelection;
 
 const CALENDAR_FOCUS: &str = "calendar";
 const MONTH_EVENT_LINES: usize = 2;
@@ -60,18 +61,6 @@ struct CalendarReorderState {
     staged: Vec<usize>,
     target_index: usize,
     pending_top_prefix: bool,
-}
-
-struct CalendarDaySelectionState {
-    selected_entries: Vec<usize>,
-    anchor: usize,
-    range_mode: bool,
-}
-
-struct CalendarDaySelectionSnapshot<Id> {
-    selected_ids: Vec<Id>,
-    anchor_id: Id,
-    range_mode: bool,
 }
 
 #[derive(Clone)]
@@ -137,7 +126,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     entry_order: Option<Box<EntryOrderFn<T>>>,
     reorder_group: Option<Box<ReorderGroupFn<T>>>,
     reordering: Option<CalendarReorderState>,
-    day_selection: Option<CalendarDaySelectionState>,
+    day_selection: Option<OrderedSelection<Id>>,
     committed_reorder: Option<Vec<usize>>,
     event_detail_on_activate: bool,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
@@ -478,7 +467,6 @@ where
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
-        let day_selection = self.day_selection_snapshot();
         self.committed_reorder = None;
         self.day_entries.clear_reorder_highlight_immediately();
         self.cancel_reorder_immediately();
@@ -491,15 +479,11 @@ where
                 })
             })
             .or_else(|| self.first_entry_on_cursor());
-        self.restore_day_selection_after_entry_replacement(day_selection);
+        self.reconcile_day_selection();
         self.refresh_day_entries();
-        if let Some(selection) = &self.day_selection {
-            self.day_entries.set_selection_overlay(
-                selection.selected_entries.clone(),
-                None,
-                0,
-                false,
-            );
+        if self.day_selection.is_some() {
+            self.day_entries
+                .set_selection_overlay(self.selected_day_entries(), None, 0, false);
         } else {
             self.day_entries.clear_selection_overlay();
         }
@@ -541,14 +525,10 @@ where
 
     /// Returns transient Day-view selection IDs in current reorder scope order.
     pub fn transient_selected_ids(&self) -> Vec<Id> {
-        let Some(selection) = &self.day_selection else {
-            return Vec::new();
-        };
-        self.default_reorder_scope(&selection.anchor)
-            .into_iter()
-            .filter(|entry| selection.selected_entries.contains(entry))
-            .map(|entry| (self.id)(&self.entries[entry]))
-            .collect()
+        self.day_selection
+            .as_ref()
+            .map(|selection| selection.selected.clone())
+            .unwrap_or_default()
     }
 
     pub fn clear_transient_selection(&mut self) {
@@ -680,7 +660,11 @@ where
             .map(|selection| {
                 source
                     .iter()
-                    .filter(|entry| selection.selected_entries.contains(entry))
+                    .filter(|entry| {
+                        selection
+                            .selected
+                            .contains(&(self.id)(&self.entries[**entry]))
+                    })
                     .copied()
                     .collect::<Vec<_>>()
             })
@@ -881,34 +865,21 @@ where
             .saturating_add_signed(delta)
             .min(scope.len().saturating_sub(1));
         let destination = scope[destination_index];
-        let selection = self
-            .day_selection
-            .get_or_insert_with(|| CalendarDaySelectionState {
-                selected_entries: Vec::new(),
-                anchor: current,
-                range_mode: shift,
-            });
+        let scope_ids = self.entry_ids(&scope);
+        let current_id = (self.id)(&self.entries[current]);
+        let destination_id = (self.id)(&self.entries[destination]);
+        let selection = self.day_selection.get_or_insert_with(|| OrderedSelection {
+            selected: Vec::new(),
+            anchor: current_id.clone(),
+            range_mode: shift,
+        });
         if shift {
-            let anchor_index = scope
-                .iter()
-                .position(|entry| *entry == selection.anchor)
-                .unwrap_or(current_index);
-            let (start, end) = if anchor_index <= destination_index {
-                (anchor_index, destination_index)
-            } else {
-                (destination_index, anchor_index)
-            };
-            selection.selected_entries = scope[start..=end].to_vec();
-            selection.range_mode = true;
+            selection.extend_range(&scope_ids, &current_id, &destination_id);
         } else {
-            if selection.selected_entries.is_empty() {
-                selection.selected_entries.push(current);
-            }
-            selection.anchor = current;
-            selection.range_mode = false;
+            selection.move_with_control(current_id);
         }
         self.day_entries
-            .set_selection_overlay(selection.selected_entries.clone(), None, 0, false);
+            .set_selection_overlay(self.selected_day_entries(), None, 0, false);
         self.set_highlighted_entry(Some(destination));
         Some(CalendarOutcome::CHANGED)
     }
@@ -934,53 +905,35 @@ where
         self.day_entries.clear_selection_overlay();
     }
 
-    fn day_selection_snapshot(&self) -> Option<CalendarDaySelectionSnapshot<Id>> {
-        let selection = self.day_selection.as_ref()?;
-        let anchor_id = (self.id)(self.entries.get(selection.anchor)?);
-        let selected_ids = selection
-            .selected_entries
+    fn reconcile_day_selection(&mut self) {
+        let Some(selection) = self.day_selection.as_ref() else {
+            return;
+        };
+        let entries_on_cursor = self.entries_on(self.cursor);
+        let Some(anchor) = entries_on_cursor
             .iter()
-            .filter_map(|entry| self.entries.get(*entry).map(|entry| (self.id)(entry)))
-            .collect();
-        Some(CalendarDaySelectionSnapshot {
-            selected_ids,
-            anchor_id,
-            range_mode: selection.range_mode,
-        })
-    }
-
-    fn restore_day_selection_after_entry_replacement(
-        &mut self,
-        snapshot: Option<CalendarDaySelectionSnapshot<Id>>,
-    ) {
-        self.day_selection = snapshot.and_then(|snapshot| {
-            let entries_on_cursor = self.entries_on(self.cursor);
-            let anchor = entries_on_cursor
-                .iter()
-                .copied()
-                .find(|entry| (self.id)(&self.entries[*entry]) == snapshot.anchor_id)
-                .or_else(|| {
-                    entries_on_cursor.iter().copied().find(|entry| {
-                        snapshot
-                            .selected_ids
-                            .contains(&(self.id)(&self.entries[*entry]))
-                    })
-                })?;
-            let scope = self.default_reorder_scope(&anchor);
-            let selected_entries = scope
-                .into_iter()
-                .filter(|entry| {
-                    snapshot
-                        .selected_ids
+            .copied()
+            .find(|entry| (self.id)(&self.entries[*entry]) == selection.anchor)
+            .or_else(|| {
+                entries_on_cursor.iter().copied().find(|entry| {
+                    selection
+                        .selected
                         .contains(&(self.id)(&self.entries[*entry]))
                 })
-                .collect::<Vec<_>>();
-            (!selected_entries.is_empty()).then_some(CalendarDaySelectionState {
-                selected_entries,
-                anchor,
-                range_mode: snapshot.range_mode,
             })
-        });
+        else {
+            self.day_selection = None;
+            return;
+        };
+        let scope_ids = self.entry_ids(&self.default_reorder_scope(&anchor));
+        if !self
+            .day_selection
+            .as_mut()
+            .expect("day selection remains active")
+            .reconcile(&scope_ids)
+        {
+            self.day_selection = None;
+        }
     }
 
     fn toggle_day_selection_at_highlight(&mut self) {
@@ -988,42 +941,21 @@ where
             return;
         };
         let scope = self.default_reorder_scope(&current);
+        let scope_ids = self.entry_ids(&scope);
+        let current_id = (self.id)(&self.entries[current]);
         let selected = {
-            let selection = self
-                .day_selection
-                .get_or_insert_with(|| CalendarDaySelectionState {
-                    selected_entries: Vec::new(),
-                    anchor: current,
-                    range_mode: false,
-                });
-            if selection
-                .selected_entries
-                .iter()
-                .any(|entry| !scope.contains(entry))
-            {
-                selection.selected_entries.clear();
-            }
-            selection.anchor = current;
-            selection.range_mode = false;
-            if let Some(index) = selection
-                .selected_entries
-                .iter()
-                .position(|entry| *entry == current)
-            {
-                selection.selected_entries.remove(index);
-            } else {
-                selection.selected_entries.push(current);
-            }
-            selection
-                .selected_entries
-                .sort_by_key(|entry| scope.iter().position(|candidate| candidate == entry));
-            selection.selected_entries.clone()
+            let selection = self.day_selection.get_or_insert_with(|| OrderedSelection {
+                selected: Vec::new(),
+                anchor: current_id.clone(),
+                range_mode: false,
+            });
+            selection.toggle(&scope_ids, current_id)
         };
         if selected.is_empty() {
             self.clear_day_selection();
         } else {
             self.day_entries
-                .set_selection_overlay(selected, None, 0, false);
+                .set_selection_overlay(self.selected_day_entries(), None, 0, false);
         }
     }
 
@@ -1079,6 +1011,27 @@ where
         self.sorted_entries_on(self.cursor)
             .into_iter()
             .filter(|entry| group(&self.entries[*moving_entry], &self.entries[*entry]))
+            .collect()
+    }
+
+    fn entry_ids(&self, entries: &[usize]) -> Vec<Id> {
+        entries
+            .iter()
+            .map(|entry| (self.id)(&self.entries[*entry]))
+            .collect()
+    }
+
+    fn selected_day_entries(&self) -> Vec<usize> {
+        let Some(selection) = self.day_selection.as_ref() else {
+            return Vec::new();
+        };
+        self.entries_on(self.cursor)
+            .into_iter()
+            .filter(|entry| {
+                selection
+                    .selected
+                    .contains(&(self.id)(&self.entries[*entry]))
+            })
             .collect()
     }
 

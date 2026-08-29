@@ -798,9 +798,9 @@ fn day_selection_survives_focus_loss_and_gain() {
         |entry| entry.span,
         |entry| entry.title.to_string(),
     )
-        .today(day)
-        .view(CalendarView::Day)
-        .reorderable(|left, right| left.span.start == right.span.start);
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
     calendar.set_focused(true);
     calendar.on_key(KeyEvent {
         code: Key::Down,
@@ -815,8 +815,8 @@ fn day_selection_survives_focus_loss_and_gain() {
             .day_selection
             .as_ref()
             .expect("day selection should remain active")
-            .selected_entries,
-        vec![0, 1]
+            .selected,
+        vec!["first", "second"]
     );
     assert!(calendar.day_entries.selection_overlay_active_for_test());
     assert!(!calendar.is_reordering());
@@ -1031,7 +1031,7 @@ fn set_entries_prunes_removed_transient_selection_and_repairs_anchor() {
         .as_ref()
         .expect("surviving selection should remain active");
     assert_eq!(calendar.highlighted_entry_id(), Some("second"));
-    assert_eq!(calendar.entries[selection.anchor].id, "second");
+    assert_eq!(selection.anchor, "second");
     assert!(calendar.day_entries.selection_overlay_active_for_test());
 }
 
@@ -1059,9 +1059,9 @@ fn clearing_transient_selection_retains_highlight() {
         |entry| entry.span,
         |entry| entry.title.to_string(),
     )
-        .today(day)
-        .view(CalendarView::Day)
-        .reorderable(|left, right| left.span.start == right.span.start);
+    .today(day)
+    .view(CalendarView::Day)
+    .reorderable(|left, right| left.span.start == right.span.start);
 
     calendar.on_key(KeyEvent {
         code: Key::Down,
