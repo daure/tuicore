@@ -59,11 +59,13 @@ where
         self.rows
             .iter()
             .find(|row| (self.row_id)(row) == *id)
-            .is_some_and(|row| {
-                self.selection_disabled_by
-                    .as_ref()
-                    .is_some_and(|disabled| disabled(row))
-            })
+            .is_some_and(|row| self.is_selection_disabled_for_row(row))
+    }
+
+    pub(super) fn is_selection_disabled_for_row(&self, row: &T) -> bool {
+        self.selection_disabled_by
+            .as_ref()
+            .is_some_and(|disabled| disabled(row))
     }
 
     pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
@@ -145,7 +147,33 @@ where
         id: &Id,
         descendants_by_id: &HashMap<Id, Vec<Id>>,
     ) -> CheckState {
-        if self.selection_mode == SelectionMode::None || self.is_selection_disabled(id) {
+        self.check_state_with_descendants_and_disabled(
+            id,
+            descendants_by_id,
+            self.is_selection_disabled(id),
+        )
+    }
+
+    pub(super) fn check_state_for_row_with_descendants(
+        &self,
+        row: &T,
+        id: &Id,
+        descendants_by_id: &HashMap<Id, Vec<Id>>,
+    ) -> CheckState {
+        self.check_state_with_descendants_and_disabled(
+            id,
+            descendants_by_id,
+            self.is_selection_disabled_for_row(row),
+        )
+    }
+
+    fn check_state_with_descendants_and_disabled(
+        &self,
+        id: &Id,
+        descendants_by_id: &HashMap<Id, Vec<Id>>,
+        disabled: bool,
+    ) -> CheckState {
+        if self.selection_mode == SelectionMode::None || disabled {
             return CheckState::Unchecked;
         }
         let ids = self.check_state_ids_from_descendants(id, descendants_by_id);
@@ -160,12 +188,13 @@ where
         }
     }
 
-    pub(super) fn selection_glyph_with_descendants(
+    pub(super) fn selection_glyph_for_row_with_descendants(
         &self,
+        row: &T,
         id: &Id,
         descendants_by_id: &HashMap<Id, Vec<Id>>,
     ) -> &'static str {
-        match self.check_state_with_descendants(id, descendants_by_id) {
+        match self.check_state_for_row_with_descendants(row, id, descendants_by_id) {
             CheckState::Unchecked => self.selection_glyphs.unchecked,
             CheckState::Checked => self.selection_glyphs.checked,
             CheckState::Indeterminate => self.selection_glyphs.indeterminate,

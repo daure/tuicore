@@ -536,6 +536,114 @@ fn multiline_cells_render_second_line_and_clip_beyond_row_height() {
 }
 
 #[test]
+fn wrapping_constrained_cells_expand_rows_without_horizontal_scrollbars() {
+    let mut view = DataView::new(["A title that wraps at the viewport edge"], |title| *title)
+        .column(
+            Column::multiline(
+                "title",
+                "",
+                Constraint::Percentage(100),
+                |title: &&str, _| Text::from(*title),
+            )
+            .constrained(),
+        )
+        .wrap_cells();
+    let area = Rect::new(0, 0, 12, 6);
+    <DataView<_, _> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    let geometry = view.scroll_geometry(area);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    let text = (0..area.height)
+        .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+        .map(|position| terminal.backend().buffer().cell(position).unwrap().symbol())
+        .collect::<String>();
+    assert!(geometry.layout.horizontal_bar.is_none());
+    assert!(geometry.content.height > 1);
+    assert!(text.contains("viewport"));
+    assert!(text.contains("edge"));
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        " "
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((1, 1)).unwrap().symbol(),
+        " "
+    );
+    assert_ne!(
+        terminal.backend().buffer().cell((2, 1)).unwrap().symbol(),
+        " "
+    );
+}
+
+#[test]
+fn multi_column_wrapping_excludes_inter_column_padding() {
+    let view = DataView::new(["abcd e", "next"], |value| *value)
+        .columns([
+            Column::multiline("first", "", Constraint::Length(5), |value: &&str, _| {
+                Text::from(*value)
+            })
+            .constrained(),
+            Column::multiline("second", "", Constraint::Length(5), |_, _| Text::default()),
+        ])
+        .wrap_cells();
+    let area = Rect::new(0, 0, 11, 3);
+    let geometry = view.scroll_geometry(area);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(geometry.content.height, 3);
+    assert_eq!(
+        terminal.backend().buffer().cell((2, 1)).unwrap().symbol(),
+        "e"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 2)).unwrap().symbol(),
+        "n"
+    );
+}
+
+#[test]
+fn horizontal_clipping_uses_the_unclipped_wrapped_cell_width() {
+    let mut view = DataView::new(["ab cd", "next"], |value| *value)
+        .columns([
+            Column::multiline("first", "", Constraint::Length(5), |value: &&str, _| {
+                Text::from(*value)
+            })
+            .constrained(),
+            Column::multiline("second", "", Constraint::Length(5), |_, _| Text::default()),
+        ])
+        .wrap_cells();
+    let area = Rect::new(0, 0, 8, 3);
+    let geometry = view.scroll_geometry(area);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    view.scroll.scroll_to(
+        ScrollOffset::new(2, 0),
+        geometry.viewport,
+        geometry.content,
+        settings,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(geometry.content.height, 2);
+    assert_eq!(
+        terminal.backend().buffer().cell((1, 0)).unwrap().symbol(),
+        "c"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        "x"
+    );
+}
+
+#[test]
 fn partially_top_clipped_row_renders_its_continuation_line() {
     let mut view = DataView::new([1, 2], |row| *row)
         .column(Column::multiline(
@@ -1046,6 +1154,97 @@ fn render_measures_each_visible_cell_once_per_pass() {
         .expect("data view should render");
 
     assert_eq!(calls.get(), 4);
+}
+
+#[test]
+fn line_navigation_and_rendering_measure_cells_linearly() {
+    const ROWS: usize = 128;
+    const VIEWPORT_HEIGHT: u16 = 5;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new(0..ROWS, |row| *row).column(Column::rich(
+        "value",
+        "",
+        Constraint::Fill(1),
+        move |row: &usize, _| {
+            renderer_calls.set(renderer_calls.get() + 1);
+            Line::from(row.to_string())
+        },
+    ));
+    let area = Rect::new(0, 0, 32, VIEWPORT_HEIGHT);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+
+    view.on_key_with_settings(Key::Down, area, settings);
+    assert_eq!(calls.get(), ROWS);
+
+    calls.set(0);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(calls.get(), ROWS + usize::from(VIEWPORT_HEIGHT));
+}
+
+#[test]
+fn multi_select_width_measurement_accesses_source_rows_linearly() {
+    fn measured_row_id_calls(rows: usize) -> usize {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let row_id_calls = calls.clone();
+        let view = DataView::new(0..rows, move |row| {
+            row_id_calls.set(row_id_calls.get() + 1);
+            *row
+        })
+        .column(Column::text(
+            "value",
+            "",
+            Constraint::Fill(1),
+            |row: &usize| row.to_string(),
+        ))
+        .selection_mode(SelectionMode::Multi)
+        .selection_disabled_by(|row| row % 2 == 0);
+
+        let _ = view.rendered_column_widths();
+        calls.get()
+    }
+
+    let small = measured_row_id_calls(64);
+    let large = measured_row_id_calls(128);
+
+    assert!(large <= small * 3, "small={small}, large={large}");
+}
+
+#[test]
+fn wrapped_line_navigation_measures_cells_a_fixed_number_of_times() {
+    const ROWS: usize = 32;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new(0..ROWS, |row| *row)
+        .column(
+            Column::rich(
+                "value",
+                "",
+                Constraint::Percentage(100),
+                move |row: &usize, _| {
+                    renderer_calls.set(renderer_calls.get() + 1);
+                    Line::from(format!("row {row} wraps across this narrow cell"))
+                },
+            )
+            .constrained(),
+        )
+        .wrap_cells();
+    let area = Rect::new(0, 0, 12, 5);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+
+    view.on_key_with_settings(Key::Down, area, settings);
+
+    assert_eq!(calls.get(), ROWS * 5);
 }
 
 #[test]
@@ -1588,6 +1787,20 @@ fn tree_selection_placeholder_sizes_and_scrolls_its_first_cell() {
 }
 
 #[test]
+fn center_selection_placeholder_centers_the_moving_row() {
+    let mut view = DataView::list(0..20, |id| *id, |id| id.to_string()).headers(false);
+    view.set_selection_overlay(vec![15], Some(SelectionOverlayPosition::After(15)), 0, true);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+
+    view.center_selection_placeholder(Rect::new(0, 0, 20, 5), settings);
+
+    assert_eq!(view.vertical_scroll_offset_for_test(), 14);
+}
+
+#[test]
 fn moving_placeholder_spans_visible_columns() {
     let mut view = DataView::new([Row::new(1, "A"), Row::new(2, "B")], |row| row.id)
         .headers(false)
@@ -1924,6 +2137,34 @@ fn default_plain_j_and_k_move_highlight_down_and_up() {
     assert_eq!(view.highlighted, 1);
     assert!(view.on_key(Key::Char('k'), area).changed);
     assert_eq!(view.highlighted, 0);
+}
+
+#[test]
+fn multi_select_j_and_k_route_through_tui_node_events() {
+    let area = Rect::new(0, 0, 10, 3);
+    let mut view = DataView::list([1, 2, 3], |row| *row, |row| row.to_string())
+        .selection_mode(SelectionMode::Multi)
+        .selection_trigger(SelectionTrigger::OnNavigate);
+    view.set_focused(true);
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+
+    let down = <DataView<usize, usize> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('j'))),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(down, EventOutcome::Handled);
+    assert_eq!(view.highlighted_id(), Some(2));
+    assert_eq!(view.selected_ids(), vec![2]);
+
+    let up = <DataView<usize, usize> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('k'))),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(up, EventOutcome::Handled);
+    assert_eq!(view.highlighted_id(), Some(1));
+    assert_eq!(view.selected_ids(), vec![1, 2]);
 }
 
 #[test]

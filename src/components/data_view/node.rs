@@ -148,23 +148,27 @@ where
         let width = self.visible_column_count().max(1).min(u16::MAX as usize) as u16;
         let header = self.shows_headers() as u16;
         let action_bar = self.action_bar as u16;
-        let rows = self
-            .visible_row_geometry()
-            .total_height()
-            .min(u16::MAX as usize) as u16;
-        let base_height = action_bar
-            .saturating_add(header)
-            .saturating_add(rows)
-            .max(1);
         let proposed_width = match proposal.width {
             crate::AxisProposal::Unbounded => u16::MAX,
             crate::AxisProposal::AtMost(width) | crate::AxisProposal::Exact(width) => width,
         };
-        let mut height = base_height;
+        let rendered_widths = self.rendered_column_widths();
+        let mut height = action_bar
+            .saturating_add(header)
+            .saturating_add(
+                self.content_size(proposed_width as usize, &rendered_widths)
+                    .height
+                    .min(u16::MAX as usize) as u16,
+            )
+            .max(1);
         for _ in 0..3 {
             let area = Rect::new(0, 0, proposed_width, height);
             let body = self.body_area(area);
-            let geometry = self.scroll_geometry(area);
+            let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
+            let base_height = action_bar
+                .saturating_add(header)
+                .saturating_add(geometry.content.height.min(u16::MAX as usize) as u16)
+                .max(1);
             let next = base_height
                 .saturating_add(body.height.saturating_sub(geometry.layout.viewport.height));
             if next == height {

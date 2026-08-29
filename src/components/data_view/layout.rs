@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span, Text};
 
 use super::{
     CELL_RIGHT_PADDING, CellContext, Column, DataView, DataViewInteraction, DisplayRow,
@@ -153,19 +153,138 @@ where
         }
     }
 
-    fn content_size(&self, viewport_width: usize, rendered_widths: &[usize]) -> ScrollSize {
-        let width = self
-            .column_widths_with_rendered(viewport_width, rendered_widths)
-            .into_iter()
-            .sum();
-        ScrollSize::new(width, self.visible_row_geometry().total_height())
+    pub(super) fn content_size(
+        &self,
+        viewport_width: usize,
+        rendered_widths: &[usize],
+    ) -> ScrollSize {
+        let column_widths = self.column_widths_with_rendered(viewport_width, rendered_widths);
+        let width = column_widths.iter().sum();
+        ScrollSize::new(
+            width,
+            self.visible_row_geometry_for_viewport(&column_widths)
+                .total_height(),
+        )
     }
 
     pub(super) fn visible_row_geometry(&self) -> VisibleRowGeometry {
+        if !self.wrap_cells {
+            return self.configured_visible_row_geometry();
+        }
+        let rendered_widths = self.rendered_column_widths();
+        let geometry = self.scroll_geometry_with_rendered_widths(self.area, &rendered_widths);
+        let column_widths = self
+            .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
+        self.visible_row_geometry_for_viewport(&column_widths)
+    }
+
+    pub(super) fn scroll_geometry_and_row_geometry(
+        &self,
+        area: Rect,
+    ) -> (ScrollGeometry, VisibleRowGeometry) {
+        let rendered_widths = self.rendered_column_widths();
+        let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
+        let column_widths = self
+            .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
+        let rows = self.visible_row_geometry_for_viewport(&column_widths);
+        (geometry, rows)
+    }
+
+    pub(super) fn visible_row_geometry_for_viewport(
+        &self,
+        column_widths: &[usize],
+    ) -> VisibleRowGeometry {
+        if !self.wrap_cells {
+            return self.configured_visible_row_geometry();
+        }
+        let selection_descendants = self.selection_descendants_by_id();
+        let show_tree_gutter = self.shows_tree_gutter();
+        let highlighted_id = self.highlighted_id();
+        VisibleRowGeometry::new(self.display_rows().into_iter().map(|row| match row {
+            DisplayRow::Data(row) => self.wrapped_row_height(
+                &row,
+                column_widths,
+                &selection_descendants,
+                show_tree_gutter,
+                highlighted_id.as_ref(),
+            ),
+            DisplayRow::SelectionPlaceholder { .. } => self.row_height,
+        }))
+    }
+
+    fn configured_visible_row_geometry(&self) -> VisibleRowGeometry {
         VisibleRowGeometry::new(self.display_rows().into_iter().map(|row| match row {
             DisplayRow::Data(row) => self.row_height_for(row.row),
             DisplayRow::SelectionPlaceholder { .. } => self.row_height,
         }))
+    }
+
+    fn wrapped_row_height(
+        &self,
+        row: &VisibleRow<'_, T, Id>,
+        column_widths: &[usize],
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
+        highlighted_id: Option<&Id>,
+    ) -> u16 {
+        let minimum = self.row_height_for(row.row);
+        if !self.wrap_cells {
+            return minimum;
+        }
+        self.visible_columns()
+            .zip(column_widths)
+            .enumerate()
+            .map(|(index, (column, _width))| {
+                let text = (column.renderer)(
+                    row.row,
+                    &CellContext {
+                        row_id: row.id.clone(),
+                        column_id: column.id.clone(),
+                        depth: row.depth,
+                        has_children: row.has_children,
+                        expanded: row.expanded,
+                        highlighted: highlighted_id == Some(&row.id),
+                        focused: self.focused,
+                    },
+                );
+                let text = self.wrapped_cell_text(
+                    index,
+                    text,
+                    self.cell_content_width(index, column_widths),
+                    row,
+                    selection_descendants,
+                    show_tree_gutter,
+                );
+                wrapped_text_height(&text, self.cell_content_width(index, column_widths))
+            })
+            .max()
+            .unwrap_or(1)
+            .max(minimum)
+    }
+
+    pub(super) fn wrapped_cell_text(
+        &self,
+        column_index: usize,
+        mut text: Text<'static>,
+        width: u16,
+        row: &VisibleRow<'_, T, Id>,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
+    ) -> Text<'static> {
+        let continuation_indent = if column_index == 0 {
+            if show_tree_gutter || self.selection_mode == SelectionMode::Multi {
+                text = self.with_row_prefix(text, row, selection_descendants, show_tree_gutter);
+            }
+            self.row_prefix_width(row, selection_descendants, show_tree_gutter)
+                .saturating_add(2)
+        } else {
+            2
+        };
+        if self.wrap_cells {
+            wrap_text(text, width, continuation_indent)
+        } else {
+            text
+        }
     }
 
     pub(super) fn highlighted_row_area(&self) -> Rect {
@@ -226,6 +345,16 @@ where
                 }
             })
             .collect()
+    }
+
+    pub(super) fn cell_content_width(&self, index: usize, column_widths: &[usize]) -> u16 {
+        let padding = usize::from(index + 1 < column_widths.len()) * CELL_RIGHT_PADDING;
+        column_widths
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .saturating_sub(padding)
+            .min(u16::MAX as usize) as u16
     }
 
     fn configured_column_widths(&self, viewport_width: usize) -> Vec<usize> {
@@ -297,6 +426,7 @@ where
 
         let selection_descendants = self.selection_descendants_by_id();
         let show_tree_gutter = self.shows_tree_gutter();
+        let highlighted_id = self.highlighted_id();
         for row in self.display_rows() {
             match row {
                 DisplayRow::Data(row) => {
@@ -305,7 +435,7 @@ where
                             index,
                             column,
                             &row,
-                            self.highlighted_id().as_ref() == Some(&row.id),
+                            highlighted_id.as_ref() == Some(&row.id),
                             &selection_descendants,
                             show_tree_gutter,
                         ));
@@ -420,10 +550,14 @@ where
             width += line_width(&Line::from(format!("{glyph} ")));
         }
         if self.selection_mode == SelectionMode::Multi {
-            let glyph = if self.is_selection_disabled(&row.id) {
+            let glyph = if self.is_selection_disabled_for_row(row.row) {
                 self.selection_disabled_glyph
             } else {
-                self.selection_glyph_with_descendants(&row.id, selection_descendants)
+                self.selection_glyph_for_row_with_descendants(
+                    row.row,
+                    &row.id,
+                    selection_descendants,
+                )
             };
             width += line_width(&Line::from(format!("{glyph} ")));
         }
@@ -442,4 +576,85 @@ where
             })
             .unwrap_or(0)
     }
+}
+
+fn wrapped_text_height(text: &ratatui::text::Text<'_>, width: u16) -> u16 {
+    let _ = width;
+    text.lines.len().max(1).min(u16::MAX as usize) as u16
+}
+
+fn wrap_text(text: Text<'static>, width: u16, continuation_indent: usize) -> Text<'static> {
+    let style = text.style;
+    let lines: Vec<_> = text
+        .lines
+        .into_iter()
+        .flat_map(|line| wrap_line(line, width, continuation_indent))
+        .collect();
+    let mut wrapped = Text::from(lines);
+    wrapped.style = style;
+    wrapped
+}
+
+fn wrap_line(line: Line<'static>, width: u16, continuation_indent: usize) -> Vec<Line<'static>> {
+    let width = usize::from(width.max(1));
+    let line_style = line.style;
+    let alignment = line.alignment;
+    let original = line.clone();
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut pending_whitespace = Vec::new();
+    let mut used_width = 0usize;
+    let mut has_content = false;
+
+    for span in line.spans {
+        for token in span.content.split_inclusive(char::is_whitespace) {
+            let token_width = line_width(&Line::from(token));
+            let whitespace = token.chars().all(char::is_whitespace);
+            if whitespace {
+                if has_content {
+                    pending_whitespace.push(Span::styled(token.to_owned(), span.style));
+                } else {
+                    spans.push(Span::styled(token.to_owned(), span.style));
+                    used_width = used_width.saturating_add(token_width);
+                }
+                continue;
+            }
+
+            let pending_width = pending_whitespace
+                .iter()
+                .map(|span| line_width(&Line::from(span.clone())))
+                .sum::<usize>();
+            if has_content
+                && used_width
+                    .saturating_add(pending_width)
+                    .saturating_add(token_width)
+                    > width
+            {
+                lines.push(Line {
+                    spans,
+                    style: line_style,
+                    alignment,
+                });
+                spans = vec![Span::raw(" ".repeat(continuation_indent))];
+                used_width = continuation_indent;
+                pending_whitespace.clear();
+            } else {
+                used_width = used_width.saturating_add(pending_width);
+                spans.append(&mut pending_whitespace);
+            }
+            spans.push(Span::styled(token.to_owned(), span.style));
+            used_width = used_width.saturating_add(token_width);
+            has_content = true;
+        }
+    }
+
+    if !has_content {
+        return vec![original];
+    }
+    lines.push(Line {
+        spans,
+        style: line_style,
+        alignment,
+    });
+    lines
 }

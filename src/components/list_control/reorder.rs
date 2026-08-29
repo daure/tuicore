@@ -445,8 +445,7 @@ where
         self.data_view.reposition_highlight_silently(&destination);
         let mut settings = ctx.animation();
         settings.enabled = false;
-        self.data_view
-            .ensure_highlight_visible(self.data_area, settings);
+        self.data_view.center_highlight(self.data_area, settings);
         ctx.request_redraw();
         ctx.stop_propagation();
         Some(EventOutcome::Handled)
@@ -522,31 +521,40 @@ where
             self.clear_flat_range_selection();
             return false;
         }
-        let visual_target_index = snapshot
-            .ids
-            .iter()
-            .rposition(|id| id == selected.last().expect("selected block is not empty"))
-            .map(|index| index + 1)
-            .expect("selected row exists in reorder snapshot");
-        let target_index = snapshot.ids[..visual_target_index]
-            .iter()
-            .filter(|id| !selected.contains(id))
-            .count();
         let Some(highlighted_id) = self.data_view.highlighted_id() else {
             self.clear_flat_range_selection();
             return false;
         };
+        let placement_id = if selection.range_mode {
+            highlighted_id.clone()
+        } else {
+            selection.anchor.clone()
+        };
+        let placement_index = snapshot
+            .ids
+            .iter()
+            .position(|id| id == &placement_id)
+            .expect("selection placement row exists in reorder snapshot");
+        let placement_is_first_selected = selected.first() == Some(&placement_id);
+        let visual_target_index = placement_index + usize::from(!placement_is_first_selected);
+        let target_index = snapshot.ids[..visual_target_index]
+            .iter()
+            .filter(|id| !selected.contains(id))
+            .count();
         self.data_view.set_selection_overlay(
             selected.clone(),
-            Some(SelectionOverlayPosition::After(
-                selected
-                    .last()
-                    .expect("selected block is not empty")
-                    .clone(),
-            )),
+            Some(if placement_is_first_selected {
+                SelectionOverlayPosition::Before(placement_id)
+            } else {
+                SelectionOverlayPosition::After(placement_id)
+            }),
             0,
             true,
         );
+        let selected_highlight_id = selected
+            .last()
+            .expect("selected block is not empty")
+            .clone();
         self.flat_block_move = Some(FlatBlockMoveState {
             snapshot,
             scroll_snapshot: self.data_view.scroll_snapshot(),
@@ -556,6 +564,8 @@ where
             highlighted_id,
             pending_g: false,
         });
+        self.data_view
+            .reposition_highlight_silently(&selected_highlight_id);
         self.position_flat_block_placeholder(settings);
         true
     }
@@ -752,7 +762,7 @@ where
     fn position_flat_block_placeholder(&mut self, mut settings: crate::AnimationSettings) {
         settings.enabled = false;
         self.data_view
-            .ensure_selection_placeholder_visible(self.data_area, settings);
+            .center_selection_placeholder(self.data_area, settings);
     }
 
     fn flat_block_staged_ids(&self, state: &FlatBlockMoveState<Id>) -> Vec<Id> {
@@ -801,6 +811,8 @@ where
         };
         self.clear_flat_range_selection();
         self.data_view
+            .reposition_highlight_silently(&state.highlighted_id);
+        self.data_view
             .restore_scroll(state.scroll_snapshot, self.data_area, settings);
         self.events.push(ListControlEvent::ReorderCancelled {
             row_id: state.highlighted_id,
@@ -812,6 +824,8 @@ where
             return;
         };
         self.clear_flat_range_selection();
+        self.data_view
+            .reposition_highlight_silently(&state.highlighted_id);
         self.data_view
             .restore_scroll(state.scroll_snapshot, self.data_area, settings);
         self.events.push(ListControlEvent::ReorderUnavailable {
@@ -1157,7 +1171,7 @@ where
     fn position_tree_block_placeholder(&mut self, mut settings: crate::AnimationSettings) {
         settings.enabled = false;
         self.data_view
-            .ensure_selection_placeholder_visible(self.data_area, settings);
+            .center_selection_placeholder(self.data_area, settings);
     }
 
     fn commit_tree_block_move(&mut self, settings: crate::AnimationSettings) {

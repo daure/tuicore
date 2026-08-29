@@ -794,6 +794,74 @@ fn flat_shift_range_selection_survives_only_shift_line_extension() {
 }
 
 #[test]
+fn flat_modified_line_selection_scrolls_highlight_into_view() {
+    for (key, start, expected_highlight, expected_offset, rendered_rank) in [
+        (
+            modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+            0,
+            4,
+            3,
+            "3",
+        ),
+        (
+            modified_key(Key::Char('j'), KeyModifiers::CONTROL),
+            0,
+            4,
+            3,
+            "3",
+        ),
+        (
+            modified_key(Key::Char('k'), KeyModifiers::SHIFT),
+            7,
+            3,
+            2,
+            "2",
+        ),
+        (
+            modified_key(Key::Char('k'), KeyModifiers::CONTROL),
+            7,
+            3,
+            2,
+            "2",
+        ),
+    ] {
+        let mut control = ranked_control(ranked_rows(8));
+        control.layout(Rect::new(0, 0, 20, 5), &mut LayoutCtx::new());
+        control.data_view.highlight_id(&start);
+        let mut settings = AnimationSettings::default();
+        settings.enabled = false;
+        let mut ctx = EventCtx::new(settings);
+        let route = EventRoute::new(TreePath::from_keys([ChildKey::new(DATA_SLOT)]));
+
+        for _ in 0..4 {
+            assert_eq!(
+                control.dispatch_event(&route, &TuiEvent::Key(key), &mut ctx),
+                EventOutcome::Handled
+            );
+        }
+
+        assert_eq!(control.data_view.highlighted_id(), Some(expected_highlight));
+        assert_eq!(
+            control.data_view.scroll_animation_state_for_test(),
+            (
+                ScrollOffset::new(0, expected_offset),
+                ScrollOffset::new(0, expected_offset),
+                false
+            )
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(20, 5)).expect("terminal should build");
+        terminal
+            .draw(|frame| control.data_view().render(frame, control.data_area))
+            .expect("data view should render");
+        assert_eq!(
+            terminal.backend().buffer().cell((1, 1)).unwrap().symbol(),
+            rendered_rank
+        );
+    }
+}
+
+#[test]
 fn flat_range_selection_survives_focus_loss_and_gain() {
     let mut control = table(4);
     control.data_view.highlight_id(&1);
@@ -1071,7 +1139,10 @@ fn routed_plain_navigation_clears_sparse_ctrl_selection() {
         );
 
         assert!(control.transient_selected_ids().is_empty());
-        assert_eq!(control.data_view().highlighted_id(), Some(expected_highlight));
+        assert_eq!(
+            control.data_view().highlighted_id(),
+            Some(expected_highlight)
+        );
         assert!(!control.data_view().selection_overlay_active_for_test());
     }
 }
@@ -1231,7 +1302,7 @@ fn start_flat_block_move_with_selection(
 ) {
     control.flat_range_selection = Some(FlatRangeSelectionState {
         selected: selected.clone(),
-        anchor: selected[0],
+        anchor: *selected.last().expect("selection is not empty"),
         range_mode: false,
     });
     control
@@ -1291,6 +1362,88 @@ fn flat_range_ctrl_m_starts_block_move_instead_of_single_reorder() {
         control.data_view.selection_placeholder_depth_for_test(),
         Some(0)
     );
+}
+
+#[test]
+fn flat_block_move_centers_the_pseudo_row_after_target_navigation() {
+    let mut control = ranked_control(ranked_rows(12));
+    control.layout(Rect::new(0, 0, 30, 7), &mut LayoutCtx::new());
+    control.data_view.highlight_id(&5);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut ctx = EventCtx::new(settings);
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(control.data_view.vertical_scroll_offset_for_test(), 5);
+
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+
+    assert_eq!(control.data_view.vertical_scroll_offset_for_test(), 6);
+}
+
+#[test]
+fn flat_block_move_starts_after_downward_shift_range_highlight() {
+    let mut control = ranked_control(ranked_rows(6));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_flat_block_boundary(&control, 4, 1);
+}
+
+#[test]
+fn flat_block_move_starts_before_upward_shift_range_highlight() {
+    let mut control = ranked_control(ranked_rows(6));
+    control.data_view.highlight_id(&3);
+    let mut ctx = EventCtx::default();
+    control.handle_flat_range_selection_key(modified_key(Key::Up, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_flat_range_selection_key(modified_key(Key::Up, KeyModifiers::SHIFT), &mut ctx);
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_flat_block_boundary(&control, 1, 1);
+}
+
+#[test]
+fn flat_block_move_starts_after_last_sparse_ctrl_selection() {
+    let mut control = ranked_control(ranked_rows(6));
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control
+        .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+    control.handle_flat_range_selection_key(modified_key(Key::Up, KeyModifiers::CONTROL), &mut ctx);
+    control.handle_flat_range_selection_key(
+        modified_key(Key::Char(' '), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_flat_block_boundary(&control, 3, 1);
 }
 
 #[test]
@@ -1428,7 +1581,7 @@ fn flat_block_move_steps_through_sparse_selected_source_rows() {
     let mut control = ranked_control(ranked_rows(6)).headers(false);
     control.flat_range_selection = Some(FlatRangeSelectionState {
         selected: vec![0, 2, 4],
-        anchor: 0,
+        anchor: 4,
         range_mode: false,
     });
     control
@@ -1620,6 +1773,18 @@ fn flat_block_move_cancel_keeps_rows_unchanged() {
         control.take_events(),
         vec![ListControlEvent::ReorderCancelled { row_id: 2 }]
     );
+}
+
+#[test]
+fn flat_block_move_uses_selected_highlight_and_restores_unselected_highlight_on_cancel() {
+    let mut control = ranked_control(ranked_rows(6));
+    start_flat_block_move_with_selection(&mut control, vec![1, 3, 5], 2);
+
+    assert_eq!(control.data_view.highlighted_id(), Some(5));
+
+    control.handle_reorder_key(KeyEvent::from(Key::Esc), &mut EventCtx::default());
+
+    assert_eq!(control.data_view.highlighted_id(), Some(2));
 }
 
 #[test]
@@ -2221,6 +2386,29 @@ fn block_move_start_does_not_start_single_row_reorder() {
     assert!(control.tree_block_move.is_some());
     assert!(control.tree_reorder.is_none());
     assert!(control.reorder.is_none());
+}
+
+#[test]
+fn tree_block_move_centers_the_pseudo_row_after_target_navigation() {
+    let mut control = mutable_tree_control((0..12).map(|id| TreeRow { id, parent: None }));
+    control.layout(Rect::new(0, 0, 30, 7), &mut LayoutCtx::new());
+    control.data_view.highlight_id(&5);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut ctx = EventCtx::new(settings);
+    control.handle_tree_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    assert_eq!(control.data_view.vertical_scroll_offset_for_test(), 5);
+
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+
+    assert_eq!(control.data_view.vertical_scroll_offset_for_test(), 6);
 }
 
 #[test]

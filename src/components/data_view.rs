@@ -84,6 +84,7 @@ pub struct DataView<T, Id> {
     headers: bool,
     row_height: u16,
     row_height_by: Option<Box<RowHeightFn<T>>>,
+    wrap_cells: bool,
     row_style_by: Option<Box<RowStyleFn<T>>>,
     scroll: ScrollState,
     vertical_scroll: DataViewVerticalScroll,
@@ -184,6 +185,7 @@ where
             headers: false,
             row_height: 1,
             row_height_by: None,
+            wrap_cells: false,
             row_style_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             vertical_scroll: DataViewVerticalScroll::Local,
@@ -300,6 +302,16 @@ where
     /// Replaces the current per-row height policy. Returned zero heights are clamped to one.
     pub fn set_row_height_by(&mut self, row_height: impl Fn(&T) -> u16 + 'static) {
         self.row_height_by = Some(Box::new(row_height));
+    }
+
+    /// Wraps cell text to the available column width and grows rows to keep every line visible.
+    pub fn wrap_cells(mut self) -> Self {
+        self.set_wrap_cells(true);
+        self
+    }
+
+    pub fn set_wrap_cells(&mut self, wrap_cells: bool) {
+        self.wrap_cells = wrap_cells;
     }
 
     /// Sets a per-row style policy.
@@ -1366,7 +1378,6 @@ where
         if !matches!(self.interaction, DataViewInteraction::Grid) {
             return self.on_interaction_key(key, area, settings);
         }
-        let page = self.visible_page_step(area);
         let data_keys = keys.data_view();
         if !self.transform_state.search.is_empty() && keys.focus().unfocus_matches(key) {
             self.pending_g = false;
@@ -1409,14 +1420,16 @@ where
         } else if keys.page_up_matches(key) {
             self.pending_g = false;
             self.highlight_centered_with_settings(
-                self.highlighted.saturating_sub(page),
+                self.highlighted
+                    .saturating_sub(self.visible_page_step(area)),
                 area,
                 settings,
             )
         } else if keys.page_down_matches(key) {
             self.pending_g = false;
             self.highlight_centered_with_settings(
-                self.highlighted.saturating_add(page),
+                self.highlighted
+                    .saturating_add(self.visible_page_step(area)),
                 area,
                 settings,
             )
@@ -1837,10 +1850,11 @@ where
     }
 
     pub(crate) fn visible_page_step(&self, area: Rect) -> usize {
-        let height = self.scroll_geometry(area).viewport.height.max(1);
-        let viewport_capacity = self
-            .visible_row_geometry()
-            .capacity(self.scroll.target_offset().y, height);
+        let (geometry, rows) = self.scroll_geometry_and_row_geometry(area);
+        let viewport_capacity = rows.capacity(
+            self.scroll.target_offset().y,
+            geometry.viewport.height.max(1),
+        );
         let basis = self.visible_len().min(viewport_capacity);
         ((basis.saturating_mul(3)).saturating_add(4) / 5).max(1)
     }
@@ -1860,10 +1874,9 @@ where
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
-        let geometry = self.scroll_geometry(area);
+        let (geometry, rows) = self.scroll_geometry_and_row_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
         let current = self.scroll.target_offset().y;
-        let rows = self.visible_row_geometry();
         let (row_start, row_end) = rows.span(self.highlighted).unwrap_or((0, 0));
         let row_height = row_end.saturating_sub(row_start);
         let target = if row_height >= viewport_height {
@@ -1888,7 +1901,7 @@ where
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
-        let geometry = self.scroll_geometry(area);
+        let (geometry, rows) = self.scroll_geometry_and_row_geometry(area);
         let Some(index) = self
             .display_rows()
             .iter()
@@ -1896,7 +1909,6 @@ where
         else {
             return ScrollOutcome::idle();
         };
-        let rows = self.visible_row_geometry();
         let (start, end) = rows.span(index).unwrap_or((0, 0));
         let viewport = geometry.viewport.height.max(1);
         let current = self.scroll.target_offset().y;
@@ -1915,14 +1927,38 @@ where
         )
     }
 
+    pub(crate) fn center_selection_placeholder(
+        &mut self,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> ScrollOutcome {
+        let (geometry, rows) = self.scroll_geometry_and_row_geometry(area);
+        let Some(index) = self
+            .display_rows()
+            .iter()
+            .position(|row| matches!(row, DisplayRow::SelectionPlaceholder { .. }))
+        else {
+            return ScrollOutcome::idle();
+        };
+        let (start, end) = rows.span(index).unwrap_or((0, 0));
+        let height = end.saturating_sub(start);
+        let viewport = geometry.viewport.height.max(1);
+        let target = start.saturating_sub(viewport.saturating_sub(height) / 2);
+        self.scroll.scroll_to(
+            ScrollOffset::new(self.scroll.target_offset().x, target),
+            geometry.viewport,
+            geometry.content,
+            settings,
+        )
+    }
+
     pub(crate) fn center_highlight(
         &mut self,
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
-        let geometry = self.scroll_geometry(area);
+        let (geometry, rows) = self.scroll_geometry_and_row_geometry(area);
         let viewport_height = geometry.viewport.height.max(1);
-        let rows = self.visible_row_geometry();
         let (row_start, row_end) = rows.span(self.highlighted).unwrap_or((0, 0));
         let row_height = row_end.saturating_sub(row_start);
         let target = row_start.saturating_sub(viewport_height.saturating_sub(row_height) / 2);

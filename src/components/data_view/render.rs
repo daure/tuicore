@@ -97,6 +97,7 @@ where
             .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
         let selection_descendants = self.selection_descendants_by_id();
         let show_tree_gutter = self.shows_tree_gutter();
+        let highlighted_id = self.highlighted_id();
 
         if self.shows_headers() {
             let header_viewport = Rect::new(
@@ -117,7 +118,7 @@ where
         }
 
         let last_line = offset.y.saturating_add(geometry.viewport.height);
-        let row_geometry = self.visible_row_geometry();
+        let row_geometry = self.visible_row_geometry_for_viewport(&column_widths);
         for (line_index, row_start, row_end) in row_geometry.intersecting(offset.y, last_line) {
             let row = &visible[line_index];
             let clipped_start = row_start.max(offset.y);
@@ -132,7 +133,8 @@ where
                 geometry.layout.viewport.width,
                 clipped_end.saturating_sub(clipped_start) as u16,
             );
-            let highlighted = matches!(row, DisplayRow::Data(row) if self.highlighted_id().as_ref() == Some(&row.id));
+            let highlighted =
+                matches!(row, DisplayRow::Data(row) if highlighted_id.as_ref() == Some(&row.id));
             let row_style = match row {
                 DisplayRow::Data(row) => {
                     self.row_style(highlighted, row, &selection_descendants, base_row_style)
@@ -292,7 +294,7 @@ where
             let Some(cell_area) = cell_area else {
                 continue;
             };
-            let mut text = (column.renderer)(
+            let text = (column.renderer)(
                 row.row,
                 &CellContext {
                     row_id: row.id.clone(),
@@ -304,9 +306,14 @@ where
                     focused: self.focused,
                 },
             );
-            if column_index == 0 && (show_tree_gutter || self.displays_selection_glyphs()) {
-                text = self.with_row_prefix(text, row, selection_descendants, show_tree_gutter);
-            }
+            let mut text = self.wrapped_cell_text(
+                column_index,
+                text,
+                self.cell_content_width(column_index, column_widths),
+                row,
+                selection_descendants,
+                show_tree_gutter,
+            );
             text.lines = text
                 .lines
                 .into_iter()
@@ -319,7 +326,7 @@ where
                 })
                 .collect();
             if (self.row_has_reorder_highlight(&row.id) || highlighted && self.focused)
-                && !self.is_selection_disabled(&row.id)
+                && !self.is_selection_disabled_for_row(row.row)
             {
                 if let Some(foreground) = row_style.and_then(|style| style.fg) {
                     for line in &mut text.lines {
@@ -373,7 +380,7 @@ where
         frame.render_widget(paragraph, placeholder_area);
     }
 
-    fn with_row_prefix(
+    pub(super) fn with_row_prefix(
         &self,
         mut text: Text<'static>,
         row: &VisibleRow<'_, T, Id>,
@@ -402,8 +409,9 @@ where
             }
         }
         if self.displays_selection_glyphs() {
-            let disabled = self.is_selection_disabled(&row.id);
-            let check_state = self.check_state_with_descendants(&row.id, selection_descendants);
+            let disabled = self.is_selection_disabled_for_row(row.row);
+            let check_state =
+                self.check_state_for_row_with_descendants(row.row, &row.id, selection_descendants);
             let glyph = if disabled {
                 self.selection_disabled_glyph
             } else {
@@ -465,7 +473,7 @@ where
     #[cfg(test)]
     pub(super) fn selection_glyph(&self, row: &VisibleRow<'_, T, Id>) -> &'static str {
         let descendants = self.selection_descendants_by_id();
-        self.selection_glyph_with_descendants(&row.id, &descendants)
+        self.selection_glyph_for_row_with_descendants(row.row, &row.id, &descendants)
     }
 
     fn row_style(
