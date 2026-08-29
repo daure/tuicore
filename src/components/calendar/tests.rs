@@ -1077,6 +1077,42 @@ fn clearing_transient_selection_retains_highlight() {
 }
 
 #[test]
+fn shift_j_then_escape_clears_transient_selection_and_keeps_destination_highlight() {
+    let day = date(2026, Month::June, 22);
+    let mut calendar = demo_calendar()
+        .today(day)
+        .view(CalendarView::Day)
+        .reorderable(|_, _| true);
+    let mut ctx = EventCtx::default();
+
+    assert_eq!(
+        calendar.event(
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::SHIFT,
+            }),
+            &mut ctx,
+        ),
+        EventOutcome::Handled
+    );
+    assert_eq!(
+        calendar.transient_selected_ids(),
+        vec!["standup", "planning"]
+    );
+    assert_eq!(calendar.highlighted_entry_id(), Some("planning"));
+    assert!(calendar.day_entries.selection_overlay_active_for_test());
+
+    assert_eq!(
+        calendar.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut ctx),
+        EventOutcome::Handled
+    );
+
+    assert!(calendar.transient_selected_ids().is_empty());
+    assert_eq!(calendar.highlighted_entry_id(), Some("planning"));
+    assert!(!calendar.day_entries.selection_overlay_active_for_test());
+}
+
+#[test]
 fn highlighting_entry_id_replaces_only_a_valid_highlight() {
     let mut calendar = demo_calendar().view(CalendarView::Day);
 

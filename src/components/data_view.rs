@@ -924,6 +924,21 @@ where
         true
     }
 
+    pub(crate) fn reconcile_selection_to_highlight_on_navigate(&mut self) {
+        if self.selection_mode != SelectionMode::Single
+            || self.selection_trigger != SelectionTrigger::OnNavigate
+        {
+            return;
+        }
+        let Some(id) = self.highlighted_id() else {
+            return;
+        };
+        if self.is_selection_disabled(&id) {
+            return;
+        }
+        self.selected = [id].into_iter().collect();
+    }
+
     pub(crate) fn start_reorder_highlight(&mut self, id: Id, settings: AnimationSettings) {
         let theme = crate::theme();
         self.start_reorder_highlight_with_colors(

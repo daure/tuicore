@@ -170,6 +170,8 @@ where
         {
             if self.tree_selection.is_some() {
                 self.clear_tree_selection();
+                self.data_view
+                    .reconcile_selection_to_highlight_on_navigate();
                 ctx.request_redraw();
                 ctx.stop_propagation();
                 return Some(EventOutcome::Handled);
@@ -366,6 +368,8 @@ where
         {
             if self.flat_range_selection.is_some() {
                 self.clear_flat_range_selection();
+                self.data_view
+                    .reconcile_selection_to_highlight_on_navigate();
                 ctx.request_redraw();
                 ctx.stop_propagation();
                 return Some(EventOutcome::Handled);
@@ -580,6 +584,9 @@ where
     fn handle_flat_block_move_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) {
         if !self.flat_block_move_is_compatible() {
             self.reject_changed_flat_block_move(ctx.animation());
+        } else if key.is_repeat() {
+            ctx.stop_propagation();
+            return;
         } else if key.code == Key::Enter && key.modifiers == KeyModifiers::NONE {
             self.commit_flat_block_move(ctx.animation());
         } else if matches!(key.code, Key::Esc)
@@ -628,19 +635,12 @@ where
         let Some(state) = self.flat_block_move.as_ref() else {
             return;
         };
-        let visual_target_index = state.visual_target_index.unwrap_or_else(|| {
-            state
-                .snapshot
-                .ids
-                .iter()
-                .filter(|id| !state.selected.contains(id))
-                .nth(state.target_index)
-                .and_then(|target| state.snapshot.ids.iter().position(|id| id == target))
-                .unwrap_or(state.snapshot.ids.len())
-        });
-        let visual_target_index = visual_target_index
-            .saturating_add_signed(delta)
-            .min(state.snapshot.ids.len());
+        let visual_target_index = move_block_visual_boundary(
+            &state.snapshot.ids,
+            &state.selected,
+            Self::flat_block_visual_target_index(state),
+            delta,
+        );
         let target_index = state.snapshot.ids[..visual_target_index]
             .iter()
             .filter(|id| !state.selected.contains(id))
@@ -651,6 +651,19 @@ where
             .expect("flat block move is active");
         state.visual_target_index = Some(visual_target_index);
         state.target_index = target_index;
+    }
+
+    fn flat_block_visual_target_index(state: &FlatBlockMoveState<Id>) -> usize {
+        state.visual_target_index.unwrap_or_else(|| {
+            state
+                .snapshot
+                .ids
+                .iter()
+                .filter(|id| !state.selected.contains(id))
+                .nth(state.target_index)
+                .and_then(|target| state.snapshot.ids.iter().position(|id| id == target))
+                .unwrap_or(state.snapshot.ids.len())
+        })
     }
 
     fn set_flat_block_target(&mut self, target_index: usize) {
@@ -668,6 +681,19 @@ where
     }
 
     fn handle_flat_block_target_key(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers == KeyModifiers::NONE {
+            match key.code {
+                Key::Char('k') | Key::Up => {
+                    self.move_flat_block_target_line(-1);
+                    return true;
+                }
+                Key::Char('j') | Key::Down => {
+                    self.move_flat_block_target_line(1);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         let keys = crate::keybindings();
         let top_prefix = keys.data_view().top_prefix_matches(key);
         if !top_prefix {
@@ -676,11 +702,7 @@ where
                 .expect("flat block move is active")
                 .pending_g = false;
         }
-        if let Some(delta) =
-            self.tree_selection_direction(key, key.modifiers == KeyModifiers::CONTROL)
-        {
-            self.move_flat_block_target_line(delta);
-        } else if keys.page_up_matches(key) {
+        if keys.page_up_matches(key) {
             self.move_flat_block_target(
                 -(self.data_view.visible_page_step(self.data_area) as isize),
             );
@@ -877,6 +899,9 @@ where
     fn handle_tree_block_move_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) {
         if !self.tree_block_move_is_compatible() {
             self.reject_changed_tree_block_move(ctx.animation());
+        } else if key.is_repeat() {
+            ctx.stop_propagation();
+            return;
         } else if key.code == Key::Enter && key.modifiers == KeyModifiers::NONE {
             self.commit_tree_block_move(ctx.animation());
         } else if matches!(key.code, Key::Esc)
@@ -948,9 +973,12 @@ where
                 .and_then(|target| siblings.iter().position(|id| id == target))
                 .unwrap_or(siblings.len())
         });
-        let visual_sibling_index = visual_sibling_index
-            .saturating_add_signed(delta)
-            .min(siblings.len());
+        let visual_sibling_index = move_block_visual_boundary(
+            &siblings,
+            &state.selected,
+            visual_sibling_index,
+            delta,
+        );
         let sibling_index = siblings[..visual_sibling_index]
             .iter()
             .filter(|id| !state.selected.contains(id))
@@ -978,6 +1006,19 @@ where
     }
 
     fn handle_tree_block_target_key(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers == KeyModifiers::NONE {
+            match key.code {
+                Key::Char('k') | Key::Up => {
+                    self.move_tree_block_target_line(-1);
+                    return true;
+                }
+                Key::Char('j') | Key::Down => {
+                    self.move_tree_block_target_line(1);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         let keys = crate::keybindings();
         let top_prefix = keys.data_view().top_prefix_matches(key);
         if !top_prefix {
@@ -986,11 +1027,7 @@ where
                 .expect("tree block move is active")
                 .pending_g = false;
         }
-        if let Some(delta) =
-            self.tree_selection_direction(key, key.modifiers == KeyModifiers::CONTROL)
-        {
-            self.move_tree_block_target_line(delta);
-        } else if keys.page_up_matches(key) {
+        if keys.page_up_matches(key) {
             self.move_tree_block_target(
                 -(self.data_view.visible_page_step(self.data_area) as isize),
             );
@@ -1540,6 +1577,40 @@ where
             reason: ListControlReorderUnavailable::DataChanged,
         });
     }
+}
+
+fn move_block_visual_boundary<Id: Eq>(
+    ids: &[Id],
+    selected: &[Id],
+    boundary: usize,
+    delta: isize,
+) -> usize {
+    let mut boundary = boundary.min(ids.len());
+    if delta < 0 {
+        if boundary == 0 {
+            return boundary;
+        }
+        if selected.contains(&ids[boundary - 1]) {
+            boundary -= 1;
+            while boundary > 0 && selected.contains(&ids[boundary - 1]) {
+                boundary -= 1;
+            }
+        } else {
+            boundary -= 1;
+        }
+    } else if delta > 0 {
+        if boundary == ids.len() {
+            return boundary;
+        }
+        if selected.contains(&ids[boundary]) {
+            while boundary < ids.len() && selected.contains(&ids[boundary]) {
+                boundary += 1;
+            }
+        } else {
+            boundary += 1;
+        }
+    }
+    boundary
 }
 
 fn unavailable_reason(reason: ReorderUnavailableReason) -> ListControlReorderUnavailable {

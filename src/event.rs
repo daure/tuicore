@@ -112,6 +112,8 @@ impl KeyModifiers {
     pub const SHIFT: Self = Self(0b0000_0001);
     pub const CONTROL: Self = Self(0b0000_0010);
     pub const ALT: Self = Self(0b0000_0100);
+    const REPEAT: Self = Self(0b1000_0000);
+    const USER_MASK: u8 = Self::SHIFT.0 | Self::CONTROL.0 | Self::ALT.0;
 
     pub const fn empty() -> Self {
         Self::NONE
@@ -132,6 +134,16 @@ impl KeyModifiers {
     pub fn remove(&mut self, other: Self) {
         self.0 &= !other.0;
     }
+
+    pub(crate) const fn user_modifiers(self) -> Self {
+        Self(self.0 & Self::USER_MASK)
+    }
+}
+
+impl KeyEvent {
+    pub const fn is_repeat(self) -> bool {
+        (self.modifiers.0 & KeyModifiers::REPEAT.0) != 0
+    }
 }
 
 impl From<Key> for KeyEvent {
@@ -145,9 +157,13 @@ impl From<Key> for KeyEvent {
 
 impl From<crossterm_event::KeyEvent> for KeyEvent {
     fn from(value: crossterm_event::KeyEvent) -> Self {
+        let mut modifiers: KeyModifiers = value.modifiers.into();
+        if value.kind == crossterm_event::KeyEventKind::Repeat {
+            modifiers |= KeyModifiers::REPEAT;
+        }
         Self {
             code: value.code.into(),
-            modifiers: value.modifiers.into(),
+            modifiers,
         }
     }
 }
@@ -328,6 +344,26 @@ mod tests {
             TuiEvent::try_from(crossterm_event::Event::Key(key)),
             Err(UnsupportedEvent)
         );
+    }
+
+    #[test]
+    fn crossterm_repeat_key_events_preserve_repeat_provenance() {
+        let key = crossterm_event::KeyEvent::new_with_kind(
+            crossterm_event::KeyCode::Char('x'),
+            crossterm_event::KeyModifiers::NONE,
+            crossterm_event::KeyEventKind::Repeat,
+        );
+
+        let TuiEvent::Key(key) = TuiEvent::try_from(crossterm_event::Event::Key(key))
+            .expect("repeat key events should be supported")
+        else {
+            unreachable!("crossterm key event should convert to a tui key event");
+        };
+
+        assert!(key.is_repeat());
+        assert_ne!(key.modifiers, KeyModifiers::NONE);
+        assert_eq!(key.modifiers.user_modifiers(), KeyModifiers::NONE);
+        assert!(crate::KeySpec::plain('x').matches(key));
     }
 
     #[test]

@@ -1522,6 +1522,10 @@ impl KeySpec {
 
     pub fn matches(self, key: impl Into<KeyEvent>) -> bool {
         let key = key.into();
+        let key = KeyEvent {
+            modifiers: key.modifiers.user_modifiers(),
+            ..key
+        };
         if self.code == Key::BackTab && key.code == Key::BackTab {
             return if self.modifiers == KeyModifiers::NONE {
                 key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
