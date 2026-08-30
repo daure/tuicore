@@ -107,6 +107,9 @@ where
     Id: Clone + Eq + Hash,
 {
     pub(super) fn request_remove_confirmation(&mut self, ctx: &mut EventCtx<M>) -> bool {
+        if self.display_only {
+            return false;
+        }
         self.clear_tree_selection();
         self.clear_flat_range_selection();
         let Some(config) = &self.remove_confirmation else {

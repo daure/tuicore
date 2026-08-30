@@ -218,11 +218,11 @@ where
         self.expanded.insert(id);
     }
 
-    pub(crate) fn tree_expansion_snapshot(&self) -> HashSet<Id> {
+    pub fn tree_expansion_snapshot(&self) -> HashSet<Id> {
         self.expanded.clone()
     }
 
-    pub(crate) fn restore_tree_expansion(&mut self, expanded: HashSet<Id>) {
+    pub fn restore_tree_expansion(&mut self, expanded: HashSet<Id>) {
         self.expanded = expanded;
     }
 

@@ -81,8 +81,8 @@ pub use form_field::FormField;
 pub use grid::{Grid, GridItem, GridTrack};
 pub use list::{List, ListOutcome};
 pub use list_control::{
-    ListControl, ListControlEvent, ListControlField, ListControlKeyBindings,
-    ListControlReorderUnavailable,
+    ListControl, ListControlDisplayKeyBindings, ListControlEvent, ListControlField,
+    ListControlKeyBindings, ListControlReorderUnavailable,
 };
 pub use menu::{Menu, MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode};
 pub use menu_button::MenuButton;

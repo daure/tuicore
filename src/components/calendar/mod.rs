@@ -1,13 +1,16 @@
 use std::cmp::Ordering;
 use std::time::Duration as StdDuration;
 
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span, Text};
+#[cfg(test)]
+use ratatui::text::Span;
+use ratatui::text::{Line, Text};
 use ratatui::{Frame, buffer::Buffer};
 use time::{Date, Duration, Weekday};
 
 pub(crate) mod date_math;
+mod day;
 mod event_wrap;
 mod model;
 mod view;
@@ -25,19 +28,18 @@ use date_math::{
     add_months, first_of_month, format_time, last_of_month, today, week_range, weekday_labels,
     weekday_short,
 };
+use day::{CalendarDayEvent, CalendarDayList, CalendarDayRow, DAY_ENTRIES_SLOT};
 
 use crate::event::{
     Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, TuiEvent,
 };
 use crate::{
-    Animated, EventCtx, EventOutcome, FocusCtx, FocusId, KeySpec, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, ScrollAxes, ScrollOffset, ScrollSize, ScrollState, TickResult,
-    TuiNode, animation_settings, preset, theme,
+    ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, KeySpec, LayoutCtx,
+    LayoutProposal, LayoutResult, LayoutSizeHint, ScrollAxes, ScrollOffset, ScrollSize,
+    ScrollState, TickResult, TuiNode, animation_settings, preset, theme,
 };
 
-use super::{Column, DataView, Panel, SelectionMode};
-use crate::components::data_view::SelectionOverlayPosition;
-use crate::components::ordered_selection::OrderedSelection;
+use super::Panel;
 
 const CALENDAR_FOCUS: &str = "calendar";
 const MONTH_EVENT_LINES: usize = 2;
@@ -51,51 +53,12 @@ type TitleFn<T> = dyn Fn(&T) -> String;
 type RoleFn<T> = dyn Fn(&T) -> Option<CalendarEntryRole>;
 type EventMarkerFn<T> = dyn Fn(&T) -> char;
 type EntryRenderFn<T> = dyn Fn(&T) -> Line<'static>;
+type DayEntryContinuationIndentFn<T> = dyn Fn(&T) -> usize;
 type DetailRenderFn<T> = dyn Fn(&T) -> Text<'static>;
 type EntryOrderFn<T> = dyn Fn(&T, &T) -> Ordering;
 type ReorderGroupFn<T> = dyn Fn(&T, &T) -> bool;
 
-struct CalendarReorderState {
-    selected_entries: Vec<usize>,
-    source: Vec<usize>,
-    staged: Vec<usize>,
-    target_index: usize,
-    pending_top_prefix: bool,
-}
-
-#[derive(Clone)]
-struct CalendarDayRow {
-    entry_index: usize,
-    prefix: String,
-    entry: Line<'static>,
-    role: Option<CalendarEntryRole>,
-}
-
-fn day_entry_data_view() -> DataView<CalendarDayRow, usize> {
-    DataView::new([], |row: &CalendarDayRow| row.entry_index)
-        .selection_mode(SelectionMode::Single)
-        .column(Column::rich(
-            "entry",
-            "",
-            Constraint::Percentage(100),
-            |row: &CalendarDayRow, _| {
-                let body_style = calendar_entry_style(row.role, false);
-                let marker_style = Style::default().fg(theme().accent_fg());
-                let mut spans = vec![Span::styled(row.prefix.clone(), marker_style)];
-                spans.extend(row.entry.spans.clone());
-                Line {
-                    spans,
-                    style: row.entry.style.patch(body_style),
-                    alignment: row.entry.alignment,
-                }
-            },
-        ))
-        .headers(false)
-        .filter_controls(false)
-        .empty_message("No entries")
-}
-
-fn calendar_entry_style(role: Option<CalendarEntryRole>, selected: bool) -> Style {
+pub(super) fn calendar_entry_style(role: Option<CalendarEntryRole>, selected: bool) -> Style {
     let t = theme();
     if selected {
         return Style::default()
@@ -122,12 +85,10 @@ pub struct Calendar<T, Id = String, M = ()> {
     role: Box<RoleFn<T>>,
     event_marker: Option<Box<EventMarkerFn<T>>>,
     render_entry: Option<Box<EntryRenderFn<T>>>,
+    day_entry_continuation_indent: Option<Box<DayEntryContinuationIndentFn<T>>>,
     render_detail: Option<Box<DetailRenderFn<T>>>,
     entry_order: Option<Box<EntryOrderFn<T>>>,
     reorder_group: Option<Box<ReorderGroupFn<T>>>,
-    reordering: Option<CalendarReorderState>,
-    day_selection: Option<OrderedSelection<Id>>,
-    committed_reorder: Option<Vec<usize>>,
     event_detail_on_activate: bool,
     on_event: Option<Box<dyn Fn(CalendarTypedEvent<Id>) -> M>>,
     view: CalendarView,
@@ -138,7 +99,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     show_weekends: bool,
     bordered: bool,
     highlighted_entry: Option<usize>,
-    day_entries: DataView<CalendarDayRow, usize>,
+    day_entries: CalendarDayList<Id, M>,
     focused: bool,
     hotkey: Option<String>,
     keybindings: CalendarKeyBindings,
@@ -146,6 +107,7 @@ pub struct Calendar<T, Id = String, M = ()> {
     quick_jump_digit: Option<u8>,
     quick_jump_elapsed: StdDuration,
     area: Rect,
+    path: crate::TreePath,
     events: Vec<CalendarTypedEvent<Id>>,
 }
 
@@ -244,7 +206,7 @@ impl CalendarKeyBindings {
     }
 }
 
-impl<T, Id, M> Calendar<T, Id, M>
+impl<T, Id, M: 'static> Calendar<T, Id, M>
 where
     Id: Clone + Eq,
 {
@@ -255,8 +217,10 @@ where
         title: impl Fn(&T) -> String + 'static,
     ) -> Self {
         let today = today();
+        let entries = entries.into_iter().collect::<Vec<_>>();
+        let keybindings = CalendarKeyBindings::default();
         let mut calendar = Self {
-            entries: entries.into_iter().collect(),
+            entries,
             id: Box::new(id),
             span: Box::new(span),
             title: Box::new(title),
@@ -264,12 +228,10 @@ where
             role: Box::new(|_| None),
             event_marker: None,
             render_entry: None,
+            day_entry_continuation_indent: None,
             render_detail: None,
             entry_order: None,
             reorder_group: None,
-            reordering: None,
-            day_selection: None,
-            committed_reorder: None,
             event_detail_on_activate: false,
             on_event: None,
             view: CalendarView::Month,
@@ -280,16 +242,18 @@ where
             show_weekends: true,
             bordered: true,
             highlighted_entry: None,
-            day_entries: day_entry_data_view(),
+            day_entries: CalendarDayList::new(keybindings.clone()),
             focused: false,
             hotkey: None,
-            keybindings: CalendarKeyBindings::default(),
+            keybindings,
             pending_top_prefix: false,
             quick_jump_digit: None,
             quick_jump_elapsed: StdDuration::ZERO,
             area: Rect::default(),
+            path: crate::TreePath::new(),
             events: Vec::new(),
         };
+        calendar.reconcile_day_row_ids();
         calendar.refresh_day_entries();
         calendar
     }
@@ -307,7 +271,7 @@ where
         let cursor_followed_today = self.cursor == self.today;
         self.today = today;
         if cursor_followed_today {
-            self.clear_day_selection();
+            self.clear_transient_selection();
             self.cursor = today;
             self.normalize_hidden_weekend_cursor();
             self.highlighted_entry = self.first_entry_on_cursor();
@@ -427,6 +391,16 @@ where
         self
     }
 
+    /// Indents wrapped Day-view entry text after the rendered entry metadata.
+    pub fn day_entry_wrap_continuation_indent_by(
+        mut self,
+        indent: impl Fn(&T) -> usize + 'static,
+    ) -> Self {
+        self.day_entry_continuation_indent = Some(Box::new(indent));
+        self.refresh_day_entries();
+        self
+    }
+
     pub fn render_detail(mut self, render: impl Fn(&T) -> Text<'static> + 'static) -> Self {
         self.render_detail = Some(Box::new(render));
         self
@@ -440,6 +414,8 @@ where
 
     pub fn reorderable(mut self, group: impl Fn(&T, &T) -> bool + 'static) -> Self {
         self.reorder_group = Some(Box::new(group));
+        self.day_entries.set_reorderable(true);
+        self.refresh_day_entries();
         self
     }
 
@@ -472,16 +448,15 @@ where
     }
 
     pub fn set_keybindings(&mut self, keybindings: CalendarKeyBindings) {
+        self.day_entries.set_keybindings(keybindings.clone());
         self.keybindings = keybindings;
         self.pending_top_prefix = false;
     }
 
     pub fn set_entries(&mut self, entries: impl IntoIterator<Item = T>) {
-        self.committed_reorder = None;
-        self.day_entries.clear_reorder_highlight_immediately();
-        self.cancel_reorder_immediately();
         let highlighted_id = self.highlighted_entry_id();
         self.entries = entries.into_iter().collect();
+        self.reconcile_day_row_ids();
         self.highlighted_entry = highlighted_id
             .and_then(|id| {
                 self.entries.iter().position(|entry| {
@@ -489,21 +464,13 @@ where
                 })
             })
             .or_else(|| self.first_entry_on_cursor());
-        self.reconcile_day_selection();
         self.refresh_day_entries();
-        if self.day_selection.is_some() {
-            self.day_entries
-                .set_selection_overlay(self.selected_day_entries(), None, 0, false);
-        } else {
-            self.day_entries.clear_selection_overlay();
-        }
     }
 
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
-        self.day_entries.set_focused(focused);
+        self.day_entries.set_display_focused(focused);
         if !focused {
-            self.cancel_reorder_immediately();
             self.pending_top_prefix = false;
             self.clear_quick_jump();
         }
@@ -535,18 +502,15 @@ where
 
     /// Returns transient Day-view selection IDs in current reorder scope order.
     pub fn transient_selected_ids(&self) -> Vec<Id> {
-        self.day_selection
-            .as_ref()
-            .map(|selection| selection.selected.clone())
-            .unwrap_or_default()
+        self.day_entries.transient_selected_ids()
     }
 
     pub fn clear_transient_selection(&mut self) {
-        self.clear_day_selection();
+        self.day_entries.clear_transient_selection();
     }
 
     pub fn is_reordering(&self) -> bool {
-        self.reordering.is_some()
+        self.day_entries.is_reordering()
     }
 
     pub fn current_range(&self) -> (Date, Date) {
@@ -567,11 +531,22 @@ where
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> CalendarOutcome {
         let key = key.into();
-        if let Some(outcome) = self.handle_reorder_key(key) {
-            return outcome;
-        }
-        if let Some(outcome) = self.handle_day_selection_key(key) {
-            return outcome;
+        self.clear_day_display_prefix_for_key(key);
+        if self.view == CalendarView::Day && !self.day_bubbles_key(key) {
+            if matches_key_specs(&self.keybindings.reorder, key)
+                && !self.day_entries.is_reordering()
+                && !self.day_entries.can_start_reorder()
+            {
+                return CalendarOutcome::HANDLED;
+            }
+            let content = self.content_area(self.area);
+            self.day_entries.layout(content, &mut LayoutCtx::new());
+            let mut ctx = EventCtx::default();
+            let (outcome, events) = self.day_entries.event(&TuiEvent::Key(key), &mut ctx);
+            let translated = self.translate_day_events(events);
+            if outcome.handled() {
+                return translated;
+            }
         }
         if let Some(outcome) = self.handle_date_quick_jump(key) {
             return outcome;
@@ -586,463 +561,80 @@ where
         }
         self.pending_top_prefix = false;
         if let Some(action) = self.key_action(key) {
-            if self.view == CalendarView::Day
-                && let Some(outcome) = self.apply_day_data_view_action(action)
-            {
-                return outcome;
-            }
             return self.apply_key_action(action);
         }
         CalendarOutcome::IDLE
     }
 
-    fn handle_reorder_key(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
-        if self.reordering.is_none() {
-            if !matches_key_specs(&self.keybindings.reorder, key)
-                || self.view != CalendarView::Day
-                || self.reorder_group.is_none()
-            {
-                return None;
+    fn clear_day_display_prefix_for_key(&mut self, key: KeyEvent) {
+        if self.view == CalendarView::Day && !matches_key_specs(&self.keybindings.top_prefix, key) {
+            self.day_entries.clear_display_pending_top_prefix();
+        }
+    }
+
+    fn clear_day_display_prefix_for_event(&mut self, event: &TuiEvent) {
+        if !matches!(event, TuiEvent::Key(key) if matches_key_specs(&self.keybindings.top_prefix, *key))
+        {
+            self.day_entries.clear_display_pending_top_prefix();
+        }
+    }
+
+    fn day_bubbles_key(&self, key: KeyEvent) -> bool {
+        matches!(
+            self.key_action(key),
+            Some(
+                CalendarKeyAction::Month
+                    | CalendarKeyAction::Week
+                    | CalendarKeyAction::Day
+                    | CalendarKeyAction::ToggleWeekends
+                    | CalendarKeyAction::Today
+                    | CalendarKeyAction::Left
+                    | CalendarKeyAction::Right
+            )
+        )
+    }
+
+    fn translate_day_events(&mut self, events: Vec<CalendarDayEvent<Id>>) -> CalendarOutcome {
+        let mut outcome = CalendarOutcome::HANDLED;
+        for event in events {
+            match event {
+                CalendarDayEvent::Highlighted(entry_id) => {
+                    self.highlighted_entry = entry_id.as_ref().and_then(|entry_id| {
+                        self.entries
+                            .iter()
+                            .position(|entry| (self.id)(entry) == *entry_id)
+                    });
+                    self.push_event(CalendarTypedEvent::EntryHighlighted { entry_id });
+                    outcome = CalendarOutcome::CHANGED;
+                }
+                CalendarDayEvent::Activated(entry_id) => {
+                    self.highlighted_entry = self
+                        .entries
+                        .iter()
+                        .position(|entry| (self.id)(entry) == entry_id);
+                    self.push_event(CalendarTypedEvent::EntryActivated { entry_id });
+                    if self.event_detail_on_activate {
+                        self.drill_to(CalendarView::EventDetail);
+                    }
+                    outcome = CalendarOutcome::ACTIVATED;
+                }
+                CalendarDayEvent::Reordered(entry_ids) => {
+                    self.push_event(CalendarTypedEvent::EntriesReordered { entry_ids });
+                    outcome = CalendarOutcome::CHANGED;
+                }
             }
-            self.begin_reorder();
-            return Some(CalendarOutcome::HANDLED);
         }
-
-        let top_prefix = matches_key_specs(&self.keybindings.top_prefix, key);
-        if !top_prefix && let Some(state) = &mut self.reordering {
-            state.pending_top_prefix = false;
-        }
-        let outcome = if matches_key_specs(&self.keybindings.reorder, key)
-            || matches!(key.code, Key::Enter | Key::Char(' '))
-                && key.modifiers == KeyModifiers::NONE
-        {
-            self.commit_reorder()
-        } else if matches!(key.code, Key::Esc)
-            || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
-        {
-            self.cancel_reorder()
-        } else if matches_key_specs(&self.keybindings.up, key) {
-            self.move_reorder(-1)
-        } else if matches_key_specs(&self.keybindings.down, key) {
-            self.move_reorder(1)
-        } else if matches_key_specs(&self.keybindings.page_up, key) {
-            let page = self
-                .day_entries
-                .visible_page_step(self.content_area(self.area));
-            self.move_reorder(-(page as isize))
-        } else if matches_key_specs(&self.keybindings.page_down, key) {
-            let page = self
-                .day_entries
-                .visible_page_step(self.content_area(self.area));
-            self.move_reorder(page as isize)
-        } else if matches_key_specs(&self.keybindings.home, key) {
-            self.move_reorder_to(0)
-        } else if matches_key_specs(&self.keybindings.end, key)
-            || matches_key_specs(&self.keybindings.bottom, key)
-        {
-            self.move_reorder_to(usize::MAX)
-        } else if top_prefix {
-            self.handle_reorder_top_prefix()
-        } else {
-            CalendarOutcome::HANDLED
-        };
-        Some(outcome)
-    }
-
-    fn begin_reorder(&mut self) {
-        let Some(moving_entry) = self.highlighted_entry else {
-            return;
-        };
-        let Some(group) = &self.reorder_group else {
-            return;
-        };
-        let source = self
-            .entries_on(self.cursor)
-            .into_iter()
-            .filter(|entry| group(&self.entries[moving_entry], &self.entries[*entry]))
-            .collect::<Vec<_>>();
-        if source.len() < 2 {
-            return;
-        }
-        let selected_entries = self
-            .day_selection
-            .as_ref()
-            .map(|selection| {
-                source
-                    .iter()
-                    .filter(|entry| {
-                        selection
-                            .selected
-                            .contains(&(self.id)(&self.entries[**entry]))
-                    })
-                    .copied()
-                    .collect::<Vec<_>>()
-            })
-            .filter(|selected| selected.len() >= 2)
-            .unwrap_or_else(|| vec![moving_entry]);
-        let target_index = source
-            .iter()
-            .position(|entry| entry == &selected_entries[0])
-            .map(|index| {
-                source[..index]
-                    .iter()
-                    .filter(|entry| !selected_entries.contains(entry))
-                    .count()
-            })
-            .expect("selected calendar entry belongs to reorder scope");
-        let block_move = selected_entries.len() >= 2;
-        self.committed_reorder = None;
-        if !block_move {
-            self.day_entries
-                .start_reorder_highlight(moving_entry, animation_settings());
-        }
-        self.reordering = Some(CalendarReorderState {
-            selected_entries,
-            staged: source.clone(),
-            source,
-            target_index,
-            pending_top_prefix: false,
-        });
-        self.day_selection = None;
-        if block_move {
-            self.day_entries.clear_selection();
-            self.day_entries.set_selection_overlay(
-                self.reordering
-                    .as_ref()
-                    .expect("calendar reorder state is active")
-                    .selected_entries
-                    .clone(),
-                Some(SelectionOverlayPosition::After(
-                    *self
-                        .reordering
-                        .as_ref()
-                        .expect("calendar reorder state is active")
-                        .selected_entries
-                        .last()
-                        .expect("calendar block selection is not empty"),
-                )),
-                0,
-                true,
-            );
-        }
-    }
-
-    fn move_reorder(&mut self, delta: isize) -> CalendarOutcome {
-        let Some(state) = &self.reordering else {
-            return CalendarOutcome::HANDLED;
-        };
-        let target = state.target_index.saturating_add_signed(delta);
-        self.move_reorder_to(target)
-    }
-
-    fn move_reorder_to(&mut self, target: usize) -> CalendarOutcome {
-        let Some(state) = &mut self.reordering else {
-            return CalendarOutcome::HANDLED;
-        };
-        let remaining = state
-            .source
-            .iter()
-            .filter(|entry| !state.selected_entries.contains(entry))
-            .copied()
-            .collect::<Vec<_>>();
-        let target = target.min(remaining.len());
-        if target == state.target_index {
-            return CalendarOutcome::HANDLED;
-        }
-        let mut staged = remaining;
-        staged.splice(target..target, state.selected_entries.iter().copied());
-        state.target_index = target;
-        state.staged = staged;
-        if state.selected_entries.len() >= 2 {
-            self.update_reorder_overlay();
-            self.position_reorder_placeholder();
-        } else {
-            self.refresh_day_entries();
-        }
-        CalendarOutcome::CHANGED
-    }
-
-    fn handle_reorder_top_prefix(&mut self) -> CalendarOutcome {
-        let Some(state) = &mut self.reordering else {
-            return CalendarOutcome::HANDLED;
-        };
-        if !state.pending_top_prefix {
-            state.pending_top_prefix = true;
-            return CalendarOutcome::HANDLED;
-        }
-        state.pending_top_prefix = false;
-        self.move_reorder_to(0)
-    }
-
-    fn commit_reorder(&mut self) -> CalendarOutcome {
-        let Some(state) = self.reordering.take() else {
-            return CalendarOutcome::HANDLED;
-        };
-        if state.selected_entries.len() == 1 {
-            self.day_entries
-                .clear_reorder_highlight(animation_settings());
-        }
-        self.day_entries.clear_selection_overlay();
-        let changed = state.source != state.staged;
-        self.committed_reorder = changed.then(|| state.staged.clone());
-        self.refresh_day_entries();
-        if changed {
-            self.push_event(CalendarTypedEvent::EntriesReordered {
-                entry_ids: state
-                    .staged
-                    .into_iter()
-                    .map(|entry| (self.id)(&self.entries[entry]))
-                    .collect(),
+        let highlighted = self.day_entries.highlighted_entry_index();
+        if self.highlighted_entry != highlighted {
+            self.highlighted_entry = highlighted;
+            self.push_event(CalendarTypedEvent::EntryHighlighted {
+                entry_id: highlighted.map(|index| (self.id)(&self.entries[index])),
             });
-        }
-        CalendarOutcome::CHANGED
-    }
-
-    fn cancel_reorder(&mut self) -> CalendarOutcome {
-        let Some(state) = self.reordering.take() else {
-            return CalendarOutcome::HANDLED;
-        };
-        if state.selected_entries.len() == 1 {
-            self.day_entries
-                .clear_reorder_highlight(animation_settings());
-        }
-        self.day_entries.clear_selection_overlay();
-        self.refresh_day_entries();
-        CalendarOutcome::CHANGED
-    }
-
-    fn cancel_reorder_immediately(&mut self) {
-        if let Some(state) = self.reordering.take() {
-            if state.selected_entries.len() == 1 {
-                self.day_entries.clear_reorder_highlight_immediately();
-            }
-            self.day_entries.clear_selection_overlay();
-            self.refresh_day_entries();
-        }
-    }
-
-    fn handle_day_selection_key(&mut self, key: KeyEvent) -> Option<CalendarOutcome> {
-        if self.view != CalendarView::Day || self.reorder_group.is_none() {
-            return None;
-        }
-        if matches!(key.code, Key::Esc)
-            || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
-        {
-            if self.day_selection.is_some() {
-                self.clear_day_selection();
-                return Some(CalendarOutcome::CHANGED);
-            }
-            return None;
-        }
-        let shift = key.modifiers == KeyModifiers::SHIFT;
-        let control = key.modifiers == KeyModifiers::CONTROL;
-        if key.code == Key::Char(' ')
-            && (control
-                || key.modifiers == KeyModifiers::NONE
-                    && self
-                        .day_selection
-                        .as_ref()
-                        .is_some_and(|selection| !selection.range_mode))
-        {
-            self.toggle_day_selection_at_highlight();
-            return Some(CalendarOutcome::CHANGED);
-        }
-        let direction = self.day_selection_direction(key, shift || control);
-        let extends_range = shift && direction.is_some();
-        if self
-            .day_selection
-            .as_ref()
-            .is_some_and(|selection| selection.range_mode)
-            && direction.is_some()
-            && !control
-            && !extends_range
-        {
-            self.clear_day_selection();
-            return None;
-        }
-        if !shift && !control {
-            return None;
-        }
-        let Some(delta) = direction else {
-            return None;
-        };
-        let Some(current) = self.highlighted_entry else {
-            return None;
-        };
-        let scope = self.default_reorder_scope(&current);
-        let current_index = scope.iter().position(|entry| *entry == current)?;
-        let destination_index = current_index
-            .saturating_add_signed(delta)
-            .min(scope.len().saturating_sub(1));
-        let destination = scope[destination_index];
-        let scope_ids = self.entry_ids(&scope);
-        let current_id = (self.id)(&self.entries[current]);
-        let destination_id = (self.id)(&self.entries[destination]);
-        let selection = self.day_selection.get_or_insert_with(|| OrderedSelection {
-            selected: Vec::new(),
-            anchor: current_id.clone(),
-            range_mode: shift,
-        });
-        if shift {
-            selection.extend_range(&scope_ids, &current_id, &destination_id);
-        } else {
-            selection.move_with_control(current_id);
-        }
-        self.day_entries
-            .set_selection_overlay(self.selected_day_entries(), None, 0, false);
-        self.set_highlighted_entry(Some(destination));
-        Some(CalendarOutcome::CHANGED)
-    }
-
-    fn day_selection_direction(&self, mut key: KeyEvent, modified: bool) -> Option<isize> {
-        if modified {
-            key.modifiers = KeyModifiers::NONE;
-            if let Key::Char(character) = key.code {
-                key.code = Key::Char(character.to_ascii_lowercase());
+            if outcome == CalendarOutcome::HANDLED {
+                outcome = CalendarOutcome::CHANGED;
             }
         }
-        if matches_key_specs(&self.keybindings.up, key) {
-            Some(-1)
-        } else if matches_key_specs(&self.keybindings.down, key) {
-            Some(1)
-        } else {
-            None
-        }
-    }
-
-    fn clear_day_selection(&mut self) {
-        self.day_selection = None;
-        self.day_entries.clear_selection_overlay();
-    }
-
-    fn reconcile_day_selection(&mut self) {
-        let Some(selection) = self.day_selection.as_ref() else {
-            return;
-        };
-        let entries_on_cursor = self.entries_on(self.cursor);
-        let Some(anchor) = entries_on_cursor
-            .iter()
-            .copied()
-            .find(|entry| (self.id)(&self.entries[*entry]) == selection.anchor)
-            .or_else(|| {
-                entries_on_cursor.iter().copied().find(|entry| {
-                    selection
-                        .selected
-                        .contains(&(self.id)(&self.entries[*entry]))
-                })
-            })
-        else {
-            self.day_selection = None;
-            return;
-        };
-        let scope_ids = self.entry_ids(&self.default_reorder_scope(&anchor));
-        if !self
-            .day_selection
-            .as_mut()
-            .expect("day selection remains active")
-            .reconcile(&scope_ids)
-        {
-            self.day_selection = None;
-        }
-    }
-
-    fn toggle_day_selection_at_highlight(&mut self) {
-        let Some(current) = self.highlighted_entry else {
-            return;
-        };
-        let scope = self.default_reorder_scope(&current);
-        let scope_ids = self.entry_ids(&scope);
-        let current_id = (self.id)(&self.entries[current]);
-        let selected = {
-            let selection = self.day_selection.get_or_insert_with(|| OrderedSelection {
-                selected: Vec::new(),
-                anchor: current_id.clone(),
-                range_mode: false,
-            });
-            selection.toggle(&scope_ids, current_id)
-        };
-        if selected.is_empty() {
-            self.clear_day_selection();
-        } else {
-            self.day_entries
-                .set_selection_overlay(self.selected_day_entries(), None, 0, false);
-        }
-    }
-
-    fn update_reorder_overlay(&mut self) {
-        let Some(state) = self.reordering.as_ref() else {
-            return;
-        };
-        let remaining = state
-            .source
-            .iter()
-            .filter(|entry| !state.selected_entries.contains(entry))
-            .copied()
-            .collect::<Vec<_>>();
-        let position = state
-            .target_index
-            .checked_sub(1)
-            .and_then(|index| remaining.get(index))
-            .copied()
-            .map(SelectionOverlayPosition::After)
-            .or_else(|| {
-                remaining
-                    .first()
-                    .copied()
-                    .map(SelectionOverlayPosition::Before)
-            })
-            .unwrap_or_else(|| {
-                SelectionOverlayPosition::After(
-                    *state
-                        .selected_entries
-                        .last()
-                        .expect("calendar reorder selection is not empty"),
-                )
-            });
-        self.day_entries.set_selection_overlay(
-            state.selected_entries.clone(),
-            Some(position),
-            0,
-            true,
-        );
-    }
-
-    fn position_reorder_placeholder(&mut self) {
-        let mut settings = animation_settings();
-        settings.enabled = false;
-        self.day_entries
-            .ensure_selection_placeholder_visible(self.content_area(self.area), settings);
-    }
-
-    fn default_reorder_scope(&self, moving_entry: &usize) -> Vec<usize> {
-        let Some(group) = &self.reorder_group else {
-            return Vec::new();
-        };
-        self.sorted_entries_on(self.cursor)
-            .into_iter()
-            .filter(|entry| group(&self.entries[*moving_entry], &self.entries[*entry]))
-            .collect()
-    }
-
-    fn entry_ids(&self, entries: &[usize]) -> Vec<Id> {
-        entries
-            .iter()
-            .map(|entry| (self.id)(&self.entries[*entry]))
-            .collect()
-    }
-
-    fn selected_day_entries(&self) -> Vec<usize> {
-        let Some(selection) = self.day_selection.as_ref() else {
-            return Vec::new();
-        };
-        self.entries_on(self.cursor)
-            .into_iter()
-            .filter(|entry| {
-                selection
-                    .selected
-                    .contains(&(self.id)(&self.entries[*entry]))
-            })
-            .collect()
+        outcome
     }
 
     fn key_action(&self, key: KeyEvent) -> Option<CalendarKeyAction> {
@@ -1082,61 +674,6 @@ where
         } else {
             None
         }
-    }
-
-    fn apply_day_data_view_action(&mut self, action: CalendarKeyAction) -> Option<CalendarOutcome> {
-        if !matches!(
-            action,
-            CalendarKeyAction::Up
-                | CalendarKeyAction::Down
-                | CalendarKeyAction::PageUp
-                | CalendarKeyAction::PageDown
-                | CalendarKeyAction::Home
-                | CalendarKeyAction::End
-                | CalendarKeyAction::Activate
-        ) {
-            return None;
-        }
-        if action == CalendarKeyAction::Activate {
-            return Some(self.activate());
-        }
-        let rows = self.day_entries.rows();
-        if rows.is_empty() {
-            return Some(CalendarOutcome::HANDLED);
-        }
-        let current = self
-            .highlighted_entry
-            .and_then(|highlighted| rows.iter().position(|row| row.entry_index == highlighted))
-            .unwrap_or(0);
-        let viewport = self.content_area(self.area);
-        let page = self.day_entries.visible_page_step(viewport);
-        let target = match action {
-            CalendarKeyAction::Up => current.saturating_sub(1),
-            CalendarKeyAction::Down => current.saturating_add(1),
-            CalendarKeyAction::PageUp => current.saturating_sub(page),
-            CalendarKeyAction::PageDown => current.saturating_add(page),
-            CalendarKeyAction::Home => 0,
-            CalendarKeyAction::End => rows.len().saturating_sub(1),
-            _ => unreachable!("filtered to day DataView actions"),
-        };
-        let outcome = if matches!(action, CalendarKeyAction::Up | CalendarKeyAction::Down) {
-            self.day_entries
-                .highlight_line_with_settings(target, viewport, animation_settings())
-        } else {
-            self.day_entries.highlight_centered_with_settings(
-                target,
-                viewport,
-                animation_settings(),
-            )
-        };
-        self.day_entries.take_events();
-        let before = self.highlighted_entry;
-        self.set_highlighted_entry(self.day_entries.highlighted_id());
-        Some(if outcome.changed || self.highlighted_entry != before {
-            CalendarOutcome::CHANGED
-        } else {
-            CalendarOutcome::HANDLED
-        })
     }
 
     fn apply_key_action(&mut self, action: CalendarKeyAction) -> CalendarOutcome {
@@ -1320,6 +857,9 @@ where
         if self.view == view {
             return CalendarOutcome::HANDLED;
         }
+        if self.view == CalendarView::Day {
+            self.day_entries.clear_display_pending_top_prefix();
+        }
         self.view = view;
         self.normalize_hidden_weekend_cursor();
         if view != CalendarView::EventDetail {
@@ -1342,7 +882,7 @@ where
             return CalendarOutcome::HANDLED;
         }
         let before_range = self.current_range();
-        self.clear_day_selection();
+        self.clear_transient_selection();
         self.cursor = date;
         self.push_event(CalendarTypedEvent::CursorChanged { date });
         if before_range != self.current_range() {
@@ -1369,7 +909,7 @@ where
 
     fn move_up(&mut self) -> CalendarOutcome {
         match self.view {
-            CalendarView::Day => self.highlight_previous_entry(),
+            CalendarView::Day => CalendarOutcome::HANDLED,
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
             CalendarView::Month | CalendarView::Week => self.move_days(-7),
         }
@@ -1377,7 +917,7 @@ where
 
     fn move_down(&mut self) -> CalendarOutcome {
         match self.view {
-            CalendarView::Day => self.highlight_next_entry(),
+            CalendarView::Day => CalendarOutcome::HANDLED,
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
             CalendarView::Month | CalendarView::Week => self.move_days(7),
         }
@@ -1409,9 +949,7 @@ where
                 let offset = self.visible_weekday_offsets().first().copied().unwrap_or(0);
                 self.set_cursor(start + Duration::days(offset as i64))
             }
-            CalendarView::Day => self
-                .apply_day_data_view_action(CalendarKeyAction::Home)
-                .expect("home is a day DataView action"),
+            CalendarView::Day => CalendarOutcome::HANDLED,
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
     }
@@ -1430,9 +968,7 @@ where
                 let offset = self.visible_weekday_offsets().last().copied().unwrap_or(6);
                 self.set_cursor(start + Duration::days(offset as i64))
             }
-            CalendarView::Day => self
-                .apply_day_data_view_action(CalendarKeyAction::End)
-                .expect("end is a day DataView action"),
+            CalendarView::Day => CalendarOutcome::HANDLED,
             CalendarView::EventDetail => CalendarOutcome::HANDLED,
         }
     }
@@ -1483,7 +1019,7 @@ where
         {
             return;
         }
-        self.clear_day_selection();
+        self.clear_transient_selection();
         self.cursor = previous_friday_if_weekend(self.cursor);
     }
 
@@ -1494,34 +1030,6 @@ where
 
     fn first_entry_on_cursor(&self) -> Option<usize> {
         self.entries_on(self.cursor).first().copied()
-    }
-
-    fn highlight_next_entry(&mut self) -> CalendarOutcome {
-        let entries = self.entries_on(self.cursor);
-        if entries.is_empty() {
-            return CalendarOutcome::HANDLED;
-        }
-        let current = self
-            .highlighted_entry
-            .and_then(|index| entries.iter().position(|entry| *entry == index))
-            .unwrap_or(0);
-        let next = entries[current
-            .saturating_add(1)
-            .min(entries.len().saturating_sub(1))];
-        self.highlight_entry(next)
-    }
-
-    fn highlight_previous_entry(&mut self) -> CalendarOutcome {
-        let entries = self.entries_on(self.cursor);
-        if entries.is_empty() {
-            return CalendarOutcome::HANDLED;
-        }
-        let current = self
-            .highlighted_entry
-            .and_then(|index| entries.iter().position(|entry| *entry == index))
-            .unwrap_or(0);
-        let next = entries[current.saturating_sub(1)];
-        self.highlight_entry(next)
     }
 
     fn highlight_entry(&mut self, index: usize) -> CalendarOutcome {
@@ -1537,20 +1045,9 @@ where
             return;
         }
         self.highlighted_entry = index;
-        if let Some(index) = index {
-            self.day_entries.highlight_id(&index);
-            if self.day_selection.is_some() || self.reordering.is_some() {
-                self.day_entries.clear_selection();
-            } else {
-                self.day_entries.select_id(index);
-            }
-        } else {
-            self.day_entries.clear_selection();
-        }
-        self.day_entries.take_events();
-        self.push_event(CalendarTypedEvent::EntryHighlighted {
-            entry_id: index.map(|index| (self.id)(&self.entries[index])),
-        });
+        let entry_id = index.map(|index| (self.id)(&self.entries[index]));
+        self.day_entries.set_highlighted(entry_id.as_ref());
+        self.push_event(CalendarTypedEvent::EntryHighlighted { entry_id });
     }
 
     fn emit_range_changed(&mut self) {
@@ -1563,9 +1060,7 @@ where
     }
 
     fn entries_on(&self, date: Date) -> Vec<usize> {
-        let mut entries = self.sorted_entries_on(date);
-        self.apply_staged_reorder(&mut entries);
-        entries
+        self.sorted_entries_on(date)
     }
 
     fn sorted_entries_on(&self, date: Date) -> Vec<usize> {
@@ -1579,51 +1074,25 @@ where
         entries
     }
 
-    fn apply_staged_reorder(&self, entries: &mut [usize]) {
-        let Some(staged) = self
-            .reordering
-            .as_ref()
-            .filter(|state| state.selected_entries.len() == 1)
-            .map(|state| &state.staged)
-            .or(self.committed_reorder.as_ref())
-        else {
-            return;
-        };
-        let positions = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(position, entry)| staged.contains(entry).then_some(position))
-            .collect::<Vec<_>>();
-        if positions.len() != staged.len() {
-            return;
-        }
-        for (position, entry) in positions.into_iter().zip(staged) {
-            entries[position] = *entry;
-        }
-    }
-
     fn refresh_day_entries(&mut self) {
-        let rows = self
-            .entries_on(self.cursor)
-            .into_iter()
-            .map(|entry_index| self.day_entry_row(entry_index))
+        let entries = self.entries_on(self.cursor);
+        let rows = entries
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(rank, entry_index)| self.day_entry_row(entry_index, rank, &entries))
             .collect::<Vec<_>>();
-        self.day_entries.set_rows(rows);
-        self.day_entries.set_focused(self.focused);
+        self.day_entries.replace_rows(rows);
+        self.day_entries.set_display_focused(self.focused);
         if let Some(index) = self.highlighted_entry {
-            self.day_entries.highlight_id(&index);
-            if self.day_selection.is_some() || self.reordering.is_some() {
-                self.day_entries.clear_selection();
-            } else {
-                self.day_entries.select_id(index);
+            let entry_id = (self.id)(&self.entries[index]);
+            if self.day_entries.highlighted_entry_index() != Some(index) {
+                self.day_entries.set_highlighted(Some(&entry_id));
             }
         }
-        self.day_entries
-            .snap_highlight_centered(self.content_area(self.area));
-        self.day_entries.take_events();
     }
 
-    fn day_entry_row(&self, entry_index: usize) -> CalendarDayRow {
+    fn day_entry_row(&self, entry_index: usize, rank: usize, entries: &[usize]) -> CalendarDayRow {
         let entry = &self.entries[entry_index];
         let span = (self.span)(entry);
         let marker = self
@@ -1632,17 +1101,53 @@ where
             .map(|marker| marker(entry))
             .filter(|marker| !marker.is_control())
             .unwrap_or(if span.all_day { '■' } else { '•' });
-        let prefix = if span.all_day {
-            format!("{marker} all-day ")
+        let (time_prefix, marker_prefix) = if span.all_day {
+            (None, format!("all-day {marker} "))
         } else {
-            format!("{marker} {} ", format_time(span.start.time()))
+            (
+                Some(format!("{} ", format_time(span.start.time()))),
+                format!("{marker} "),
+            )
         };
-        CalendarDayRow {
+        let prefix = format!(
+            "{}{}",
+            time_prefix.as_deref().unwrap_or_default(),
+            marker_prefix
+        );
+        let key = self.day_entries.key_for(&(self.id)(entry));
+        let continuation_indent = self
+            .day_entry_continuation_indent
+            .as_ref()
+            .map_or(0, |indent| {
+                crate::line_width(&Line::from(prefix.clone())) + indent(entry)
+            });
+        let scope = self.reorder_group.as_ref().map_or_else(Vec::new, |group| {
+            entries
+                .iter()
+                .copied()
+                .filter(|candidate| group(entry, &self.entries[*candidate]))
+                .map(|candidate| {
+                    self.day_entries
+                        .key_for(&(self.id)(&self.entries[candidate]))
+                })
+                .collect()
+        });
+        CalendarDayRow::new(
+            key,
             entry_index,
-            prefix,
-            entry: self.entry_line(entry_index),
-            role: (self.role)(entry),
-        }
+            rank,
+            time_prefix,
+            marker_prefix,
+            self.entry_line(entry_index),
+            continuation_indent,
+            (self.role)(entry),
+            scope,
+        )
+    }
+
+    fn reconcile_day_row_ids(&mut self) {
+        self.day_entries
+            .reconcile_ids(self.entries.iter().map(|entry| (self.id)(entry)));
     }
 
     fn compare_entries(&self, left: usize, right: usize) -> Ordering {
@@ -1702,6 +1207,7 @@ where
 impl<T, Id, M> TuiNode<M> for Calendar<T, Id, M>
 where
     Id: Clone + Eq + 'static,
+    M: 'static,
 {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         LayoutSizeHint::content(72, 12).normalized(proposal)
@@ -1709,6 +1215,7 @@ where
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
+        self.path = ctx.current_path();
         ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if let Some(hotkey) = &self.hotkey {
             ctx.register_focusable_with_hotkey_sequences(
@@ -1721,11 +1228,21 @@ where
             ctx.register_focusable(FocusId::new(CALENDAR_FOCUS), area, true);
         }
         ctx.set_focus_receives_events_before_global_hotkeys(FocusId::new(CALENDAR_FOCUS), true);
+        if self.view == CalendarView::Day {
+            let content = self.content_area(area);
+            ctx.push_slot(ChildKey::new(DAY_ENTRIES_SLOT), content, |ctx| {
+                self.day_entries.layout(content, ctx);
+            });
+        }
         LayoutResult::new(area)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _ctx: &mut crate::RenderCtx<'_>) {
-        Self::render(self, frame, area);
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut crate::RenderCtx<'a>) {
+        if self.view == CalendarView::Day {
+            self.render_day_node(frame, area, ctx);
+        } else {
+            Self::render(self, frame, area);
+        }
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
@@ -1734,18 +1251,51 @@ where
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
+        if matches!(event, TuiEvent::Mouse(_)) {
+            self.pending_top_prefix = false;
+            self.day_entries.clear_display_pending_top_prefix();
+        }
         let event_start = self.events.len();
+        let had_day_entries_child = self.view == CalendarView::Day;
         let outcome = match event {
             TuiEvent::Mouse(mouse)
-                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
+                if self.view != CalendarView::Day
+                    && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
             {
                 self.click_date(*mouse)
             }
             TuiEvent::Mouse(mouse) if self.view == CalendarView::Day => match mouse.kind {
                 MouseEventKind::ScrollUp => self.scroll_month(-1),
                 MouseEventKind::ScrollDown => self.scroll_month(1),
-                _ => return EventOutcome::Ignored,
+                _ => {
+                    self.clear_day_display_prefix_for_event(event);
+                    let (outcome, events) = self.day_entries.event(event, ctx);
+                    let translated = self.translate_day_events(events);
+                    if outcome.handled() {
+                        translated
+                    } else {
+                        return EventOutcome::Ignored;
+                    }
+                }
             },
+            TuiEvent::Key(key) if self.view == CalendarView::Day => {
+                if self.day_bubbles_key(*key)
+                    || matches_key_specs(&self.keybindings.reorder, *key)
+                        && !self.day_entries.is_reordering()
+                        && !self.day_entries.can_start_reorder()
+                {
+                    self.on_key(*key)
+                } else {
+                    self.clear_day_display_prefix_for_event(event);
+                    let (outcome, events) = self.day_entries.event(event, ctx);
+                    let translated = self.translate_day_events(events);
+                    if outcome.handled() {
+                        translated
+                    } else {
+                        self.on_key(*key)
+                    }
+                }
+            }
             TuiEvent::Key(key) => self.on_key(*key),
             _ => return EventOutcome::Ignored,
         };
@@ -1755,15 +1305,15 @@ where
                 ctx.emit(on_event(event));
             }
         }
+        if had_day_entries_child != (self.view == CalendarView::Day) {
+            ctx.request_layout();
+        }
         if outcome.needs_redraw() {
             ctx.request_redraw();
         }
         if outcome.handled {
             if matches!(event, TuiEvent::Mouse(_)) {
-                ctx.focus(crate::FocusRequest::TargetAt {
-                    path: ctx.current_path(),
-                    id: FocusId::new(CALENDAR_FOCUS),
-                });
+                self.focus_self(ctx);
             }
             ctx.stop_propagation();
             EventOutcome::Handled
@@ -1775,6 +1325,67 @@ where
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.set_focused(focused);
         ctx.request_redraw();
+    }
+
+    fn dispatch_event(
+        &mut self,
+        route: &EventRoute,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> EventOutcome {
+        if let Some(path) = route
+            .path
+            .without_first_if(&ChildKey::new(DAY_ENTRIES_SLOT))
+        {
+            if self.view != CalendarView::Day {
+                return EventOutcome::Ignored;
+            }
+            if matches!(
+                event,
+                TuiEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp | MouseEventKind::ScrollDown,
+                    ..
+                })
+            ) {
+                return self.event(event, ctx);
+            }
+            let event_start = self.events.len();
+            self.clear_day_display_prefix_for_event(event);
+            let (outcome, events) = if path.is_empty() {
+                self.day_entries.event(event, ctx)
+            } else {
+                self.day_entries
+                    .dispatch_event(&EventRoute::new(path), event, ctx)
+            };
+            let translated = self.translate_day_events(events);
+            if outcome.handled() {
+                if let Some(on_event) = &self.on_event {
+                    let events = self.events.drain(event_start..).collect::<Vec<_>>();
+                    for event in events {
+                        ctx.emit(on_event(event));
+                    }
+                }
+                if translated.needs_redraw() {
+                    ctx.request_redraw();
+                }
+                if self.view != CalendarView::Day {
+                    ctx.request_layout();
+                }
+                if matches!(event, TuiEvent::Mouse(_)) {
+                    self.focus_self(ctx);
+                }
+                return EventOutcome::Handled;
+            }
+            if let TuiEvent::Key(key) = event {
+                return self.event(&TuiEvent::Key(*key), ctx);
+            }
+            return EventOutcome::Ignored;
+        }
+        if route.path.is_empty() {
+            self.event(event, ctx)
+        } else {
+            EventOutcome::Ignored
+        }
     }
 
     fn tick(&mut self, dt: StdDuration, settings: crate::AnimationSettings) -> TickResult {
@@ -1790,9 +1401,37 @@ where
             }
         };
         if self.view == CalendarView::Day {
-            result = result.merge(Animated::tick(&mut self.day_entries, dt, settings));
+            result = result.merge(self.day_entries.tick(dt, settings));
         }
         result
+    }
+
+    fn init(&mut self, ctx: &mut crate::LifecycleCtx<M>) {
+        self.day_entries.init(ctx);
+    }
+
+    fn mount(&mut self, ctx: &mut crate::LifecycleCtx<M>) {
+        self.day_entries.mount(ctx);
+    }
+
+    fn unmount(&mut self, ctx: &mut crate::LifecycleCtx<M>) {
+        self.day_entries.unmount(ctx);
+    }
+
+    fn destroy(&mut self, ctx: &mut crate::LifecycleCtx<M>) {
+        self.day_entries.destroy(ctx);
+    }
+}
+
+impl<T, Id, M: 'static> Calendar<T, Id, M>
+where
+    Id: Clone + Eq,
+{
+    fn focus_self(&self, ctx: &mut EventCtx<M>) {
+        ctx.focus(crate::FocusRequest::TargetAt {
+            path: self.path.clone(),
+            id: FocusId::new(CALENDAR_FOCUS),
+        });
     }
 }
 

@@ -36,8 +36,8 @@ pub use model::{
     DataViewTransformState, DataViewTypedEvent, SelectionGlyphs, SelectionMode,
     SelectionPropagation, SelectionTrigger, SortDirection, TreeAdapter, TreeGlyphs,
 };
+pub(crate) use model::{DataViewDisplayAction, ReorderSnapshot, ReorderUnavailableReason};
 use model::{DisplayRow, RowIdFn, SelectionOverlay, VisibleRow};
-pub(crate) use model::{ReorderSnapshot, ReorderUnavailableReason};
 pub(crate) use tree_edit::TreeEditSnapshot;
 
 const HORIZONTAL_JUMP_PERCENT: usize = 70;
@@ -56,6 +56,7 @@ type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
 type RowHeightFn<T> = dyn Fn(&T) -> u16;
 type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
+type LeftGutterMarkerFn<T> = dyn Fn(&T) -> Option<ratatui::text::Span<'static>>;
 type SelectionDisabledFn<T> = dyn Fn(&T) -> bool;
 
 pub(crate) fn search_focus_id() -> FocusId {
@@ -80,12 +81,14 @@ pub struct DataView<T, Id> {
     expanded: HashSet<Id>,
     highlighted: usize,
     focused: bool,
+    show_inactive_highlight: bool,
     focused_events_before_global_hotkeys: bool,
     headers: bool,
     row_height: u16,
     row_height_by: Option<Box<RowHeightFn<T>>>,
     wrap_cells: bool,
     row_style_by: Option<Box<RowStyleFn<T>>>,
+    left_gutter_marker_by: Option<Box<LeftGutterMarkerFn<T>>>,
     scroll: ScrollState,
     vertical_scroll: DataViewVerticalScroll,
     sort: Option<DataViewSort>,
@@ -181,12 +184,14 @@ where
             expanded: HashSet::new(),
             highlighted: 0,
             focused: false,
+            show_inactive_highlight: false,
             focused_events_before_global_hotkeys: true,
             headers: false,
             row_height: 1,
             row_height_by: None,
             wrap_cells: false,
             row_style_by: None,
+            left_gutter_marker_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             vertical_scroll: DataViewVerticalScroll::Local,
             sort: None,
@@ -331,6 +336,23 @@ where
         self.row_style_by = Some(Box::new(row_style));
     }
 
+    /// Adds a one-cell, row-specific marker before tree and selection gutters.
+    pub fn left_gutter_marker_by(
+        mut self,
+        marker: impl Fn(&T) -> Option<ratatui::text::Span<'static>> + 'static,
+    ) -> Self {
+        self.set_left_gutter_marker_by(marker);
+        self
+    }
+
+    /// Replaces the row-specific left-edge marker policy.
+    pub fn set_left_gutter_marker_by(
+        &mut self,
+        marker: impl Fn(&T) -> Option<ratatui::text::Span<'static>> + 'static,
+    ) {
+        self.left_gutter_marker_by = Some(Box::new(marker));
+    }
+
     pub fn configured_row_height(&self) -> u16 {
         self.row_height
     }
@@ -410,8 +432,21 @@ where
         }
     }
 
+    pub fn show_inactive_highlight(mut self, show: bool) -> Self {
+        self.show_inactive_highlight = show;
+        self
+    }
+
+    pub fn set_show_inactive_highlight(&mut self, show: bool) {
+        self.show_inactive_highlight = show;
+    }
+
     pub fn is_focused(&self) -> bool {
         self.focused
+    }
+
+    pub fn is_searching(&self) -> bool {
+        matches!(self.interaction, DataViewInteraction::Search)
     }
 
     pub(crate) fn has_active_interaction(&self) -> bool {
@@ -1070,6 +1105,69 @@ where
         (column.snapshot_matches)(&self.rows, &ordered, snapshot.ranks.as_ref())
     }
 
+    pub(crate) fn reorder_scoped_ids(
+        &self,
+        snapshot: &ReorderSnapshot<Id>,
+        anchor_id: &Id,
+        same_scope: &dyn Fn(&T, &T) -> bool,
+    ) -> Option<Vec<Id>> {
+        let anchor = self
+            .rows
+            .iter()
+            .find(|row| (self.row_id)(row) == *anchor_id)?;
+        snapshot
+            .ids
+            .iter()
+            .map(|id| {
+                self.rows
+                    .iter()
+                    .find(|row| (self.row_id)(row) == *id)
+                    .map(|row| (id.clone(), row))
+            })
+            .map(|row| row.map(|(id, row)| same_scope(anchor, row).then_some(id)))
+            .collect::<Option<Vec<_>>>()
+            .map(|ids| ids.into_iter().flatten().collect())
+    }
+
+    pub(crate) fn handle_display_action(
+        &mut self,
+        action: DataViewDisplayAction,
+        area: Rect,
+        settings: AnimationSettings,
+    ) -> DataViewOutcome {
+        match action {
+            DataViewDisplayAction::LineUp => self.highlight_line_with_settings(
+                self.highlighted.saturating_sub(1),
+                area,
+                settings,
+            ),
+            DataViewDisplayAction::LineDown => self.highlight_line_with_settings(
+                self.highlighted.saturating_add(1),
+                area,
+                settings,
+            ),
+            DataViewDisplayAction::PageUp => self.highlight_centered_with_settings(
+                self.highlighted
+                    .saturating_sub(self.visible_page_step(area)),
+                area,
+                settings,
+            ),
+            DataViewDisplayAction::PageDown => self.highlight_centered_with_settings(
+                self.highlighted
+                    .saturating_add(self.visible_page_step(area)),
+                area,
+                settings,
+            ),
+            DataViewDisplayAction::Top => self.highlight_centered_with_settings(0, area, settings),
+            DataViewDisplayAction::Bottom => self.highlight_centered_with_settings(
+                self.visible_len().saturating_sub(1),
+                area,
+                settings,
+            ),
+            DataViewDisplayAction::Activate => self.activate_highlighted(),
+        }
+    }
+
     pub(crate) fn commit_reorder(
         &mut self,
         column_id: &str,
@@ -1181,8 +1279,29 @@ where
             return DataViewOutcome::IDLE;
         }
         let before_id = self.highlighted_id();
+        let ancestors = before_id
+            .as_ref()
+            .map(|id| self.visible_tree_ancestor_ids(id))
+            .unwrap_or_default();
         self.expanded.clear();
-        let (_, update) = self.clamp_visible_state_from(before_id);
+        let visible_ids = self
+            .all_visible_rows()
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<HashSet<_>>();
+        let target_id = before_id
+            .clone()
+            .filter(|id| visible_ids.contains(id))
+            .or_else(|| ancestors.into_iter().find(|id| visible_ids.contains(id)));
+        let all_visible = self.all_visible_rows();
+        let position = target_id
+            .as_ref()
+            .and_then(|id| all_visible.iter().position(|row| &row.id == id))
+            .unwrap_or(0);
+        let has_visible_rows = !all_visible.is_empty();
+        drop(all_visible);
+        let (_, update) =
+            self.set_highlighted_visible_position_from(position, has_visible_rows, before_id);
         DataViewOutcome {
             handled: true,
             changed: true,
@@ -1199,7 +1318,7 @@ where
         let outcome = self.collapse_all();
         if outcome.changed {
             let mut scrolled = self
-                .ensure_highlight_visible(area, settings)
+                .center_highlight(area, settings)
                 .into_data_view_outcome(outcome.handled, outcome.changed);
             scrolled.activated = outcome.activated;
             scrolled
@@ -1218,7 +1337,7 @@ where
             return DataViewOutcome::IDLE;
         }
         self.expanded = ids;
-        let (_, update) = self.clamp_visible_state_from(before_id);
+        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
             handled: true,
             changed: true,
@@ -1235,7 +1354,7 @@ where
         let outcome = self.expand_all();
         if outcome.changed {
             let mut scrolled = self
-                .ensure_highlight_visible(area, settings)
+                .center_highlight(area, settings)
                 .into_data_view_outcome(outcome.handled, outcome.changed);
             scrolled.activated = outcome.activated;
             scrolled
@@ -1322,6 +1441,13 @@ where
         let mut settings = animation_settings();
         settings.enabled = false;
         self.reveal_highlighted_with_settings(settings)
+    }
+
+    pub fn reveal_highlighted_centered(&mut self) -> DataViewOutcome {
+        let mut settings = animation_settings();
+        settings.enabled = false;
+        self.center_highlight(self.area, settings)
+            .into_data_view_outcome(true, false)
     }
 
     pub fn reveal_highlighted_with_settings(
@@ -1977,6 +2103,29 @@ where
         self.visible_rows().len()
     }
 
+    fn visible_tree_ancestor_ids(&self, id: &Id) -> Vec<Id> {
+        let rows = self.all_visible_rows();
+        let mut parent_id = rows
+            .iter()
+            .find(|row| &row.id == id)
+            .and_then(|row| row.parent_id.clone());
+        let mut ancestors = Vec::new();
+        let mut visited = HashSet::new();
+
+        while let Some(current_id) = parent_id {
+            if !visited.insert(current_id.clone()) {
+                break;
+            }
+            parent_id = rows
+                .iter()
+                .find(|row| row.id == current_id)
+                .and_then(|row| row.parent_id.clone());
+            ancestors.push(current_id);
+        }
+
+        ancestors
+    }
+
     fn set_search_query_with_settings(
         &mut self,
         query: String,
@@ -2102,13 +2251,32 @@ where
         before_id: Option<Id>,
     ) -> (bool, HighlightUpdate) {
         let all_visible = self.all_visible_rows();
-        let position = before_id
-            .as_ref()
-            .and_then(|id| all_visible.iter().position(|row| &row.id == id))
+        let first_tree_match = (self.tree.is_some() && self.local_transform_active())
+            .then(|| {
+                all_visible
+                    .iter()
+                    .position(|row| self.row_matches_transform(row.row))
+            })
+            .flatten();
+        let position = first_tree_match
+            .or_else(|| {
+                before_id
+                    .as_ref()
+                    .and_then(|id| all_visible.iter().position(|row| &row.id == id))
+            })
             .unwrap_or(0);
         let has_visible_rows = !all_visible.is_empty();
         drop(all_visible);
 
+        self.set_highlighted_visible_position_from(position, has_visible_rows, before_id)
+    }
+
+    fn set_highlighted_visible_position_from(
+        &mut self,
+        position: usize,
+        has_visible_rows: bool,
+        before_id: Option<Id>,
+    ) -> (bool, HighlightUpdate) {
         let mut page_changed = false;
         let highlighted = if has_visible_rows {
             if let Some(pagination) = &mut self.pagination {

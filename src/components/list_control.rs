@@ -11,7 +11,7 @@ mod tests;
 
 use ratatui::layout::{Constraint, Rect};
 
-use super::data_view::{DataViewScrollSnapshot, ReorderSnapshot};
+use super::data_view::{DataViewDisplayAction, DataViewScrollSnapshot, ReorderSnapshot};
 use super::ordered_selection::OrderedSelection;
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView,
@@ -39,6 +39,7 @@ type Creator<T> = dyn FnMut(Vec<String>, &[T]) -> T;
 type RemoveFormatter<T> = dyn Fn(&T) -> String;
 type EditGetter<T> = dyn Fn(&T) -> Vec<String>;
 type EditMutator<T> = dyn Fn(&mut T, Vec<String>);
+type SameScope<T> = dyn Fn(&T, &T) -> bool;
 
 struct Editable<T> {
     getter: Box<EditGetter<T>>,
@@ -256,6 +257,95 @@ pub struct ListControlKeyBindings {
     pub reorder: Vec<KeySpec>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListControlDisplayKeyBindings {
+    line_up: Vec<KeySpec>,
+    line_down: Vec<KeySpec>,
+    page_up: Vec<KeySpec>,
+    page_down: Vec<KeySpec>,
+    top: Vec<KeySpec>,
+    top_prefix: Vec<KeySpec>,
+    bottom: Vec<KeySpec>,
+    activate: Vec<KeySpec>,
+    reorder: Vec<KeySpec>,
+}
+
+impl ListControlDisplayKeyBindings {
+    pub fn line_up(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.line_up = keys.into_iter().collect();
+        self
+    }
+
+    pub fn line_down(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.line_down = keys.into_iter().collect();
+        self
+    }
+
+    pub fn page_up(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.page_up = keys.into_iter().collect();
+        self
+    }
+
+    pub fn page_down(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.page_down = keys.into_iter().collect();
+        self
+    }
+
+    pub fn top(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.top = keys.into_iter().collect();
+        self
+    }
+
+    pub fn top_prefix(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.top_prefix = keys.into_iter().collect();
+        self
+    }
+
+    pub fn bottom(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.bottom = keys.into_iter().collect();
+        self
+    }
+
+    pub fn activate(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.activate = keys.into_iter().collect();
+        self
+    }
+
+    pub fn reorder(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
+        self.reorder = keys.into_iter().collect();
+        self
+    }
+
+    fn action(&self, key: KeyEvent) -> Option<DataViewDisplayAction> {
+        let matches = |bindings: &[KeySpec]| bindings.iter().any(|binding| binding.matches(key));
+        if matches(&self.line_up) {
+            Some(DataViewDisplayAction::LineUp)
+        } else if matches(&self.line_down) {
+            Some(DataViewDisplayAction::LineDown)
+        } else if matches(&self.page_up) {
+            Some(DataViewDisplayAction::PageUp)
+        } else if matches(&self.page_down) {
+            Some(DataViewDisplayAction::PageDown)
+        } else if matches(&self.top) {
+            Some(DataViewDisplayAction::Top)
+        } else if matches(&self.bottom) {
+            Some(DataViewDisplayAction::Bottom)
+        } else if matches(&self.activate) {
+            Some(DataViewDisplayAction::Activate)
+        } else {
+            None
+        }
+    }
+
+    fn reorder_matches(&self, key: KeyEvent) -> bool {
+        self.reorder.iter().any(|binding| binding.matches(key))
+    }
+
+    fn top_prefix_matches(&self, key: KeyEvent) -> bool {
+        self.top_prefix.iter().any(|binding| binding.matches(key))
+    }
+}
+
 impl Default for ListControlKeyBindings {
     fn default() -> Self {
         Self {
@@ -325,6 +415,7 @@ struct ReorderState<Id> {
     snapshot: ReorderSnapshot<Id>,
     scroll_snapshot: DataViewScrollSnapshot,
     staged: Vec<Id>,
+    scope_ids: Option<Vec<Id>>,
     moving_id: Id,
     pending_g: bool,
 }
@@ -349,7 +440,9 @@ struct FlatBlockMoveState<Id> {
     snapshot: ReorderSnapshot<Id>,
     scroll_snapshot: DataViewScrollSnapshot,
     selected: Vec<Id>,
+    scope_ids: Option<Vec<Id>>,
     target_index: usize,
+    /// Boundary in complete snapshot/display order, including rows outside the scope.
     visual_target_index: Option<usize>,
     highlighted_id: Id,
     pending_g: bool,
@@ -369,12 +462,13 @@ struct TreeBlockMoveState<Id> {
 
 pub struct ListControl<T, Id, M = ()> {
     data_view: DataView<T, Id>,
+    display_only: bool,
     panel: Panel,
     panel_visible: bool,
     inputs: Vec<ListControlInput<M>>,
     required_fields: Vec<bool>,
     field_visibility: Vec<Option<ListControlFieldVisibility>>,
-    creator: Box<Creator<T>>,
+    creator: Option<Box<Creator<T>>>,
     editable: Option<Editable<T>>,
     keys: ListControlKeyBindings,
     adding: bool,
@@ -395,6 +489,9 @@ pub struct ListControl<T, Id, M = ()> {
     confirmation_area: Rect,
     confirmation_bounds: Rect,
     reorder_column: Option<String>,
+    reorder_scope: Option<Box<SameScope<T>>>,
+    display_keys: Option<ListControlDisplayKeyBindings>,
+    display_pending_top_prefix: bool,
     allow_horizontal_moving: bool,
     reorder: Option<ReorderState<Id>>,
     tree_reorder: Option<TreeReorderState<Id>>,
@@ -493,12 +590,13 @@ where
             .collect();
         Self {
             data_view: DataView::new(rows, row_id),
+            display_only: false,
             panel: Panel::new(),
             panel_visible: true,
             inputs,
             required_fields,
             field_visibility,
-            creator: Box::new(creator),
+            creator: Some(Box::new(creator)),
             editable: None,
             keys: ListControlKeyBindings::default(),
             adding: false,
@@ -522,6 +620,59 @@ where
             confirmation_area: Rect::default(),
             confirmation_bounds: Rect::default(),
             reorder_column: None,
+            reorder_scope: None,
+            display_keys: None,
+            display_pending_top_prefix: false,
+            allow_horizontal_moving: true,
+            reorder: None,
+            tree_reorder: None,
+            tree_selection: None,
+            flat_range_selection: None,
+            flat_block_move: None,
+            tree_block_move: None,
+        }
+    }
+
+    /// Creates a panel-less read-only list for embedding in a focused host.
+    pub fn display(rows: impl IntoIterator<Item = T>, row_id: impl Fn(&T) -> Id + 'static) -> Self {
+        Self {
+            data_view: DataView::new(rows, row_id)
+                .headers(false)
+                .action_bar(false)
+                .filter_controls(false),
+            display_only: true,
+            panel: Panel::new(),
+            panel_visible: false,
+            inputs: Vec::new(),
+            required_fields: Vec::new(),
+            field_visibility: Vec::new(),
+            creator: None,
+            editable: None,
+            keys: ListControlKeyBindings::default(),
+            adding: false,
+            adding_parent: None,
+            editing: None,
+            events: Vec::new(),
+            area: Rect::default(),
+            data_area: Rect::default(),
+            input_area: Rect::default(),
+            active_field: 0,
+            hotkey: None,
+            pending_hotkey_prefix: None,
+            max_rows: DEFAULT_MAX_ROWS,
+            remove_confirmation: None,
+            confirmation_keys: ConfirmationDialogKeyBindings {
+                yes: Some(KeySpec::plain('d')),
+                no: Some(KeySpec::plain('c')),
+            },
+            pending_remove: None,
+            confirmation_dialog: DynamicChild::default(),
+            confirmation_area: Rect::default(),
+            confirmation_bounds: Rect::default(),
+            reorder_column: None,
+            reorder_scope: None,
+            display_keys: None,
+            display_pending_top_prefix: false,
             allow_horizontal_moving: true,
             reorder: None,
             tree_reorder: None,
@@ -581,12 +732,32 @@ where
     }
 
     pub fn action_bar(mut self, action_bar: bool) -> Self {
-        self.data_view = self.data_view.action_bar(action_bar);
+        self.data_view =
+            self.data_view
+                .action_bar(if self.display_only { false } else { action_bar });
         self
     }
 
     pub fn filter_controls(mut self, enabled: bool) -> Self {
-        self.data_view = self.data_view.filter_controls(enabled);
+        self.data_view =
+            self.data_view
+                .filter_controls(if self.display_only { false } else { enabled });
+        self
+    }
+
+    /// Wraps rich display rows to the available column width.
+    pub fn wrap_cells(mut self) -> Self {
+        self.set_wrap_cells(true);
+        self
+    }
+
+    pub fn set_wrap_cells(&mut self, wrap_cells: bool) {
+        self.data_view.set_wrap_cells(wrap_cells);
+    }
+
+    /// Sets a display row-height policy. Returned zero heights are clamped to one.
+    pub fn row_height_by(mut self, row_height: impl Fn(&T) -> u16 + 'static) -> Self {
+        self.data_view.set_row_height_by(row_height);
         self
     }
 
@@ -660,10 +831,12 @@ where
         title: impl Into<String>,
         formatter: impl Fn(&T) -> String + 'static,
     ) -> Self {
-        self.remove_confirmation = Some(RemoveConfirmation {
-            title: title.into(),
-            formatter: Box::new(formatter),
-        });
+        if !self.display_only {
+            self.remove_confirmation = Some(RemoveConfirmation {
+                title: title.into(),
+                formatter: Box::new(formatter),
+            });
+        }
         self
     }
 
@@ -711,6 +884,19 @@ where
         self
     }
 
+    pub fn display_keybindings(mut self, keys: ListControlDisplayKeyBindings) -> Self {
+        self.set_display_keybindings(keys);
+        self
+    }
+
+    pub fn set_display_keybindings(&mut self, keys: ListControlDisplayKeyBindings) {
+        if self.display_only {
+            self.display_keys = Some(keys);
+            self.clear_display_pending_top_prefix();
+            self.clear_pending_reorder_g();
+        }
+    }
+
     pub fn sorted_by(mut self, column_id: impl Into<String>, direction: SortDirection) -> Self {
         assert!(
             self.reorder_column.is_none(),
@@ -728,6 +914,23 @@ where
         let column_id = column_id.into();
         self.data_view.configure_reorder_sort(&column_id);
         self.reorder_column = Some(column_id);
+        self.reorder_scope = None;
+        self
+    }
+
+    pub fn reorderable_by_scoped(
+        mut self,
+        column_id: impl Into<String>,
+        same_scope: impl Fn(&T, &T) -> bool + 'static,
+    ) -> Self {
+        assert!(
+            !self.data_view.has_automatic_sort(),
+            "ListControl automatic sorting and reorderable mode are mutually exclusive"
+        );
+        let column_id = column_id.into();
+        self.data_view.configure_reorder_sort(&column_id);
+        self.reorder_column = Some(column_id);
+        self.reorder_scope = Some(Box::new(same_scope));
         self
     }
 
@@ -736,10 +939,12 @@ where
         getter: impl Fn(&T) -> Vec<String> + 'static,
         mutator: impl Fn(&mut T, Vec<String>) + 'static,
     ) -> Self {
-        self.editable = Some(Editable {
-            getter: Box::new(getter),
-            mutator: Box::new(mutator),
-        });
+        if !self.display_only {
+            self.editable = Some(Editable {
+                getter: Box::new(getter),
+                mutator: Box::new(mutator),
+            });
+        }
         self
     }
 
@@ -770,9 +975,23 @@ where
             .reconcile_selection_to_highlight_on_navigate();
     }
 
+    /// Updates the displayed row highlight without changing ListControl interactions.
+    pub fn set_highlighted_id(&mut self, id: &Id) -> DataViewOutcome {
+        self.data_view.highlight_id(id)
+    }
+
     pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
         let outcome = self.data_view.set_rows(rows);
         self.restore_transient_selection_after_row_replacement();
+        if self.is_reordering() {
+            if !self.reorder_states_are_compatible() {
+                self.reject_reorder_for_data_change(crate::AnimationSettings::default());
+            } else {
+                self.restore_block_move_overlay_after_row_replacement(
+                    crate::AnimationSettings::default(),
+                );
+            }
+        }
         outcome
     }
 
@@ -788,8 +1007,17 @@ where
 
     fn restore_transient_selection_after_row_replacement(&mut self) {
         let display_ids = self.data_view.reorder_visible_ids();
-        if let Some(selection) = self.flat_range_selection.as_mut() {
-            if !selection.reconcile(&display_ids) {
+        if let Some(anchor) = self
+            .flat_range_selection
+            .as_ref()
+            .map(|selection| selection.anchor.clone())
+        {
+            let scope_ids = self.flat_scope_ids(&anchor, display_ids.clone());
+            let selection = self
+                .flat_range_selection
+                .as_mut()
+                .expect("flat selection remains active");
+            if scope_ids.is_empty() || !selection.reconcile(&scope_ids) {
                 self.clear_flat_range_selection();
                 return;
             }
@@ -822,6 +1050,77 @@ where
         }
     }
 
+    fn display_action(&self, key: KeyEvent) -> Option<DataViewDisplayAction> {
+        self.display_keys.as_ref().and_then(|keys| keys.action(key))
+    }
+
+    fn display_reorder_matches(&self, key: KeyEvent) -> bool {
+        self.display_keys
+            .as_ref()
+            .is_some_and(|keys| keys.reorder_matches(key))
+    }
+
+    fn reorder_key_matches(&self, key: KeyEvent) -> bool {
+        if self.display_uses_custom_bindings() {
+            self.display_reorder_matches(key)
+        } else {
+            self.keys.reorder_matches(key)
+        }
+    }
+
+    fn display_uses_custom_bindings(&self) -> bool {
+        self.display_only && self.display_keys.is_some()
+    }
+
+    fn handle_display_data_key(
+        &mut self,
+        key: KeyEvent,
+        ctx: &mut EventCtx<M>,
+    ) -> Option<EventOutcome> {
+        if self.display_top_prefix_matches(key) {
+            if self.display_pending_top_prefix {
+                self.display_pending_top_prefix = false;
+                return self.handle_display_data_action(DataViewDisplayAction::Top, ctx);
+            }
+            self.display_pending_top_prefix = true;
+            ctx.stop_propagation();
+            return Some(EventOutcome::Handled);
+        }
+        self.display_pending_top_prefix = false;
+        let action = self.display_action(key)?;
+        self.handle_display_data_action(action, ctx)
+    }
+
+    fn handle_display_data_action(
+        &mut self,
+        action: DataViewDisplayAction,
+        ctx: &mut EventCtx<M>,
+    ) -> Option<EventOutcome> {
+        let outcome = self
+            .data_view
+            .handle_display_action(action, self.data_area, ctx.animation());
+        if outcome.needs_redraw() {
+            ctx.request_redraw();
+            ctx.request_layout();
+        }
+        ctx.stop_propagation();
+        Some(EventOutcome::Handled)
+    }
+
+    fn display_top_prefix_matches(&self, key: KeyEvent) -> bool {
+        self.display_keys
+            .as_ref()
+            .is_some_and(|keys| keys.top_prefix_matches(key))
+    }
+
+    fn display_suppresses_global_key(&self, key: KeyEvent) -> bool {
+        if !self.display_uses_custom_bindings() {
+            return false;
+        }
+        let keys = crate::keybindings();
+        self.data_view.is_navigation_key(key) || keys.data_view().activate_matches(key)
+    }
+
     pub fn take_data_view_events(&mut self) -> Vec<DataViewTypedEvent<Id>> {
         self.data_view.take_events()
     }
@@ -832,6 +1131,22 @@ where
 
     pub fn panel_mut(&mut self) -> &mut Panel {
         &mut self.panel
+    }
+
+    /// Applies the embedding host's focused state to display rows.
+    pub fn set_display_focused(&mut self, focused: bool) {
+        let losing_focus = self.data_view.is_focused() && !focused;
+        self.data_view.set_focused(focused);
+        if !focused {
+            self.clear_display_pending_top_prefix();
+            if losing_focus {
+                self.cancel_reorder_for_focus_loss(crate::AnimationSettings::default());
+            }
+        }
+    }
+
+    pub(crate) fn clear_display_pending_top_prefix(&mut self) {
+        self.display_pending_top_prefix = false;
     }
 
     pub fn is_adding(&self) -> bool {
@@ -862,6 +1177,9 @@ where
     }
 
     fn remove_highlighted(&mut self) -> bool {
+        if self.display_only {
+            return false;
+        }
         self.clear_tree_selection();
         self.clear_flat_range_selection();
         let Some(row_id) = self.data_view.highlighted_id() else {
@@ -925,6 +1243,9 @@ where
         route: &EventRoute,
         ctx: &mut EventCtx<M>,
     ) -> Option<EventOutcome> {
+        if self.display_only {
+            return None;
+        }
         if self.editor_active() {
             if self.inputs[self.active_field].dropdown_is_open() {
                 return None;

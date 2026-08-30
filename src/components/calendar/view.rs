@@ -10,7 +10,7 @@ use crate::{line_width, theme};
 use super::event_wrap::wrap_event_spans;
 use super::*;
 
-impl<T, Id, M> Calendar<T, Id, M>
+impl<T, Id, M: 'static> Calendar<T, Id, M>
 where
     Id: Clone + Eq,
 {
@@ -231,6 +231,20 @@ where
         );
         let inner = self.content_area(area);
         self.day_entries.render(frame, inner);
+    }
+
+    pub(super) fn render_day_node<'a>(
+        &'a self,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &mut crate::RenderCtx<'a>,
+    ) {
+        self.render_panel(
+            frame,
+            area,
+            format!("{} · {}", self.cursor, weekday_short(self.cursor)),
+        );
+        TuiNode::render(&self.day_entries, frame, self.content_area(area), ctx);
     }
 
     pub(super) fn render_detail_view(&self, frame: &mut Frame, area: Rect) {
@@ -476,19 +490,12 @@ where
     }
 
     fn date_has_day_selection(&self, date: Date) -> bool {
-        date == self.cursor
-            && self
-                .day_selection
-                .as_ref()
-                .is_some_and(|selection| !selection.selected.is_empty())
+        date == self.cursor && !self.day_entries.transient_selected_ids().is_empty()
     }
 
     fn day_selection_contains(&self, index: usize) -> bool {
-        self.day_selection.as_ref().is_some_and(|selection| {
-            selection
-                .selected
-                .contains(&(self.id)(&self.entries[index]))
-        })
+        self.day_entries
+            .is_transient_selected(&(self.id)(&self.entries[index]))
     }
 
     fn persistent_selection_style(&self) -> Style {

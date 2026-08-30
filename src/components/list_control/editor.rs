@@ -57,6 +57,9 @@ where
     }
 
     pub(super) fn begin_add(&mut self, parent_id: Option<Id>) {
+        if self.display_only {
+            return;
+        }
         self.clear_tree_selection();
         self.clear_flat_range_selection();
         self.adding = true;
@@ -72,6 +75,9 @@ where
     }
 
     pub(super) fn begin_add_child(&mut self) -> bool {
+        if self.display_only {
+            return false;
+        }
         if !self.data_view.tree_is_mutable() {
             return false;
         }
@@ -83,6 +89,9 @@ where
     }
 
     pub(super) fn begin_add_sibling(&mut self) {
+        if self.display_only {
+            return;
+        }
         let parent_id = self
             .data_view
             .highlighted_id()
@@ -92,6 +101,9 @@ where
     }
 
     pub(super) fn begin_edit(&mut self) -> bool {
+        if self.display_only {
+            return false;
+        }
         self.clear_tree_selection();
         self.clear_flat_range_selection();
         let Some(editable) = &self.editable else {
@@ -156,6 +168,9 @@ where
     }
 
     fn submit(&mut self, settings: AnimationSettings) -> bool {
+        if self.display_only {
+            return false;
+        }
         self.clear_tree_selection();
         let values = self.values();
         let visible = self.visible_fields();
@@ -168,7 +183,8 @@ where
             return false;
         }
         if self.adding {
-            let mut row = (self.creator)(values, self.data_view.rows());
+            let creator = self.creator.as_mut().expect("adding requires a creator");
+            let mut row = creator(values, self.data_view.rows());
             let parent_id = self.adding_parent.clone().unwrap_or(None);
             self.data_view
                 .set_new_row_parent(&mut row, parent_id.clone());

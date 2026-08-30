@@ -274,7 +274,10 @@ where
         show_tree_gutter: bool,
     ) -> Text<'static> {
         let default_continuation_indent = if column_index == 0 {
-            if show_tree_gutter || self.selection_mode == SelectionMode::Multi {
+            if self.left_gutter_marker_by.is_some()
+                || show_tree_gutter
+                || self.selection_mode == SelectionMode::Multi
+            {
                 text = self.with_row_prefix(text, row, selection_descendants, show_tree_gutter);
             }
             self.row_prefix_width(row, selection_descendants, show_tree_gutter)
@@ -288,7 +291,10 @@ where
             .map(|indent| indent(row.row))
             .unwrap_or(default_continuation_indent);
         if self.wrap_cells {
-            wrap_text(text, width, continuation_indent)
+            self.repeat_left_gutter_marker_on_wrapped_lines(
+                wrap_text(text, width, continuation_indent),
+                row.row,
+            )
         } else {
             text
         }
@@ -540,7 +546,11 @@ where
         selection_descendants: &HashMap<Id, Vec<Id>>,
         show_tree_gutter: bool,
     ) -> usize {
-        let mut width = 0;
+        let mut width = self
+            .left_gutter_marker_by
+            .as_ref()
+            .is_some_and(|marker| marker(row.row).is_some())
+            .into();
         if show_tree_gutter {
             width += row
                 .depth

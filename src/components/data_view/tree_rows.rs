@@ -278,7 +278,7 @@ where
             .collect()
     }
 
-    fn row_matches_transform(&self, row: &T) -> bool {
+    pub(super) fn row_matches_transform(&self, row: &T) -> bool {
         let search = self.transform_state.search.trim();
         (search.is_empty() || self.row_matches_search(row, search)) && self.row_matches_filters(row)
     }

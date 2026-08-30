@@ -67,7 +67,8 @@ where
             return Some(EventOutcome::Handled);
         }
         if self.reorder.is_none() {
-            let block_command = self.keys.reorder_matches(key)
+            let reorder_matches = self.reorder_key_matches(key);
+            let block_command = reorder_matches
                 || matches!(key.code, Key::Char(' ')) && key.modifiers == KeyModifiers::NONE;
             let starts_flat_block = self
                 .flat_range_selection
@@ -109,7 +110,7 @@ where
             } else if consumes_single {
                 ctx.stop_propagation();
                 return Some(EventOutcome::Handled);
-            } else if !self.keys.reorder_matches(key) {
+            } else if !reorder_matches {
                 return None;
             }
             if self.data_view.tree_is_mutable() {
@@ -122,33 +123,32 @@ where
         } else if !self.reorder_is_compatible() {
             self.reject_changed_reorder(ctx.animation());
         } else {
-            let keys = crate::keybindings();
-            let top_prefix = keys.data_view().top_prefix_matches(key);
+            let top_prefix = self.top_prefix_matches(key);
             if !top_prefix {
                 self.clear_pending_reorder_g();
             }
-
-            if matches!(key.code, Key::Enter | Key::Char(' '))
-                && key.modifiers == KeyModifiers::NONE
+            if self.reorder_key_matches(key)
+                || matches!(key.code, Key::Enter | Key::Char(' '))
+                    && key.modifiers == KeyModifiers::NONE
             {
                 self.commit_reorder(ctx.animation());
             } else if matches!(key.code, Key::Esc)
                 || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
             {
                 self.cancel_reorder(ctx.animation());
-            } else if keys.line_up_matches(key) {
+            } else if self.line_up_matches(key) {
                 self.move_reorder_line(-1, ctx.animation());
-            } else if keys.line_down_matches(key) {
+            } else if self.line_down_matches(key) {
                 self.move_reorder_line(1, ctx.animation());
-            } else if keys.page_up_matches(key) {
+            } else if self.page_up_matches(key) {
                 let page = self.data_view.visible_page_step(self.data_area);
                 self.move_reorder(-(page as isize), ctx.animation());
-            } else if keys.page_down_matches(key) {
+            } else if self.page_down_matches(key) {
                 let page = self.data_view.visible_page_step(self.data_area);
                 self.move_reorder(page as isize, ctx.animation());
-            } else if keys.home_matches(key) {
+            } else if self.top_matches(key) {
                 self.move_reorder_to(0, ctx.animation());
-            } else if keys.end_matches(key) || keys.data_view().bottom_matches(key) {
+            } else if self.bottom_matches(key) {
                 self.move_reorder_to(usize::MAX, ctx.animation());
             } else if top_prefix {
                 self.handle_reorder_g(ctx.animation());
@@ -181,11 +181,8 @@ where
         let shift = key.modifiers == KeyModifiers::SHIFT;
         let control = key.modifiers == KeyModifiers::CONTROL;
         let direction = self.tree_selection_direction(key, shift || control);
-        let range_extension = shift && direction.is_some();
-        if self.tree_selection.is_some()
-            && self.data_view.is_navigation_key(key)
-            && !range_extension
-        {
+        let range_extension = (shift || control) && direction.is_some();
+        if self.tree_selection.is_some() && self.is_navigation_key(key) && !range_extension {
             self.clear_tree_selection();
             ctx.request_redraw();
             return None;
@@ -231,10 +228,9 @@ where
                 key.code = Key::Char(character.to_ascii_lowercase());
             }
         }
-        let keys = crate::keybindings();
-        if keys.line_up_matches(key) {
+        if self.line_up_matches(key) {
             Some(-1)
-        } else if keys.line_down_matches(key) {
+        } else if self.line_down_matches(key) {
             Some(1)
         } else {
             None
@@ -384,10 +380,7 @@ where
         let control = key.modifiers == KeyModifiers::CONTROL;
         let direction = self.tree_selection_direction(key, shift || control);
         let range_extension = shift && direction.is_some();
-        if self.flat_range_selection.is_some()
-            && self.data_view.is_navigation_key(key)
-            && !range_extension
-        {
+        if self.flat_range_selection.is_some() && self.is_navigation_key(key) && !range_extension {
             self.clear_flat_range_selection();
             ctx.request_redraw();
             return None;
@@ -417,14 +410,14 @@ where
         let Some(current) = self.data_view.highlighted_id() else {
             return None;
         };
+        let ids = self.flat_scope_ids(&current, self.data_view.reorder_visible_ids());
         if self
             .flat_range_selection
             .as_ref()
-            .is_some_and(|state| state.range_mode != shift)
+            .is_some_and(|state| state.selected.iter().any(|id| !ids.contains(id)))
         {
             self.clear_flat_range_selection();
         }
-        let ids = self.data_view.reorder_visible_ids();
         let Some(current_index) = ids.iter().position(|id| id == &current) else {
             return None;
         };
@@ -459,7 +452,7 @@ where
         let Some(current) = self.data_view.highlighted_id() else {
             return;
         };
-        let ids = self.data_view.reorder_visible_ids();
+        let ids = self.flat_scope_ids(&current, self.data_view.reorder_visible_ids());
         if !ids.contains(&current) {
             return;
         }
@@ -471,6 +464,10 @@ where
                     anchor: current.clone(),
                     range_mode: false,
                 });
+            if state.selected.iter().any(|id| !ids.contains(id)) {
+                state.selected.clear();
+                state.anchor = current.clone();
+            }
             state.toggle(&ids, current)
         };
         if selected.is_empty() {
@@ -487,7 +484,7 @@ where
     }
 
     fn flat_range_selection_available(&self) -> bool {
-        !self.data_view.tree_is_mutable() && self.reorder.is_none()
+        !self.data_view.tree_is_mutable() && self.reorder_column.is_some() && self.reorder.is_none()
     }
 
     fn flat_block_move_available(&self) -> bool {
@@ -497,6 +494,99 @@ where
                     .reorder_snapshot(column)
                     .is_ok_and(|snapshot| snapshot.ids == self.data_view.reorder_visible_ids())
             })
+    }
+
+    fn is_navigation_key(&self, key: KeyEvent) -> bool {
+        self.display_action(key)
+            .is_some_and(|action| !matches!(action, super::DataViewDisplayAction::Activate))
+            || self.data_view.is_navigation_key(key)
+    }
+
+    fn line_up_matches(&self, key: KeyEvent) -> bool {
+        self.display_action(key) == Some(super::DataViewDisplayAction::LineUp)
+            || !self.display_uses_custom_bindings() && crate::keybindings().line_up_matches(key)
+    }
+
+    fn line_down_matches(&self, key: KeyEvent) -> bool {
+        self.display_action(key) == Some(super::DataViewDisplayAction::LineDown)
+            || !self.display_uses_custom_bindings() && crate::keybindings().line_down_matches(key)
+    }
+
+    fn page_up_matches(&self, key: KeyEvent) -> bool {
+        self.display_action(key) == Some(super::DataViewDisplayAction::PageUp)
+            || !self.display_uses_custom_bindings() && crate::keybindings().page_up_matches(key)
+    }
+
+    fn page_down_matches(&self, key: KeyEvent) -> bool {
+        self.display_action(key) == Some(super::DataViewDisplayAction::PageDown)
+            || !self.display_uses_custom_bindings() && crate::keybindings().page_down_matches(key)
+    }
+
+    fn top_matches(&self, key: KeyEvent) -> bool {
+        self.display_action(key) == Some(super::DataViewDisplayAction::Top)
+            || !self.display_uses_custom_bindings() && crate::keybindings().home_matches(key)
+    }
+
+    fn bottom_matches(&self, key: KeyEvent) -> bool {
+        self.display_action(key) == Some(super::DataViewDisplayAction::Bottom)
+            || !self.display_uses_custom_bindings()
+                && (crate::keybindings().end_matches(key)
+                    || crate::keybindings().data_view().bottom_matches(key))
+    }
+
+    fn top_prefix_matches(&self, key: KeyEvent) -> bool {
+        if self.display_uses_custom_bindings() {
+            self.display_top_prefix_matches(key)
+        } else {
+            crate::keybindings().data_view().top_prefix_matches(key)
+        }
+    }
+
+    pub(super) fn flat_scope_ids(&self, anchor_id: &Id, ids: Vec<Id>) -> Vec<Id> {
+        let Some(same_scope) = self.reorder_scope.as_ref() else {
+            return ids;
+        };
+        let Some(anchor) = self
+            .data_view
+            .rows()
+            .iter()
+            .find(|row| self.data_view.row_id(row) == *anchor_id)
+        else {
+            return Vec::new();
+        };
+        ids.into_iter()
+            .filter(|id| {
+                self.data_view
+                    .rows()
+                    .iter()
+                    .find(|row| self.data_view.row_id(row) == *id)
+                    .is_some_and(|row| same_scope(anchor, row))
+            })
+            .collect()
+    }
+
+    fn scoped_snapshot_ids(
+        &self,
+        snapshot: &super::ReorderSnapshot<Id>,
+        anchor_id: &Id,
+    ) -> Option<Vec<Id>> {
+        self.reorder_scope.as_ref().map_or_else(
+            || Some(snapshot.ids.clone()),
+            |same_scope| {
+                self.data_view
+                    .reorder_scoped_ids(snapshot, anchor_id, same_scope.as_ref())
+            },
+        )
+    }
+
+    fn scope_is_compatible(
+        &self,
+        snapshot: &super::ReorderSnapshot<Id>,
+        anchor_id: &Id,
+        scope_ids: &Option<Vec<Id>>,
+    ) -> bool {
+        self.reorder_scope.is_none()
+            || self.scoped_snapshot_ids(snapshot, anchor_id).as_ref() == scope_ids.as_ref()
     }
 
     fn begin_flat_block_move(&mut self, settings: crate::AnimationSettings) -> bool {
@@ -515,8 +605,15 @@ where
             self.clear_flat_range_selection();
             return false;
         };
-        let selected = snapshot
-            .ids
+        let Some(highlighted_id) = self.data_view.highlighted_id() else {
+            self.clear_flat_range_selection();
+            return false;
+        };
+        let Some(scope_ids) = self.scoped_snapshot_ids(&snapshot, &highlighted_id) else {
+            self.clear_flat_range_selection();
+            return false;
+        };
+        let selected = scope_ids
             .iter()
             .filter(|id| selection.selected.contains(id))
             .cloned()
@@ -525,10 +622,6 @@ where
             self.clear_flat_range_selection();
             return false;
         }
-        let Some(highlighted_id) = self.data_view.highlighted_id() else {
-            self.clear_flat_range_selection();
-            return false;
-        };
         let placement_id = if selection.range_mode {
             highlighted_id.clone()
         } else {
@@ -541,10 +634,12 @@ where
             .expect("selection placement row exists in reorder snapshot");
         let placement_is_first_selected = selected.first() == Some(&placement_id);
         let visual_target_index = placement_index + usize::from(!placement_is_first_selected);
-        let target_index = snapshot.ids[..visual_target_index]
-            .iter()
-            .filter(|id| !selected.contains(id))
-            .count();
+        let target_index = Self::flat_block_scoped_target_index(
+            &snapshot.ids,
+            &scope_ids,
+            &selected,
+            visual_target_index,
+        );
         self.data_view.set_selection_overlay(
             selected.clone(),
             Some(if placement_is_first_selected {
@@ -563,6 +658,7 @@ where
             snapshot,
             scroll_snapshot: self.data_view.scroll_snapshot(),
             selected,
+            scope_ids: self.reorder_scope.as_ref().map(|_| scope_ids),
             target_index,
             visual_target_index: Some(visual_target_index),
             highlighted_id,
@@ -580,7 +676,9 @@ where
         } else if key.is_repeat() {
             ctx.stop_propagation();
             return;
-        } else if key.code == Key::Enter && key.modifiers == KeyModifiers::NONE {
+        } else if self.reorder_key_matches(key)
+            || key.code == Key::Enter && key.modifiers == KeyModifiers::NONE
+        {
             self.commit_flat_block_move(ctx.animation());
         } else if matches!(key.code, Key::Esc)
             || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
@@ -603,13 +701,19 @@ where
             self.data_view
                 .reorder_snapshot_matches(column, &state.snapshot)
                 && self.data_view.reorder_visible_ids() == state.snapshot.ids
+                && self.scope_is_compatible(
+                    &state.snapshot,
+                    state.selected.first().expect("selected block is not empty"),
+                    &state.scope_ids,
+                )
         })
     }
 
     fn flat_block_remaining_ids(&self, state: &FlatBlockMoveState<Id>) -> Vec<Id> {
         state
-            .snapshot
-            .ids
+            .scope_ids
+            .as_ref()
+            .unwrap_or(&state.snapshot.ids)
             .iter()
             .filter(|id| !state.selected.contains(id))
             .cloned()
@@ -634,10 +738,12 @@ where
             Self::flat_block_visual_target_index(state),
             delta,
         );
-        let target_index = state.snapshot.ids[..visual_target_index]
-            .iter()
-            .filter(|id| !state.selected.contains(id))
-            .count();
+        let target_index = Self::flat_block_scoped_target_index(
+            &state.snapshot.ids,
+            state.scope_ids.as_ref().unwrap_or(&state.snapshot.ids),
+            &state.selected,
+            visual_target_index,
+        );
         let state = self
             .flat_block_move
             .as_mut()
@@ -649,14 +755,27 @@ where
     fn flat_block_visual_target_index(state: &FlatBlockMoveState<Id>) -> usize {
         state.visual_target_index.unwrap_or_else(|| {
             state
-                .snapshot
-                .ids
+                .scope_ids
+                .as_ref()
+                .unwrap_or(&state.snapshot.ids)
                 .iter()
                 .filter(|id| !state.selected.contains(id))
                 .nth(state.target_index)
                 .and_then(|target| state.snapshot.ids.iter().position(|id| id == target))
                 .unwrap_or(state.snapshot.ids.len())
         })
+    }
+
+    fn flat_block_scoped_target_index(
+        full_ids: &[Id],
+        scope_ids: &[Id],
+        selected: &[Id],
+        visual_target_index: usize,
+    ) -> usize {
+        full_ids[..visual_target_index.min(full_ids.len())]
+            .iter()
+            .filter(|id| scope_ids.contains(id) && !selected.contains(id))
+            .count()
     }
 
     fn set_flat_block_target(&mut self, target_index: usize) {
@@ -674,36 +793,30 @@ where
     }
 
     fn handle_flat_block_target_key(&mut self, key: KeyEvent) -> bool {
-        if key.modifiers == KeyModifiers::NONE {
-            match key.code {
-                Key::Char('k') | Key::Up => {
-                    self.move_flat_block_target_line(-1);
-                    return true;
-                }
-                Key::Char('j') | Key::Down => {
-                    self.move_flat_block_target_line(1);
-                    return true;
-                }
-                _ => {}
-            }
+        if key.modifiers == KeyModifiers::NONE && self.line_up_matches(key) {
+            self.move_flat_block_target_line(-1);
+            return true;
         }
-        let keys = crate::keybindings();
-        let top_prefix = keys.data_view().top_prefix_matches(key);
+        if key.modifiers == KeyModifiers::NONE && self.line_down_matches(key) {
+            self.move_flat_block_target_line(1);
+            return true;
+        }
+        let top_prefix = self.top_prefix_matches(key);
         if !top_prefix {
             self.flat_block_move
                 .as_mut()
                 .expect("flat block move is active")
                 .pending_g = false;
         }
-        if keys.page_up_matches(key) {
+        if self.page_up_matches(key) {
             self.move_flat_block_target(
                 -(self.data_view.visible_page_step(self.data_area) as isize),
             );
-        } else if keys.page_down_matches(key) {
+        } else if self.page_down_matches(key) {
             self.move_flat_block_target(self.data_view.visible_page_step(self.data_area) as isize);
-        } else if keys.home_matches(key) {
+        } else if self.top_matches(key) {
             self.set_flat_block_target(0);
-        } else if keys.end_matches(key) || keys.data_view().bottom_matches(key) {
+        } else if self.bottom_matches(key) {
             self.set_flat_block_target(usize::MAX);
         } else if top_prefix {
             let move_to_top = {
@@ -783,7 +896,8 @@ where
             return;
         };
         self.clear_flat_range_selection();
-        let staged = self.flat_block_staged_ids(&state);
+        let scoped_staged = self.flat_block_staged_ids(&state);
+        let staged = Self::merge_scope_order(&state.snapshot.ids, &state.scope_ids, &scoped_staged);
         let column = self
             .reorder_column
             .as_deref()
@@ -796,8 +910,9 @@ where
                 .reposition_highlight_silently(&state.highlighted_id);
             self.data_view
                 .ensure_highlight_visible(self.data_area, settings);
-            self.events
-                .push(ListControlEvent::Reordered { row_ids: staged });
+            self.events.push(ListControlEvent::Reordered {
+                row_ids: scoped_staged,
+            });
         } else {
             self.data_view
                 .reposition_highlight_silently(&state.highlighted_id);
@@ -919,7 +1034,9 @@ where
         } else if key.is_repeat() {
             ctx.stop_propagation();
             return;
-        } else if key.code == Key::Enter && key.modifiers == KeyModifiers::NONE {
+        } else if self.reorder_key_matches(key)
+            || key.code == Key::Enter && key.modifiers == KeyModifiers::NONE
+        {
             self.commit_tree_block_move(ctx.animation());
         } else if matches!(key.code, Key::Esc)
             || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
@@ -1253,7 +1370,9 @@ where
         let keys = crate::keybindings();
         if !self.tree_reorder_is_compatible() {
             self.reject_changed_tree_reorder(ctx.animation());
-        } else if key.code == Key::Enter && key.modifiers == KeyModifiers::NONE {
+        } else if self.reorder_key_matches(key)
+            || key.code == Key::Enter && key.modifiers == KeyModifiers::NONE
+        {
             self.commit_tree_reorder(ctx.animation());
         } else if matches!(key.code, Key::Esc)
             || key.code == Key::Char('[') && key.modifiers == KeyModifiers::CONTROL
@@ -1407,6 +1526,12 @@ where
         let Some(moving_id) = self.data_view.highlighted_id() else {
             return;
         };
+        let Some(scope_ids) = self.scoped_snapshot_ids(&snapshot, &moving_id) else {
+            self.events.push(ListControlEvent::ReorderUnavailable {
+                reason: ListControlReorderUnavailable::DataChanged,
+            });
+            return;
+        };
         self.clear_flat_range_selection();
         let scroll_snapshot = self.data_view.scroll_snapshot();
         let ids = snapshot.ids.clone();
@@ -1418,6 +1543,7 @@ where
             snapshot,
             scroll_snapshot,
             staged: ids,
+            scope_ids: self.reorder_scope.as_ref().map(|_| scope_ids),
             moving_id,
             pending_g: false,
         });
@@ -1432,13 +1558,37 @@ where
         };
         self.data_view
             .reorder_snapshot_matches(column, &state.snapshot)
+            && self.scope_is_compatible(&state.snapshot, &state.moving_id, &state.scope_ids)
+    }
+
+    pub(super) fn reorder_states_are_compatible(&self) -> bool {
+        self.reorder_is_compatible()
+            && self.tree_reorder_is_compatible()
+            && self.flat_block_move_is_compatible()
+            && self.tree_block_move_is_compatible()
+    }
+
+    pub(super) fn restore_block_move_overlay_after_row_replacement(
+        &mut self,
+        settings: crate::AnimationSettings,
+    ) {
+        if self.flat_block_move.is_some() {
+            self.update_flat_block_overlay();
+            self.data_view
+                .ensure_selection_placeholder_visible(self.data_area, settings);
+        }
+        if self.tree_block_move.is_some() {
+            self.update_tree_block_overlay();
+            self.data_view
+                .ensure_selection_placeholder_visible(self.data_area, settings);
+        }
     }
 
     fn move_reorder(&mut self, delta: isize, settings: crate::AnimationSettings) -> bool {
-        let visible_ids = self.data_view.reorder_visible_ids();
         let Some(state) = &self.reorder else {
             return false;
         };
+        let visible_ids = self.reorder_scope_order(state);
         let Some(index) = visible_ids.iter().position(|id| id == &state.moving_id) else {
             return false;
         };
@@ -1454,7 +1604,10 @@ where
     }
 
     fn move_reorder_to(&mut self, target: usize, settings: crate::AnimationSettings) -> bool {
-        let visible_ids = self.data_view.reorder_visible_ids();
+        let Some(state) = self.reorder.as_ref() else {
+            return false;
+        };
+        let visible_ids = self.reorder_scope_order(state);
         let Some(state) = &mut self.reorder else {
             return false;
         };
@@ -1465,15 +1618,20 @@ where
         if target == index {
             return false;
         }
-        let moving_index = state
+        let scope_ids = state.scope_ids.as_ref().unwrap_or(&state.snapshot.ids);
+        let mut staged_scope = state
             .staged
+            .iter()
+            .filter(|id| scope_ids.contains(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let moving_index = staged_scope
             .iter()
             .position(|id| id == &state.moving_id)
             .expect("reorder snapshot contains moving row");
-        let moving_id = state.staged.remove(moving_index);
+        let moving_id = staged_scope.remove(moving_index);
         let anchor_id = &visible_ids[target];
-        let anchor_index = state
-            .staged
+        let anchor_index = staged_scope
             .iter()
             .position(|id| id == anchor_id)
             .expect("reorder snapshot contains visible anchor");
@@ -1482,7 +1640,9 @@ where
         } else {
             anchor_index + 1
         };
-        state.staged.insert(insertion_index, moving_id);
+        staged_scope.insert(insertion_index, moving_id);
+        state.staged =
+            Self::merge_scope_order(&state.snapshot.ids, &state.scope_ids, &staged_scope);
         self.data_view
             .set_derived_row_order(Some(state.staged.clone()));
         self.data_view
@@ -1491,8 +1651,47 @@ where
         true
     }
 
-    fn clear_pending_reorder_g(&mut self) {
+    fn reorder_scope_order(&self, state: &ReorderState<Id>) -> Vec<Id> {
+        let scope_ids = state.scope_ids.as_ref().unwrap_or(&state.snapshot.ids);
+        self.data_view
+            .reorder_visible_ids()
+            .into_iter()
+            .filter(|id| scope_ids.contains(id))
+            .collect()
+    }
+
+    fn merge_scope_order(
+        full_ids: &[Id],
+        scope_ids: &Option<Vec<Id>>,
+        scoped_order: &[Id],
+    ) -> Vec<Id> {
+        let Some(scope_ids) = scope_ids else {
+            return scoped_order.to_vec();
+        };
+        let mut scoped = scoped_order.iter();
+        full_ids
+            .iter()
+            .map(|id| {
+                if scope_ids.contains(id) {
+                    scoped
+                        .next()
+                        .expect("scoped reorder contains every scoped row")
+                        .clone()
+                } else {
+                    id.clone()
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn clear_pending_reorder_g(&mut self) {
         if let Some(state) = &mut self.reorder {
+            state.pending_g = false;
+        }
+        if let Some(state) = &mut self.flat_block_move {
+            state.pending_g = false;
+        }
+        if let Some(state) = &mut self.tree_block_move {
             state.pending_g = false;
         }
     }
@@ -1527,7 +1726,17 @@ where
             self.data_view
                 .reposition_highlight_silently(&state.moving_id);
             self.events.push(ListControlEvent::Reordered {
-                row_ids: state.staged,
+                row_ids: state.scope_ids.as_ref().map_or_else(
+                    || state.staged.clone(),
+                    |scope_ids| {
+                        state
+                            .staged
+                            .iter()
+                            .filter(|id| scope_ids.contains(id))
+                            .cloned()
+                            .collect()
+                    },
+                ),
             });
         } else {
             self.data_view.set_derived_row_order(None);
@@ -1605,6 +1814,19 @@ where
         self.events.push(ListControlEvent::ReorderUnavailable {
             reason: ListControlReorderUnavailable::DataChanged,
         });
+    }
+
+    pub(super) fn reject_reorder_for_data_change(&mut self, settings: crate::AnimationSettings) {
+        if self.flat_block_move.is_some() {
+            self.reject_changed_flat_block_move(settings);
+        }
+        if self.tree_block_move.is_some() {
+            self.reject_changed_tree_block_move(settings);
+        }
+        if self.tree_reorder.is_some() {
+            self.reject_changed_tree_reorder(settings);
+        }
+        self.reject_changed_reorder(settings);
     }
 }
 

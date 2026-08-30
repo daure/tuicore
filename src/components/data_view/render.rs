@@ -392,6 +392,13 @@ where
             text.lines.push(Line::default());
         }
         let mut prefix = Vec::new();
+        if let Some(marker) = self
+            .left_gutter_marker_by
+            .as_ref()
+            .and_then(|marker| marker(row.row))
+        {
+            prefix.push(marker);
+        }
         if show_tree_gutter {
             let indent = " ".repeat(
                 row.depth
@@ -437,6 +444,44 @@ where
             };
             spans.append(&mut line.spans);
             line.spans = spans;
+        }
+        text
+    }
+
+    pub(super) fn repeat_left_gutter_marker_on_wrapped_lines(
+        &self,
+        mut text: Text<'static>,
+        row: &T,
+    ) -> Text<'static> {
+        let Some(marker) = self
+            .left_gutter_marker_by
+            .as_ref()
+            .and_then(|marker| marker(row))
+        else {
+            return text;
+        };
+        for line in &mut text.lines {
+            if line
+                .spans
+                .first()
+                .is_some_and(|span| span.content == marker.content)
+            {
+                continue;
+            }
+            let Some(prefix) = line.spans.first() else {
+                continue;
+            };
+            let Some(first_character) = prefix.content.chars().next() else {
+                continue;
+            };
+            if !first_character.is_whitespace() {
+                continue;
+            }
+            let padding = prefix.content.chars().skip(1).collect::<String>();
+            let padding_style = prefix.style;
+            line.spans.remove(0);
+            line.spans.insert(0, Span::styled(padding, padding_style));
+            line.spans.insert(0, marker.clone());
         }
         text
     }
@@ -505,6 +550,8 @@ where
             Some(self.selected_row_style())
         } else if highlighted && self.focused {
             Some(self.highlighted_row_style())
+        } else if highlighted && self.show_inactive_highlight {
+            Some(self.selected_row_style())
         } else if !self.displays_selection_glyphs()
             && self.row_is_visually_selected(&row.id, selection_descendants)
         {

@@ -383,6 +383,38 @@ mod tests {
     }
 
     #[test]
+    fn type_ahead_requires_enter_to_activate_the_only_matching_menu_item() {
+        let mut menu_button = menu_button("m");
+        layout(&mut menu_button);
+        let mut open_ctx = EventCtx::default();
+        menu_button.dispatch_event(
+            &route(TRIGGER_SLOT),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut open_ctx,
+        );
+        layout(&mut menu_button);
+        let mut search_ctx = EventCtx::default();
+        menu_button.dispatch_event(
+            &route(MENU_SLOT),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('f'))),
+            &mut search_ctx,
+        );
+
+        assert!(menu_button.take_activated().is_empty());
+        assert!(menu_button.is_open());
+
+        let mut activate_ctx = EventCtx::default();
+        menu_button.dispatch_event(
+            &route(MENU_SLOT),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut activate_ctx,
+        );
+
+        assert_eq!(menu_button.take_activated(), vec!["new"]);
+        assert!(!menu_button.is_open());
+    }
+
+    #[test]
     fn layout_uses_internal_focus_and_overlay_paths() {
         let mut menu_button = menu_button("m");
         let closed = layout(&mut menu_button);

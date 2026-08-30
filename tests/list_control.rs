@@ -2,12 +2,13 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::Modifier;
+use ratatui::text::Line;
 use tuicore::{
     AnimationSettings, ChildKey, Column, ConfirmationDialogKeyBindings, DataView, DispatchEffects,
     EventCtx, EventRoute, FocusCtx, FocusManager, FocusRequest, HotkeyEvent, Key, KeyEvent,
-    KeyModifiers, KeySpec, LayoutCtx, LayoutEngine, ListControl, ListControlEvent,
-    ListControlField, ListControlKeyBindings, ListControlReorderUnavailable, Panel, RenderCtx,
-    SortDirection, TreeAdapter, TreeDispatcher, TreePath, TuiEvent, TuiNode,
+    KeyModifiers, KeySpec, LayoutCtx, LayoutEngine, ListControl, ListControlDisplayKeyBindings,
+    ListControlEvent, ListControlField, ListControlKeyBindings, ListControlReorderUnavailable,
+    Panel, RenderCtx, SortDirection, TreeAdapter, TreeDispatcher, TreePath, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +37,30 @@ fn control(rows: impl IntoIterator<Item = Row>) -> ListControl<Row, usize> {
 
 fn data_route() -> EventRoute {
     EventRoute::new(TreePath::from_keys([ChildKey::new("data")]))
+}
+
+fn display_control() -> ListControl<Row, usize> {
+    ListControl::display(
+        [
+            Row {
+                id: 1,
+                name: "Morning planning and review".into(),
+            },
+            Row {
+                id: 2,
+                name: "Afternoon delivery".into(),
+            },
+        ],
+        |row| row.id,
+    )
+    .column(Column::rich(
+        "entry",
+        "",
+        Constraint::Percentage(100),
+        |row: &Row, _| Line::from(row.name.clone()),
+    ))
+    .wrap_cells()
+    .row_height_by(|_| 2)
 }
 
 fn input_route() -> EventRoute {
@@ -216,6 +241,61 @@ fn reorder_key() -> TuiEvent {
 struct RankedRow {
     id: usize,
     rank: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScopedRankedRow {
+    id: usize,
+    scope: char,
+    rank: usize,
+}
+
+fn scoped_ranked_control(
+    rows: impl IntoIterator<Item = ScopedRankedRow>,
+) -> ListControl<ScopedRankedRow, usize> {
+    ListControl::display(rows, |row| row.id)
+        .column(
+            Column::text("rank", "", Constraint::Fill(1), |row: &ScopedRankedRow| {
+                row.rank.to_string()
+            })
+            .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+        )
+        .reorderable_by_scoped("rank", |left, right| left.scope == right.scope)
+}
+
+fn scoped_ranked_rows() -> [ScopedRankedRow; 6] {
+    [
+        ScopedRankedRow {
+            id: 1,
+            scope: 'a',
+            rank: 10,
+        },
+        ScopedRankedRow {
+            id: 2,
+            scope: 'b',
+            rank: 20,
+        },
+        ScopedRankedRow {
+            id: 3,
+            scope: 'a',
+            rank: 30,
+        },
+        ScopedRankedRow {
+            id: 4,
+            scope: 'b',
+            rank: 40,
+        },
+        ScopedRankedRow {
+            id: 5,
+            scope: 'a',
+            rank: 50,
+        },
+        ScopedRankedRow {
+            id: 6,
+            scope: 'b',
+            rank: 60,
+        },
+    ]
 }
 
 fn ranked_control(rows: impl IntoIterator<Item = RankedRow>) -> ListControl<RankedRow, usize> {
@@ -887,6 +967,450 @@ fn header_filter_owns_list_control_action_characters() {
     for character in ['e', '+', 'x'] {
         assert_header_filter_receives_list_binding(character);
     }
+}
+
+#[test]
+fn display_list_is_panel_less_and_suppresses_mutation_from_direct_and_routed_events() {
+    let mut control = display_control()
+        .action_bar(true)
+        .filter_controls(true)
+        .editable(
+            |row| vec![row.name.clone()],
+            |row, values| row.name.clone_from(&values[0]),
+        )
+        .confirm_remove("Remove?", |_| "row".into());
+    let area = Rect::new(0, 0, 18, 5);
+    let mut layout = LayoutCtx::new();
+    control.layout(area, &mut layout);
+
+    assert!(layout.focus_targets().is_empty());
+    assert!(!control.has_remove_confirmation());
+    control.set_display_focused(true);
+    assert!(control.data_view().is_focused());
+
+    let initial_rows = control.items().to_vec();
+    let mutation_keys = [
+        key(Key::Char('+'), KeyModifiers::NONE),
+        key(Key::Char('\\'), KeyModifiers::NONE),
+        edit_key(),
+        key(Key::Char('x'), KeyModifiers::CONTROL),
+    ];
+    for event in mutation_keys {
+        control.event(&event, &mut EventCtx::default());
+        control.dispatch_event(&data_route(), &event, &mut EventCtx::default());
+    }
+
+    assert_eq!(control.items(), initial_rows);
+    assert!(!control.is_adding());
+    assert!(!control.is_editing());
+    assert!(!control.is_confirming_remove());
+    assert!(control.take_events().is_empty());
+
+    let mut terminal = Terminal::new(TestBackend::new(18, 5)).expect("terminal should build");
+    terminal
+        .draw(|frame| {
+            let mut ctx = RenderCtx::new();
+            control.render(frame, area, &mut ctx);
+        })
+        .expect("display list should render");
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "M"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 2)).unwrap().symbol(),
+        "A"
+    );
+}
+
+#[test]
+fn display_list_allows_explicit_reorder() {
+    let mut control: ListControl<RankedRow, usize> =
+        ListControl::display(ranked_rows(), |row: &RankedRow| row.id)
+            .column(
+                Column::text("rank", "", Constraint::Fill(1), |row: &RankedRow| {
+                    row.rank.to_string()
+                })
+                .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+            )
+            .reorderable_by("rank");
+    control.set_display_focused(true);
+
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+
+    assert!(control.is_reordering());
+}
+
+#[test]
+fn lists_without_flat_reorder_retain_data_view_navigation_behavior() {
+    let mut normal: ListControl<RankedRow, usize> = ListControl::new(
+        ranked_rows(),
+        |row: &RankedRow| row.id,
+        |_, _| unreachable!(),
+    );
+    normal.data_view_mut().set_focused(true);
+    normal.dispatch_event(
+        &data_route(),
+        &key(Key::Char('j'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(normal.data_view().highlighted_id(), Some(2));
+    assert!(normal.transient_selected_ids().is_empty());
+
+    let mut display: ListControl<RankedRow, usize> =
+        ListControl::display(ranked_rows(), |row: &RankedRow| row.id);
+    display.set_display_focused(true);
+    display.event(
+        &key(Key::Char('j'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(display.data_view().highlighted_id(), Some(2));
+    assert!(display.transient_selected_ids().is_empty());
+}
+
+#[test]
+fn scoped_reorder_moves_only_highlighted_scope_and_emits_only_scope_ids() {
+    let mut control = scoped_ranked_control(scoped_ranked_rows());
+    control.set_display_focused(true);
+    control.data_view_mut().highlight_id(&1);
+
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Down, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .map(|row| (row.id, row.rank))
+            .collect::<Vec<_>>(),
+        vec![(1, 30), (2, 20), (3, 10), (4, 40), (5, 50), (6, 60)]
+    );
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Reordered {
+            row_ids: vec![3, 1, 5]
+        }]
+    );
+}
+
+#[test]
+fn scoped_sparse_block_selection_stays_in_scope_and_cancel_restores_rows() {
+    let mut control = scoped_ranked_control(scoped_ranked_rows());
+    control.set_display_focused(true);
+    control.data_view_mut().highlight_id(&1);
+
+    for event in [
+        key(Key::Down, KeyModifiers::CONTROL),
+        key(Key::Char(' '), KeyModifiers::CONTROL),
+        key(Key::Down, KeyModifiers::CONTROL),
+    ] {
+        control.dispatch_event(&data_route(), &event, &mut EventCtx::default());
+    }
+    assert_eq!(control.transient_selected_ids(), vec![1, 3]);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Down, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Esc, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(control.items(), scoped_ranked_rows());
+    assert!(matches!(
+        control.take_events().as_slice(),
+        [ListControlEvent::ReorderCancelled { row_id: 5 }]
+    ));
+}
+
+#[test]
+fn scoped_reorder_preserves_active_state_after_compatible_refresh() {
+    let mut control = scoped_ranked_control(scoped_ranked_rows());
+    control.set_display_focused(true);
+    control.data_view_mut().highlight_id(&1);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+
+    control.set_rows(scoped_ranked_rows());
+
+    assert!(control.is_reordering());
+    assert!(control.take_events().is_empty());
+}
+
+#[test]
+fn scoped_reorder_rejects_active_state_after_incompatible_refresh() {
+    let mut control = scoped_ranked_control(scoped_ranked_rows());
+    control.set_display_focused(true);
+    control.data_view_mut().highlight_id(&1);
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    let mut refreshed = scoped_ranked_rows();
+    refreshed[2].scope = 'b';
+
+    control.set_rows(refreshed);
+
+    assert!(!control.is_reordering());
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::ReorderUnavailable {
+            reason: ListControlReorderUnavailable::DataChanged
+        }]
+    );
+}
+
+#[test]
+fn reorderable_by_clears_a_previous_scope() {
+    let mut control = scoped_ranked_control(scoped_ranked_rows()).reorderable_by("rank");
+    control.set_display_focused(true);
+    control.data_view_mut().highlight_id(&1);
+
+    control.dispatch_event(&data_route(), &reorder_key(), &mut EventCtx::default());
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Down, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Enter, KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .map(|row| (row.id, row.rank))
+            .collect::<Vec<_>>(),
+        vec![(1, 20), (2, 10), (3, 30), (4, 40), (5, 50), (6, 60)]
+    );
+}
+
+#[test]
+fn display_bindings_drive_direct_and_routed_navigation_activation_and_reorder() {
+    let mut control: ListControl<RankedRow, usize> =
+        ListControl::display(ranked_rows(), |row: &RankedRow| row.id)
+            .column(
+                Column::text("rank", "", Constraint::Fill(1), |row: &RankedRow| {
+                    row.rank.to_string()
+                })
+                .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+            )
+            .reorderable_by("rank")
+            .display_keybindings(
+                ListControlDisplayKeyBindings::default()
+                    .line_down([KeySpec::plain('d')])
+                    .activate([KeySpec::plain('a')])
+                    .reorder([KeySpec::plain('r')]),
+            );
+    control.set_display_focused(true);
+
+    control.event(
+        &key(Key::Char('d'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(control.data_view().highlighted_id(), Some(2));
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('a'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert!(matches!(
+        control.take_data_view_events().as_slice(),
+        [
+            tuicore::DataViewTypedEvent::HighlightChanged { .. },
+            tuicore::DataViewTypedEvent::Activated { row_id: 2 }
+        ]
+    ));
+    control.dispatch_event(
+        &data_route(),
+        &key(Key::Char('r'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    assert!(control.is_reordering());
+}
+
+#[test]
+fn display_custom_activation_preserves_ctrl_navigation_selection_directly_and_when_routed() {
+    for routed in [false, true] {
+        for (navigation, highlighted_id, selected_ids) in [
+            (Key::Char('j'), 3, vec![2, 3]),
+            (Key::Char('k'), 1, vec![1, 2]),
+        ] {
+            let mut control: ListControl<RankedRow, usize> =
+                ListControl::display(ranked_rows(), |row: &RankedRow| row.id)
+                    .column(
+                        Column::text("rank", "", Constraint::Fill(1), |row: &RankedRow| {
+                            row.rank.to_string()
+                        })
+                        .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+                    )
+                    .reorderable_by("rank")
+                    .display_keybindings(
+                        ListControlDisplayKeyBindings::default()
+                            .line_up([KeySpec::plain('k')])
+                            .line_down([KeySpec::plain('j')])
+                            .activate([KeySpec::key(Key::Enter), KeySpec::plain(' ')]),
+                    );
+            control.set_display_focused(true);
+            control.data_view_mut().highlight_id(&2);
+            control.take_data_view_events();
+
+            let send = |control: &mut ListControl<RankedRow, usize>, event: TuiEvent| {
+                if routed {
+                    control.dispatch_event(&data_route(), &event, &mut EventCtx::default());
+                } else {
+                    control.event(&event, &mut EventCtx::default());
+                }
+            };
+
+            send(&mut control, key(navigation, KeyModifiers::CONTROL));
+            send(&mut control, key(Key::Char(' '), KeyModifiers::NONE));
+
+            assert_eq!(control.data_view().highlighted_id(), Some(highlighted_id));
+            assert_eq!(control.transient_selected_ids(), selected_ids);
+            assert!(control.take_data_view_events().is_empty());
+
+            send(&mut control, key(Key::Enter, KeyModifiers::NONE));
+
+            assert_eq!(control.transient_selected_ids(), selected_ids);
+            assert!(matches!(
+                control.take_data_view_events().as_slice(),
+                [tuicore::DataViewTypedEvent::Activated { row_id }]
+                    if *row_id == highlighted_id
+            ));
+        }
+    }
+}
+
+#[test]
+fn display_reorder_bindings_handle_direct_and_routed_movement_top_prefix_commit_and_cancel() {
+    for routed in [false, true] {
+        let make_control = || {
+            ListControl::display(ranked_rows(), |row: &RankedRow| row.id)
+                .column(
+                    Column::text("rank", "", Constraint::Fill(1), |row: &RankedRow| {
+                        row.rank.to_string()
+                    })
+                    .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+                )
+                .reorderable_by("rank")
+                .display_keybindings(
+                    ListControlDisplayKeyBindings::default()
+                        .line_down([KeySpec::plain('d')])
+                        .top_prefix([KeySpec::plain('g')])
+                        .reorder([KeySpec::plain('r')]),
+                )
+        };
+
+        let send = |control: &mut ListControl<RankedRow, usize>, event: TuiEvent| {
+            if routed {
+                control.dispatch_event(&data_route(), &event, &mut EventCtx::default());
+            } else {
+                control.event(&event, &mut EventCtx::default());
+            }
+        };
+        let mut control = make_control();
+        control.set_display_focused(true);
+        control.data_view_mut().highlight_id(&2);
+        send(&mut control, key(Key::Char('r'), KeyModifiers::NONE));
+        assert!(control.is_reordering());
+        send(&mut control, key(Key::Char('d'), KeyModifiers::NONE));
+        send(&mut control, key(Key::Char('g'), KeyModifiers::NONE));
+        send(&mut control, key(Key::Char('r'), KeyModifiers::NONE));
+        assert!(!control.is_reordering());
+        assert_eq!(
+            control
+                .items()
+                .iter()
+                .map(|row| row.rank)
+                .collect::<Vec<_>>(),
+            vec![10, 30, 20]
+        );
+
+        let mut control = make_control();
+        control.set_display_focused(true);
+        control.data_view_mut().highlight_id(&2);
+        send(&mut control, key(Key::Char('r'), KeyModifiers::NONE));
+        send(&mut control, key(Key::Char('d'), KeyModifiers::NONE));
+        send(&mut control, key(Key::Char('g'), KeyModifiers::NONE));
+        send(&mut control, key(Key::Char('g'), KeyModifiers::NONE));
+        send(&mut control, key(Key::Char('r'), KeyModifiers::NONE));
+        assert_eq!(
+            control
+                .items()
+                .iter()
+                .map(|row| row.rank)
+                .collect::<Vec<_>>(),
+            vec![20, 10, 30]
+        );
+
+        send(&mut control, key(Key::Char('r'), KeyModifiers::NONE));
+        assert!(control.is_reordering());
+        send(&mut control, key(Key::Esc, KeyModifiers::NONE));
+        assert!(!control.is_reordering());
+    }
+}
+
+#[test]
+fn replacing_display_bindings_clears_an_active_reorder_top_prefix() {
+    let mut control: ListControl<RankedRow, usize> =
+        ListControl::display(ranked_rows(), |row: &RankedRow| row.id)
+            .column(
+                Column::text("rank", "", Constraint::Fill(1), |row: &RankedRow| {
+                    row.rank.to_string()
+                })
+                .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+            )
+            .reorderable_by("rank")
+            .display_keybindings(
+                ListControlDisplayKeyBindings::default()
+                    .top_prefix([KeySpec::plain('g')])
+                    .reorder([KeySpec::plain('r')]),
+            );
+    control.set_display_focused(true);
+    control.data_view_mut().highlight_id(&3);
+
+    control.event(
+        &key(Key::Char('r'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.event(
+        &key(Key::Char('g'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.set_display_keybindings(
+        ListControlDisplayKeyBindings::default()
+            .top_prefix([KeySpec::plain('t')])
+            .reorder([KeySpec::plain('r')]),
+    );
+    control.event(
+        &key(Key::Char('t'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+    control.event(
+        &key(Key::Char('r'), KeyModifiers::NONE),
+        &mut EventCtx::default(),
+    );
+
+    assert_eq!(
+        control
+            .items()
+            .iter()
+            .map(|row| row.rank)
+            .collect::<Vec<_>>(),
+        vec![10, 20, 30]
+    );
 }
 
 #[test]

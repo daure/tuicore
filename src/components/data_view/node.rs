@@ -180,11 +180,16 @@ where
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        let viewport_resized = self.area != Rect::default()
+            && (self.area.width != area.width || self.area.height != area.height);
         let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
         ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if width_changed {
             self.scroll.snap_horizontal_to_start();
+        }
+        if viewport_resized {
+            self.reveal_highlighted();
         }
         let focus_area = if self.vertical_scroll == DataViewVerticalScroll::ParentDelegated {
             self.highlighted_row_area()

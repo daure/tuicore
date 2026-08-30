@@ -196,6 +196,13 @@ struct RankedRow {
     rank: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScopedRankedRow {
+    id: usize,
+    scope: char,
+    rank: usize,
+}
+
 fn ranked_control(rows: impl IntoIterator<Item = RankedRow>) -> ListControl<RankedRow, usize> {
     ListControl::new(rows, |row| row.id, |_, _| unreachable!())
         .columns([
@@ -209,6 +216,52 @@ fn ranked_control(rows: impl IntoIterator<Item = RankedRow>) -> ListControl<Rank
             }),
         ])
         .reorderable_by("rank")
+}
+
+fn scoped_ranked_control(
+    rows: impl IntoIterator<Item = ScopedRankedRow>,
+) -> ListControl<ScopedRankedRow, usize> {
+    ListControl::new(rows, |row| row.id, |_, _| unreachable!())
+        .column(
+            Column::text(
+                "rank",
+                "Rank",
+                Constraint::Fill(1),
+                |row: &ScopedRankedRow| row.rank.to_string(),
+            )
+            .reorderable(|row| row.rank, |row, rank| row.rank = rank),
+        )
+        .reorderable_by_scoped("rank", |left, right| left.scope == right.scope)
+}
+
+fn interleaved_scoped_rows() -> [ScopedRankedRow; 5] {
+    [
+        ScopedRankedRow {
+            id: 1,
+            scope: 'a',
+            rank: 10,
+        },
+        ScopedRankedRow {
+            id: 2,
+            scope: 'b',
+            rank: 20,
+        },
+        ScopedRankedRow {
+            id: 3,
+            scope: 'a',
+            rank: 30,
+        },
+        ScopedRankedRow {
+            id: 4,
+            scope: 'b',
+            rank: 40,
+        },
+        ScopedRankedRow {
+            id: 5,
+            scope: 'a',
+            rank: 50,
+        },
+    ]
 }
 
 fn modified_key(code: Key, modifiers: KeyModifiers) -> KeyEvent {
@@ -863,7 +916,7 @@ fn flat_modified_line_selection_scrolls_highlight_into_view() {
 
 #[test]
 fn flat_range_selection_survives_focus_loss_and_gain() {
-    let mut control = table(4);
+    let mut control = ranked_control(ranked_rows(4));
     control.data_view.highlight_id(&1);
     let mut event = EventCtx::default();
     control
@@ -887,17 +940,20 @@ fn flat_range_selection_survives_focus_loss_and_gain() {
 }
 
 #[test]
-fn flat_selection_without_reordering_supports_bulk_actions() {
+fn flat_selection_requires_configured_reordering() {
     let mut control = table(4);
     control.data_view.highlight_id(&1);
     let mut ctx = EventCtx::default();
 
-    control.handle_flat_range_selection_key(
-        modified_key(Key::Char('j'), KeyModifiers::SHIFT),
-        &mut ctx,
+    assert_eq!(
+        control.handle_flat_range_selection_key(
+            modified_key(Key::Char('j'), KeyModifiers::SHIFT),
+            &mut ctx,
+        ),
+        None
     );
 
-    assert_eq!(control.transient_selected_ids(), vec![1, 2]);
+    assert!(control.transient_selected_ids().is_empty());
 
     let rows = control.items().to_vec();
     control.handle_reorder_key(
@@ -986,7 +1042,7 @@ fn transient_selected_ids_returns_sparse_ctrl_selection_in_display_order() {
 }
 
 #[test]
-fn flat_ctrl_navigation_replaces_shift_range_selection() {
+fn flat_ctrl_navigation_retains_shift_range_selection() {
     let mut control = ranked_control(ranked_rows(5));
     control.data_view.highlight_id(&1);
     let mut ctx = EventCtx::default();
@@ -997,7 +1053,7 @@ fn flat_ctrl_navigation_replaces_shift_range_selection() {
         .handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::CONTROL), &mut ctx);
 
     assert_eq!(control.data_view.highlighted_id(), Some(4));
-    assert_eq!(control.transient_selected_ids(), vec![3]);
+    assert_eq!(control.transient_selected_ids(), vec![1, 2, 3]);
 }
 
 #[test]
@@ -1017,7 +1073,7 @@ fn flat_shift_navigation_replaces_sparse_ctrl_selection() {
     control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
 
     assert_eq!(control.data_view.highlighted_id(), Some(4));
-    assert_eq!(control.transient_selected_ids(), vec![3, 4]);
+    assert_eq!(control.transient_selected_ids(), vec![2, 3, 4]);
 }
 
 #[test]
@@ -1045,7 +1101,7 @@ fn clearing_transient_selection_retains_highlight() {
 
 #[test]
 fn routed_shift_j_then_escape_reconciles_on_navigate_selection_to_destination() {
-    let mut control = table(4)
+    let mut control = ranked_control(ranked_rows(4))
         .selection_mode(SelectionMode::Single)
         .selection_trigger(SelectionTrigger::OnNavigate)
         .activation_mode(ActivationMode::OnNavigate);
@@ -1091,28 +1147,12 @@ fn routed_shift_j_then_escape_reconciles_on_navigate_selection_to_destination() 
     assert!(!control.data_view().selection_overlay_active_for_test());
     assert!(control.data_view.take_events().is_empty());
     assert!(control.data_view.take_last_activated().is_none());
-
-    let mut terminal = Terminal::new(TestBackend::new(30, 5)).expect("terminal should build");
-    terminal
-        .draw(|frame| {
-            control.data_view().render(frame, Rect::new(0, 0, 30, 5));
-        })
-        .expect("task table should render");
-    let anchor = terminal.backend().buffer().cell((0, 2)).unwrap();
-    let destination = terminal.backend().buffer().cell((0, 4)).unwrap();
-    let theme = crate::theme();
-    assert_ne!(
-        (anchor.fg, anchor.bg),
-        (theme.selected_fg(), theme.selected_bg())
-    );
-    assert_eq!(destination.fg, theme.highlight_fg());
-    assert_eq!(destination.bg, theme.highlight_bg());
 }
 
 #[test]
 fn routed_plain_navigation_clears_sparse_ctrl_selection() {
     for (key, expected_highlight) in [(Key::Up, 2), (Key::Down, 4)] {
-        let mut control = table(5);
+        let mut control = ranked_control(ranked_rows(5));
         control.data_view.highlight_id(&1);
         control.data_view.set_focused(true);
         control.layout(Rect::new(0, 0, 30, 6), &mut LayoutCtx::new());
@@ -1214,6 +1254,40 @@ fn replacing_rows_retains_surviving_shift_selection_anchor_and_highlight() {
         1
     );
     assert_eq!(control.data_view.highlighted_id(), Some(2));
+}
+
+#[test]
+fn scoped_flat_selection_reconciles_only_anchor_scope_after_row_replacement() {
+    let mut control = scoped_ranked_control(interleaved_scoped_rows());
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::default();
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+
+    control.set_rows([
+        ScopedRankedRow {
+            id: 1,
+            scope: 'a',
+            rank: 10,
+        },
+        ScopedRankedRow {
+            id: 2,
+            scope: 'b',
+            rank: 20,
+        },
+        ScopedRankedRow {
+            id: 3,
+            scope: 'b',
+            rank: 30,
+        },
+    ]);
+    assert_eq!(control.transient_selected_ids(), vec![1]);
+
+    control.set_rows([ScopedRankedRow {
+        id: 3,
+        scope: 'b',
+        rank: 30,
+    }]);
+    assert!(control.transient_selected_ids().is_empty());
 }
 
 #[test]
@@ -1468,6 +1542,21 @@ fn flat_block_move_moves_the_pseudo_target_through_unselected_gaps() {
 }
 
 #[test]
+fn compatible_row_replacement_preserves_flat_block_move_placeholder() {
+    let mut control = ranked_control(ranked_rows(5));
+    start_flat_block_move(&mut control, 1);
+
+    control.set_rows(ranked_rows(5));
+
+    assert!(control.flat_block_move.is_some());
+    assert!(control.data_view.selection_overlay_active_for_test());
+    assert_eq!(
+        control.data_view.selection_placeholder_depth_for_test(),
+        Some(0)
+    );
+}
+
+#[test]
 fn flat_block_move_ignores_repeat_target_keys() {
     let mut control = ranked_control(ranked_rows(5));
     start_flat_block_move(&mut control, 1);
@@ -1540,6 +1629,83 @@ fn flat_block_move_uses_visual_boundaries_for_character_and_arrow_keys() {
     assert_flat_block_boundary(&control, 5, 3);
     control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
     assert_flat_block_boundary(&control, 5, 3);
+}
+
+fn start_scoped_flat_block_move(
+    control: &mut ListControl<ScopedRankedRow, usize>,
+    selected: Vec<usize>,
+    highlighted_id: usize,
+) {
+    control.flat_range_selection = Some(FlatRangeSelectionState {
+        selected: selected.clone(),
+        anchor: *selected.last().expect("selection is not empty"),
+        range_mode: false,
+    });
+    control
+        .data_view
+        .set_selection_overlay(selected, None, 0, false);
+    control.data_view.highlight_id(&highlighted_id);
+    control.handle_reorder_key(
+        modified_key(Key::Char('m'), KeyModifiers::CONTROL),
+        &mut EventCtx::default(),
+    );
+}
+
+fn assert_scoped_flat_block_boundary(
+    control: &ListControl<ScopedRankedRow, usize>,
+    boundary: usize,
+    target_index: usize,
+) {
+    let state = control
+        .flat_block_move
+        .as_ref()
+        .expect("scoped flat block move should be active");
+    assert_eq!(state.visual_target_index, Some(boundary));
+    assert_eq!(state.target_index, target_index);
+}
+
+#[test]
+fn scoped_contiguous_block_moves_one_full_display_boundary_and_commits_its_scope_order() {
+    let mut control = scoped_ranked_control(interleaved_scoped_rows());
+    start_scoped_flat_block_move(&mut control, vec![1, 3], 3);
+    let mut ctx = EventCtx::default();
+
+    assert_scoped_flat_block_boundary(&control, 3, 0);
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+    assert_scoped_flat_block_boundary(&control, 4, 0);
+    control.handle_reorder_key(KeyEvent::from(Key::Down), &mut ctx);
+    assert_scoped_flat_block_boundary(&control, 5, 1);
+    control.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+
+    assert_eq!(control.data_view.reorder_visible_ids(), vec![5, 2, 1, 4, 3]);
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Reordered {
+            row_ids: vec![5, 1, 3]
+        }]
+    );
+}
+
+#[test]
+fn scoped_sparse_block_moves_one_full_display_boundary_and_commits_its_scope_order() {
+    let mut control = scoped_ranked_control(interleaved_scoped_rows());
+    start_scoped_flat_block_move(&mut control, vec![1, 5], 5);
+    let mut ctx = EventCtx::default();
+
+    assert_scoped_flat_block_boundary(&control, 5, 1);
+    control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+    assert_scoped_flat_block_boundary(&control, 4, 1);
+    control.handle_reorder_key(KeyEvent::from(Key::Up), &mut ctx);
+    assert_scoped_flat_block_boundary(&control, 3, 1);
+    control.handle_reorder_key(KeyEvent::from(Key::Enter), &mut ctx);
+
+    assert_eq!(control.data_view.reorder_visible_ids(), vec![3, 2, 1, 4, 5]);
+    assert_eq!(
+        control.take_events(),
+        vec![ListControlEvent::Reordered {
+            row_ids: vec![3, 1, 5]
+        }]
+    );
 }
 
 #[test]
@@ -2386,6 +2552,33 @@ fn block_move_start_does_not_start_single_row_reorder() {
     assert!(control.tree_block_move.is_some());
     assert!(control.tree_reorder.is_none());
     assert!(control.reorder.is_none());
+}
+
+#[test]
+fn compatible_row_replacement_preserves_tree_block_move_placeholder() {
+    let mut control = tree_block_move_control();
+
+    control.set_rows([
+        TreeRow {
+            id: 1,
+            parent: None,
+        },
+        TreeRow {
+            id: 2,
+            parent: None,
+        },
+        TreeRow {
+            id: 3,
+            parent: None,
+        },
+    ]);
+
+    assert!(control.tree_block_move.is_some());
+    assert!(control.data_view.selection_overlay_active_for_test());
+    assert_eq!(
+        control.data_view.selection_placeholder_depth_for_test(),
+        Some(0)
+    );
 }
 
 #[test]

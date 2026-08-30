@@ -108,6 +108,26 @@ fn focused_event_precedence_can_be_disabled_for_app_hotkeys() {
 }
 
 #[test]
+fn resizing_the_viewport_keeps_the_highlighted_row_visible() {
+    let mut view = DataView::list(0..20, |id| *id, |id| id.to_string());
+    let old_area = Rect::new(0, 0, 20, 5);
+    let resized_area = Rect::new(0, 0, 20, 3);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut layout = LayoutCtx::new();
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, old_area, &mut layout);
+    view.highlighted = 9;
+    view.ensure_highlight_visible(old_area, settings);
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, resized_area, &mut layout);
+
+    assert_eq!(view.highlighted_id(), Some(9));
+    assert_eq!(view.scroll.target_offset().y, 7);
+}
+
+#[test]
 fn delegated_vertical_scroll_keeps_the_local_offset_at_zero_and_requests_reveal() {
     let mut view = DataView::list(0..20, |id| *id, |id| id.to_string()).parent_vertical_scroll();
     let area = Rect::new(0, 0, 20, 3);
@@ -336,6 +356,71 @@ fn tree_with_branch_preserves_chevron_gutter_for_leaf_rows() {
         terminal.backend().buffer().cell((2, 2)).unwrap().symbol(),
         "["
     );
+}
+
+#[test]
+fn left_gutter_marker_precedes_tree_indentation() {
+    let view = DataView::list(
+        [
+            Row {
+                id: 1,
+                parent: None,
+                name: "Parent",
+            },
+            Row {
+                id: 2,
+                parent: Some(1),
+                name: "Child",
+            },
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+    .tree_glyphs(TreeGlyphs::ASCII)
+    .expanded([1])
+    .left_gutter_marker_by(|row| (row.id == 2).then(|| Span::raw("┃")));
+    let mut terminal = Terminal::new(TestBackend::new(20, 2)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "v"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        "┃"
+    );
+}
+
+#[test]
+fn left_gutter_marker_repeats_for_wrapped_lines() {
+    let view = DataView::list(
+        [Row {
+            id: 1,
+            parent: None,
+            name: "alpha bravo charlie",
+        }],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .left_gutter_marker_by(|_| Some(Span::raw("┃")))
+    .wrap_cells();
+    let mut terminal = Terminal::new(TestBackend::new(10, 3)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    for y in 0..3 {
+        assert_eq!(
+            terminal.backend().buffer().cell((0, y)).unwrap().symbol(),
+            "┃"
+        );
+    }
 }
 
 #[test]
@@ -1352,6 +1437,16 @@ fn tree_search_keeps_matching_child_ancestors_visible() {
     view.set_search_query("task 3");
 
     assert_eq!(visible_ids(&view), vec![1, 3, 6]);
+    assert_eq!(view.highlighted_id(), Some(6));
+}
+
+#[test]
+fn tree_search_prefers_a_direct_parent_match() {
+    let mut view = tree_view();
+
+    view.set_search_query("root");
+
+    assert_eq!(view.highlighted_id(), Some(1));
 }
 
 #[test]
@@ -3023,6 +3118,26 @@ fn inactive_highlight_does_not_style_row() {
 }
 
 #[test]
+fn inactive_highlight_uses_selected_style_when_enabled() {
+    let view = DataView::list(
+        [Row::new(1, "selected")],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .show_inactive_highlight(true);
+    let mut terminal = Terminal::new(TestBackend::new(10, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
+        .expect("data view should render");
+
+    let theme = crate::theme();
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.fg, theme.selected_fg());
+    assert_eq!(cell.bg, theme.selected_bg());
+}
+
+#[test]
 fn checked_row_uses_checkbox_as_its_only_indicator() {
     let view = DataView::list(
         [Row::new(1, "first"), Row::new(2, "second")],
@@ -3616,13 +3731,13 @@ fn collapse_emits_navigation_activation_but_sort_preserves_highlighted_id() {
     let collapse_outcome = collapsed.collapse_all();
 
     assert!(collapse_outcome.activated);
-    assert_eq!(collapsed.highlighted, 1);
-    assert_eq!(collapsed.highlighted_id(), Some(3));
+    assert_eq!(collapsed.highlighted, 0);
+    assert_eq!(collapsed.highlighted_id(), Some(1));
     assert_eq!(
         collapsed.take_events(),
         vec![
-            DataViewTypedEvent::HighlightChanged { row_id: Some(3) },
-            DataViewTypedEvent::Activated { row_id: 3 },
+            DataViewTypedEvent::HighlightChanged { row_id: Some(1) },
+            DataViewTypedEvent::Activated { row_id: 1 },
         ]
     );
 
@@ -3835,6 +3950,41 @@ fn tree_bulk_shortcut_expands_when_collapsed_and_collapses_when_expanded() {
 
     assert!(collapsed.changed);
     assert!(stale.expanded.is_empty());
+}
+
+#[test]
+fn tree_bulk_shortcut_restores_the_closest_visible_ancestor_and_scrolls_to_it() {
+    let area = Rect::new(0, 0, 20, 1);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut view = tree_view().expanded([1, 2, 3]);
+    view.highlighted = 3;
+    view.ensure_highlight_visible(area, settings);
+
+    let collapsed = view.on_key_with_settings(Key::Char('z'), area, settings);
+
+    assert!(collapsed.changed);
+    assert_eq!(view.highlighted_id(), Some(1));
+    assert_eq!(view.scroll.target_offset().y, 0);
+}
+
+#[test]
+fn tree_bulk_shortcut_centers_the_highlighted_item_when_expanding() {
+    let area = Rect::new(0, 0, 20, 3);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    let mut view = tree_view().expanded([1]);
+    view.highlighted = 2;
+
+    let expanded = view.on_key_with_settings(Key::Char('z'), area, settings);
+
+    assert!(expanded.changed);
+    assert_eq!(view.highlighted_id(), Some(3));
+    assert_eq!(view.scroll.target_offset().y, 3);
 }
 
 #[test]

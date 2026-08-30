@@ -97,13 +97,15 @@ where
         };
         ctx.push_slot(ChildKey::new(DATA_SLOT), self.data_area, |ctx| {
             let focus_disabled = ctx.focus_disabled();
-            if self.confirmation_dialog.is_some() {
+            if self.confirmation_dialog.is_some() || self.display_only {
                 ctx.set_focus_disabled(true);
             }
             <DataView<T, Id> as TuiNode<M>>::layout(&mut self.data_view, self.data_area, ctx);
-            ctx.set_focus_control(FocusId::new(DATA_FOCUS), true);
-            if self.editor_active() {
-                ctx.set_focus_tab_stop(FocusId::new(DATA_FOCUS), false);
+            if !self.display_only {
+                ctx.set_focus_control(FocusId::new(DATA_FOCUS), true);
+                if self.editor_active() {
+                    ctx.set_focus_tab_stop(FocusId::new(DATA_FOCUS), false);
+                }
             }
             ctx.set_focus_disabled(focus_disabled);
         });
@@ -217,6 +219,27 @@ where
         if self.confirmation_dialog.is_some() {
             return self.confirmation_event(&EventRoute::new(TreePath::new()), event, ctx);
         }
+        if self.display_only {
+            if let TuiEvent::Key(key) = event {
+                if let Some(outcome) = self.handle_flat_range_selection_key(*key, ctx) {
+                    return outcome;
+                }
+                if let Some(outcome) = self.handle_tree_selection_key(*key, ctx) {
+                    return outcome;
+                }
+                if let Some(outcome) = self.handle_reorder_key(*key, ctx) {
+                    return outcome;
+                }
+                if let Some(outcome) = self.handle_display_data_key(*key, ctx) {
+                    return outcome;
+                }
+                if self.display_suppresses_global_key(*key) {
+                    ctx.stop_propagation();
+                    return EventOutcome::Handled;
+                }
+            }
+            return self.data_view.event(event, ctx);
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
@@ -325,6 +348,19 @@ where
             {
                 return outcome;
             }
+            if self.display_only
+                && let TuiEvent::Key(key) = event
+                && let Some(outcome) = self.handle_display_data_key(*key, ctx)
+            {
+                return outcome;
+            }
+            if self.display_only
+                && let TuiEvent::Key(key) = event
+                && self.display_suppresses_global_key(*key)
+            {
+                ctx.stop_propagation();
+                return EventOutcome::Handled;
+            }
             if let TuiEvent::Key(key) = event
                 && let Some(outcome) = self.handle_control_key(*key, route, ctx)
             {
@@ -373,6 +409,11 @@ where
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
+        if self.display_only && target.path.is_empty() {
+            self.set_display_focused(focused);
+            ctx.request_redraw();
+            return;
+        }
         if let Some(dialog) = self.confirmation_dialog.child_mut() {
             if let Some(target) = target.for_child(&ChildKey::new(CONFIRM_SLOT)) {
                 self.panel.set_focused(focused, ctx.animation());

@@ -37,6 +37,17 @@ pub(crate) struct ReorderSnapshot<Id> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DataViewDisplayAction {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+    Activate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataViewOutcome {
     pub handled: bool,
     pub changed: bool,

@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::components::{Column, DataView, SelectionMode, TextInput};
 use crate::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -16,8 +16,7 @@ use crate::{
     Animated, AnimationSettings, AnimationSpec, EventCtx, EventOutcome, FocusCtx, FocusId,
     FocusRequest, FocusTarget, HintSource, HotkeyMatch, HotkeySequenceMatcher, LayoutCtx,
     LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, OverlayId, OverlayLayer, OverlaySpec,
-    TickResult, TreePath, TuiEvent, TuiNode, Tween, border_set, keybindings, line_width, preset,
-    theme,
+    TickResult, TreePath, TuiEvent, TuiNode, Tween, keybindings, line_width, theme,
 };
 
 mod types;
@@ -26,7 +25,6 @@ pub use types::{MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuS
 
 const SEARCH_FOCUS: &str = "search";
 const PANEL_FOCUS: &str = "panel";
-const POPUP_BORDER_HEIGHT: u16 = 2;
 const DEFAULT_VISIBLE_ITEMS: u16 = 10;
 const MENU_BACKDROP_AMOUNT: f64 = 0.55;
 const MENU_OVERLAY_NAMESPACE: u64 = 0x4d45_4e55_504f_5055;
@@ -669,12 +667,11 @@ where
         if popup_area.is_empty() {
             return [popup_area, popup_area];
         }
-        let popup_inner = Block::default().borders(Borders::ALL).inner(popup_area);
         let search_height = u16::from(self.search_enabled());
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(search_height), Constraint::Fill(1)])
-            .areas(popup_inner)
+            .areas(popup_area)
     }
 
     fn effective_trigger_area(&self, bounds: Rect) -> Rect {
@@ -722,8 +719,7 @@ where
     }
 
     fn popup_content_height(&self, width: u16) -> u16 {
-        POPUP_BORDER_HEIGHT
-            .saturating_add(u16::from(self.search_enabled()))
+        u16::from(self.search_enabled())
             .saturating_add(self.visible_popup_rows())
             .saturating_add(u16::from(self.needs_horizontal_scrollbar(width)))
     }
@@ -733,7 +729,7 @@ where
     }
 
     fn needs_horizontal_scrollbar(&self, width: u16) -> bool {
-        let viewport_width = width.saturating_sub(2);
+        let viewport_width = width;
         let content_width = self
             .filtered
             .iter()
@@ -751,7 +747,6 @@ where
             .map(|label| line_width(&Line::from(label.as_str())))
             .max()
             .unwrap_or(0)
-            .saturating_add(2)
             .min(u16::MAX as usize) as u16;
         self.min_popup_width.max(label_width)
     }
@@ -759,8 +754,7 @@ where
     fn effective_max_popup_height(&self, width: u16) -> u16 {
         self.max_popup_height
             .unwrap_or_else(|| {
-                POPUP_BORDER_HEIGHT
-                    .saturating_add(u16::from(self.search_enabled()))
+                u16::from(self.search_enabled())
                     .saturating_add(self.visible_items)
                     .saturating_add(u16::from(self.needs_horizontal_scrollbar(width)))
             })
@@ -786,17 +780,10 @@ where
     fn render_popup(&self, frame: &mut Frame, area: Rect) {
         let theme = theme();
         frame.render_widget(Clear, area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_set(border_set(preset().border()))
-            .border_style(Style::default().fg(if self.focus_region.is_some() {
-                theme.accent_fg()
-            } else {
-                theme.border_fg()
-            }))
-            .style(Style::default().bg(theme.surface_bg()));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        frame.render_widget(
+            Block::default().style(Style::default().bg(theme.surface_bg())),
+            area,
+        );
 
         let [search_area, list_area] = self.popup_inner_areas(area);
         if self.search_enabled() {
@@ -812,7 +799,6 @@ where
             );
             frame.render_widget(Paragraph::new(line), list_area);
         } else {
-            let list_area = Rect::new(inner.x, list_area.y, inner.width, list_area.height);
             self.data_view.render_with_row_style(frame, list_area, None);
         }
     }
