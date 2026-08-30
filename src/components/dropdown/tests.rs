@@ -50,6 +50,33 @@ where
     ctx
 }
 
+#[test]
+fn popup_portal_uses_the_scrolled_field_position() {
+    let mut dropdown = single_dropdown();
+    dropdown.open();
+    let field = Rect::new(0, 10, 12, 3);
+    layout_dropdown(&mut dropdown, field, Rect::new(0, 0, 20, 20));
+    let mut terminal = Terminal::new(TestBackend::new(20, 20)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| {
+            let mut ctx = RenderCtx::new();
+            ctx.with_portal_offset(0, -8, |ctx| dropdown.render(frame, field, ctx));
+            ctx.flush(frame);
+        })
+        .expect("dropdown popup should render");
+
+    let search_row = (0..20)
+        .find(|y| {
+            (0..20)
+                .map(|x| terminal.backend().buffer().cell((x, *y)).unwrap().symbol())
+                .collect::<String>()
+                .contains("Search...")
+        })
+        .expect("popup search should render");
+    assert_eq!(search_row, 5);
+}
+
 struct DialogControlsTabBody {
     dropdown: Dropdown<&'static str, &'static str>,
     dropdown_area: Rect,

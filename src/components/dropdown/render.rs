@@ -32,21 +32,26 @@ where
             self.render_field(frame, field_area);
         }
         if self.open {
-            let bounds = self.overlay_bounds;
-            ctx.push_portal(OverlayLayer::Popover, 0, bounds, |frame, bounds| {
-                self.render_portal_popup(frame, bounds);
-            });
+            let local_bounds = self.overlay_bounds;
+            let field_area = ctx.translate_portal_rect(self.effective_field_area(local_bounds));
+            ctx.push_portal(
+                OverlayLayer::Popover,
+                0,
+                local_bounds,
+                move |frame, bounds| {
+                    self.render_portal_popup(frame, bounds, field_area);
+                },
+            );
         }
     }
 
-    fn render_portal_popup(&self, frame: &mut Frame, bounds: Rect) {
+    fn render_portal_popup(&self, frame: &mut Frame, bounds: Rect, field_area: Rect) {
         if !self.open || bounds.is_empty() {
             return;
         }
 
-        let popup_area = self.popup_overlay_area(bounds);
+        let popup_area = self.popup_area_for(field_area, bounds);
         if !popup_area.is_empty() {
-            let field_area = self.effective_field_area(bounds);
             let desired_height = self
                 .popup_content_height(field_area.width)
                 .min(self.effective_max_popup_height());

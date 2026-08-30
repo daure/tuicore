@@ -3,6 +3,7 @@ name = "tuicore"
 version = "0.20.0"
 edition = "2024"
 default-run = "gallery"
+autoexamples = false
 description = "Composable ratatui components and a crossterm tree runtime for terminal UIs"
 repository = "https://github.com/daure/tuicore"
 readme = "README.md"
@@ -23,6 +24,46 @@ include = [
 [[bin]]
 name = "gallery"
 path = "examples/gallery.rs"
+
+[[example]]
+name = "ai_dock_demo"
+path = "examples/ai_dock_demo.rs"
+
+[[example]]
+name = "app_shell"
+path = "examples/app_shell.rs"
+
+[[example]]
+name = "calendar"
+path = "examples/calendar.rs"
+
+[[example]]
+name = "data_view"
+path = "examples/data_view.rs"
+
+[[example]]
+name = "dialogs"
+path = "examples/dialogs.rs"
+
+[[example]]
+name = "dropdowns"
+path = "examples/dropdowns.rs"
+
+[[example]]
+name = "forms"
+path = "examples/forms.rs"
+
+[[example]]
+name = "layouts"
+path = "examples/layouts.rs"
+
+[[example]]
+name = "list_control"
+path = "examples/list_control.rs"
+
+[[example]]
+name = "scroll_container"
+path = "examples/scroll_container.rs"
 
 [dependencies]
 base64 = "0.22"

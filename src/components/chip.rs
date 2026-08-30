@@ -92,7 +92,7 @@ impl Chip {
         frame.render_widget(Paragraph::new(self.line()), area);
     }
 
-    pub(crate) fn line(&self) -> Line<'static> {
+    pub fn line(&self) -> Line<'static> {
         let (background, foreground) = self.colors(&theme());
         let cap_style = Style::default().fg(background);
         let content_style = Style::default().fg(foreground).bg(background).add_modifier(

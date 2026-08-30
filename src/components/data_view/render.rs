@@ -326,13 +326,22 @@ where
                     )
                 })
                 .collect();
-            if (self.row_has_reorder_highlight(&row.id) || highlighted && self.focused)
+            let selected_style = self.selected_row_style();
+            if (self.row_has_reorder_highlight(&row.id)
+                || highlighted && self.focused
+                || row_style == Some(selected_style))
                 && !self.is_selection_disabled_for_row(row.row)
             {
-                if let Some(foreground) = row_style.and_then(|style| style.fg) {
+                if let Some(style) = row_style
+                    && let (Some(foreground), Some(background)) = (style.fg, style.bg)
+                {
                     for line in &mut text.lines {
                         for span in &mut line.spans {
-                            span.style = span.style.fg(foreground);
+                            if span.style.bg.is_some() {
+                                span.style = span.style.fg(background).bg(foreground);
+                            } else if span.style.bg.is_none() {
+                                span.style = span.style.fg(foreground);
+                            }
                         }
                     }
                 }

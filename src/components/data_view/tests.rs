@@ -82,6 +82,22 @@ fn assert_restored_highlight_is_centered(view: &DataView<usize, usize>, area: Re
     assert_eq!(view.scroll.target_offset().y, expected);
 }
 
+fn assert_embedded_chip_styles(
+    buffer: &ratatui::buffer::Buffer,
+    chip_width: usize,
+    foreground: Color,
+    background: Color,
+) {
+    for x in [0, chip_width - 1] {
+        let cap = buffer.cell((x as u16, 0)).unwrap();
+        assert_eq!(cap.fg, foreground);
+        assert_eq!(cap.bg, background);
+    }
+    let content = buffer.cell((1, 0)).unwrap();
+    assert_eq!(content.fg, background);
+    assert_eq!(content.bg, foreground);
+}
+
 #[test]
 fn focused_event_precedence_can_be_disabled_for_app_hotkeys() {
     for (view, expected) in [
@@ -1027,6 +1043,41 @@ fn row_height_changes_measurement_and_render_spacing() {
             crate::theme().highlight_bg()
         );
     }
+}
+
+#[test]
+fn selected_non_cursor_row_normalizes_embedded_chip_colors() {
+    let chip = crate::Chip::new("chip")
+        .color_role(crate::ChipColorRole::Highlight)
+        .line();
+    let chip_width = line_width(&chip);
+    let mut view = DataView::new([1], |row| *row)
+        .columns([Column::rich(
+            "chip",
+            "",
+            Constraint::Percentage(100),
+            move |_, _| chip.clone(),
+        )])
+        .focused(false);
+    view.selection_overlay = Some(SelectionOverlay {
+        selected: vec![1],
+        position: None,
+        placeholder_depth: 0,
+        placeholder_focused: false,
+    });
+
+    let mut terminal = Terminal::new(TestBackend::new(12, 1)).expect("terminal should build");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+
+    let theme = theme();
+    assert_embedded_chip_styles(
+        terminal.backend().buffer(),
+        chip_width,
+        theme.selected_fg(),
+        theme.selected_bg(),
+    );
 }
 
 #[test]
@@ -2758,6 +2809,35 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
 }
 
 #[test]
+fn focused_highlight_normalizes_embedded_chip_colors() {
+    let chip = crate::Chip::new("chip")
+        .color_role(crate::ChipColorRole::Highlight)
+        .line();
+    let chip_width = line_width(&chip);
+    let view = DataView::new([1], |row| *row)
+        .column(Column::rich(
+            "chip",
+            "",
+            Constraint::Percentage(100),
+            move |_, _| chip.clone(),
+        ))
+        .focused(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+
+    let theme = theme();
+    assert_embedded_chip_styles(
+        terminal.backend().buffer(),
+        chip_width,
+        theme.highlight_fg(),
+        theme.highlight_bg(),
+    );
+}
+
+#[test]
 fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_clears() {
     let mut view = DataView::list(
         [Row::new(1, "moving"), Row::new(2, "other")],
@@ -3135,6 +3215,35 @@ fn inactive_highlight_uses_selected_style_when_enabled() {
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     assert_eq!(cell.fg, theme.selected_fg());
     assert_eq!(cell.bg, theme.selected_bg());
+}
+
+#[test]
+fn inactive_highlight_normalizes_embedded_chip_colors() {
+    let chip = crate::Chip::new("chip")
+        .color_role(crate::ChipColorRole::Highlight)
+        .line();
+    let chip_width = line_width(&chip);
+    let view = DataView::new([1], |row| *row)
+        .column(Column::rich(
+            "chip",
+            "",
+            Constraint::Percentage(100),
+            move |_, _| chip.clone(),
+        ))
+        .show_inactive_highlight(true);
+    let mut terminal = Terminal::new(TestBackend::new(12, 1)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .expect("data view should render");
+
+    let theme = theme();
+    assert_embedded_chip_styles(
+        terminal.backend().buffer(),
+        chip_width,
+        theme.selected_fg(),
+        theme.selected_bg(),
+    );
 }
 
 #[test]

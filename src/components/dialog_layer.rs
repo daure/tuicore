@@ -695,6 +695,7 @@ fn fade_buffer_except(
     excluded: &[Rect],
     apply_dim_modifier: bool,
 ) {
+    let area = area.intersection(frame.area());
     let theme = theme();
     let fallback_fg = theme.text_fg();
     let fallback_bg = theme.background_bg();
@@ -1267,6 +1268,15 @@ mod tests {
         );
         assert_eq!(cell.bg, expected_bg);
         assert!(!cell.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn buffer_fade_clips_an_area_that_extends_beyond_the_frame() {
+        let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| fade_buffer(frame, Rect::new(0, 0, 2, 2), 0.5))
+            .expect("fade should clip to the frame instead of indexing past its buffer");
     }
 
     #[test]

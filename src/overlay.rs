@@ -269,6 +269,10 @@ impl<'a> RenderCtx<'a> {
         result
     }
 
+    pub(crate) fn translate_portal_rect(&self, area: Rect) -> Rect {
+        translate_rect(area, self.portal_offset.0, self.portal_offset.1)
+    }
+
     pub fn flush(&mut self, frame: &mut Frame<'_>) {
         while !self.portals.is_empty() {
             self.portals

@@ -2349,13 +2349,6 @@ where
         }
     }
 
-    fn clamp_visible_state_from(&mut self, before_id: Option<Id>) -> (bool, HighlightUpdate) {
-        let page_changed = self.clamp_page();
-        let highlighted = self.highlighted.min(self.visible_len().saturating_sub(1));
-        let update = self.set_highlighted_index_from(highlighted, before_id);
-        (page_changed, update)
-    }
-
     fn clamp_page(&mut self) -> bool {
         let max_page = self.max_page();
         let Some(pagination) = &mut self.pagination else {
