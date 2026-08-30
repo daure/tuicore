@@ -62,7 +62,7 @@ use list_control::{
     ListControlShowcase, compact_names, entity_table, reorder_mode, reorder_mode_tree,
 };
 #[cfg(test)]
-use list_control::{compact_name_controls, entity_controls, reorder_control};
+use list_control::{entity_controls, reorder_control};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};

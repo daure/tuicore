@@ -555,6 +555,7 @@ fn main() -> tuicore::Result<()> {
         Tab::<()>::new("Compact", compact_names()).hotkey("c"),
         Tab::new("Entities", entity_table()).hotkey("e"),
         Tab::new("Reorder", reorder_mode()).hotkey("r"),
+        Tab::new("Tree reorder", reorder_mode_tree()).hotkey("t"),
     ]);
 
     tuicore::TreeApp::new(tabs).run()

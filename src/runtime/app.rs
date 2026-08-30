@@ -3048,7 +3048,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn explicit_focus_request_wins_over_tab_traversal() {
         let bindings = FocusKeyBindings::default();
         let event = TuiEvent::Key(KeyEvent::from(Key::Tab));

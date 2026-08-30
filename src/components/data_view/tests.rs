@@ -720,7 +720,7 @@ fn wrapping_fill_cells_expand_rows_without_horizontal_scrollbars() {
 
 #[test]
 fn wrapping_can_align_continuations_after_a_row_prefix() {
-    let mut view = DataView::new([Row::new(1, "alpha bravo charlie")], |row| row.id)
+    let view = DataView::new([Row::new(1, "alpha bravo charlie")], |row| row.id)
         .column(
             Column::rich("title", "", Constraint::Fill(1), |row: &Row, _| {
                 Line::from(vec![
