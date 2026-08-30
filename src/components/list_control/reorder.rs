@@ -484,11 +484,14 @@ where
     }
 
     fn flat_range_selection_available(&self) -> bool {
-        !self.data_view.tree_is_mutable() && self.reorder_column.is_some() && self.reorder.is_none()
+        !self.data_view.tree_is_mutable()
+            && (self.transient_selection_enabled || self.reorder_column.is_some())
+            && self.reorder.is_none()
     }
 
     fn flat_block_move_available(&self) -> bool {
-        self.flat_range_selection_available()
+        self.reorder_column.is_some()
+            && self.flat_range_selection_available()
             && self.reorder_column.as_deref().is_some_and(|column| {
                 self.data_view
                     .reorder_snapshot(column)

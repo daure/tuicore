@@ -1042,6 +1042,29 @@ fn transient_selected_ids_returns_sparse_ctrl_selection_in_display_order() {
 }
 
 #[test]
+fn transient_selection_does_not_enable_reordering() {
+    let mut control = ListControl::new(ranked_rows(3), |row| row.id, |_, _| unreachable!())
+        .column(Column::text(
+            "id",
+            "ID",
+            Constraint::Fill(1),
+            |row: &RankedRow| row.id.to_string(),
+        ))
+        .transient_selection(true);
+    control.data_view.highlight_id(&1);
+    let mut ctx = EventCtx::<()>::default();
+
+    control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
+    assert_eq!(control.transient_selected_ids(), vec![1, 2]);
+    assert!(
+        control
+            .handle_reorder_key(KeyEvent::from(Key::Char(' ')), &mut ctx)
+            .is_some()
+    );
+    assert!(!control.is_reordering());
+}
+
+#[test]
 fn flat_ctrl_navigation_retains_shift_range_selection() {
     let mut control = ranked_control(ranked_rows(5));
     control.data_view.highlight_id(&1);

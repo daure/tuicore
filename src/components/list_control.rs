@@ -490,6 +490,7 @@ pub struct ListControl<T, Id, M = ()> {
     confirmation_bounds: Rect,
     reorder_column: Option<String>,
     reorder_scope: Option<Box<SameScope<T>>>,
+    transient_selection_enabled: bool,
     display_keys: Option<ListControlDisplayKeyBindings>,
     display_pending_top_prefix: bool,
     allow_horizontal_moving: bool,
@@ -621,6 +622,7 @@ where
             confirmation_bounds: Rect::default(),
             reorder_column: None,
             reorder_scope: None,
+            transient_selection_enabled: false,
             display_keys: None,
             display_pending_top_prefix: false,
             allow_horizontal_moving: true,
@@ -671,6 +673,7 @@ where
             confirmation_bounds: Rect::default(),
             reorder_column: None,
             reorder_scope: None,
+            transient_selection_enabled: false,
             display_keys: None,
             display_pending_top_prefix: false,
             allow_horizontal_moving: true,
@@ -915,6 +918,12 @@ where
         self.data_view.configure_reorder_sort(&column_id);
         self.reorder_column = Some(column_id);
         self.reorder_scope = None;
+        self
+    }
+
+    /// Enables transient range and sparse selections without enabling reordering.
+    pub fn transient_selection(mut self, enabled: bool) -> Self {
+        self.transient_selection_enabled = enabled;
         self
     }
 
