@@ -247,6 +247,7 @@ where
                 );
             }
         }
+        self.render_bottom_left(frame, area, border, border_style);
     }
 
     fn render_filled_field(&self, frame: &mut Frame, area: Rect) {
@@ -665,5 +666,51 @@ where
         };
 
         frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+    }
+
+    fn render_bottom_left(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        border: BorderKind,
+        border_style: Style,
+    ) {
+        let Some(text) = &self.bottom_left else {
+            return;
+        };
+        if area.width <= 6 || area.height < 2 {
+            return;
+        }
+
+        let reserved_right = self
+            .hotkey
+            .as_deref()
+            .map(hotkey_badge_width)
+            .unwrap_or(0)
+            .min(u16::MAX as usize) as u16;
+        let available = area.width.saturating_sub(2).saturating_sub(reserved_right) as usize;
+        if available < 5 {
+            return;
+        }
+
+        let text = truncate_cells(text, available.saturating_sub(4));
+        if text.is_empty() {
+            return;
+        }
+
+        let text_style = self
+            .bottom_left_style
+            .unwrap_or_else(|| Style::default().fg(theme().muted_fg()));
+        let line = Line::from(vec![
+            Span::styled("─ ", border_style),
+            Span::styled(text, text_style),
+            Span::styled(" ─", border_style),
+        ]);
+        let width = line_width(&line).min(available) as u16;
+        let y = area.y + area.height.saturating_sub(1);
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect::new(area.x.saturating_add(1), y, width, 1),
+        );
     }
 }

@@ -140,6 +140,8 @@ pub struct Dropdown<T, Id> {
     overlay_bounds: Rect,
     focus_region: Option<DropdownFocusRegion>,
     label: Option<String>,
+    bottom_left: Option<String>,
+    bottom_left_style: Option<Style>,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     tab_stop: bool,
@@ -253,6 +255,8 @@ where
             overlay_bounds: Rect::default(),
             focus_region: None,
             label: None,
+            bottom_left: None,
+            bottom_left_style: None,
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             tab_stop: true,
@@ -431,6 +435,32 @@ where
 
     pub fn clear_label(&mut self) {
         self.label = None;
+    }
+
+    pub fn bottom_left(mut self, text: impl Into<String>) -> Self {
+        self.set_bottom_left(text);
+        self
+    }
+
+    pub fn set_bottom_left(&mut self, text: impl Into<String>) {
+        self.bottom_left = Some(text.into());
+    }
+
+    pub fn clear_bottom_left(&mut self) {
+        self.bottom_left = None;
+    }
+
+    pub fn bottom_left_style(mut self, style: Style) -> Self {
+        self.set_bottom_left_style(style);
+        self
+    }
+
+    pub fn set_bottom_left_style(&mut self, style: Style) {
+        self.bottom_left_style = Some(style);
+    }
+
+    pub fn clear_bottom_left_style(&mut self) {
+        self.bottom_left_style = None;
     }
 
     pub fn label_position(mut self, position: DropdownLabelPosition) -> Self {
@@ -1449,6 +1479,15 @@ where
             }
             if let Some(hotkey) = &self.hotkey {
                 width = width.max(hotkey_badge_width(hotkey));
+            }
+        }
+
+        if self.variant == DropdownVariant::Bordered {
+            if let Some(bottom_left) = &self.bottom_left {
+                let bottom_left_width = line_width(&Line::from(bottom_left.as_str()))
+                    .saturating_add(6)
+                    .saturating_add(self.hotkey.as_deref().map(hotkey_badge_width).unwrap_or(0));
+                width = width.max(bottom_left_width);
             }
         }
 

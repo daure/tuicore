@@ -228,6 +228,45 @@ fn unfocused_disabled_dropdown_renders_hotkey_with_border_color() {
 }
 
 #[test]
+fn bordered_dropdown_renders_muted_bottom_left_text_between_plain_dashes() {
+    let dropdown = single_dropdown()
+        .selected_one("Beta")
+        .bottom_left("(unchanged)")
+        .hotkey("it");
+    let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), "─");
+    assert_eq!(buffer.cell((2, 2)).unwrap().symbol(), " ");
+    assert_eq!(buffer.cell((3, 2)).unwrap().symbol(), "(");
+    assert_eq!(buffer.cell((3, 2)).unwrap().fg, theme().muted_fg());
+    assert_eq!(buffer.cell((15, 2)).unwrap().symbol(), "─");
+    assert_ne!(buffer.cell((1, 2)).unwrap().symbol(), "┤");
+    assert_eq!(buffer.cell((20, 2)).unwrap().symbol(), "┤");
+}
+
+#[test]
+fn bordered_dropdown_applies_custom_bottom_left_style() {
+    let dropdown = single_dropdown()
+        .bottom_left("Previous")
+        .bottom_left_style(Style::default().fg(Color::Cyan));
+    let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, frame.area()))
+        .expect("dropdown should render");
+
+    assert_eq!(
+        terminal.backend().buffer().cell((3, 2)).unwrap().fg,
+        Color::Cyan
+    );
+}
+
+#[test]
 fn open_disabled_dropdown_uses_accent_hotkey_and_dashed_popup_border() {
     let mut dropdown = single_dropdown()
         .label("Priority")

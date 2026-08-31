@@ -127,7 +127,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `external_loading_message`/`set_external_loading_message`; loading renders the shared `Spinner`.
   Inspect IDs/query/open state; open/close/cancel/commit return `DropdownOutcome`.
   Configure with `DropdownActionKeys`, `DropdownCommitMode`, `DropdownLabelPosition`,
-  `DropdownPopupDirection`, `DropdownSearchMode`, and `DropdownVariant`.
+   `DropdownPopupDirection`, `DropdownSearchMode`, and `DropdownVariant`. Bordered dropdowns also
+   support a bottom-left border label via `bottom_left`, with optional `bottom_left_style`.
 - `Menu<Id>`: transient commands from `MenuItem::new`; configure search/popup/action keys/hotkey,
   open contextually, drain activation. `MenuButton<Id, M>::new` owns trigger, focus, and popup.
   Supporting outputs/config: `MenuOutcome`, `MenuActionKeys`, `MenuPopupDirection`,
