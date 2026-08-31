@@ -59,6 +59,12 @@ type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
 type LeftGutterMarkerFn<T> = dyn Fn(&T) -> Option<ratatui::text::Span<'static>>;
 type SelectionDisabledFn<T> = dyn Fn(&T) -> bool;
 
+struct DataViewMetricCache {
+    revision: u64,
+    viewport_width: usize,
+    rendered_column_widths: Vec<usize>,
+}
+
 pub(crate) fn search_focus_id() -> FocusId {
     FocusId::new(TEXT_INPUT_FOCUS)
 }
@@ -124,6 +130,8 @@ pub struct DataView<T, Id> {
     reorder_highlight_crossfades: bool,
     scroll_restoration: Option<DataViewScrollRestoration>,
     selection_overlay: Option<SelectionOverlay<Id>>,
+    metric_revision: u64,
+    metric_cache: Option<DataViewMetricCache>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -230,6 +238,8 @@ where
             reorder_highlight_crossfades: false,
             scroll_restoration: None,
             selection_overlay: None,
+            metric_revision: 0,
+            metric_cache: None,
         }
     }
 
@@ -248,20 +258,24 @@ where
 
     pub fn column(mut self, column: Column<T, Id>) -> Self {
         self.columns.push(column);
+        self.invalidate_metrics();
         self
     }
 
     pub fn add_column(&mut self, column: Column<T, Id>) {
         self.columns.push(column);
+        self.invalidate_metrics();
     }
 
     pub fn columns(mut self, columns: impl IntoIterator<Item = Column<T, Id>>) -> Self {
         self.columns.extend(columns);
+        self.invalidate_metrics();
         self
     }
 
     pub fn add_columns(&mut self, columns: impl IntoIterator<Item = Column<T, Id>>) {
         self.columns.extend(columns);
+        self.invalidate_metrics();
     }
 
     pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
@@ -285,6 +299,7 @@ where
 
     pub fn headers(mut self, headers: bool) -> Self {
         self.headers = headers;
+        self.invalidate_metrics();
         self
     }
 
@@ -296,6 +311,7 @@ where
     pub fn set_row_height(&mut self, row_height: u16) {
         self.row_height = row_height.max(1);
         self.row_height_by = None;
+        self.invalidate_metrics();
     }
 
     /// Sets a per-row height policy. Returned zero heights are clamped to one.
@@ -307,6 +323,7 @@ where
     /// Replaces the current per-row height policy. Returned zero heights are clamped to one.
     pub fn set_row_height_by(&mut self, row_height: impl Fn(&T) -> u16 + 'static) {
         self.row_height_by = Some(Box::new(row_height));
+        self.invalidate_metrics();
     }
 
     /// Wraps cell text to the available column width and grows rows to keep every line visible.
@@ -317,6 +334,7 @@ where
 
     pub fn set_wrap_cells(&mut self, wrap_cells: bool) {
         self.wrap_cells = wrap_cells;
+        self.invalidate_metrics();
     }
 
     /// Sets a per-row style policy.
@@ -351,6 +369,7 @@ where
         marker: impl Fn(&T) -> Option<ratatui::text::Span<'static>> + 'static,
     ) {
         self.left_gutter_marker_by = Some(Box::new(marker));
+        self.invalidate_metrics();
     }
 
     pub fn configured_row_height(&self) -> u16 {
@@ -386,6 +405,7 @@ where
 
     pub fn visible_row_ids(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
         self.visible_row_indices = Some(self.row_indices_for_ids(ids));
+        self.invalidate_metrics();
         self.highlighted = 0;
         self.clamp_page();
         self
@@ -402,16 +422,19 @@ where
 
     pub fn tree(mut self, tree: TreeAdapter<T, Id>) -> Self {
         self.tree = Some(tree);
+        self.invalidate_metrics();
         self
     }
 
     pub fn expanded(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
         self.expanded = ids.into_iter().collect();
+        self.invalidate_metrics();
         self
     }
 
     pub fn tree_glyphs(mut self, glyphs: TreeGlyphs) -> Self {
         self.tree_glyphs = glyphs;
+        self.invalidate_metrics();
         self
     }
 
@@ -422,11 +445,15 @@ where
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self.invalidate_metrics();
         self
     }
 
     pub fn set_focused(&mut self, focused: bool) {
-        self.focused = focused;
+        if self.focused != focused {
+            self.focused = focused;
+            self.invalidate_metrics();
+        }
         if !focused {
             self.clear_reorder_highlight_immediately();
         }
@@ -480,6 +507,7 @@ where
         }
         let before_id = self.highlighted_id();
         self.transform_mode = mode;
+        self.invalidate_metrics();
         let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
             handled: true,
@@ -572,6 +600,7 @@ where
                 .collect::<Vec<_>>()
         });
         self.rows = rows.into_iter().collect();
+        self.invalidate_metrics();
         self.normalize_selection();
         if let Some(ids) = visible_ids {
             self.visible_row_indices = Some(self.row_indices_for_ids(ids));
@@ -591,6 +620,11 @@ where
 
     pub(crate) fn visible_row_count(&self) -> usize {
         self.visible_rows().len()
+    }
+
+    fn invalidate_metrics(&mut self) {
+        self.metric_revision = self.metric_revision.wrapping_add(1);
+        self.metric_cache = None;
     }
 
     pub(crate) fn measurement_chrome_height(&self) -> u16 {
@@ -616,6 +650,7 @@ where
     pub fn push_row(&mut self, row: T) -> DataViewOutcome {
         let id = (self.row_id)(&row);
         self.rows.push(row);
+        self.invalidate_metrics();
         self.clamp_visible_state();
         let mut outcome = self.highlight_id(&id);
         outcome.handled = true;
@@ -635,6 +670,7 @@ where
             &(self.row_id)(row) == id,
             "DataView row update must preserve the row ID"
         );
+        self.invalidate_metrics();
         self.normalize_selection();
         let (_, highlight) = self.sync_highlight_after_visible_set_change(before_id);
         Some(DataViewOutcome {
@@ -649,6 +685,7 @@ where
         let index = self.rows.iter().position(|row| &(self.row_id)(row) == id)?;
         let highlighted = self.highlighted;
         let removed = self.rows.remove(index);
+        self.invalidate_metrics();
         self.selected.remove(id);
         self.expanded.remove(id);
         if let Some(indices) = &mut self.visible_row_indices {
@@ -681,6 +718,7 @@ where
 
     pub fn extend_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
         self.rows.extend(rows);
+        self.invalidate_metrics();
         self.clamp_visible_state();
         DataViewOutcome::CHANGED
     }
@@ -775,6 +813,7 @@ where
         if self.sort.take().is_none() {
             return DataViewOutcome::IDLE;
         }
+        self.invalidate_metrics();
         let update = self.restore_highlight(before_id);
         DataViewOutcome {
             handled: true,
@@ -818,6 +857,7 @@ where
             column_id,
             direction,
         });
+        self.invalidate_metrics();
     }
 
     fn restore_highlight(&mut self, before_id: Option<Id>) -> HighlightUpdate {
@@ -960,6 +1000,7 @@ where
 
     pub(crate) fn set_derived_row_order(&mut self, ids: Option<Vec<Id>>) {
         self.derived_row_order = ids;
+        self.invalidate_metrics();
     }
 
     pub(crate) fn reorder_visible_ids(&self) -> Vec<Id> {
@@ -1199,6 +1240,7 @@ where
             && (column.snapshot_matches)(&candidate, &staged_indices, snapshot.ranks.as_ref());
         if valid {
             self.rows = candidate;
+            self.invalidate_metrics();
         }
         valid
     }
@@ -2201,6 +2243,7 @@ where
     }
 
     fn outcome_after_transform_change(&mut self, before_id: Option<Id>) -> DataViewOutcome {
+        self.invalidate_metrics();
         let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
             handled: true,
@@ -2237,6 +2280,7 @@ where
 
         let before_id = self.highlighted_id();
         self.visible_row_indices = next;
+        self.invalidate_metrics();
         let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
             handled: true,
@@ -2319,6 +2363,9 @@ where
         let before_index = self.highlighted;
         self.highlighted = highlighted;
         let after_id = self.highlighted_id();
+        if before_id != after_id {
+            self.invalidate_metrics();
+        }
         if before_id == after_id {
             return HighlightUpdate {
                 index_changed: before_index != highlighted,

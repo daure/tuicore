@@ -1,8 +1,8 @@
 use ratatui::layout::Rect;
 use tuicore::{
-    AxisProposal, ChildKey, EventCtx, EventRoute, ExternalEditorResponse, FocusCtx,
-    FocusId, FocusRequest, FocusTarget, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal,
-    RenderCtx, TreePath, TuiEvent, TuiNode,
+    AxisProposal, ChildKey, EventCtx, EventRoute, ExternalEditorResponse, FocusCtx, FocusId,
+    FocusRequest, FocusTarget, Key, KeyEvent, KeyModifiers, LayoutCtx, LayoutProposal, RenderCtx,
+    TreePath, TuiEvent, TuiNode,
 };
 
 use super::super::super::Msg;

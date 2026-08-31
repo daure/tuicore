@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -13,7 +14,48 @@ use crate::{
 };
 
 pub(super) struct VisibleRowGeometry {
-    offsets: Vec<usize>,
+    kind: VisibleRowGeometryKind,
+}
+
+enum VisibleRowGeometryKind {
+    Uniform { count: usize, height: usize },
+    Variable { offsets: Vec<usize> },
+}
+
+pub(super) enum IntersectingRows<'a> {
+    Empty,
+    Uniform {
+        next: usize,
+        end: usize,
+        height: usize,
+    },
+    Variable {
+        offsets: &'a [usize],
+        next: usize,
+        end: usize,
+    },
+}
+
+impl Iterator for IntersectingRows<'_> {
+    type Item = (usize, usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Empty => None,
+            Self::Uniform { next, end, height } if *next < *end => {
+                let index = *next;
+                *next += 1;
+                let row_start = index.saturating_mul(*height);
+                Some((index, row_start, row_start.saturating_add(*height)))
+            }
+            Self::Variable { offsets, next, end } if *next < *end => {
+                let index = *next;
+                *next += 1;
+                Some((index, offsets[index], offsets[index + 1]))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl VisibleRowGeometry {
@@ -28,15 +70,38 @@ impl VisibleRowGeometry {
                     .saturating_add(height.max(1) as usize),
             );
         }
-        Self { offsets }
+        Self {
+            kind: VisibleRowGeometryKind::Variable { offsets },
+        }
+    }
+
+    fn uniform(count: usize, height: u16) -> Self {
+        Self {
+            kind: VisibleRowGeometryKind::Uniform {
+                count,
+                height: height.max(1) as usize,
+            },
+        }
     }
 
     pub(super) fn total_height(&self) -> usize {
-        self.offsets.last().copied().unwrap_or(0)
+        match &self.kind {
+            VisibleRowGeometryKind::Uniform { count, height } => count.saturating_mul(*height),
+            VisibleRowGeometryKind::Variable { offsets } => offsets.last().copied().unwrap_or(0),
+        }
     }
 
     pub(super) fn span(&self, index: usize) -> Option<(usize, usize)> {
-        Some((*self.offsets.get(index)?, *self.offsets.get(index + 1)?))
+        match &self.kind {
+            VisibleRowGeometryKind::Uniform { count, height } if index < *count => {
+                let start = index.saturating_mul(*height);
+                Some((start, start.saturating_add(*height)))
+            }
+            VisibleRowGeometryKind::Uniform { .. } => None,
+            VisibleRowGeometryKind::Variable { offsets } => {
+                Some((*offsets.get(index)?, *offsets.get(index + 1)?))
+            }
+        }
     }
 
     pub(super) fn capacity(&self, offset: usize, height: usize) -> usize {
@@ -46,23 +111,46 @@ impl VisibleRowGeometry {
     }
 
     fn height_through(&self, row_count: usize) -> usize {
-        self.offsets
-            .get(row_count.min(self.offsets.len().saturating_sub(1)))
-            .copied()
-            .unwrap_or(0)
+        match &self.kind {
+            VisibleRowGeometryKind::Uniform { count, height } => {
+                row_count.min(*count).saturating_mul(*height)
+            }
+            VisibleRowGeometryKind::Variable { offsets } => offsets
+                .get(row_count.min(offsets.len().saturating_sub(1)))
+                .copied()
+                .unwrap_or(0),
+        }
     }
 
-    pub(super) fn intersecting(
-        &self,
-        start: usize,
-        end: usize,
-    ) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
-        self.offsets
-            .windows(2)
-            .enumerate()
-            .filter_map(move |(index, span)| {
-                (span[0] < end && span[1] > start).then_some((index, span[0], span[1]))
-            })
+    pub(super) fn intersecting(&self, start: usize, end: usize) -> IntersectingRows<'_> {
+        if start >= end {
+            return IntersectingRows::Empty;
+        }
+        match &self.kind {
+            VisibleRowGeometryKind::Uniform { count, height } => {
+                let first = (start / *height).min(*count);
+                let last = end
+                    .saturating_sub(1)
+                    .saturating_div(*height)
+                    .saturating_add(1)
+                    .min(*count);
+                IntersectingRows::Uniform {
+                    next: first,
+                    end: last,
+                    height: *height,
+                }
+            }
+            VisibleRowGeometryKind::Variable { offsets } => {
+                let first = offsets[1..].partition_point(|row_end| *row_end <= start);
+                let last = offsets[..offsets.len().saturating_sub(1)]
+                    .partition_point(|row_start| *row_start < end);
+                IntersectingRows::Variable {
+                    offsets,
+                    next: first,
+                    end: last,
+                }
+            }
+        }
     }
 }
 
@@ -71,7 +159,7 @@ where
     Id: Clone + Eq + Hash,
 {
     pub(crate) fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
-        let rendered_widths = self.rendered_column_widths();
+        let rendered_widths = self.rendered_column_widths_for_viewport(area.width as usize);
         self.scroll_geometry_with_rendered_widths(area, &rendered_widths)
     }
 
@@ -171,7 +259,7 @@ where
         if !self.wrap_cells {
             return self.configured_visible_row_geometry();
         }
-        let rendered_widths = self.rendered_column_widths();
+        let rendered_widths = self.rendered_column_widths_for_viewport(self.area.width as usize);
         let geometry = self.scroll_geometry_with_rendered_widths(self.area, &rendered_widths);
         let column_widths = self
             .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
@@ -182,7 +270,7 @@ where
         &self,
         area: Rect,
     ) -> (ScrollGeometry, VisibleRowGeometry) {
-        let rendered_widths = self.rendered_column_widths();
+        let rendered_widths = self.rendered_column_widths_for_viewport(area.width as usize);
         let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
         let column_widths = self
             .column_widths_with_rendered(geometry.layout.viewport.width as usize, &rendered_widths);
@@ -213,6 +301,9 @@ where
     }
 
     fn configured_visible_row_geometry(&self) -> VisibleRowGeometry {
+        if self.row_height_by.is_none() {
+            return VisibleRowGeometry::uniform(self.display_rows().len(), self.row_height);
+        }
         VisibleRowGeometry::new(self.display_rows().into_iter().map(|row| match row {
             DisplayRow::Data(row) => self.row_height_for(row.row),
             DisplayRow::SelectionPlaceholder { .. } => self.row_height,
@@ -431,9 +522,19 @@ where
         let columns = self.visible_columns().collect::<Vec<_>>();
         let mut widths = vec![0; columns.len()];
 
+        if self.wrap_cells
+            || !columns
+                .iter()
+                .any(|column| column.sizing == super::ColumnSizing::Intrinsic)
+        {
+            return widths;
+        }
+
         if self.shows_headers() {
             for (index, column) in columns.iter().enumerate() {
-                widths[index] = widths[index].max(self.header_width(column));
+                if column.sizing == super::ColumnSizing::Intrinsic {
+                    widths[index] = widths[index].max(self.header_width(column));
+                }
             }
         }
 
@@ -444,14 +545,16 @@ where
             match row {
                 DisplayRow::Data(row) => {
                     for (index, column) in columns.iter().enumerate() {
-                        widths[index] = widths[index].max(self.rendered_cell_width(
-                            index,
-                            column,
-                            &row,
-                            highlighted_id.as_ref() == Some(&row.id),
-                            &selection_descendants,
-                            show_tree_gutter,
-                        ));
+                        if column.sizing == super::ColumnSizing::Intrinsic {
+                            widths[index] = widths[index].max(self.rendered_cell_width(
+                                index,
+                                column,
+                                &row,
+                                highlighted_id.as_ref() == Some(&row.id),
+                                &selection_descendants,
+                                show_tree_gutter,
+                            ));
+                        }
                     }
                 }
                 DisplayRow::SelectionPlaceholder {
@@ -459,7 +562,11 @@ where
                     depth,
                     focused,
                 } => {
-                    if let Some(width) = widths.first_mut() {
+                    if columns
+                        .first()
+                        .is_some_and(|column| column.sizing == super::ColumnSizing::Intrinsic)
+                        && let Some(width) = widths.first_mut()
+                    {
                         let label = if focused {
                             format!("Moving {count} tasks")
                         } else {
@@ -474,6 +581,50 @@ where
         }
 
         widths
+    }
+
+    pub(super) fn prepare_metrics(&mut self, viewport_width: usize) {
+        if !self.metrics_cacheable() {
+            self.metric_cache = None;
+            return;
+        }
+        if self.metric_cache.as_ref().is_some_and(|cache| {
+            cache.revision == self.metric_revision && cache.viewport_width == viewport_width
+        }) {
+            return;
+        }
+        self.metric_cache = Some(super::DataViewMetricCache {
+            revision: self.metric_revision,
+            viewport_width,
+            rendered_column_widths: self.rendered_column_widths(),
+        });
+    }
+
+    pub(super) fn rendered_column_widths_for_viewport(
+        &self,
+        viewport_width: usize,
+    ) -> Cow<'_, [usize]> {
+        if let Some(cache) = self.metric_cache.as_ref().filter(|cache| {
+            self.metrics_cacheable()
+                && cache.revision == self.metric_revision
+                && cache.viewport_width == viewport_width
+        }) {
+            return Cow::Borrowed(&cache.rendered_column_widths);
+        }
+        Cow::Owned(self.rendered_column_widths())
+    }
+
+    fn metrics_cacheable(&self) -> bool {
+        !self.wrap_cells
+            && self.row_height_by.is_none()
+            && self.tree.is_none()
+            && self.pagination.is_none()
+            && self.selection_mode == SelectionMode::None
+            && self.selection_overlay.is_none()
+            && matches!(self.interaction, DataViewInteraction::Grid)
+            && self
+                .visible_columns()
+                .any(|column| column.sizing == super::ColumnSizing::Intrinsic)
     }
 
     fn header_width(&self, column: &Column<T, Id>) -> usize {

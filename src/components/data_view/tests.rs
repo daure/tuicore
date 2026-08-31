@@ -622,6 +622,28 @@ fn dynamic_row_height_clamps_zero_and_fixed_height_replaces_policy() {
 }
 
 #[test]
+fn row_geometry_finds_only_rows_intersecting_the_viewport() {
+    let fixed = DataView::list(0..1_000, |row| *row, |row| row.to_string()).row_height(2);
+    let fixed_rows = fixed.visible_row_geometry();
+    assert_eq!(
+        fixed_rows.intersecting(1_000, 1_006).collect::<Vec<_>>(),
+        vec![
+            (500, 1_000, 1_002),
+            (501, 1_002, 1_004),
+            (502, 1_004, 1_006)
+        ]
+    );
+
+    let variable = DataView::list(0..4, |row| *row, |row| row.to_string())
+        .row_height_by(|row| [1, 3, 2, 4][*row]);
+    let variable_rows = variable.visible_row_geometry();
+    assert_eq!(
+        variable_rows.intersecting(2, 7).collect::<Vec<_>>(),
+        vec![(1, 1, 4), (2, 4, 6), (3, 6, 10)]
+    );
+}
+
+#[test]
 fn multiline_cells_render_second_line_and_clip_beyond_row_height() {
     let view = DataView::new([1], |row| *row)
         .column(Column::multiline(
@@ -1365,6 +1387,198 @@ fn render_measures_each_visible_cell_once_per_pass() {
 }
 
 #[test]
+fn prepared_intrinsic_metrics_skip_offscreen_renderers_at_stable_width() {
+    const ROWS: usize = 1_000;
+    const VIEWPORT_HEIGHT: u16 = 5;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new(0..ROWS, |row| *row).column(Column::rich(
+        "value",
+        "",
+        Constraint::Fill(1),
+        move |row: &usize, _| {
+            renderer_calls.set(renderer_calls.get() + 1);
+            Line::from(format!("row {row}"))
+        },
+    ));
+    let area = Rect::new(0, 0, 32, VIEWPORT_HEIGHT);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+    let first_pass = calls.get();
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(first_pass, ROWS + usize::from(VIEWPORT_HEIGHT));
+    assert_eq!(calls.get(), first_pass + usize::from(VIEWPORT_HEIGHT));
+}
+
+#[test]
+fn focus_rebuilds_prepared_intrinsic_metrics_before_rendering() {
+    const ROWS: usize = 1_000;
+    const VIEWPORT_HEIGHT: u16 = 5;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new(0..ROWS, |row| *row).column(Column::rich(
+        "value",
+        "",
+        Constraint::Fill(1),
+        move |row: &usize, _| {
+            renderer_calls.set(renderer_calls.get() + 1);
+            Line::from(format!("row {row}"))
+        },
+    ));
+    let area = Rect::new(0, 0, 32, VIEWPORT_HEIGHT);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    let mut focus = FocusCtx::new(AnimationSettings::default());
+    <DataView<usize, usize> as TuiNode<()>>::focus(&mut view, None, true, &mut focus);
+    assert!(focus.layout_requested());
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+    let first_render = calls.get();
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(first_render, ROWS * 2 + usize::from(VIEWPORT_HEIGHT));
+    assert_eq!(calls.get(), first_render + usize::from(VIEWPORT_HEIGHT));
+}
+
+#[test]
+fn highlight_event_rebuilds_prepared_intrinsic_metrics_before_rendering() {
+    const ROWS: usize = 1_000;
+    const VIEWPORT_HEIGHT: u16 = 5;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new(0..ROWS, |row| *row)
+        .column(Column::rich(
+            "value",
+            "",
+            Constraint::Fill(1),
+            move |row: &usize, _| {
+                renderer_calls.set(renderer_calls.get() + 1);
+                Line::from(format!("row {row}"))
+            },
+        ))
+        .focused(true);
+    let area = Rect::new(0, 0, 32, VIEWPORT_HEIGHT);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    let mut event = EventCtx::new(AnimationSettings::default());
+    let outcome = <DataView<usize, usize> as TuiNode<()>>::event(
+        &mut view,
+        &TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crate::MouseButton::Left),
+            column: 0,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }),
+        &mut event,
+    );
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(event.layout_requested());
+
+    <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+    let first_render = calls.get();
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(first_render, ROWS * 2 + usize::from(VIEWPORT_HEIGHT));
+    assert_eq!(calls.get(), first_render + usize::from(VIEWPORT_HEIGHT));
+}
+
+#[test]
+fn intrinsic_metric_cache_rebuilds_after_resize_and_state_mutation() {
+    const ROWS: usize = 1_000;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new((0..ROWS).map(|row| (row, row)), |row: &(usize, usize)| {
+        row.0
+    })
+    .column(Column::rich(
+        "value",
+        "",
+        Constraint::Fill(1),
+        move |row: &(usize, usize), _| {
+            renderer_calls.set(renderer_calls.get() + 1);
+            Line::from(format!("row {}", row.1))
+        },
+    ));
+
+    <DataView<(usize, usize), usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 32, 5),
+        &mut LayoutCtx::new(),
+    );
+    assert_eq!(calls.get(), ROWS);
+
+    <DataView<(usize, usize), usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 48, 5),
+        &mut LayoutCtx::new(),
+    );
+    assert_eq!(calls.get(), ROWS * 2);
+
+    view.update_row(&500, |row| row.1 = 1_500).unwrap();
+    <DataView<(usize, usize), usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 48, 5),
+        &mut LayoutCtx::new(),
+    );
+    assert_eq!(calls.get(), ROWS * 3);
+
+    view.set_rows((0..ROWS).map(|row| (row, row)));
+    <DataView<(usize, usize), usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 48, 5),
+        &mut LayoutCtx::new(),
+    );
+    assert_eq!(calls.get(), ROWS * 4);
+
+    view.set_transform_mode(DataViewTransformMode::External);
+    <DataView<(usize, usize), usize> as TuiNode<()>>::layout(
+        &mut view,
+        Rect::new(0, 0, 48, 5),
+        &mut LayoutCtx::new(),
+    );
+    assert_eq!(calls.get(), ROWS * 5);
+}
+
+#[test]
+fn direct_render_computes_intrinsic_metrics_without_a_layout_cache() {
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let view = DataView::new(0..1_000, |row| *row).column(Column::rich(
+        "value",
+        "",
+        Constraint::Fill(1),
+        move |row: &usize, _| {
+            renderer_calls.set(renderer_calls.get() + 1);
+            Line::from(format!("row {row}"))
+        },
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(32, 5)).unwrap();
+
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+
+    assert_eq!(calls.get(), 1_005);
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "r"
+    );
+}
+
+#[test]
 fn line_navigation_and_rendering_measure_cells_linearly() {
     const ROWS: usize = 128;
     const VIEWPORT_HEIGHT: u16 = 5;
@@ -1425,8 +1639,9 @@ fn multi_select_width_measurement_accesses_source_rows_linearly() {
 }
 
 #[test]
-fn wrapped_line_navigation_measures_cells_a_fixed_number_of_times() {
+fn wrapped_line_navigation_cell_measurement_scales_linearly() {
     const ROWS: usize = 32;
+    const MAX_CELL_MEASUREMENTS_PER_ROW: usize = 4;
 
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let renderer_calls = calls.clone();
@@ -1452,7 +1667,39 @@ fn wrapped_line_navigation_measures_cells_a_fixed_number_of_times() {
 
     view.on_key_with_settings(Key::Down, area, settings);
 
-    assert_eq!(calls.get(), ROWS * 5);
+    assert!(
+        calls.get() <= ROWS * MAX_CELL_MEASUREMENTS_PER_ROW,
+        "calls={}, rows={ROWS}",
+        calls.get()
+    );
+}
+
+#[test]
+fn constrained_columns_skip_intrinsic_cell_measurement() {
+    let row_id_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted_row_id = row_id_calls.clone();
+    let renderer_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted_renderer = renderer_calls.clone();
+    let view = DataView::new(0..1_000, move |row| {
+        counted_row_id.set(counted_row_id.get() + 1);
+        *row
+    })
+    .column(
+        Column::rich(
+            "value",
+            "Value",
+            Constraint::Fill(1),
+            move |row: &usize, _| {
+                counted_renderer.set(counted_renderer.get() + 1);
+                Line::from(row.to_string())
+            },
+        )
+        .constrained(),
+    );
+
+    assert_eq!(view.rendered_column_widths(), vec![0]);
+    assert_eq!(row_id_calls.get(), 0);
+    assert_eq!(renderer_calls.get(), 0);
 }
 
 #[test]

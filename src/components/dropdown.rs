@@ -6,7 +6,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders};
 
 use crate::animation::Easing;
@@ -173,6 +173,15 @@ where
         Self::new(rows, row_id, label, false)
     }
 
+    pub fn single_rich(
+        rows: impl IntoIterator<Item = T>,
+        row_id: impl Fn(&T) -> Id + 'static,
+        label: impl Fn(&T) -> String + 'static,
+        renderer: impl Fn(&T, &str, DropdownSearchMode) -> Text<'static> + 'static,
+    ) -> Self {
+        Self::new_with_renderer(rows, row_id, label, renderer, false)
+    }
+
     pub fn multi(
         rows: impl IntoIterator<Item = T>,
         row_id: impl Fn(&T) -> Id + 'static,
@@ -187,13 +196,30 @@ where
         label: impl Fn(&T) -> String + 'static,
         multi: bool,
     ) -> Self {
+        let label: Rc<dyn Fn(&T) -> String> = Rc::new(label);
+        let render_label = Rc::clone(&label);
+        Self::new_with_renderer(
+            rows,
+            row_id,
+            move |row| label(row),
+            move |row, query, mode| highlighted_label_line(render_label(row), query, mode).into(),
+            multi,
+        )
+    }
+
+    fn new_with_renderer(
+        rows: impl IntoIterator<Item = T>,
+        row_id: impl Fn(&T) -> Id + 'static,
+        label: impl Fn(&T) -> String + 'static,
+        renderer: impl Fn(&T, &str, DropdownSearchMode) -> Text<'static> + 'static,
+        multi: bool,
+    ) -> Self {
         let rows = rows.into_iter().collect::<Vec<_>>();
         let row_id: Rc<dyn Fn(&T) -> Id> = Rc::new(row_id);
         let label: Rc<dyn Fn(&T) -> String> = Rc::new(label);
         let ids = rows.iter().map(|row| row_id(row)).collect::<Vec<_>>();
         let labels = rows.iter().map(|row| label(row)).collect::<Vec<_>>();
         let data_view_row_id = Rc::clone(&row_id);
-        let data_view_label = Rc::clone(&label);
         let search_render_query = Rc::new(RefCell::new(String::new()));
         let search_render_mode = Rc::new(Cell::new(DropdownSearchMode::Fuzzy));
         let data_view_search_query = Rc::clone(&search_render_query);
@@ -204,13 +230,13 @@ where
             SelectionMode::Single
         };
         let data_view = DataView::new(rows, move |row| data_view_row_id(row))
-            .column(Column::rich(
+            .column(Column::multiline(
                 "label",
                 "",
                 Constraint::Percentage(100),
                 move |row, _| {
-                    highlighted_label_line(
-                        data_view_label(row),
+                    renderer(
+                        row,
                         &data_view_search_query.borrow(),
                         data_view_search_mode.get(),
                     )
@@ -303,6 +329,14 @@ where
 
     pub fn set_external_loading_message(&mut self, message: impl Into<String>) {
         self.external_loading_message = message.into();
+    }
+
+    pub fn set_row_height(&mut self, row_height: u16) {
+        self.data_view.set_row_height(row_height);
+    }
+
+    pub fn set_wrap_cells(&mut self, wrap_cells: bool) {
+        self.data_view.set_wrap_cells(wrap_cells);
     }
 
     pub fn min_search_chars(mut self, count: usize) -> Self {
@@ -1437,10 +1471,12 @@ where
             return 1;
         }
         let no_selection_row = usize::from(self.show_no_selection_row());
-        self.filtered
+        (self
+            .filtered
             .len()
             .saturating_add(no_selection_row)
-            .min(usize::from(u16::MAX)) as u16
+            .min(usize::from(u16::MAX)) as u16)
+            .saturating_mul(self.data_view.configured_row_height())
     }
 
     fn needs_horizontal_scrollbar(&self, width: u16) -> bool {

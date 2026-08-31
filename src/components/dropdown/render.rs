@@ -247,7 +247,7 @@ where
                 );
             }
         }
-        self.render_bottom_left(frame, area, border, border_style);
+        self.render_bottom_left(frame, area, border_style);
     }
 
     fn render_filled_field(&self, frame: &mut Frame, area: Rect) {
@@ -672,7 +672,6 @@ where
         &self,
         frame: &mut Frame,
         area: Rect,
-        border: BorderKind,
         border_style: Style,
     ) {
         let Some(text) = &self.bottom_left else {

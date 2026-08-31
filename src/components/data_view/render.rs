@@ -24,7 +24,7 @@ where
         row_y: u16,
         row_height: u16,
     ) -> Vec<Rect> {
-        let rendered_widths = self.rendered_column_widths();
+        let rendered_widths = self.rendered_column_widths_for_viewport(area.width as usize);
         let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
         let offset = self.visible_offset(geometry.viewport, geometry.content);
         let viewport = Rect::new(
@@ -89,7 +89,7 @@ where
             return;
         }
 
-        let rendered_widths = self.rendered_column_widths();
+        let rendered_widths = self.rendered_column_widths_for_viewport(area.width as usize);
         let geometry = self.scroll_geometry_with_rendered_widths(area, &rendered_widths);
         let visible = self.display_rows();
         let offset = self.visible_offset(geometry.viewport, geometry.content);

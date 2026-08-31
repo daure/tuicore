@@ -107,6 +107,7 @@ where
                 else {
                     return EventOutcome::Ignored;
                 };
+                let metric_revision = self.metric_revision;
                 let highlight = self.set_highlighted_index(index);
                 let activation = self.activate_highlighted();
                 ctx.focus(FocusRequest::TargetAt {
@@ -120,6 +121,9 @@ where
                     || activation.activated
                 {
                     ctx.request_redraw();
+                }
+                if self.metric_revision != metric_revision {
+                    ctx.request_layout();
                 }
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
@@ -152,7 +156,7 @@ where
             crate::AxisProposal::Unbounded => u16::MAX,
             crate::AxisProposal::AtMost(width) | crate::AxisProposal::Exact(width) => width,
         };
-        let rendered_widths = self.rendered_column_widths();
+        let rendered_widths = self.rendered_column_widths_for_viewport(proposed_width as usize);
         let mut height = action_bar
             .saturating_add(header)
             .saturating_add(
@@ -184,6 +188,7 @@ where
             && (self.area.width != area.width || self.area.height != area.height);
         let width_changed = self.area.width != 0 && self.area.width != area.width;
         self.area = area;
+        self.prepare_metrics(area.width as usize);
         ctx.register_hit_region(crate::HitRegion::new(ctx.current_path(), area));
         if width_changed {
             self.scroll.snap_horizontal_to_start();
@@ -255,6 +260,7 @@ where
         let focused_search = matches!(self.interaction, DataViewInteraction::Search);
         let before_interaction = self.interaction.clone();
         let before_visible_rows = self.visible_row_count();
+        let metric_revision = self.metric_revision;
         let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
         let delegated_boundary = self.vertical_scroll == DataViewVerticalScroll::ParentDelegated
             && !outcome.changed
@@ -281,6 +287,11 @@ where
             }
         }
         if self.visible_row_count() != before_visible_rows {
+            ctx.request_layout();
+        }
+        if self.metric_revision != metric_revision
+            && self.vertical_scroll != DataViewVerticalScroll::ParentDelegated
+        {
             ctx.request_layout();
         }
         if Self::search_exited(&before_interaction, &self.interaction) {
@@ -334,9 +345,13 @@ where
                 return self.event(event, ctx);
             }
             let before_interaction = self.interaction.clone();
+            let metric_revision = self.metric_revision;
             let outcome = self.on_search_event(event, self.area, ctx.animation(), ctx);
             if Self::search_exited(&before_interaction, &self.interaction) {
                 self.focus_self(ctx);
+            }
+            if self.metric_revision != metric_revision {
+                ctx.request_layout();
             }
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -356,6 +371,7 @@ where
                 return EventOutcome::Ignored;
             };
             let popup_open = self.filter_dropdown.is_some();
+            let metric_revision = self.metric_revision;
             let outcome =
                 self.on_filter_values_event(event, self.area, ctx.animation(), &column_id, ctx);
             if popup_open != self.filter_dropdown.is_some() {
@@ -363,6 +379,9 @@ where
                 if popup_open {
                     self.focus_self(ctx);
                 }
+            }
+            if self.metric_revision != metric_revision {
+                ctx.request_layout();
             }
             if outcome.needs_redraw() {
                 ctx.request_redraw();
@@ -381,8 +400,12 @@ where
     }
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
+        let metric_revision = self.metric_revision;
         self.set_focused(focused);
         ctx.request_redraw();
+        if self.metric_revision != metric_revision {
+            ctx.request_layout();
+        }
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
@@ -391,6 +414,7 @@ where
             .without_first_if(&ChildKey::new(SEARCH_SLOT))
             .is_some()
         {
+            let metric_revision = self.metric_revision;
             self.set_focused(focused);
             self.search_input.set_focused(focused);
             if focused {
@@ -400,9 +424,13 @@ where
                 self.interaction = DataViewInteraction::Grid;
             }
             ctx.request_redraw();
+            if self.metric_revision != metric_revision {
+                ctx.request_layout();
+            }
             return;
         }
         if let Some(child_target) = target.for_child(&ChildKey::new(FILTER_DROPDOWN_SLOT)) {
+            let metric_revision = self.metric_revision;
             self.set_focused(focused);
             if let Some(dropdown) = self.filter_dropdown.as_mut() {
                 <Box<ChoiceDropdown> as TuiNode<M>>::dispatch_focus(
@@ -416,6 +444,9 @@ where
                 self.close_choice_dropdowns();
             }
             ctx.request_redraw();
+            if self.metric_revision != metric_revision {
+                ctx.request_layout();
+            }
             return;
         }
         if target.path.is_empty() {
