@@ -278,6 +278,19 @@ where
         self.invalidate_metrics();
     }
 
+    pub fn set_column_wrap_continuation_indent_by(
+        &mut self,
+        column_id: &str,
+        indent: impl Fn(&T) -> usize + 'static,
+    ) -> bool {
+        let Some(column) = self.columns.iter_mut().find(|column| column.id == column_id) else {
+            return false;
+        };
+        column.continuation_indent = Some(Box::new(indent));
+        self.invalidate_metrics();
+        true
+    }
+
     pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
         self.copy_formatter = Some(Box::new(formatter));
         self

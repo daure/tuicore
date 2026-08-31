@@ -44,6 +44,7 @@ struct PanelTitle {
 
 struct PanelActionHotkey<M> {
     sequence: String,
+    enabled: bool,
     on_trigger: Rc<dyn Fn() -> M>,
 }
 
@@ -51,6 +52,7 @@ impl<M> Clone for PanelActionHotkey<M> {
     fn clone(&self) -> Self {
         Self {
             sequence: self.sequence.clone(),
+            enabled: self.enabled,
             on_trigger: Rc::clone(&self.on_trigger),
         }
     }
@@ -211,10 +213,22 @@ impl<M> Panel<M> {
     ) -> Self {
         self.action_hotkeys.push(PanelActionHotkey {
             sequence: sequence.into(),
+            enabled: true,
             on_trigger: Rc::new(on_trigger),
         });
         self.rebuild_hotkey_matcher();
         self
+    }
+
+    pub fn set_action_hotkey_enabled(&mut self, sequence: &str, enabled: bool) {
+        if let Some(action) = self
+            .action_hotkeys
+            .iter_mut()
+            .find(|action| action.sequence == sequence)
+        {
+            action.enabled = enabled;
+            self.rebuild_hotkey_matcher();
+        }
     }
 
     pub(crate) fn set_hotkey_badge(&mut self, hotkey: Option<String>) {
@@ -696,6 +710,7 @@ impl<M> Panel<M> {
             .chain(
                 self.action_hotkeys
                     .iter()
+                    .filter(|action| action.enabled)
                     .map(|action| action.sequence.clone()),
             )
             .collect::<Vec<_>>();
@@ -1106,6 +1121,7 @@ impl<M> Panel<M> {
             .chain(
                 self.action_hotkeys
                     .iter()
+                    .filter(|action| action.enabled)
                     .map(|action| action.sequence.clone()),
             )
             .collect()
@@ -1117,13 +1133,17 @@ impl<M> Panel<M> {
 
     fn action_for_match_index(&self, index: usize) -> Option<&PanelActionHotkey<M>> {
         let action_index = index.checked_sub(self.hotkey.is_some() as usize)?;
-        self.action_hotkeys.get(action_index)
+        self.action_hotkeys
+            .iter()
+            .filter(|action| action.enabled)
+            .nth(action_index)
     }
 
     fn action_for_sequence(&self, sequence: &str) -> Option<&PanelActionHotkey<M>> {
         self.action_hotkeys.iter().find(|action| {
-            crate::hotkey::normalize_hotkey(&action.sequence)
-                == crate::hotkey::normalize_hotkey(sequence)
+            action.enabled
+                && crate::hotkey::normalize_hotkey(&action.sequence)
+                    == crate::hotkey::normalize_hotkey(sequence)
         })
     }
 }

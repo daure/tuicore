@@ -142,6 +142,7 @@ pub struct Dropdown<T, Id> {
     label: Option<String>,
     bottom_left: Option<String>,
     bottom_left_style: Option<Style>,
+    field_text_style: Option<Style>,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     tab_stop: bool,
@@ -283,6 +284,7 @@ where
             label: None,
             bottom_left: None,
             bottom_left_style: None,
+            field_text_style: None,
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             tab_stop: true,
@@ -337,6 +339,15 @@ where
 
     pub fn set_wrap_cells(&mut self, wrap_cells: bool) {
         self.data_view.set_wrap_cells(wrap_cells);
+    }
+
+    pub fn wrap_continuation_indent_by(mut self, indent: impl Fn(&T) -> usize + 'static) -> Self {
+        debug_assert!(
+            self.data_view
+                .set_column_wrap_continuation_indent_by("label", indent),
+            "dropdowns always provide a label column"
+        );
+        self
     }
 
     pub fn min_search_chars(mut self, count: usize) -> Self {
@@ -449,8 +460,16 @@ where
     }
 
     pub fn max_popup_height(mut self, height: u16) -> Self {
-        self.max_popup_height = Some(height.max(1));
+        self.set_max_popup_height(height);
         self
+    }
+
+    pub fn set_max_popup_height(&mut self, height: u16) {
+        self.max_popup_height = Some(height.max(1));
+    }
+
+    pub fn configured_max_popup_height(&self) -> Option<u16> {
+        self.max_popup_height
     }
 
     pub fn auto_focus_search(mut self, auto_focus: bool) -> Self {
@@ -495,6 +514,19 @@ where
 
     pub fn clear_bottom_left_style(&mut self) {
         self.bottom_left_style = None;
+    }
+
+    pub fn field_text_style(mut self, style: Style) -> Self {
+        self.set_field_text_style(style);
+        self
+    }
+
+    pub fn set_field_text_style(&mut self, style: Style) {
+        self.field_text_style = Some(style);
+    }
+
+    pub fn clear_field_text_style(&mut self) {
+        self.field_text_style = None;
     }
 
     pub fn label_position(mut self, position: DropdownLabelPosition) -> Self {

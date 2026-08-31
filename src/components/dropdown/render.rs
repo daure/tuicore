@@ -202,10 +202,12 @@ where
         } else {
             Line::from(Span::styled(
                 self.selected_summary(),
-                Style::default().fg(if self.disabled {
-                    theme.muted_fg()
-                } else {
-                    theme.text_fg()
+                self.field_text_style.unwrap_or_else(|| {
+                    Style::default().fg(if self.disabled {
+                        theme.muted_fg()
+                    } else {
+                        theme.text_fg()
+                    })
                 }),
             ))
         };
@@ -320,7 +322,10 @@ where
                     placeholder_style,
                 )
             } else {
-                Line::from(Span::styled(self.selected_summary(), base_style))
+                Line::from(Span::styled(
+                    self.selected_summary(),
+                    self.field_text_style.unwrap_or(base_style),
+                ))
             };
             frame.render_widget(Paragraph::new(text), text_area);
         }
@@ -668,12 +673,7 @@ where
         frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
     }
 
-    fn render_bottom_left(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        border_style: Style,
-    ) {
+    fn render_bottom_left(&self, frame: &mut Frame, area: Rect, border_style: Style) {
         let Some(text) = &self.bottom_left else {
             return;
         };
