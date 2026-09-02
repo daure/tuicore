@@ -1544,6 +1544,19 @@ fn rapid_syntax_invalidations_eventually_apply_only_latest_revision() {
 }
 
 #[test]
+fn textarea_hides_initial_content_until_syntax_highlighting_is_ready() {
+    let mut input = TextareaInput::<()>::new()
+        .value("fn main() {}")
+        .language(Language::Rust);
+
+    assert!(input.visible_lines(20, 1).lines[0].spans.is_empty());
+
+    finish_syntax(&mut input);
+
+    assert_eq!(input.visible_lines(20, 1).lines[0].spans[0].content, "f");
+}
+
+#[test]
 fn textarea_rebuilds_invalidated_highlighting_after_edits_and_set_value() {
     let mut input = TextareaInput::<()>::new()
         .value("fn main")

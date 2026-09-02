@@ -1024,6 +1024,12 @@ impl<M> TextareaInput<M> {
             Style::default().fg(theme.muted_fg())
         };
         let cursor_style = self.cursor_fade.style(value_style);
+        if !self.syntax_render_ready(theme_name) {
+            return VisibleLines {
+                lines: vec![Line::default(); height],
+                first_line,
+            };
+        }
         let ranges = self.line_ranges();
         if self.wrap {
             return self.visible_wrapped_lines_from_with_cursor(
@@ -1972,6 +1978,13 @@ impl<M> TextareaInput<M> {
         } else {
             style
         }
+    }
+
+    fn syntax_render_ready(&self, theme_name: ThemeName) -> bool {
+        self.language.is_none()
+            || self.syntax_cache.as_ref().is_some_and(|cache| {
+                self.language == Some(cache.language) && cache.theme_name == theme_name
+            })
     }
 
     fn external_editor_extension(&self) -> Option<String> {
