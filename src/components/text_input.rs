@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -23,6 +23,7 @@ use super::Panel;
 const INPUT_FOCUS: &str = "input";
 const PASSWORD_INPUT_FOCUS: &str = "password-input";
 const CURSOR_FADE_HALF: Duration = Duration::from_millis(600);
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 const TAB_WIDTH: usize = 4;
 const TAB_INSERT: &str = "    ";
 
@@ -104,6 +105,7 @@ pub struct TextInput<M = ()> {
     chrome: InputChrome,
     panel: Panel,
     area: Rect,
+    last_click: Option<Instant>,
 }
 
 pub struct PasswordInput<M = ()> {
@@ -337,6 +339,7 @@ impl<M> TextInput<M> {
             chrome: InputChrome::Plain,
             panel: Panel::new(),
             area: Rect::default(),
+            last_click: None,
         }
     }
 
@@ -361,6 +364,7 @@ impl<M> TextInput<M> {
         self.disabled = disabled;
         if disabled {
             self.insert_mode = false;
+            self.last_click = None;
         }
         self.cursor_fade.reset();
         self.sync_panel();
@@ -428,7 +432,15 @@ impl<M> TextInput<M> {
             return false;
         }
 
-        if !self.disabled && !self.insert_mode {
+        let is_double_click = !self.disabled
+            && self
+                .last_click
+                .is_some_and(|last_click| last_click.elapsed() <= DOUBLE_CLICK_INTERVAL);
+        if !self.disabled {
+            self.last_click = Some(Instant::now());
+        }
+
+        if !self.disabled && !self.insert_mode && is_double_click {
             self.set_insert_mode(true);
             ctx.request_layout();
             ctx.request_redraw();

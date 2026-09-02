@@ -381,6 +381,9 @@ impl Theme {
     pub fn muted_fg(&self) -> Color {
         self.muted_fg
     }
+    pub fn disabled_focus_fg(&self) -> Color {
+        mix_color(self.muted_fg, self.text_fg, 0.3)
+    }
     pub fn subtle_fg(&self) -> Color {
         self.subtle_fg
     }
@@ -1401,6 +1404,13 @@ mod tests {
         assert_eq!(theme.success_fg(), Color::Rgb(0x6b, 0xa1, 0xe6));
         assert_eq!(theme.warning_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
         assert_eq!(theme.error_fg(), Color::Rgb(0xe0, 0x6c, 0x75));
+    }
+
+    #[test]
+    fn disabled_focus_color_is_thirty_percent_toward_text() {
+        let theme = Theme::named(ThemeName::Orng);
+
+        assert_eq!(theme.disabled_focus_fg(), Color::Rgb(0xa1, 0xa1, 0xa1));
     }
 
     #[test]

@@ -51,8 +51,10 @@ impl ToggleOutcome {
 pub struct Toggle<M = ()> {
     label: String,
     value: bool,
+    disabled: bool,
     style: ToggleStyle,
     hotkey: Option<String>,
+    preserve_focus_on_hotkey: bool,
     hotkey_matcher: HotkeySequenceMatcher,
     focused: bool,
     on_change: Option<Box<dyn Fn(bool) -> M>>,
@@ -69,8 +71,10 @@ impl<M> Toggle<M> {
         Self {
             label: label.into(),
             value: false,
+            disabled: false,
             style: ToggleStyle::default(),
             hotkey: None,
+            preserve_focus_on_hotkey: false,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             focused: false,
             on_change: None,
@@ -103,6 +107,30 @@ impl<M> Toggle<M> {
         self.value
     }
 
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
+        self.pending_hotkey_prefix = None;
+        self.hotkey_matcher = if disabled {
+            HotkeySequenceMatcher::default()
+        } else {
+            self.hotkey
+                .clone()
+                .map_or_else(HotkeySequenceMatcher::default, |hotkey| {
+                    HotkeySequenceMatcher::new([hotkey])
+                })
+        };
+        self.sync_idle_colors();
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
@@ -128,6 +156,11 @@ impl<M> Toggle<M> {
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
         self.set_hotkey(hotkey);
+        self
+    }
+
+    pub fn preserve_focus_on_hotkey(mut self, preserve: bool) -> Self {
+        self.preserve_focus_on_hotkey = preserve;
         self
     }
 
@@ -166,6 +199,9 @@ impl<M> Toggle<M> {
     }
 
     pub fn toggle(&mut self) -> ToggleOutcome {
+        if self.disabled {
+            return ToggleOutcome::ignored(self.value);
+        }
         self.value = !self.value;
         if !self.focused {
             self.sync_idle_colors();
@@ -174,6 +210,9 @@ impl<M> Toggle<M> {
     }
 
     pub fn on_key(&mut self, key: impl Into<KeyEvent>) -> ToggleOutcome {
+        if self.disabled {
+            return ToggleOutcome::ignored(self.value);
+        }
         let key = key.into();
         match self.hotkey_matcher.on_key(key) {
             HotkeyMatch::Matched(_) => return self.toggle(),
@@ -204,6 +243,7 @@ impl<M> Toggle<M> {
     }
 
     fn line(&self) -> Line<'static> {
+        let disabled_focus = self.disabled && self.focused;
         let switch = match (self.style, self.value) {
             (ToggleStyle::Switch, true) => "──●",
             (ToggleStyle::Switch, false) => "○──",
@@ -222,12 +262,24 @@ impl<M> Toggle<M> {
             Span::raw(" "),
             Span::styled(
                 self.label.clone(),
-                Style::default().fg(self.visible_text_color()),
+                Style::default()
+                    .fg(self.visible_text_color())
+                    .add_modifier(if disabled_focus {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
         ];
 
         if let Some(ref hotkey) = self.hotkey {
-            let base_style = Style::default().fg(self.visible_hotkey_color());
+            let base_style = Style::default()
+                .fg(self.visible_hotkey_color())
+                .add_modifier(if disabled_focus {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                });
             let highlight_style = base_style.add_modifier(Modifier::BOLD);
             let hotkey = crate::hotkey::normalize_hotkey(hotkey);
             let highlight = self
@@ -255,6 +307,13 @@ impl<M> Toggle<M> {
     }
 
     fn visible_switch_color(&self) -> ratatui::style::Color {
+        if self.disabled {
+            return if self.focused {
+                theme().disabled_focus_fg()
+            } else {
+                theme().muted_fg()
+            };
+        }
         if self.switch_color.is_active() {
             return self.switch_color.value();
         }
@@ -270,6 +329,13 @@ impl<M> Toggle<M> {
     }
 
     fn visible_text_color(&self) -> ratatui::style::Color {
+        if self.disabled {
+            return if self.focused {
+                theme().disabled_focus_fg()
+            } else {
+                theme().muted_fg()
+            };
+        }
         if self.text_color.is_active() {
             return self.text_color.value();
         }
@@ -283,6 +349,13 @@ impl<M> Toggle<M> {
     }
 
     fn visible_hotkey_color(&self) -> ratatui::style::Color {
+        if self.disabled {
+            return if self.focused {
+                theme().disabled_focus_fg()
+            } else {
+                theme().muted_fg()
+            };
+        }
         if self.hotkey_color.is_active() {
             return self.hotkey_color.value();
         }
@@ -297,19 +370,31 @@ impl<M> Toggle<M> {
 
     fn sync_idle_colors(&mut self) {
         let theme = theme();
-        self.switch_color.snap_to(if self.focused {
+        self.switch_color.snap_to(if self.disabled && self.focused {
+            theme.disabled_focus_fg()
+        } else if self.disabled {
+            theme.muted_fg()
+        } else if self.focused {
             theme.accent_fg()
         } else if self.value {
             theme.success_fg()
         } else {
             theme.muted_fg()
         });
-        self.text_color.snap_to(if self.focused {
+        self.text_color.snap_to(if self.disabled && self.focused {
+            theme.disabled_focus_fg()
+        } else if self.disabled {
+            theme.muted_fg()
+        } else if self.focused {
             theme.accent_fg()
         } else {
             theme.text_fg()
         });
-        self.hotkey_color.snap_to(if self.focused {
+        self.hotkey_color.snap_to(if self.disabled && self.focused {
+            theme.disabled_focus_fg()
+        } else if self.disabled {
+            theme.muted_fg()
+        } else if self.focused {
             theme.accent_fg()
         } else {
             theme.text_fg()
@@ -319,7 +404,11 @@ impl<M> Toggle<M> {
     fn start_color_transition(&mut self, settings: AnimationSettings) {
         let theme = theme();
         self.switch_color.start(
-            if self.focused {
+            if self.disabled && self.focused {
+                theme.disabled_focus_fg()
+            } else if self.disabled {
+                theme.muted_fg()
+            } else if self.focused {
                 theme.accent_fg()
             } else if self.value {
                 theme.success_fg()
@@ -330,7 +419,11 @@ impl<M> Toggle<M> {
             focus_color_animation(),
         );
         self.text_color.start(
-            if self.focused {
+            if self.disabled && self.focused {
+                theme.disabled_focus_fg()
+            } else if self.disabled {
+                theme.muted_fg()
+            } else if self.focused {
                 theme.accent_fg()
             } else {
                 theme.text_fg()
@@ -339,7 +432,11 @@ impl<M> Toggle<M> {
             focus_color_animation(),
         );
         self.hotkey_color.start(
-            if self.focused {
+            if self.disabled && self.focused {
+                theme.disabled_focus_fg()
+            } else if self.disabled {
+                theme.muted_fg()
+            } else if self.focused {
                 theme.accent_fg()
             } else {
                 theme.text_fg()
@@ -397,6 +494,14 @@ where
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
         if let TuiEvent::Hotkey(hotkey) = event {
+            if self.disabled {
+                if self.preserve_focus_on_hotkey
+                    && matches!(hotkey, HotkeyEvent::Commit(sequence) if self.hotkey.as_deref().is_some_and(|hotkey| hotkey_matches_sequence(hotkey, sequence)))
+                {
+                    ctx.focus(FocusRequest::Keep);
+                }
+                return EventOutcome::Ignored;
+            }
             match hotkey {
                 HotkeyEvent::Pending(prefix) => {
                     self.pending_hotkey_prefix = Some(prefix.clone());
@@ -423,6 +528,9 @@ where
                             }
                             ctx.request_redraw();
                         }
+                        if self.preserve_focus_on_hotkey {
+                            ctx.focus(FocusRequest::Keep);
+                        }
                         ctx.stop_propagation();
                         return EventOutcome::Handled;
                     }
@@ -435,9 +543,11 @@ where
                 return EventOutcome::Ignored;
             }
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                self.toggle();
-                if let Some(on_change) = &self.on_change {
-                    ctx.emit(on_change(self.value));
+                let outcome = self.toggle();
+                if outcome.changed {
+                    if let Some(on_change) = &self.on_change {
+                        ctx.emit(on_change(self.value));
+                    }
                 }
                 ctx.focus(FocusRequest::TargetAt {
                     path: ctx.current_path(),
@@ -586,6 +696,88 @@ mod tests {
     }
 
     #[test]
+    fn disabled_toggle_is_focusable_but_cannot_change_value() {
+        let mut toggle = Toggle::new("Telemetry")
+            .hotkey("x")
+            .disabled(true)
+            .on_change(|value| value);
+        let mut layout = LayoutCtx::new();
+        toggle.layout(Rect::new(4, 2, 12, 1), &mut layout);
+        let mut ctx = EventCtx::default();
+
+        assert_eq!(layout.focus_targets().len(), 1);
+        assert!(layout.focus_targets()[0].tab_stop);
+        assert_eq!(layout.focus_targets()[0].hotkey_sequences, vec!["x"]);
+        assert_eq!(
+            toggle.event(&TuiEvent::Key(KeyEvent::from(Key::Char(' '))), &mut ctx),
+            EventOutcome::Ignored
+        );
+        assert_eq!(
+            toggle.event(
+                &TuiEvent::Hotkey(HotkeyEvent::Commit("x".to_string())),
+                &mut ctx,
+            ),
+            EventOutcome::Ignored
+        );
+        assert!(!toggle.is_checked());
+        assert_eq!(ctx.propagation(), Propagation::Continue);
+
+        let outcome = toggle.event(
+            &TuiEvent::Mouse(crate::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 4,
+                row: 2,
+                modifiers: crate::KeyModifiers::NONE,
+            }),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!toggle.is_checked());
+        assert!(ctx.drain_messages().collect::<Vec<_>>().is_empty());
+        assert_eq!(
+            ctx.focus_request(),
+            Some(&FocusRequest::TargetAt {
+                path: crate::TreePath::new(),
+                id: FocusId::new(TOGGLE_FOCUS),
+            })
+        );
+    }
+
+    #[test]
+    fn disabled_hotkey_preserves_focus_when_configured() {
+        let mut toggle = Toggle::<()>::new("Telemetry")
+            .hotkey("x")
+            .disabled(true)
+            .preserve_focus_on_hotkey(true);
+        let mut ctx = EventCtx::default();
+
+        let outcome = toggle.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("x".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Ignored);
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Keep));
+    }
+
+    #[test]
+    fn disabled_toggle_renders_brighter_text_when_focused() {
+        let line = Toggle::<()>::new("Telemetry")
+            .hotkey("x")
+            .disabled(true)
+            .focused(true)
+            .line();
+
+        assert_eq!(line.spans[0].style.fg, Some(theme().disabled_focus_fg()));
+        assert_eq!(line.spans[2].style.fg, Some(theme().disabled_focus_fg()));
+        assert_eq!(line.spans[4].style.fg, Some(theme().disabled_focus_fg()));
+        assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(line.spans[2].style.add_modifier.contains(Modifier::BOLD));
+        assert!(line.spans[4].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn hotkey_registers_and_toggles() {
         let mut toggle = Toggle::<()>::new("Telemetry").hotkey("x");
         let mut layout = LayoutCtx::new();
@@ -597,6 +789,22 @@ mod tests {
 
         assert!(outcome.handled);
         assert!(toggle.is_checked());
+    }
+
+    #[test]
+    fn preserving_focus_on_a_hotkey_keeps_the_current_component_focused() {
+        let mut toggle = Toggle::<()>::new("Telemetry")
+            .hotkey("x")
+            .preserve_focus_on_hotkey(true);
+        let mut ctx = EventCtx::default();
+
+        let outcome = toggle.event(
+            &TuiEvent::Hotkey(HotkeyEvent::Commit("x".to_string())),
+            &mut ctx,
+        );
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.focus_request(), Some(&FocusRequest::Keep));
     }
 
     #[test]

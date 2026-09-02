@@ -788,6 +788,8 @@ struct PreviewState {
     tag_input_panel: TagInput,
     toggle: Toggle<Msg>,
     checkbox_toggle: Toggle<Msg>,
+    disabled_toggle: Toggle<Msg>,
+    disabled_checkbox_toggle: Toggle<Msg>,
     dialog_100: Button<Msg>,
     dialog_80: Button<Msg>,
     dialog_60: Button<Msg>,
@@ -1000,6 +1002,14 @@ impl PreviewState {
             tag_input_panel: demo_tag_input_panel(),
             toggle: Toggle::new("Telemetry").hotkey("x"),
             checkbox_toggle: Toggle::new("Item").checkbox().checked(true).hotkey("i"),
+            disabled_toggle: Toggle::new("Sync over cellular")
+                .checked(true)
+                .hotkey("o")
+                .disabled(true),
+            disabled_checkbox_toggle: Toggle::new("Locked option")
+                .checkbox()
+                .hotkey("l")
+                .disabled(true),
             dialog_100: dialog_button(DialogExample::Full),
             dialog_80: dialog_button(DialogExample::Large),
             dialog_60: dialog_button(DialogExample::Medium),
@@ -1338,7 +1348,12 @@ impl PreviewState {
                 (index, keys.len(), active)
             }
             PreviewKind::Toggle => {
-                let keys = [toggle_switch_child_key(), toggle_checkbox_child_key()];
+                let keys = [
+                    toggle_switch_child_key(),
+                    toggle_checkbox_child_key(),
+                    disabled_toggle_switch_child_key(),
+                    disabled_toggle_checkbox_child_key(),
+                ];
                 let index = child_position(key, &keys)?;
                 (index, keys.len(), false)
             }
@@ -1588,14 +1603,30 @@ impl PreviewState {
             {
                 return self.toggle.dispatch_event(&route, event, ctx);
             }
-            let Some(route) = route
+            if let Some(route) = route
                 .path
                 .without_first_if(&toggle_checkbox_child_key())
+                .map(EventRoute::new)
+            {
+                return self.checkbox_toggle.dispatch_event(&route, event, ctx);
+            }
+            if let Some(route) = route
+                .path
+                .without_first_if(&disabled_toggle_switch_child_key())
+                .map(EventRoute::new)
+            {
+                return self.disabled_toggle.dispatch_event(&route, event, ctx);
+            }
+            let Some(route) = route
+                .path
+                .without_first_if(&disabled_toggle_checkbox_child_key())
                 .map(EventRoute::new)
             else {
                 return EventOutcome::Ignored;
             };
-            return self.checkbox_toggle.dispatch_event(&route, event, ctx);
+            return self
+                .disabled_checkbox_toggle
+                .dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::NotificationTriggers {
             return self.notification_trigger_dispatch_event(route, event, ctx);
@@ -1891,6 +1922,22 @@ impl PreviewState {
                     focused,
                     ctx,
                 );
+                if dispatch_focus_child(
+                    &mut self.disabled_toggle,
+                    target,
+                    disabled_toggle_switch_child_key(),
+                    focused,
+                    ctx,
+                ) {
+                    return;
+                }
+                dispatch_focus_child(
+                    &mut self.disabled_checkbox_toggle,
+                    target,
+                    disabled_toggle_checkbox_child_key(),
+                    focused,
+                    ctx,
+                );
             }
             PreviewKind::NotificationTriggers => dispatch_focus_indexed(
                 target,
@@ -2055,6 +2102,12 @@ impl PreviewState {
             ))
             .merge(Animated::tick(&mut self.toggle, dt, settings))
             .merge(Animated::tick(&mut self.checkbox_toggle, dt, settings))
+            .merge(Animated::tick(&mut self.disabled_toggle, dt, settings))
+            .merge(Animated::tick(
+                &mut self.disabled_checkbox_toggle,
+                dt,
+                settings,
+            ))
             .merge(
                 <Calendar<DemoCalendarEntry, &'static str, Msg> as TuiNode<Msg>>::tick(
                     &mut self.calendar,
@@ -3402,25 +3455,55 @@ impl PreviewState {
     }
 
     fn layout_toggle(&mut self, area: Rect, ctx: &mut LayoutCtx) {
-        let [_, switch_area, checkbox_area] = toggle_layout(area);
+        let [
+            _,
+            switch_area,
+            checkbox_area,
+            disabled_switch_area,
+            disabled_checkbox_area,
+        ] = toggle_layout(area);
         ctx.push_slot(toggle_switch_child_key(), switch_area, |ctx| {
             self.toggle.layout(switch_area, ctx);
         });
         ctx.push_slot(toggle_checkbox_child_key(), checkbox_area, |ctx| {
             self.checkbox_toggle.layout(checkbox_area, ctx);
         });
+        ctx.push_slot(
+            disabled_toggle_switch_child_key(),
+            disabled_switch_area,
+            |ctx| {
+                self.disabled_toggle.layout(disabled_switch_area, ctx);
+            },
+        );
+        ctx.push_slot(
+            disabled_toggle_checkbox_child_key(),
+            disabled_checkbox_area,
+            |ctx| {
+                self.disabled_checkbox_toggle
+                    .layout(disabled_checkbox_area, ctx);
+            },
+        );
     }
 
     fn render_toggle(&self, frame: &mut Frame, area: Rect) {
-        let [instructions, switch_area, checkbox_area] = toggle_layout(area);
+        let [
+            instructions,
+            switch_area,
+            checkbox_area,
+            disabled_switch_area,
+            disabled_checkbox_area,
+        ] = toggle_layout(area);
         frame.render_widget(
             Paragraph::new(
-                "Enter/Space toggles. Press x for switch style or i for checkbox style. h/k moves back; j/l moves forward.",
+                "Enter/Space toggles enabled controls. Press x for switch style or i for checkbox style.\nDisabled toggles remain focusable but cannot change. h/k moves back; j/l moves forward.",
             ),
             instructions,
         );
         self.toggle.render(frame, switch_area);
         self.checkbox_toggle.render(frame, checkbox_area);
+        self.disabled_toggle.render(frame, disabled_switch_area);
+        self.disabled_checkbox_toggle
+            .render(frame, disabled_checkbox_area);
     }
 
     fn render_spinner(&self, frame: &mut Frame, area: Rect) {
@@ -3946,6 +4029,14 @@ fn toggle_switch_child_key() -> ChildKey {
 
 fn toggle_checkbox_child_key() -> ChildKey {
     ChildKey::new("toggle-checkbox")
+}
+
+fn disabled_toggle_switch_child_key() -> ChildKey {
+    ChildKey::new("disabled-toggle-switch")
+}
+
+fn disabled_toggle_checkbox_child_key() -> ChildKey {
+    ChildKey::new("disabled-toggle-checkbox")
 }
 
 fn form_navigation_key(event: &TuiEvent) -> Option<FormNavigation> {

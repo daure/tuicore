@@ -669,7 +669,7 @@ fn textarea_panel_style_moves_hotkey_to_panel() {
 }
 
 #[test]
-fn textarea_click_focuses_and_enters_insert_mode_for_all_chrome() {
+fn textarea_double_click_enters_insert_mode_for_all_chrome() {
     for (mut input, area) in [
         (TextareaInput::<()>::new(), Rect::new(2, 3, 20, 1)),
         (
@@ -681,15 +681,17 @@ fn textarea_click_focuses_and_enters_insert_mode_for_all_chrome() {
         input.layout(area, &mut layout);
         let mut ctx = EventCtx::default();
 
-        let outcome = input.event(
-            &TuiEvent::Mouse(MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: area.x,
-                row: area.y,
-                modifiers: KeyModifiers::NONE,
-            }),
-            &mut ctx,
-        );
+        let click = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let outcome = input.event(&click, &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!input.insert_mode());
+        let outcome = input.event(&click, &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert!(input.insert_mode());

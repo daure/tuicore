@@ -297,6 +297,7 @@ pub struct FocusTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FocusRequest {
+    Keep,
     Next,
     Previous,
     Unfocus,

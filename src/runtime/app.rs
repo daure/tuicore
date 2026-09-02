@@ -1605,6 +1605,8 @@ mod tests {
         hotkey_commits: usize,
         last_hotkey_commit: Option<String>,
         yank_events: usize,
+        preserve_focus_on_hotkey: bool,
+        focused: Option<String>,
     }
 
     impl TuiNode<()> for QuitNode {
@@ -2295,6 +2297,9 @@ mod tests {
                     if let Some(value) = self.copy_on_hotkey {
                         ctx.copy_to_clipboard(value);
                     }
+                    if self.preserve_focus_on_hotkey {
+                        ctx.focus(FocusRequest::Keep);
+                    }
                     return EventOutcome::Handled;
                 }
                 TuiEvent::Yank => {
@@ -2304,6 +2309,12 @@ mod tests {
                 _ => {}
             }
             EventOutcome::Ignored
+        }
+
+        fn focus(&mut self, target: Option<&FocusId>, focused: bool, _ctx: &mut FocusCtx<()>) {
+            if focused {
+                self.focused = target.map(|target| target.as_str().to_owned());
+            }
         }
     }
 
@@ -3430,6 +3441,22 @@ mod tests {
 
         assert_eq!(app.root.hotkey_commits, 2);
         assert_eq!(app.root.yank_events, 0);
+    }
+
+    #[test]
+    fn global_hotkey_can_preserve_the_previously_focused_component() {
+        let app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["i"],
+            preserve_focus_on_hotkey: true,
+            ..HotkeyPrecedenceProbe::default()
+        })
+        .initial_focus(FocusRequest::Target(FocusId::new("probe")))
+        .run_test_events(
+            [TuiEvent::Key(KeyEvent::from(Key::Char('i')))],
+            Rect::new(0, 0, 10, 1),
+        );
+
+        assert_eq!(app.root.focused.as_deref(), Some("probe"));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
@@ -34,6 +34,7 @@ use super::text_input::{
 use super::{Language, Panel};
 
 const TEXTAREA_FOCUS: &str = "textarea";
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 const TAB_INSERT: &str = "    ";
 const SYNTAX_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const SYNTAX_QUEUE_CAPACITY: usize = 1;
@@ -82,6 +83,7 @@ pub struct TextareaInput<M = ()> {
     keys: TextareaInputKeyBindings,
     cursor_fade: CursorFade,
     pending_hotkey_prefix: Option<String>,
+    last_click: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +234,7 @@ impl<M> TextareaInput<M> {
             keys: TextareaInputKeyBindings::default(),
             cursor_fade: CursorFade::default(),
             pending_hotkey_prefix: None,
+            last_click: None,
         }
     }
 
@@ -254,6 +257,7 @@ impl<M> TextareaInput<M> {
         self.disabled = disabled;
         if disabled {
             self.insert_mode = false;
+            self.last_click = None;
         }
         self.cursor_fade.reset();
         self.sync_panel();
@@ -327,7 +331,15 @@ impl<M> TextareaInput<M> {
             return false;
         }
 
-        if !self.disabled && !self.insert_mode {
+        let is_double_click = !self.disabled
+            && self
+                .last_click
+                .is_some_and(|last_click| last_click.elapsed() <= DOUBLE_CLICK_INTERVAL);
+        if !self.disabled {
+            self.last_click = Some(Instant::now());
+        }
+
+        if !self.disabled && !self.insert_mode && is_double_click {
             if self.begin_insert_mode() {
                 self.scroll_cursor_into_view(disabled_animation_settings());
             }

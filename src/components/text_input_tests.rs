@@ -176,7 +176,7 @@ fn disabled_text_input_suppresses_editor_hotkey() {
 }
 
 #[test]
-fn text_input_click_focuses_and_enters_insert_mode_for_all_chrome() {
+fn text_input_double_click_enters_insert_mode_for_all_chrome() {
     for (mut input, area) in [
         (TextInput::<()>::new(), Rect::new(2, 3, 12, 1)),
         (
@@ -188,15 +188,17 @@ fn text_input_click_focuses_and_enters_insert_mode_for_all_chrome() {
         input.layout(area, &mut layout);
         let mut ctx = EventCtx::default();
 
-        let outcome = input.event(
-            &TuiEvent::Mouse(MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: area.x,
-                row: area.y,
-                modifiers: KeyModifiers::NONE,
-            }),
-            &mut ctx,
-        );
+        let click = TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let outcome = input.event(&click, &mut ctx);
+
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert!(!input.insert_mode());
+        let outcome = input.event(&click, &mut ctx);
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert!(input.insert_mode());
@@ -213,21 +215,23 @@ fn text_input_click_focuses_and_enters_insert_mode_for_all_chrome() {
 }
 
 #[test]
-fn password_input_click_focuses_and_enters_insert_mode() {
+fn password_input_double_click_enters_insert_mode() {
     let mut input = PasswordInput::<()>::new();
     let mut layout = LayoutCtx::new();
     input.layout(Rect::new(2, 3, 12, 1), &mut layout);
     let mut ctx = EventCtx::default();
 
-    let outcome = input.event(
-        &TuiEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 3,
-            modifiers: KeyModifiers::NONE,
-        }),
-        &mut ctx,
-    );
+    let click = TuiEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 2,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    });
+    let outcome = input.event(&click, &mut ctx);
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert!(!input.insert_mode());
+    let outcome = input.event(&click, &mut ctx);
 
     assert_eq!(outcome, EventOutcome::Handled);
     assert!(input.insert_mode());

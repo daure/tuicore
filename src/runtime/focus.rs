@@ -109,6 +109,7 @@ impl FocusManager {
         targets: &[FocusTarget],
     ) -> Option<FocusTransition> {
         match request {
+            FocusRequest::Keep => None,
             FocusRequest::Next => self.set_current(self.next_target(targets), targets, true),
             FocusRequest::Previous => {
                 self.set_current(self.previous_target(targets), targets, true)

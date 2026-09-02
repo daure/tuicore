@@ -65,11 +65,13 @@ pub(crate) fn text_input_showcase_layout(area: Rect) -> [Rect; 5] {
         .areas(area)
 }
 
-pub(crate) fn toggle_layout(area: Rect) -> [Rect; 3] {
+pub(crate) fn toggle_layout(area: Rect) -> [Rect; 5] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
         ])

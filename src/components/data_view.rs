@@ -54,6 +54,7 @@ const DEFAULT_EMPTY_MESSAGE: &str = "No results found.";
 
 type ChoiceDropdown = Dropdown<DataViewChoice, String>;
 type CopyFormatter<T> = dyn Fn(&T) -> String;
+type CopyHotkeyFormatter<T> = dyn Fn(&T) -> Option<String>;
 type RowHeightFn<T> = dyn Fn(&T) -> u16;
 type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
 type LeftGutterMarkerFn<T> = dyn Fn(&T) -> Option<ratatui::text::Span<'static>>;
@@ -81,6 +82,7 @@ pub struct DataView<T, Id> {
     columns: Vec<Column<T, Id>>,
     row_id: Box<RowIdFn<T, Id>>,
     copy_formatter: Option<Box<CopyFormatter<T>>>,
+    copy_hotkeys: Vec<(String, Box<CopyHotkeyFormatter<T>>)>,
     empty_state: Option<SeasonalEmptyState>,
     empty_message: String,
     tree: Option<TreeAdapter<T, Id>>,
@@ -186,6 +188,7 @@ where
             columns: Vec::new(),
             row_id: Box::new(row_id),
             copy_formatter: None,
+            copy_hotkeys: Vec::new(),
             empty_state: None,
             empty_message: DEFAULT_EMPTY_MESSAGE.to_string(),
             tree: None,
@@ -293,6 +296,15 @@ where
 
     pub fn copy_with(mut self, formatter: impl Fn(&T) -> String + 'static) -> Self {
         self.copy_formatter = Some(Box::new(formatter));
+        self
+    }
+
+    pub fn copy_hotkey(
+        mut self,
+        sequence: impl Into<String>,
+        formatter: impl Fn(&T) -> Option<String> + 'static,
+    ) -> Self {
+        self.copy_hotkeys.push((sequence.into(), Box::new(formatter)));
         self
     }
 

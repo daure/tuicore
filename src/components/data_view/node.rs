@@ -201,12 +201,18 @@ where
         } else {
             area
         };
-        if let Some(hotkey) = &self.hotkey {
+        let hotkeys = self
+            .hotkey
+            .iter()
+            .cloned()
+            .chain(self.copy_hotkeys.iter().map(|(sequence, _)| sequence.clone()))
+            .collect::<Vec<_>>();
+        if !hotkeys.is_empty() {
             ctx.register_focusable_with_hotkey_sequences(
                 FocusId::new(DATA_VIEW_FOCUS),
                 focus_area,
                 true,
-                vec![hotkey.clone()],
+                hotkeys,
             );
         } else {
             ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), focus_area, true);
@@ -225,6 +231,21 @@ where
     }
 
     fn event(&mut self, event: &crate::TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let crate::TuiEvent::Hotkey(crate::HotkeyEvent::Commit(sequence)) = event
+            && let Some((_, formatter)) = self
+                .copy_hotkeys
+                .iter()
+                .find(|(candidate, _)| candidate == sequence)
+        {
+            if let Some(row) = self.visible_rows().get(self.highlighted) {
+                if let Some(value) = formatter(row.row) {
+                    ctx.copy_to_clipboard(value);
+                }
+            }
+            ctx.focus(FocusRequest::Keep);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         if matches!(event, crate::TuiEvent::Yank) {
             if let Some(value) = self.highlighted_copy_value() {
                 ctx.copy_to_clipboard(value);
