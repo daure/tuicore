@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{num::NonZeroU16, time::Duration};
 
 mod gallery_demo;
 mod list_control;
@@ -22,6 +22,7 @@ use gallery_demo::dropdowns::{
     dropdown_no_search_immediate, dropdown_preview_layout,
 };
 use gallery_demo::forms::{FormControlId, ValidatedForm};
+use gallery_demo::images::ImageDemo;
 use gallery_demo::inputs::{
     button_layout, chip_layout, date_time_showcase_layout, password_input_showcase_layout,
     text_input_showcase_layout, textarea_showcase_layout, toggle_layout, typography_showcase,
@@ -63,10 +64,10 @@ use list_control::{
 };
 #[cfg(test)]
 use list_control::{entity_controls, reorder_control};
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+use ratatui::{Frame, buffer::CellDiffOption};
 #[cfg(test)]
 use tuicore::{CalendarView, LayoutProposal};
 
@@ -388,6 +389,7 @@ struct Gallery {
     preview_panel: Panel,
     footer: StatusBar<Msg>,
     previews: Box<PreviewState>,
+    pending_kitty_cleanup: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -425,6 +427,7 @@ impl Gallery {
             ComponentKind::DataView,
             ComponentKind::ListControl,
             ComponentKind::DiffViewer,
+            ComponentKind::Image,
         ])
         .focused(true);
 
@@ -446,12 +449,26 @@ impl Gallery {
             preview_panel: Panel::new().top_left(ComponentKind::Tabs.preview().title()),
             footer,
             previews: Box::new(PreviewState::new()),
+            pending_kitty_cleanup: Vec::new(),
         }
     }
 
     fn select(&mut self, selected: ComponentKind) {
+        let previous_preview = self.selected.preview();
+        let preview = selected.preview();
+        if previous_preview != preview {
+            if let Some(command) = self.previews.kitty_cleanup_command(previous_preview) {
+                if !self.pending_kitty_cleanup.contains(&command) {
+                    self.pending_kitty_cleanup.push(command);
+                }
+            }
+        }
+        if let Some(command) = self.previews.kitty_cleanup_command(preview) {
+            self.pending_kitty_cleanup.retain(|pending| pending != &command);
+        }
         self.selected = selected;
-        self.preview_panel.set_top_left(selected.preview().title());
+        self.previews.redraw_image(preview);
+        self.preview_panel.set_top_left(preview.title());
     }
 
     fn store_debug_state(&self) -> InspectValue {
@@ -617,6 +634,14 @@ impl TuiNode<Msg> for Gallery {
 
         self.footer.render(frame, self.areas.footer, ctx);
         self.previews.notification_triggers.render(frame, area);
+        if !self.pending_kitty_cleanup.is_empty() {
+            let cleanup = self.pending_kitty_cleanup.concat();
+            render_graphics_command(
+                frame,
+                self.areas.preview_body,
+                &cleanup,
+            );
+        }
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -639,7 +664,8 @@ impl TuiNode<Msg> for Gallery {
             .merge(Animated::tick(&mut self.preview_panel, dt, settings))
             .merge(Animated::tick(&mut self.component_list, dt, settings))
             .merge(self.footer.tick(dt, settings))
-            .merge(self.previews.tick(dt, settings));
+            .merge(self.previews.tick(dt, settings))
+            .merge(self.previews.tick_image(self.selected.preview()));
 
         tick_res
     }
@@ -859,6 +885,9 @@ struct PreviewState {
     diff_side_by_side: DiffDemo<Msg>,
     diff_inline: DiffDemo<Msg>,
     syntax_highlighting: gallery_demo::syntax_highlighting::SyntaxHighlightingDemo,
+    image_path: ImageDemo,
+    image_base64: ImageDemo,
+    image_url: ImageDemo,
     diff_word: DiffDemo<Msg>,
     diff_raw_patch: DiffDemo<Msg>,
 }
@@ -886,6 +915,33 @@ struct DemoCalendarEntry {
 }
 
 impl PreviewState {
+    fn tick_image(&mut self, preview: PreviewKind) -> TickResult {
+        match preview {
+            PreviewKind::ImagePath => self.image_path.tick(),
+            PreviewKind::ImageBase64 => self.image_base64.tick(),
+            PreviewKind::ImageUrl => self.image_url.tick(),
+            _ => TickResult::IDLE,
+        }
+    }
+
+    fn kitty_cleanup_command(&self, preview: PreviewKind) -> Option<String> {
+        match preview {
+            PreviewKind::ImagePath => self.image_path.kitty_cleanup_command(),
+            PreviewKind::ImageBase64 => self.image_base64.kitty_cleanup_command(),
+            PreviewKind::ImageUrl => self.image_url.kitty_cleanup_command(),
+            _ => None,
+        }
+    }
+
+    fn redraw_image(&mut self, preview: PreviewKind) {
+        match preview {
+            PreviewKind::ImagePath => self.image_path.redraw(),
+            PreviewKind::ImageBase64 => self.image_base64.redraw(),
+            PreviewKind::ImageUrl => self.image_url.redraw(),
+            _ => {}
+        }
+    }
+
     fn new() -> Self {
         Self {
             text_input: TextInput::new()
@@ -1099,6 +1155,9 @@ impl PreviewState {
             diff_side_by_side: side_by_side_diff_demo(),
             diff_inline: inline_diff_demo(),
             syntax_highlighting: gallery_demo::syntax_highlighting::SyntaxHighlightingDemo::new(),
+            image_path: ImageDemo::path(),
+            image_base64: ImageDemo::base64(),
+            image_url: ImageDemo::url(),
             diff_word: word_diff_demo(),
             diff_raw_patch: raw_patch_diff_demo(),
         }
@@ -1236,6 +1295,15 @@ impl PreviewState {
             }
             PreviewKind::SyntaxHighlighting => {
                 self.syntax_highlighting.layout(area, ctx);
+            }
+            PreviewKind::ImagePath => {
+                self.image_path.layout(area, ctx);
+            }
+            PreviewKind::ImageBase64 => {
+                self.image_base64.layout(area, ctx);
+            }
+            PreviewKind::ImageUrl => {
+                self.image_url.layout(area, ctx);
             }
             preview if preview.is_diff_viewer() => {
                 self.active_diff_viewer_mut(preview).layout(area, ctx);
@@ -1437,6 +1505,9 @@ impl PreviewState {
             PreviewKind::SyntaxHighlighting => {
                 self.syntax_highlighting.render(frame, area, ctx);
             }
+            PreviewKind::ImagePath => self.image_path.render(frame, area, ctx),
+            PreviewKind::ImageBase64 => self.image_base64.render(frame, area, ctx),
+            PreviewKind::ImageUrl => self.image_url.render(frame, area, ctx),
             preview @ (PreviewKind::DiffSideBySide
             | PreviewKind::DiffInline
             | PreviewKind::DiffWord
@@ -2323,6 +2394,9 @@ impl PreviewState {
         self.diff_side_by_side.init(ctx);
         self.diff_inline.init(ctx);
         TuiNode::<Msg>::init(&mut self.syntax_highlighting, ctx);
+        self.image_path.init(ctx);
+        self.image_base64.init(ctx);
+        self.image_url.init(ctx);
         self.diff_word.init(ctx);
         self.diff_raw_patch.init(ctx);
         self.scroll_mixed.init(ctx);
@@ -3747,6 +3821,18 @@ impl PreviewState {
     }
 }
 
+fn render_graphics_command(frame: &mut Frame, area: Rect, command: &str) {
+    let Some(cell) = frame.buffer_mut().cell_mut((area.x, area.y)) else {
+        return;
+    };
+    let symbol = cell.symbol();
+    let symbol = format!("{command}{symbol}");
+    cell.set_symbol(&symbol)
+        .set_diff_option(CellDiffOption::ForcedWidth(
+            NonZeroU16::new(1).expect("one is non-zero"),
+        ));
+}
+
 fn demo_menu_button() -> MenuButton<&'static str, Msg> {
     MenuButton::new(
         "Open menu",
@@ -4254,12 +4340,16 @@ enum ComponentKind {
     DiffSideBySide,
     DiffInline,
     SyntaxHighlighting,
+    Image,
+    ImagePath,
+    ImageBase64,
+    ImageUrl,
     DiffWord,
     DiffRawPatch,
 }
 
 impl ComponentKind {
-    const ALL: [Self; 58] = [
+    const ALL: [Self; 62] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelVariants,
@@ -4316,6 +4406,10 @@ impl ComponentKind {
         Self::DiffSideBySide,
         Self::DiffInline,
         Self::SyntaxHighlighting,
+        Self::Image,
+        Self::ImagePath,
+        Self::ImageBase64,
+        Self::ImageUrl,
         Self::DiffWord,
         Self::DiffRawPatch,
     ];
@@ -4380,6 +4474,10 @@ impl ComponentKind {
             Self::DiffWord => "Word / Intra-line",
             Self::DiffRawPatch => "Raw patch / Patch view",
             Self::SyntaxHighlighting => "Syntax Highlighting",
+            Self::Image => "Image",
+            Self::ImagePath => "From path",
+            Self::ImageBase64 => "From base64",
+            Self::ImageUrl => "From URL",
         }
     }
 
@@ -4425,6 +4523,7 @@ impl ComponentKind {
             Self::DiffSideBySide | Self::DiffInline | Self::DiffWord | Self::DiffRawPatch => {
                 Some(Self::DiffViewer)
             }
+            Self::ImagePath | Self::ImageBase64 | Self::ImageUrl => Some(Self::Image),
             _ => None,
         }
     }
@@ -4482,6 +4581,9 @@ impl ComponentKind {
             Self::DiffViewer | Self::DiffSideBySide => PreviewKind::DiffSideBySide,
             Self::DiffInline => PreviewKind::DiffInline,
             Self::SyntaxHighlighting => PreviewKind::SyntaxHighlighting,
+            Self::Image | Self::ImagePath => PreviewKind::ImagePath,
+            Self::ImageBase64 => PreviewKind::ImageBase64,
+            Self::ImageUrl => PreviewKind::ImageUrl,
             Self::DiffWord => PreviewKind::DiffWord,
             Self::DiffRawPatch => PreviewKind::DiffRawPatch,
         }
@@ -4540,6 +4642,9 @@ enum PreviewKind {
     DiffSideBySide,
     DiffInline,
     SyntaxHighlighting,
+    ImagePath,
+    ImageBase64,
+    ImageUrl,
     DiffWord,
     DiffRawPatch,
 }
@@ -4599,6 +4704,9 @@ impl PreviewKind {
             Self::DiffWord => "Word / Intra-line",
             Self::DiffRawPatch => "Raw patch / Patch view",
             Self::SyntaxHighlighting => "Syntax Highlighting",
+            Self::ImagePath => "Image: Path",
+            Self::ImageBase64 => "Image: Base64",
+            Self::ImageUrl => "Image: URL",
         }
     }
 

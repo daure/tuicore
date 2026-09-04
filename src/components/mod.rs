@@ -13,6 +13,7 @@ mod dropdown;
 mod flex;
 mod form_field;
 mod grid;
+mod image;
 mod list;
 mod list_control;
 mod menu;
@@ -79,6 +80,7 @@ pub use dropdown::{
 pub use flex::{CrossAlign, CrossSize, Flex, FlexItem, MainAlign};
 pub use form_field::FormField;
 pub use grid::{Grid, GridItem, GridTrack};
+pub use image::{Image, ImageError, ImageProtocol};
 pub use list::{List, ListOutcome};
 pub use list_control::{
     ListControl, ListControlDisplayKeyBindings, ListControlEvent, ListControlField,

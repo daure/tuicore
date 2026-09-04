@@ -209,6 +209,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   left, right, or bottom border. Types: `TabsSelectionMemory`, `ModalCloseReason`.
 - `FormField<C, M>`: `new(label, child)`, embedded mode, error and child access.
 - `Chip`: `new(label)`, icons and `ChipColorRole`. `Header`: `new(text)`, optional icon.
+- `Image`: `from_path`, `from_url`, `from_base64`, or `from_bytes`; configure fit-content
+  dimensions with `size`. The default `ImageProtocol::Auto` selects a compatible graphics backend;
+  use `ImageProtocol::Kitty` with terminals that support Kitty placeholders, such as Ghostty.
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,
   must tick. `SeasonalEmptyState`: `new(message)`, `SeasonalGlyphs`, must tick when live.
 - `SpeedReader`: `new(plain_text)` or `markdown(source)`; configure title, WPM, natural pauses, and

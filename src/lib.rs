@@ -40,7 +40,7 @@ pub use components::{
     DialogLayerPlacement, DialogTitlePosition, DiffLocation, DiffStyle, DiffViewer, DockChrome,
     DockSide, DockSpec, Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition,
     DropdownOutcome, DropdownPopupDirection, DropdownSearchMode, DropdownVariant, Flex, FlexItem,
-    FormField, Grid, GridItem, GridTrack, Header, InputChrome, InputOutcome, InputPanelChrome,
+    FormField, Grid, GridItem, GridTrack, Header, Image, ImageError, ImageProtocol, InputChrome, InputOutcome, InputPanelChrome,
     Language, List, ListControl, ListControlDisplayKeyBindings, ListControlEvent, ListControlField,
     ListControlKeyBindings, ListControlReorderUnavailable, ListOutcome, MainAlign, Menu,
     MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode, ModalCloseReason,

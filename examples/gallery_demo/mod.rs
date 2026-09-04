@@ -5,6 +5,7 @@ pub(crate) mod dialogs;
 pub(crate) mod diffs;
 pub(crate) mod dropdowns;
 pub(crate) mod forms;
+pub(crate) mod images;
 pub(crate) mod inputs;
 pub(crate) mod layouts;
 pub(crate) mod notifications;

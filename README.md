@@ -55,7 +55,7 @@ Useful public exports:
 - App wiring: `tuicore::run`, `TreeApp`
 - Tree contracts: `TuiNode`, `EventCtx`, `LayoutCtx`, `FocusCtx`, `LifecycleCtx`
 - Events and keys: `TuiEvent`, `KeyEvent`, `Key`, `KeyModifiers`
-- Layout/components: `Panel`, `Panel::host`, `Split`, `Flex`, `FlexItem`, `Tabs`, `List`, `Spinner`
+- Layout/components: `Panel`, `Panel::host`, `Split`, `Flex`, `FlexItem`, `Tabs`, `List`, `Spinner`, `Image`
 - Shared state helpers: `ScrollState`, `FocusChain`, `FocusRouter`
 - Runtime config: `init`, `theme`, `preset`, `keybindings`, `animation_settings`
 
