@@ -1,4 +1,4 @@
-use std::{num::NonZeroU16, time::Duration};
+use std::time::Duration;
 
 mod gallery_demo;
 mod list_control;
@@ -31,6 +31,7 @@ use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
     layout_split_demo, layout_stack_demo, render_layout_intro,
 };
+use gallery_demo::mermaid::MermaidDemo;
 use gallery_demo::notifications::{
     notification_button_areas, notification_button_child_key, notification_button_child_route,
     notification_button_index, notification_buttons, notification_for_index,
@@ -64,10 +65,10 @@ use list_control::{
 };
 #[cfg(test)]
 use list_control::{entity_controls, reorder_control};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::{Frame, buffer::CellDiffOption};
 #[cfg(test)]
 use tuicore::{CalendarView, LayoutProposal};
 
@@ -389,7 +390,6 @@ struct Gallery {
     preview_panel: Panel,
     footer: StatusBar<Msg>,
     previews: Box<PreviewState>,
-    pending_kitty_cleanup: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -427,6 +427,7 @@ impl Gallery {
             ComponentKind::DataView,
             ComponentKind::ListControl,
             ComponentKind::DiffViewer,
+            ComponentKind::Mermaid,
             ComponentKind::Image,
         ])
         .focused(true);
@@ -449,23 +450,11 @@ impl Gallery {
             preview_panel: Panel::new().top_left(ComponentKind::Tabs.preview().title()),
             footer,
             previews: Box::new(PreviewState::new()),
-            pending_kitty_cleanup: Vec::new(),
         }
     }
 
     fn select(&mut self, selected: ComponentKind) {
-        let previous_preview = self.selected.preview();
         let preview = selected.preview();
-        if previous_preview != preview {
-            if let Some(command) = self.previews.kitty_cleanup_command(previous_preview) {
-                if !self.pending_kitty_cleanup.contains(&command) {
-                    self.pending_kitty_cleanup.push(command);
-                }
-            }
-        }
-        if let Some(command) = self.previews.kitty_cleanup_command(preview) {
-            self.pending_kitty_cleanup.retain(|pending| pending != &command);
-        }
         self.selected = selected;
         self.previews.redraw_image(preview);
         self.preview_panel.set_top_left(preview.title());
@@ -634,14 +623,6 @@ impl TuiNode<Msg> for Gallery {
 
         self.footer.render(frame, self.areas.footer, ctx);
         self.previews.notification_triggers.render(frame, area);
-        if !self.pending_kitty_cleanup.is_empty() {
-            let cleanup = self.pending_kitty_cleanup.concat();
-            render_graphics_command(
-                frame,
-                self.areas.preview_body,
-                &cleanup,
-            );
-        }
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
@@ -885,6 +866,7 @@ struct PreviewState {
     diff_side_by_side: DiffDemo<Msg>,
     diff_inline: DiffDemo<Msg>,
     syntax_highlighting: gallery_demo::syntax_highlighting::SyntaxHighlightingDemo,
+    mermaid: MermaidDemo,
     image_path: ImageDemo,
     image_base64: ImageDemo,
     image_url: ImageDemo,
@@ -921,15 +903,6 @@ impl PreviewState {
             PreviewKind::ImageBase64 => self.image_base64.tick(),
             PreviewKind::ImageUrl => self.image_url.tick(),
             _ => TickResult::IDLE,
-        }
-    }
-
-    fn kitty_cleanup_command(&self, preview: PreviewKind) -> Option<String> {
-        match preview {
-            PreviewKind::ImagePath => self.image_path.kitty_cleanup_command(),
-            PreviewKind::ImageBase64 => self.image_base64.kitty_cleanup_command(),
-            PreviewKind::ImageUrl => self.image_url.kitty_cleanup_command(),
-            _ => None,
         }
     }
 
@@ -1155,6 +1128,7 @@ impl PreviewState {
             diff_side_by_side: side_by_side_diff_demo(),
             diff_inline: inline_diff_demo(),
             syntax_highlighting: gallery_demo::syntax_highlighting::SyntaxHighlightingDemo::new(),
+            mermaid: MermaidDemo::new(),
             image_path: ImageDemo::path(),
             image_base64: ImageDemo::base64(),
             image_url: ImageDemo::url(),
@@ -1295,6 +1269,9 @@ impl PreviewState {
             }
             PreviewKind::SyntaxHighlighting => {
                 self.syntax_highlighting.layout(area, ctx);
+            }
+            PreviewKind::MermaidGenerator => {
+                self.mermaid.layout(area, ctx);
             }
             PreviewKind::ImagePath => {
                 self.image_path.layout(area, ctx);
@@ -1505,6 +1482,7 @@ impl PreviewState {
             PreviewKind::SyntaxHighlighting => {
                 self.syntax_highlighting.render(frame, area, ctx);
             }
+            PreviewKind::MermaidGenerator => self.mermaid.render(frame, area, ctx),
             PreviewKind::ImagePath => self.image_path.render(frame, area, ctx),
             PreviewKind::ImageBase64 => self.image_base64.render(frame, area, ctx),
             PreviewKind::ImageUrl => self.image_url.render(frame, area, ctx),
@@ -1738,6 +1716,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::SyntaxHighlighting {
             return self.syntax_highlighting.dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::MermaidGenerator {
+            return self.mermaid.dispatch_event(route, event, ctx);
         }
         if preview.is_diff_viewer() {
             return self
@@ -2074,6 +2055,7 @@ impl PreviewState {
             PreviewKind::SyntaxHighlighting => self
                 .syntax_highlighting
                 .dispatch_focus(target, focused, ctx),
+            PreviewKind::MermaidGenerator => self.mermaid.dispatch_focus(target, focused, ctx),
             preview if preview.is_diff_viewer() => self
                 .active_diff_viewer_mut(preview)
                 .dispatch_focus(target, focused, ctx),
@@ -2376,6 +2358,7 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(TuiNode::<Msg>::tick(&mut self.mermaid, dt, settings))
             .merge(self.diff_word.tick(dt, settings))
             .merge(self.diff_raw_patch.tick(dt, settings))
             .merge(self.scroll_mixed.tick(dt, settings))
@@ -2394,6 +2377,7 @@ impl PreviewState {
         self.diff_side_by_side.init(ctx);
         self.diff_inline.init(ctx);
         TuiNode::<Msg>::init(&mut self.syntax_highlighting, ctx);
+        TuiNode::<Msg>::init(&mut self.mermaid, ctx);
         self.image_path.init(ctx);
         self.image_base64.init(ctx);
         self.image_url.init(ctx);
@@ -2415,6 +2399,7 @@ impl PreviewState {
         self.diff_side_by_side.mount(ctx);
         self.diff_inline.mount(ctx);
         TuiNode::<Msg>::mount(&mut self.syntax_highlighting, ctx);
+        TuiNode::<Msg>::mount(&mut self.mermaid, ctx);
         self.diff_word.mount(ctx);
         self.diff_raw_patch.mount(ctx);
         self.scroll_mixed.mount(ctx);
@@ -2428,6 +2413,7 @@ impl PreviewState {
         self.scroll_mixed.unmount(ctx);
         self.diff_inline.unmount(ctx);
         TuiNode::<Msg>::unmount(&mut self.syntax_highlighting, ctx);
+        TuiNode::<Msg>::unmount(&mut self.mermaid, ctx);
         self.diff_side_by_side.unmount(ctx);
         self.menu_button.unmount(ctx);
         self.list_reorder_tree.unmount(ctx);
@@ -2446,6 +2432,7 @@ impl PreviewState {
         self.scroll_mixed.destroy(ctx);
         self.diff_inline.destroy(ctx);
         TuiNode::<Msg>::destroy(&mut self.syntax_highlighting, ctx);
+        TuiNode::<Msg>::destroy(&mut self.mermaid, ctx);
         self.diff_side_by_side.destroy(ctx);
         self.menu_button.destroy(ctx);
         self.list_reorder_tree.destroy(ctx);
@@ -3821,18 +3808,6 @@ impl PreviewState {
     }
 }
 
-fn render_graphics_command(frame: &mut Frame, area: Rect, command: &str) {
-    let Some(cell) = frame.buffer_mut().cell_mut((area.x, area.y)) else {
-        return;
-    };
-    let symbol = cell.symbol();
-    let symbol = format!("{command}{symbol}");
-    cell.set_symbol(&symbol)
-        .set_diff_option(CellDiffOption::ForcedWidth(
-            NonZeroU16::new(1).expect("one is non-zero"),
-        ));
-}
-
 fn demo_menu_button() -> MenuButton<&'static str, Msg> {
     MenuButton::new(
         "Open menu",
@@ -4340,6 +4315,8 @@ enum ComponentKind {
     DiffSideBySide,
     DiffInline,
     SyntaxHighlighting,
+    Mermaid,
+    MermaidGenerator,
     Image,
     ImagePath,
     ImageBase64,
@@ -4349,7 +4326,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 62] = [
+    const ALL: [Self; 64] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelVariants,
@@ -4406,6 +4383,8 @@ impl ComponentKind {
         Self::DiffSideBySide,
         Self::DiffInline,
         Self::SyntaxHighlighting,
+        Self::Mermaid,
+        Self::MermaidGenerator,
         Self::Image,
         Self::ImagePath,
         Self::ImageBase64,
@@ -4474,6 +4453,8 @@ impl ComponentKind {
             Self::DiffWord => "Word / Intra-line",
             Self::DiffRawPatch => "Raw patch / Patch view",
             Self::SyntaxHighlighting => "Syntax Highlighting",
+            Self::Mermaid => "Mermaid",
+            Self::MermaidGenerator => "Generator",
             Self::Image => "Image",
             Self::ImagePath => "From path",
             Self::ImageBase64 => "From base64",
@@ -4523,6 +4504,7 @@ impl ComponentKind {
             Self::DiffSideBySide | Self::DiffInline | Self::DiffWord | Self::DiffRawPatch => {
                 Some(Self::DiffViewer)
             }
+            Self::MermaidGenerator => Some(Self::Mermaid),
             Self::ImagePath | Self::ImageBase64 | Self::ImageUrl => Some(Self::Image),
             _ => None,
         }
@@ -4581,6 +4563,7 @@ impl ComponentKind {
             Self::DiffViewer | Self::DiffSideBySide => PreviewKind::DiffSideBySide,
             Self::DiffInline => PreviewKind::DiffInline,
             Self::SyntaxHighlighting => PreviewKind::SyntaxHighlighting,
+            Self::Mermaid | Self::MermaidGenerator => PreviewKind::MermaidGenerator,
             Self::Image | Self::ImagePath => PreviewKind::ImagePath,
             Self::ImageBase64 => PreviewKind::ImageBase64,
             Self::ImageUrl => PreviewKind::ImageUrl,
@@ -4642,6 +4625,7 @@ enum PreviewKind {
     DiffSideBySide,
     DiffInline,
     SyntaxHighlighting,
+    MermaidGenerator,
     ImagePath,
     ImageBase64,
     ImageUrl,
@@ -4704,6 +4688,7 @@ impl PreviewKind {
             Self::DiffWord => "Word / Intra-line",
             Self::DiffRawPatch => "Raw patch / Patch view",
             Self::SyntaxHighlighting => "Syntax Highlighting",
+            Self::MermaidGenerator => "Mermaid Generator",
             Self::ImagePath => "Image: Path",
             Self::ImageBase64 => "Image: Base64",
             Self::ImageUrl => "Image: URL",

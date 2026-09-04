@@ -1,24 +1,24 @@
 use std::fmt;
 use std::io::Cursor;
-use std::num::NonZeroU16;
 use std::path::Path;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
+use std::sync::{Arc, OnceLock};
 
 use base64::Engine;
 use image::{DynamicImage, ImageFormat, imageops::FilterType};
+use ratatui::Frame;
 use ratatui::layout::{Rect, Size};
-use ratatui::{
-    Frame,
-    buffer::{Buffer, CellDiffOption},
-    widgets::Widget,
-};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 use ratatui_image::{Image as RatatuiImage, Resize};
 
-use crate::{LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, RenderCtx, TickResult, TuiNode};
+use crate::runtime::renderer::{
+    BASE_DIRECT_KITTY_Z_INDEX, DirectKittyIntent, DirectKittyPlacementId, GraphicsLevel,
+    next_direct_kitty_image_id,
+};
+use crate::{
+    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, RenderCtx, TickResult, TuiNode,
+};
 
 /// Selects the terminal graphics protocol used to render an [`Image`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -28,8 +28,13 @@ pub enum ImageProtocol {
     Auto,
     /// Use the Sixel graphics protocol.
     Sixel,
-    /// Use the Kitty graphics protocol when the terminal supports Kitty placeholders.
+    /// Use renderer-owned direct Kitty placements.
     Kitty,
+    /// Use ratatui-image's cell-bound Kitty Unicode placeholders.
+    ///
+    /// Unlike [`Self::Kitty`], placeholders participate in normal buffer rendering, so dialogs
+    /// and other overlays occlude them naturally.
+    KittyPlaceholder,
 }
 
 /// A decoded terminal image that can be loaded from a file, URL, or base64 data.
@@ -102,6 +107,24 @@ impl Image {
         Self::from_bytes(bytes)
     }
 
+    /// Download and load an image from an HTTP(S) URL using HTTP Basic authentication.
+    pub fn from_url_with_basic_auth(
+        url: impl AsRef<str>,
+        username: impl AsRef<str>,
+        password: impl AsRef<str>,
+    ) -> Result<Self, ImageError> {
+        let bytes = reqwest::blocking::Client::new()
+            .get(url.as_ref())
+            .basic_auth(username.as_ref(), Some(password.as_ref()))
+            .send()
+            .map_err(ImageError::Download)?
+            .error_for_status()
+            .map_err(ImageError::Download)?
+            .bytes()
+            .map_err(ImageError::Download)?;
+        Self::from_bytes(bytes)
+    }
+
     /// Decode a base64 image payload. `data:image/...;base64,...` URLs are also accepted.
     pub fn from_base64(encoded: impl AsRef<str>) -> Result<Self, ImageError> {
         let encoded = encoded.as_ref();
@@ -135,8 +158,14 @@ impl Image {
         self.protocol = None;
         self.direct_kitty = None;
         self.pending_kitty = None;
+        self.picker = None;
         self.encoded_size = None;
         self
+    }
+
+    /// Return the configured graphics protocol.
+    pub const fn graphics_protocol(&self) -> ImageProtocol {
+        self.graphics_protocol
     }
 
     /// Set the preferred size in terminal cells when the parent uses fit-content sizing.
@@ -177,18 +206,10 @@ impl Image {
     /// Poll a background Kitty image encode.
     pub fn tick(&mut self) -> TickResult {
         let Some(pending) = &self.pending_kitty else {
-            return self
-                .direct_kitty
-                .as_mut()
-                .is_some_and(DirectKittyImage::replace_transfer_with_placement)
-                .then_some(TickResult::CHANGED)
-                .unwrap_or(TickResult::IDLE);
+            return TickResult::IDLE;
         };
         match pending.receiver.try_recv() {
-            Ok(Ok(mut image)) => {
-                if let Some(previous) = &self.direct_kitty {
-                    image.data.insert_str(0, &previous.cleanup_command());
-                }
+            Ok(Ok(image)) => {
                 self.direct_kitty = Some(image);
                 self.pending_kitty = None;
                 TickResult::CHANGED
@@ -202,15 +223,15 @@ impl Image {
     }
 
     fn picker(&mut self) -> &Picker {
-        self.picker.get_or_insert_with(|| {
-            let mut picker = detected_picker();
-            match self.graphics_protocol {
-                ImageProtocol::Auto => {}
-                ImageProtocol::Sixel => picker.set_protocol_type(ProtocolType::Sixel),
-                ImageProtocol::Kitty => picker.set_protocol_type(ProtocolType::Kitty),
+        let picker = self.picker.get_or_insert_with(detected_picker);
+        match self.graphics_protocol {
+            ImageProtocol::Auto => {}
+            ImageProtocol::Sixel => picker.set_protocol_type(ProtocolType::Sixel),
+            ImageProtocol::Kitty | ImageProtocol::KittyPlaceholder => {
+                picker.set_protocol_type(ProtocolType::Kitty);
             }
-            picker
-        })
+        }
+        picker
     }
 
     fn encode(&mut self, area: Rect) {
@@ -242,7 +263,10 @@ impl Image {
 
     fn request_kitty_image(&mut self, size: Size) {
         if self.encoded_size == Some(size)
-            || self.pending_kitty.as_ref().is_some_and(|pending| pending.size == size)
+            || self
+                .pending_kitty
+                .as_ref()
+                .is_some_and(|pending| pending.size == size)
         {
             return;
         }
@@ -257,33 +281,30 @@ impl Image {
 }
 
 struct DirectKittyImage {
-    data: String,
-    transmit_once: bool,
+    data: Arc<str>,
     size: Size,
+    requested_size: Size,
     image_id: u32,
     placement_id: u32,
+    generation: u64,
 }
 
 impl DirectKittyImage {
     fn new(image: DynamicImage, size: Size) -> Result<Self, image::ImageError> {
-        static NEXT_IMAGE_ID: AtomicU32 = AtomicU32::new(1);
-
+        let requested_size = size;
         let (width, height, size) = fitted_kitty_size(&image, size);
         let image = image.resize_exact(width, height, FilterType::Triangle);
         let mut png = Vec::new();
         image.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)?;
 
-        let image_id = NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed);
+        let image_id = next_direct_kitty_image_id();
         let placement_id = 1;
         let encoded = base64::engine::general_purpose::STANDARD.encode(png);
         let mut data = String::new();
         for (index, chunk) in encoded.as_bytes().chunks(4096).enumerate() {
             let more = usize::from((index + 1) * 4096 < encoded.len());
             if index == 0 {
-                data.push_str(&format!(
-                    "\x1b_Ga=T,t=d,f=100,i={image_id},p={placement_id},c={},r={},C=1,q=2,m={more};",
-                    size.width, size.height,
-                ));
+                data.push_str(&format!("\x1b_Ga=t,t=d,f=100,i={image_id},q=2,m={more};"));
             } else {
                 data.push_str(&format!("\x1b_Gm={more};"));
             }
@@ -292,38 +313,42 @@ impl DirectKittyImage {
         }
 
         Ok(Self {
-            data,
-            transmit_once: true,
+            data: Arc::from(data),
             size,
+            requested_size,
             image_id,
             placement_id,
+            generation: 0,
         })
     }
 
     fn redraw(&mut self) {
-        self.transmit_once = false;
-        self.data = format!(
-            "\x1b_Ga=p,i={},p={},c={},r={},C=1,q=2\x1b\\",
-            self.image_id, self.placement_id, self.size.width, self.size.height
-        );
+        self.generation = self.generation.wrapping_add(1);
     }
 
     fn cleanup_command(&self) -> String {
         format!(
-            "\x1b_Ga=d,d=i,i={},p={},q=2\x1b\\",
+            "\x1b_Ga=d,d=I,i={},p={},q=2\x1b\\",
             self.image_id, self.placement_id
         )
     }
 
-    fn replace_transfer_with_placement(&mut self) -> bool {
-        if !self.transmit_once {
-            return false;
+    fn intent(&self, area: Rect) -> Option<DirectKittyIntent> {
+        if Size::from(area) != self.requested_size {
+            return None;
         }
-        self.transmit_once = false;
-        self.redraw();
-        true
+        Some(DirectKittyIntent {
+            id: DirectKittyPlacementId {
+                image_id: self.image_id,
+                placement_id: self.placement_id,
+            },
+            area: Rect::new(area.x, area.y, self.size.width, self.size.height),
+            generation: self.generation,
+            payload: Arc::clone(&self.data),
+            level: GraphicsLevel::base(),
+            z_index: BASE_DIRECT_KITTY_Z_INDEX,
+        })
     }
-
 }
 
 fn fitted_kitty_size(image: &DynamicImage, area: Size) -> (u32, u32, Size) {
@@ -341,23 +366,6 @@ fn fitted_kitty_size(image: &DynamicImage, area: Size) -> (u32, u32, Size) {
     );
 
     (width, height, size)
-}
-
-impl Widget for &DirectKittyImage {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if self.size.width > area.width || self.size.height > area.height {
-            return;
-        }
-
-        let Some(cell) = buf.cell_mut((area.x, area.y)) else {
-            return;
-        };
-        let symbol = format!("{} ", self.data);
-        cell.set_symbol(&symbol)
-            .set_diff_option(CellDiffOption::ForcedWidth(
-                NonZeroU16::new(1).expect("one is non-zero"),
-            ));
-    }
 }
 
 fn detected_picker() -> Picker {
@@ -378,9 +386,11 @@ impl<M> TuiNode<M> for Image {
         LayoutResult::new(area)
     }
 
-    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, _ctx: &mut RenderCtx<'a>) {
+    fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         if let Some(kitty) = &self.direct_kitty {
-            frame.render_widget(kitty, area);
+            if let Some(intent) = kitty.intent(area) {
+                ctx.register_direct_kitty(intent);
+            }
         } else if let Some(protocol) = &self.protocol {
             frame.render_widget(RatatuiImage::new(protocol).allow_clipping(true), area);
         }
@@ -389,10 +399,24 @@ impl<M> TuiNode<M> for Image {
     fn init(&mut self, _ctx: &mut crate::LifecycleCtx<M>) {
         self.picker();
     }
+
+    fn tick(
+        &mut self,
+        _dt: std::time::Duration,
+        _settings: crate::AnimationSettings,
+    ) -> TickResult {
+        Image::tick(self)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
     use super::*;
 
     const TEST_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAwCAIAAABhdOiYAAAAf0lEQVR42u3RMRGAQBADwBdBTU1NjTDkvAhcffMSMJFrbjYTA9mM47wjvd4v0j2fSFcoAxAgQIAAAQIECBAgQIAKgLoOSx0PCBAgQIAAAQIECBAgQBVAXYeljgcECBAgQIAAAQIECBCgCqCuw1LHAwIECBAgQIAAAQIECFAB0A/Lrzglvf/PRwAAAABJRU5ErkJggg==";
@@ -409,6 +433,40 @@ mod tests {
         let image = Image::from_base64(format!("data:image/png;base64,{TEST_PNG}"))
             .expect("valid PNG data URL");
 
+        assert_eq!(image.dimensions(), (96, 48));
+    }
+
+    #[test]
+    fn loads_a_url_with_basic_authentication() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/image.png", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let size = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..size]);
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: basic dxnlckblegftcgxllmnvbtp0b2tlbg=="),
+                "{request}"
+            );
+            let body = base64::engine::general_purpose::STANDARD
+                .decode(TEST_PNG)
+                .unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(&body).unwrap();
+        });
+
+        let image = Image::from_url_with_basic_auth(url, "user@example.com", "token")
+            .expect("authenticated image download succeeds");
+
+        server.join().unwrap();
         assert_eq!(image.dimensions(), (96, 48));
     }
 
@@ -443,13 +501,15 @@ mod tests {
     }
 
     #[test]
-    fn direct_kitty_payload_uses_cursor_placement_without_placeholders() {
+    fn direct_kitty_payload_transmits_without_creating_a_placement() {
         let image = Image::from_base64(TEST_PNG).expect("valid PNG data");
         let kitty =
             DirectKittyImage::new(image.image, Size::new(2, 1)).expect("PNG encoding succeeds");
 
-        assert!(kitty.data.starts_with("\x1b_Ga=T,t=d,f=100,"));
-        assert!(kitty.data.contains("c=2,r=1,C=1,q=2,"));
+        assert!(kitty.data.starts_with("\x1b_Ga=t,t=d,f=100,"));
+        assert!(!kitty.data.contains("c="));
+        assert!(!kitty.data.contains("r="));
+        assert!(!kitty.data.contains("z="));
         assert!(!kitty.data.contains('\u{10eeee}'));
     }
 
@@ -467,18 +527,33 @@ mod tests {
         let kitty =
             DirectKittyImage::new(image.image, Size::new(2, 1)).expect("PNG encoding succeeds");
 
-        assert!(kitty.cleanup_command().starts_with("\x1b_Ga=d,d=i,i="));
+        assert!(kitty.cleanup_command().starts_with("\x1b_Ga=d,d=I,i="));
         assert!(kitty.cleanup_command().ends_with(",p=1,q=2\x1b\\"));
     }
 
     #[test]
-    fn direct_kitty_replaces_its_full_transfer_with_a_placement_command() {
+    fn direct_kitty_redraw_advances_the_cached_placement_generation() {
         let image = Image::from_base64(TEST_PNG).expect("valid PNG data");
         let mut kitty =
             DirectKittyImage::new(image.image, Size::new(2, 1)).expect("PNG encoding succeeds");
 
-        assert!(kitty.replace_transfer_with_placement());
-        assert!(kitty.data.starts_with("\x1b_Ga=p,i="));
-        assert!(!kitty.replace_transfer_with_placement());
+        kitty.redraw();
+
+        assert_eq!(kitty.generation, 1);
+        assert!(kitty.data.starts_with("\x1b_Ga=t,t=d,f=100,"));
+    }
+
+    #[test]
+    fn kitty_placeholders_use_ratatui_image_instead_of_direct_kitty() {
+        let mut image = Image::from_base64(TEST_PNG)
+            .expect("valid PNG data")
+            .protocol(ImageProtocol::KittyPlaceholder);
+        image.picker = Some(Picker::halfblocks());
+
+        image.encode(Rect::new(0, 0, 32, 16));
+
+        assert!(matches!(image.protocol, Some(Protocol::Kitty(_))));
+        assert!(image.direct_kitty.is_none());
+        assert!(image.pending_kitty.is_none());
     }
 }

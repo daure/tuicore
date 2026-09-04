@@ -46,6 +46,23 @@ where
         self.selection_disabled_by = None;
     }
 
+    /// Hides the selection glyph for rows that are navigable but not selectable.
+    pub fn selection_glyph_hidden_by(mut self, hidden: impl Fn(&T) -> bool + 'static) -> Self {
+        self.set_selection_glyph_hidden_by(hidden);
+        self
+    }
+
+    /// Replaces the per-row selection glyph visibility policy.
+    pub fn set_selection_glyph_hidden_by(&mut self, hidden: impl Fn(&T) -> bool + 'static) {
+        self.selection_glyph_hidden_by = Some(Box::new(hidden));
+        self.invalidate_metrics();
+    }
+
+    pub fn clear_selection_glyph_hidden_by(&mut self) {
+        self.selection_glyph_hidden_by = None;
+        self.invalidate_metrics();
+    }
+
     pub fn selection_disabled_glyph(mut self, glyph: &'static str) -> Self {
         self.selection_disabled_glyph = glyph;
         self
@@ -66,6 +83,12 @@ where
         self.selection_disabled_by
             .as_ref()
             .is_some_and(|disabled| disabled(row))
+    }
+
+    pub(super) fn selection_glyph_is_hidden_for_row(&self, row: &T) -> bool {
+        self.selection_glyph_hidden_by
+            .as_ref()
+            .is_some_and(|hidden| hidden(row))
     }
 
     pub fn selected(mut self, ids: impl IntoIterator<Item = Id>) -> Self {

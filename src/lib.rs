@@ -8,6 +8,7 @@ pub mod focus;
 pub mod form;
 pub mod hotkey;
 pub mod keybindings;
+pub mod mermaid;
 pub mod node;
 pub mod overlay;
 pub mod preset;
@@ -40,23 +41,24 @@ pub use components::{
     DialogLayerPlacement, DialogTitlePosition, DiffLocation, DiffStyle, DiffViewer, DockChrome,
     DockSide, DockSpec, Dropdown, DropdownActionKeys, DropdownCommitMode, DropdownLabelPosition,
     DropdownOutcome, DropdownPopupDirection, DropdownSearchMode, DropdownVariant, Flex, FlexItem,
-    FormField, Grid, GridItem, GridTrack, Header, Image, ImageError, ImageProtocol, InputChrome, InputOutcome, InputPanelChrome,
-    Language, List, ListControl, ListControlDisplayKeyBindings, ListControlEvent, ListControlField,
-    ListControlKeyBindings, ListControlReorderUnavailable, ListOutcome, MainAlign, Menu,
-    MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection, MenuSearchMode, ModalCloseReason,
-    Notification, NotificationCenter, NotificationId, NotificationKind, Overlay, OverlayAnchor,
-    OverlaySize, Panel, PanelHost, PanelTitlePosition, PanelTone, Paragraph, ParagraphOverflow,
-    PasswordInput, PickerOutcome, RelativeDate, RelativeDateMode, ScrollContainer,
-    SeasonalEmptyState, SeasonalGlyphs, SelectedTag, SelectionGlyphs, SelectionMode,
-    SelectionPropagation, SelectionTrigger, SortDirection, SpeedReader, SpeedReaderInputMode,
-    SpeedReaderKeyBindings, SpeedReaderOutcome, SpeedReaderState, Spinner, Split, Stack,
-    StackAlign, StackItem, StackSize, StatusBar, StatusBarKeyBindings, StatusBarMenuItem,
-    StoreDebugView, SyntaxHighlighter, Tab, Tabs, TabsBodyBorderStyle, TabsSelectionMemory,
-    TagInput, TagInputEvent, TextInput, TextInputKeyBindings, TextareaInput,
-    TextareaInputKeyBindings, TimeField, TimePicker, TimePrecision, ToastIcons, ToastRack, Toggle,
-    ToggleOutcome, ToggleStyle, TreeAdapter, TreeGlyphs, WeatherFetchError, WeatherForecastDay,
-    WeatherForecastDialog, WeatherForecastError, WeatherIndicator, WeatherProviderConfig,
-    WeatherReport, WeatherSummary, fade_buffer, weather_condition_icon,
+    FormField, Grid, GridItem, GridTrack, Header, Image, ImageError, ImageProtocol, InputChrome,
+    InputOutcome, InputPanelChrome, Language, List, ListControl, ListControlDisplayKeyBindings,
+    ListControlEvent, ListControlField, ListControlKeyBindings, ListControlReorderUnavailable,
+    ListOutcome, MainAlign, Menu, MenuActionKeys, MenuItem, MenuOutcome, MenuPopupDirection,
+    MenuSearchMode, ModalCloseReason, Notification, NotificationCenter, NotificationId,
+    NotificationKind, Overlay, OverlayAnchor, OverlaySize, Panel, PanelHost, PanelTitlePosition,
+    PanelTone, Paragraph, ParagraphOverflow, PasswordInput, PickerOutcome, RelativeDate,
+    RelativeDateMode, ScrollContainer, SeasonalEmptyState, SeasonalGlyphs, SelectedTag,
+    SelectionGlyphs, SelectionMode, SelectionPropagation, SelectionTrigger, SortDirection,
+    SpeedReader, SpeedReaderInputMode, SpeedReaderKeyBindings, SpeedReaderOutcome,
+    SpeedReaderState, Spinner, Split, Stack, StackAlign, StackItem, StackSize, StatusBar,
+    StatusBarKeyBindings, StatusBarMenuItem, StoreDebugView, SyntaxHighlighter, Tab, Tabs,
+    TabsBodyBorderStyle, TabsSelectionMemory, TagInput, TagInputEvent, TextInput,
+    TextInputKeyBindings, TextareaInput, TextareaInputKeyBindings, TimeField, TimePicker,
+    TimePrecision, ToastIcons, ToastRack, Toggle, ToggleOutcome, ToggleStyle, TreeAdapter,
+    TreeGlyphs, WeatherFetchError, WeatherForecastDay, WeatherForecastDialog, WeatherForecastError,
+    WeatherIndicator, WeatherProviderConfig, WeatherReport, WeatherSummary, fade_buffer,
+    weather_condition_icon,
 };
 pub use components::{AiDock, LlmEvent, LlmEventKind, ToolPolicy};
 
@@ -78,6 +80,10 @@ pub use keybindings::{
     ButtonKeyBindings, ClipboardKeyBindings, DataViewKeyBindings, DateTimePickerKeyBindings,
     DropdownKeyBindings, FocusKeyBindings, KeyBindings, KeyBindingsError, KeySpec,
     RuntimeKeyBindings, TabsKeyBindings, ToggleKeyBindings,
+};
+pub use mermaid::{
+    MermaidError, MermaidHostTheme, MermaidRasterFitBox, MermaidRasterOptions, MermaidRenderer,
+    mermaid_host_theme,
 };
 pub use node::{
     AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,

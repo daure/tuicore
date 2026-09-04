@@ -511,7 +511,7 @@ impl<M> Dialog<M> {
             .borders(edge_borders)
             .border_set(border_set(border))
             .border_style(border_style)
-            .style(Style::default().bg(theme().surface_bg()));
+            .style(Style::default().bg(theme().dialog_bg()));
         let inner = self.content_area_for(area, edge_borders);
         frame.render_widget(block, area);
 
@@ -1338,6 +1338,14 @@ mod tests {
 
     use super::*;
     use crate::{Key, MouseButton, MouseEvent, MouseEventKind, TextInput, animation_settings};
+
+    #[test]
+    fn transparent_app_theme_keeps_dialog_surface_opaque() {
+        let theme = crate::Theme::named(crate::ThemeName::LucentOrng);
+
+        assert_eq!(theme.surface_bg(), ratatui::style::Color::Reset);
+        assert_eq!(theme.dialog_bg(), ratatui::style::Color::Rgb(20, 20, 20));
+    }
 
     fn render_node<M>(node: &impl TuiNode<M>, frame: &mut ratatui::Frame, area: Rect) {
         let mut ctx = crate::RenderCtx::new();

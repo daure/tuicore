@@ -211,7 +211,13 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `Chip`: `new(label)`, icons and `ChipColorRole`. `Header`: `new(text)`, optional icon.
 - `Image`: `from_path`, `from_url`, `from_base64`, or `from_bytes`; configure fit-content
   dimensions with `size`. The default `ImageProtocol::Auto` selects a compatible graphics backend;
-  use `ImageProtocol::Kitty` with terminals that support Kitty placeholders, such as Ghostty.
+  `ImageProtocol::Kitty` uses renderer-owned direct placements, while `KittyPlaceholder` uses
+  cell-bound Unicode placeholders on terminals and multiplexers that support them.
+- `MermaidRenderer`: native, reusable Mermaid-to-SVG/PNG renderer with no Node.js or browser.
+  Use `render_svg`, `render_png`, or `render_image` for a terminal-ready `Image`; reuse one renderer
+  for repeated diagrams. `MermaidRasterOptions` with `MermaidRasterFitBox` configures PNG sizing and
+  scale: `.with_fit_to(MermaidRasterFitBox::contain(width, height)).with_scale(scale)`. Use
+  `render_*_with_theme(..., &theme())` to apply active semantic colors to SVG/PNG output.
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,
   must tick. `SeasonalEmptyState`: `new(message)`, `SeasonalGlyphs`, must tick when live.
 - `SpeedReader`: `new(plain_text)` or `markdown(source)`; configure title, WPM, natural pauses, and

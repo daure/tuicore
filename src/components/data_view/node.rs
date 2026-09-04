@@ -205,7 +205,11 @@ where
             .hotkey
             .iter()
             .cloned()
-            .chain(self.copy_hotkeys.iter().map(|(sequence, _)| sequence.clone()))
+            .chain(
+                self.copy_hotkeys
+                    .iter()
+                    .map(|(sequence, _)| sequence.clone()),
+            )
             .collect::<Vec<_>>();
         if !hotkeys.is_empty() {
             ctx.register_focusable_with_hotkey_sequences(

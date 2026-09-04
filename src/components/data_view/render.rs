@@ -425,7 +425,7 @@ where
                 prefix.push(Span::raw(format!("{} ", self.tree_glyphs.leaf)));
             }
         }
-        if self.displays_selection_glyphs() {
+        if self.displays_selection_glyphs() && !self.selection_glyph_is_hidden_for_row(row.row) {
             let disabled = self.is_selection_disabled_for_row(row.row);
             let check_state =
                 self.check_state_for_row_with_descendants(row.row, &row.id, selection_descendants);

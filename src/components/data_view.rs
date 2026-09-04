@@ -59,6 +59,7 @@ type RowHeightFn<T> = dyn Fn(&T) -> u16;
 type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
 type LeftGutterMarkerFn<T> = dyn Fn(&T) -> Option<ratatui::text::Span<'static>>;
 type SelectionDisabledFn<T> = dyn Fn(&T) -> bool;
+type SelectionGlyphHiddenFn<T> = dyn Fn(&T) -> bool;
 
 struct DataViewMetricCache {
     revision: u64,
@@ -112,6 +113,7 @@ pub struct DataView<T, Id> {
     selected: HashSet<Id>,
     selection_glyphs: SelectionGlyphs,
     selection_disabled_by: Option<Box<SelectionDisabledFn<T>>>,
+    selection_glyph_hidden_by: Option<Box<SelectionGlyphHiddenFn<T>>>,
     selection_disabled_glyph: &'static str,
     tree_glyphs: TreeGlyphs,
     hotkey: Option<String>,
@@ -217,6 +219,7 @@ where
             selection_propagation: SelectionPropagation::default(),
             selected: HashSet::new(),
             selection_glyphs: SelectionGlyphs::NERD_FONT,
+            selection_glyph_hidden_by: None,
             selection_disabled_by: None,
             selection_disabled_glyph: "󰄲",
             tree_glyphs: TreeGlyphs::NERD_FONT,
@@ -286,7 +289,11 @@ where
         column_id: &str,
         indent: impl Fn(&T) -> usize + 'static,
     ) -> bool {
-        let Some(column) = self.columns.iter_mut().find(|column| column.id == column_id) else {
+        let Some(column) = self
+            .columns
+            .iter_mut()
+            .find(|column| column.id == column_id)
+        else {
             return false;
         };
         column.continuation_indent = Some(Box::new(indent));
@@ -304,7 +311,8 @@ where
         sequence: impl Into<String>,
         formatter: impl Fn(&T) -> Option<String> + 'static,
     ) -> Self {
-        self.copy_hotkeys.push((sequence.into(), Box::new(formatter)));
+        self.copy_hotkeys
+            .push((sequence.into(), Box::new(formatter)));
         self
     }
 

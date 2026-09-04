@@ -85,6 +85,7 @@ ansi-to-tui = "8.0.1"
 schemars = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ratatui-image = { version = "11.0.6", default-features = false, features = ["image-defaults", "crossterm"] }
+merman = { version = "0.7", default-features = false, features = ["raster"] }
 
 [dev-dependencies]
 dotenvy = { version = "0.15" }

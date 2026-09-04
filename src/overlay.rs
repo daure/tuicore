@@ -4,6 +4,10 @@ use std::hash::{Hash, Hasher};
 use ratatui::{Frame, layout::Rect};
 
 use crate::node::TreePath;
+use crate::runtime::renderer::{
+    DirectKittyIntent, GraphicsFrame, GraphicsLevel, OpaqueKittyMaskIntent,
+};
+use crate::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OverlayId(u64);
@@ -69,6 +73,9 @@ pub struct RenderCtx<'a> {
     next_order: u64,
     overlays_disabled: bool,
     portal_offset: (i32, i32),
+    graphics_intents: Vec<DirectKittyIntent>,
+    opaque_kitty_masks: Vec<OpaqueKittyMaskIntent>,
+    graphics_level: GraphicsLevel,
 }
 
 struct PortalTask<'a> {
@@ -196,6 +203,9 @@ impl<'a> RenderCtx<'a> {
             next_order: 0,
             overlays_disabled: false,
             portal_offset: (0, 0),
+            graphics_intents: Vec::new(),
+            opaque_kitty_masks: Vec::new(),
+            graphics_level: GraphicsLevel::base(),
         }
     }
 
@@ -224,25 +234,43 @@ impl<'a> RenderCtx<'a> {
         );
     }
 
+    pub(crate) fn push_portal_with_ctx_and_graphics_level(
+        &mut self,
+        layer: OverlayLayer,
+        z_index: i32,
+        area: Rect,
+        render: impl FnOnce(&mut Frame<'_>, Rect, &mut RenderCtx<'a>) + 'a,
+    ) -> GraphicsLevel {
+        self.push_portal_task(
+            layer,
+            z_index,
+            area,
+            PortalRender::WithCtx(Box::new(render)),
+        )
+    }
+
     fn push_portal_task(
         &mut self,
         layer: OverlayLayer,
         z_index: i32,
         area: Rect,
         render: PortalRender<'a>,
-    ) {
+    ) -> GraphicsLevel {
         if self.overlays_disabled {
-            return;
+            return self.graphics_level;
         }
+        let order = self.next_order;
+        let level = GraphicsLevel::new(layer, z_index, order);
         let task = PortalTask {
             layer,
             z_index,
-            order: self.next_order,
+            order,
             area: translate_rect(area, self.portal_offset.0, self.portal_offset.1),
             render,
         };
         self.next_order += 1;
         self.portals.push(task);
+        level
     }
 
     pub fn with_overlays_disabled<R>(&mut self, render: impl FnOnce(&mut Self) -> R) -> R {
@@ -278,15 +306,45 @@ impl<'a> RenderCtx<'a> {
             self.portals
                 .sort_by_key(|portal| (portal.layer, portal.z_index, portal.order));
             let portal = self.portals.remove(0);
+            let previous_level = self.graphics_level;
+            self.graphics_level = GraphicsLevel::new(portal.layer, portal.z_index, portal.order);
             match portal.render {
                 PortalRender::Simple(render) => render(frame, portal.area),
                 PortalRender::WithCtx(render) => render(frame, portal.area, self),
             }
+            self.graphics_level = previous_level;
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.portals.is_empty()
+    }
+
+    pub(crate) fn register_direct_kitty(&mut self, mut intent: DirectKittyIntent) {
+        intent.level = self.graphics_level;
+        intent.z_index = self.graphics_level.kitty_image_z_index();
+        self.graphics_intents.push(intent);
+    }
+
+    pub(crate) fn register_opaque_modal_mask(
+        &mut self,
+        owner: OverlayId,
+        area: Rect,
+        level: GraphicsLevel,
+    ) {
+        self.opaque_kitty_masks.push(OpaqueKittyMaskIntent {
+            owner: owner.get(),
+            area,
+            color: theme().dialog_bg(),
+            level,
+        });
+    }
+
+    pub(crate) fn take_graphics_frame(&mut self) -> GraphicsFrame {
+        GraphicsFrame {
+            intents: std::mem::take(&mut self.graphics_intents),
+            opaque_masks: std::mem::take(&mut self.opaque_kitty_masks),
+        }
     }
 }
 

@@ -3992,6 +3992,28 @@ fn disabled_checkbox_rows_are_muted_and_cannot_be_selected() {
 }
 
 #[test]
+fn hidden_selection_glyph_rows_keep_tree_alignment_without_a_placeholder() {
+    let view = DataView::list([1, 2], |row| *row, |row| format!("row {row}"))
+        .selection_mode(SelectionMode::Multi)
+        .selection_glyphs(SelectionGlyphs::ASCII)
+        .selection_disabled_by(|row| *row == 2)
+        .selection_glyph_hidden_by(|row| *row == 2);
+    let area = Rect::new(0, 0, 20, 2);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "["
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 1)).unwrap().symbol(),
+        "r"
+    );
+}
+
+#[test]
 fn disabled_tree_descendants_leave_parent_unchecked_and_are_removed_after_row_updates() {
     let mut view = DataView::list(
         [

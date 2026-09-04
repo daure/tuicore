@@ -10,7 +10,7 @@ use tuicore::{
 
 use crate::Msg;
 
-const KITTEN_IMAGE: &str = "examples/assets/ginger-kitten.jpg";
+const DOGGO_IMAGE: &str = "examples/assets/doggo.jpg";
 const BASE64_IMAGE: &str = include_str!("../assets/31272.jpg.base64");
 const URL_IMAGE: &str = "https://cdn.pixabay.com/photo/2015/11/16/14/43/cat-1045782_1280.jpg";
 const MAX_IMAGE_SIZE: (u16, u16) = (48, 28);
@@ -23,8 +23,8 @@ pub(crate) struct ImageDemo {
 impl ImageDemo {
     pub(crate) fn path() -> Self {
         Self::new(
-            "Path · examples/assets/ginger-kitten.jpg",
-            Image::from_path(KITTEN_IMAGE).expect("gallery kitten image is available"),
+            "Path · examples/assets/doggo.jpg",
+            Image::from_path(DOGGO_IMAGE).expect("gallery dog image is available"),
         )
     }
 

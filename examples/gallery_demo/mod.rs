@@ -8,6 +8,8 @@ pub(crate) mod forms;
 pub(crate) mod images;
 pub(crate) mod inputs;
 pub(crate) mod layouts;
+pub(crate) mod mermaid;
+pub(crate) mod mermaid_examples;
 pub(crate) mod notifications;
 pub(crate) mod panels;
 pub(crate) mod relative_date;

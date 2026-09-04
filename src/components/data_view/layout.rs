@@ -717,7 +717,9 @@ where
             };
             width += line_width(&Line::from(format!("{glyph} ")));
         }
-        if self.selection_mode == SelectionMode::Multi {
+        if self.selection_mode == SelectionMode::Multi
+            && !self.selection_glyph_is_hidden_for_row(row.row)
+        {
             let glyph = if self.is_selection_disabled_for_row(row.row) {
                 self.selection_disabled_glyph
             } else {

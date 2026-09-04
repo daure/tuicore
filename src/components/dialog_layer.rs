@@ -548,13 +548,18 @@ where
             dim_backdrop_buffer(frame, self.base_rect, dim);
         }
         if self.active {
-            ctx.push_portal_with_ctx(
+            let level = ctx.push_portal_with_ctx_and_graphics_level(
                 OverlayLayer::Modal,
                 0,
                 self.layer_rect,
                 |frame, area, ctx| {
                     self.layer.render(frame, area, ctx);
                 },
+            );
+            ctx.register_opaque_modal_mask(
+                crate::OverlayId::for_path(MODAL_OVERLAY_ID, &self.layer_path),
+                self.layer_rect,
+                level,
             );
         }
     }
@@ -1983,6 +1988,9 @@ mod tests {
                 dialog_layer.render(frame, frame.area(), &mut ctx);
                 assert_eq!(*order.borrow(), vec!["base"]);
                 ctx.flush(frame);
+                let graphics = ctx.take_graphics_frame();
+                assert_eq!(graphics.opaque_masks.len(), 1);
+                assert_eq!(graphics.opaque_masks[0].area, dialog_layer.layer_rect);
             })
             .expect("dialog layer should render");
 

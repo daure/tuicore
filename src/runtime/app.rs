@@ -192,12 +192,13 @@ where
         );
 
         flags.merge(self.unmount_root());
+        let graphics_cleanup = renderer.clear_direct_kitty(terminal.terminal_mut());
         let restore_result = terminal.restore();
 
         if let Err(error) = run_result {
             return Err(error);
         }
-        restore_result
+        graphics_cleanup.and(restore_result)
     }
 
     fn run_loop(
@@ -239,7 +240,7 @@ where
                 if flags.layout || layout_engine.area() != area {
                     self.layout_root(flags, focus_manager, layout_engine, dispatcher, area);
                 }
-                renderer.render_with_toasts_and_fade(
+                renderer.render_with_toasts_and_fade_to_crossterm(
                     terminal.terminal_mut(),
                     &self.root,
                     &self.notifications,

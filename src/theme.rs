@@ -233,6 +233,7 @@ pub struct Theme {
     selected_bg: Color,
     background_bg: Color,
     surface_bg: Color,
+    dialog_bg: Color,
     backdrop_bg: Color,
     text_fg: Color,
     muted_fg: Color,
@@ -288,6 +289,7 @@ impl Theme {
             } else {
                 palette.surface
             },
+            dialog_bg: palette.surface,
             backdrop_bg: if transparent_background {
                 Color::Reset
             } else {
@@ -371,6 +373,9 @@ impl Theme {
     }
     pub fn surface_bg(&self) -> Color {
         self.surface_bg
+    }
+    pub fn dialog_bg(&self) -> Color {
+        self.dialog_bg
     }
     pub fn backdrop_bg(&self) -> Color {
         self.backdrop_bg
@@ -456,6 +461,7 @@ impl Theme {
             "selected_bg" => self.selected_bg = color,
             "background_bg" => self.background_bg = color,
             "surface_bg" => self.surface_bg = color,
+            "dialog_bg" => self.dialog_bg = color,
             "backdrop_bg" => self.backdrop_bg = color,
             "text_fg" => self.text_fg = color,
             "muted_fg" => self.muted_fg = color,
