@@ -37,6 +37,11 @@ pub(crate) const EXAMPLES: &[MermaidExample] = &[
         source: "flowchart LR\n    A[Draft] --> B{Review}\n    B -->|Approved| C[Release]\n    B -->|Changes requested| A\n    C --> D[(Metrics)]",
     },
     MermaidExample {
+        id: "release-pipeline",
+        label: "Release pipeline",
+        source: "flowchart TD\n    start([Start release]) --> receive[/Receive release candidate/]\n    receive --> validate[Validate manifest]\n    validate --> manifest{Manifest valid?}\n    manifest -->|No| reject([Reject candidate])\n    manifest -->|Yes| build[Build artifacts]\n    build --> test[Run integration tests]\n    test --> testsPass{Tests pass?}\n    testsPass -->|No| fix[Fix failed tests]\n    fix -.->|Retry| build\n    testsPass -->|Yes| package[Package release]\n    package --> canary[Deploy canary]\n    canary --> healthy{Canary healthy?}\n    healthy -->|No| rollback[Roll back canary]\n    rollback --> rejected([End release])\n    healthy -->|Yes| requestApproval[Request production approval]\n    requestApproval --> approved{Approved?}\n    approved -->|No| schedule[Schedule next window]\n    schedule -.->|Next window| requestApproval\n    approved -->|Yes| deploy[Deploy production]\n    deploy --> observe[Observe production]\n    observe --> complete([Release complete])",
+    },
+    MermaidExample {
         id: "gantt",
         label: "Gantt plan",
         source: "gantt\n    title Release plan\n    dateFormat YYYY-MM-DD\n    section Build\n    Design :done, design, 2026-01-01, 3d\n    Implement :active, impl, after design, 5d\n    section Ship\n    Verify :verify, after impl, 2d\n    Release :milestone, after verify, 0d",
@@ -105,6 +110,11 @@ pub(crate) const EXAMPLES: &[MermaidExample] = &[
         id: "state",
         label: "Service state",
         source: "stateDiagram-v2\n    [*] --> Starting\n    Starting --> Running\n    Running --> Degraded: health check fails\n    Degraded --> Running: recovered\n    Running --> Stopped\n    Stopped --> [*]",
+    },
+    MermaidExample {
+        id: "deployment-lifecycle",
+        label: "Deployment lifecycle",
+        source: "stateDiagram-v2\n    direction TB\n    [*] --> Queued\n    Queued --> Provisioning : start\n\n    state Provisioning {\n        direction LR\n        [*] --> Creating\n        Creating --> Configuring : infrastructure ready\n        Configuring --> Verifying : configuration applied\n        Verifying --> [*] : checks pass\n    }\n\n    Provisioning --> AwaitingApproval : provisioned\n    AwaitingApproval --> Deploying : approve\n    AwaitingApproval --> Cancelled : cancel\n\n    state Deploying {\n        direction LR\n        [*] --> RollingOut\n        RollingOut --> Monitoring : release complete\n        Monitoring --> [*] : observation window ends\n    }\n\n    state deploymentResult <<choice>>\n    Deploying --> deploymentResult\n    deploymentResult --> Healthy : [checks pass]\n    deploymentResult --> RollingBack : [checks fail]\n    RollingBack --> RolledBack : rollback complete\n    RolledBack --> Queued : retry\n    Healthy --> Scaling : load increases\n    Scaling --> Healthy : capacity ready\n    Healthy --> Retiring : retire\n    Retiring --> Retired : shutdown complete\n    Retired --> [*]\n    Cancelled --> [*]",
     },
     MermaidExample {
         id: "timeline",

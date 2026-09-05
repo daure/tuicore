@@ -4,10 +4,7 @@ use std::hash::{Hash, Hasher};
 use ratatui::{Frame, layout::Rect};
 
 use crate::node::TreePath;
-use crate::runtime::renderer::{
-    DirectKittyIntent, GraphicsFrame, GraphicsLevel, OpaqueKittyMaskIntent,
-};
-use crate::theme;
+use crate::runtime::renderer::{DirectKittyIntent, GraphicsFrame, GraphicsLevel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OverlayId(u64);
@@ -74,7 +71,6 @@ pub struct RenderCtx<'a> {
     overlays_disabled: bool,
     portal_offset: (i32, i32),
     graphics_intents: Vec<DirectKittyIntent>,
-    opaque_kitty_masks: Vec<OpaqueKittyMaskIntent>,
     graphics_level: GraphicsLevel,
 }
 
@@ -204,7 +200,6 @@ impl<'a> RenderCtx<'a> {
             overlays_disabled: false,
             portal_offset: (0, 0),
             graphics_intents: Vec::new(),
-            opaque_kitty_masks: Vec::new(),
             graphics_level: GraphicsLevel::base(),
         }
     }
@@ -232,21 +227,6 @@ impl<'a> RenderCtx<'a> {
             area,
             PortalRender::WithCtx(Box::new(render)),
         );
-    }
-
-    pub(crate) fn push_portal_with_ctx_and_graphics_level(
-        &mut self,
-        layer: OverlayLayer,
-        z_index: i32,
-        area: Rect,
-        render: impl FnOnce(&mut Frame<'_>, Rect, &mut RenderCtx<'a>) + 'a,
-    ) -> GraphicsLevel {
-        self.push_portal_task(
-            layer,
-            z_index,
-            area,
-            PortalRender::WithCtx(Box::new(render)),
-        )
     }
 
     fn push_portal_task(
@@ -326,24 +306,9 @@ impl<'a> RenderCtx<'a> {
         self.graphics_intents.push(intent);
     }
 
-    pub(crate) fn register_opaque_modal_mask(
-        &mut self,
-        owner: OverlayId,
-        area: Rect,
-        level: GraphicsLevel,
-    ) {
-        self.opaque_kitty_masks.push(OpaqueKittyMaskIntent {
-            owner: owner.get(),
-            area,
-            color: theme().dialog_bg(),
-            level,
-        });
-    }
-
     pub(crate) fn take_graphics_frame(&mut self) -> GraphicsFrame {
         GraphicsFrame {
             intents: std::mem::take(&mut self.graphics_intents),
-            opaque_masks: std::mem::take(&mut self.opaque_kitty_masks),
         }
     }
 }
