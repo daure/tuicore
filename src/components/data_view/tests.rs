@@ -4439,6 +4439,19 @@ fn tree_cascade_selects_collapsed_descendants_and_reports_indeterminate_parent()
 }
 
 #[test]
+fn tree_cascade_deselecting_a_child_clears_selected_ancestors() {
+    let mut view = tree_view()
+        .selection_mode(SelectionMode::Multi)
+        .selection_propagation(SelectionPropagation::CascadeDescendants);
+
+    assert!(view.toggle_selected(2));
+    assert!(view.toggle_selected(4));
+
+    assert_eq!(view.selected_ids(), vec![5]);
+    assert_eq!(view.check_state(&2), CheckState::Indeterminate);
+}
+
+#[test]
 fn cascade_check_state_uses_descendants_for_non_leaf_rows() {
     let checked = tree_view()
         .selection_mode(SelectionMode::Multi)

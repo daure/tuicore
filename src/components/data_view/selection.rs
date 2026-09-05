@@ -370,6 +370,13 @@ where
                         next.insert(id);
                     }
                 }
+                if checked && self.cascades_selection() {
+                    let mut ancestor = self.tree_parent_id(&id).flatten();
+                    while let Some(id) = ancestor {
+                        next.remove(&id);
+                        ancestor = self.tree_parent_id(&id).flatten();
+                    }
+                }
                 self.replace_selection(next)
             }
         }
