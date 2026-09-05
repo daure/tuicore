@@ -273,27 +273,6 @@ impl Renderer {
         Ok(())
     }
 
-    pub(crate) fn render_with_toasts_and_fade<B, N, M>(
-        &mut self,
-        terminal: &mut Terminal<B>,
-        root: &N,
-        toasts: &ToastRack,
-        area: Rect,
-        fade_amount: f64,
-    ) -> Result<()>
-    where
-        B: Backend,
-        N: TuiNode<M>,
-        std::io::Error: From<B::Error>,
-    {
-        terminal
-            .draw(|frame| {
-                render_frame_with_toasts_and_fade(frame, root, toasts, area, fade_amount);
-            })
-            .map_err(Into::into)?;
-        Ok(())
-    }
-
     pub(crate) fn render_with_toasts_and_fade_to_crossterm<W, N, M>(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<W>>,
@@ -599,19 +578,6 @@ mod tests {
                 DirectKittyCommand::DeleteImage(image_id) => ("delete-image", *image_id),
                 DirectKittyCommand::Transmit { image_id, .. } => ("transmit", *image_id),
                 DirectKittyCommand::Place { id, .. } => ("place", id.image_id),
-            })
-            .collect()
-    }
-
-    fn command_image_ids(commands: &[DirectKittyCommand]) -> Vec<u32> {
-        commands
-            .iter()
-            .map(|command| match command {
-                DirectKittyCommand::DeletePlacement(id) | DirectKittyCommand::Place { id, .. } => {
-                    id.image_id
-                }
-                DirectKittyCommand::DeleteImage(image_id)
-                | DirectKittyCommand::Transmit { image_id, .. } => *image_id,
             })
             .collect()
     }

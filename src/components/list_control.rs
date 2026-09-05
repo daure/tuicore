@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::hash::Hash;
+use std::{collections::HashSet, hash::Hash, rc::Rc};
 
 mod confirmation;
 mod editor;
@@ -9,13 +8,17 @@ mod reorder;
 #[cfg(test)]
 mod tests;
 
-use ratatui::layout::{Constraint, Rect};
+use ratatui::{
+    layout::{Constraint, Rect},
+    text::Text,
+};
 
 use super::data_view::{DataViewDisplayAction, DataViewScrollSnapshot, ReorderSnapshot};
 use super::ordered_selection::OrderedSelection;
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView,
-    DataViewOutcome, DataViewTypedEvent, Dropdown, DropdownSearchMode, DropdownVariant, Panel,
+    DataViewOutcome, DataViewTypedEvent, Dropdown, DropdownPopupDirection, DropdownSearchMode,
+    DropdownVariant, Panel,
     SeasonalEmptyState, SelectionMode, SelectionTrigger, SortDirection, TextInput,
 };
 use crate::{
@@ -34,6 +37,7 @@ const CONFIRM_SLOT: &str = "remove-confirmation";
 const DIALOG_FOCUS: &str = "dialog";
 const CONFIRM_OVERLAY_ID: u64 = 0x4c49_5354_434f_4e46;
 const DEFAULT_MAX_ROWS: usize = 8;
+type DropdownRowRenderer = Rc<dyn Fn(&str, &str, &str, DropdownSearchMode) -> Text<'static>>;
 
 type Creator<T> = dyn FnMut(Vec<String>, &[T]) -> T;
 type RemoveFormatter<T> = dyn Fn(&T) -> String;
@@ -51,7 +55,7 @@ struct RemoveConfirmation<T> {
     formatter: Box<RemoveFormatter<T>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ListControlField {
     placeholder: String,
     kind: ListControlFieldKind,
@@ -65,11 +69,12 @@ struct ListControlFieldVisibility {
     allowed_values: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 enum ListControlFieldKind {
     Text,
     Dropdown {
         options: Vec<(String, String)>,
+        renderer: Option<DropdownRowRenderer>,
         min_search_chars: usize,
         max_filtered_items: Option<usize>,
         visible_without_search: Option<Vec<String>>,
@@ -100,6 +105,7 @@ impl ListControlField {
                     .map(Into::into)
                     .map(|option| (option.clone(), option))
                     .collect(),
+                renderer: None,
                 min_search_chars: 0,
                 max_filtered_items: None,
                 visible_without_search: None,
@@ -120,6 +126,7 @@ impl ListControlField {
                     .into_iter()
                     .map(|(id, label)| (id.into(), label.into()))
                     .collect(),
+                renderer: None,
                 min_search_chars: 0,
                 max_filtered_items: None,
                 visible_without_search: None,
@@ -127,6 +134,18 @@ impl ListControlField {
             required: true,
             visibility: None,
         }
+    }
+
+    pub fn dropdown_options_rich(
+        placeholder: impl Into<String>,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+        renderer: impl Fn(&str, &str, &str, DropdownSearchMode) -> Text<'static> + 'static,
+    ) -> Self {
+        let mut field = Self::dropdown_options(placeholder, options);
+        if let ListControlFieldKind::Dropdown { renderer: slot, .. } = &mut field.kind {
+            *slot = Some(Rc::new(renderer));
+        }
+        field
     }
 
     pub fn min_search_chars(mut self, count: usize) -> Self {
@@ -463,6 +482,8 @@ struct TreeBlockMoveState<Id> {
 pub struct ListControl<T, Id, M = ()> {
     data_view: DataView<T, Id>,
     display_only: bool,
+    disabled: bool,
+    enabled_border: Option<crate::BorderKind>,
     panel: Panel,
     panel_visible: bool,
     inputs: Vec<ListControlInput<M>>,
@@ -557,15 +578,28 @@ where
                 }
                 ListControlFieldKind::Dropdown {
                     options,
+                    renderer,
                     min_search_chars,
                     max_filtered_items,
                     visible_without_search,
                 } => ListControlInput::Dropdown(Some({
-                    let mut input = Dropdown::single(
-                        options.clone(),
-                        |option| option.0.clone(),
-                        |option| option.1.clone(),
-                    )
+                    let mut input = if let Some(renderer) = renderer {
+                        let renderer = Rc::clone(renderer);
+                        Dropdown::single_rich(
+                            options.clone(),
+                            |option| option.0.clone(),
+                            |option| option.1.clone(),
+                            move |option, query, mode| {
+                                renderer(&option.0, &option.1, query, mode)
+                            },
+                        )
+                    } else {
+                        Dropdown::single(
+                            options.clone(),
+                            |option| option.0.clone(),
+                            |option| option.1.clone(),
+                        )
+                    }
                     .variant(DropdownVariant::Filled)
                     .search_mode(DropdownSearchMode::Fuzzy)
                     .min_search_chars(*min_search_chars)
@@ -592,6 +626,8 @@ where
         Self {
             data_view: DataView::new(rows, row_id),
             display_only: false,
+            disabled: false,
+            enabled_border: None,
             panel: Panel::new(),
             panel_visible: true,
             inputs,
@@ -643,6 +679,8 @@ where
                 .action_bar(false)
                 .filter_controls(false),
             display_only: true,
+            disabled: false,
+            enabled_border: None,
             panel: Panel::new(),
             panel_visible: false,
             inputs: Vec::new(),
@@ -734,11 +772,50 @@ where
         self
     }
 
+    pub fn focus_id(mut self, id: impl Into<String>) -> Self {
+        self.data_view = self.data_view.focus_id(id);
+        self
+    }
+
     pub fn action_bar(mut self, action_bar: bool) -> Self {
         self.data_view =
             self.data_view
                 .action_bar(if self.display_only { false } else { action_bar });
         self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.set_disabled(disabled);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        if self.disabled == disabled {
+            return;
+        }
+        self.disabled = disabled;
+        if disabled {
+            self.enabled_border = self.panel.border_kind();
+            self.panel.set_border(crate::BorderKind::AsciiDashed);
+        } else {
+            if let Some(border) = self.enabled_border.take() {
+                self.panel.set_border(border);
+            } else {
+                self.panel.clear_border();
+            }
+        }
+        if disabled {
+            self.cancel_editor(false);
+            let mut settings = crate::AnimationSettings::default();
+            settings.enabled = false;
+            self.cancel_reorder_for_focus_loss(settings);
+            self.clear_tree_selection();
+            self.clear_flat_range_selection();
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
     }
 
     pub fn filter_controls(mut self, enabled: bool) -> Self {
@@ -863,6 +940,10 @@ where
 
     pub fn panel(mut self, panel: Panel) -> Self {
         self.panel = panel;
+        if self.disabled {
+            self.enabled_border = self.panel.border_kind();
+            self.panel.set_border(crate::BorderKind::AsciiDashed);
+        }
         self.panel.set_hotkey_badge(self.hotkey.clone());
         self.panel
             .set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
@@ -1002,6 +1083,54 @@ where
             }
         }
         outcome
+    }
+
+    pub fn dropdown_search_query(&self, field_index: usize) -> Option<&str> {
+        let ListControlInput::Dropdown(Some(dropdown)) = self.inputs.get(field_index)? else {
+            return None;
+        };
+        Some(dropdown.search_query())
+    }
+
+    pub fn set_dropdown_search_mode(&mut self, field_index: usize, mode: DropdownSearchMode) {
+        let Some(ListControlInput::Dropdown(Some(dropdown))) = self.inputs.get_mut(field_index)
+        else {
+            return;
+        };
+        dropdown.set_search_mode(mode);
+    }
+
+    pub fn set_dropdown_popup_direction(
+        &mut self,
+        field_index: usize,
+        direction: DropdownPopupDirection,
+    ) {
+        let Some(ListControlInput::Dropdown(Some(dropdown))) = self.inputs.get_mut(field_index)
+        else {
+            return;
+        };
+        dropdown.set_popup_direction(direction);
+    }
+
+    pub fn set_dropdown_external_loading(&mut self, field_index: usize, loading: bool) {
+        let Some(ListControlInput::Dropdown(Some(dropdown))) = self.inputs.get_mut(field_index)
+        else {
+            return;
+        };
+        dropdown.set_external_loading(loading);
+    }
+
+    pub fn set_dropdown_rows(
+        &mut self,
+        field_index: usize,
+        rows: impl IntoIterator<Item = (String, String)>,
+    ) {
+        let Some(ListControlInput::Dropdown(Some(dropdown))) = self.inputs.get_mut(field_index)
+        else {
+            return;
+        };
+        dropdown.set_rows(rows);
+        dropdown.set_row_height(2);
     }
 
     pub fn data_view_mut(&mut self) -> &mut DataView<T, Id> {

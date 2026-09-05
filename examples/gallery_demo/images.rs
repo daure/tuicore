@@ -46,10 +46,6 @@ impl ImageDemo {
         self.image.redraw();
     }
 
-    pub(crate) fn kitty_cleanup_command(&self) -> Option<String> {
-        self.image.kitty_cleanup_command()
-    }
-
     pub(crate) fn tick(&mut self) -> TickResult {
         self.image.tick()
     }

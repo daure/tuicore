@@ -78,6 +78,7 @@ struct DataViewChoice {
 }
 
 pub struct DataView<T, Id> {
+    focus_id: FocusId,
     rows: Vec<T>,
     visible_row_indices: Option<Vec<usize>>,
     columns: Vec<Column<T, Id>>,
@@ -185,6 +186,7 @@ where
 {
     pub fn new(rows: impl IntoIterator<Item = T>, row_id: impl Fn(&T) -> Id + 'static) -> Self {
         Self {
+            focus_id: FocusId::new(DATA_VIEW_FOCUS),
             rows: rows.into_iter().collect(),
             visible_row_indices: None,
             columns: Vec::new(),
@@ -260,6 +262,11 @@ where
             Constraint::Percentage(100),
             accessor,
         ))
+    }
+
+    pub fn focus_id(mut self, id: impl Into<String>) -> Self {
+        self.focus_id = FocusId::new(id);
+        self
     }
 
     pub fn column(mut self, column: Column<T, Id>) -> Self {
@@ -1790,7 +1797,7 @@ where
         };
         ctx.focus(FocusRequest::TargetAt {
             path,
-            id: FocusId::new(DATA_VIEW_FOCUS),
+            id: self.focus_id.clone(),
         });
     }
 

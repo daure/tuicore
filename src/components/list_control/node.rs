@@ -219,7 +219,7 @@ where
         if self.confirmation_dialog.is_some() {
             return self.confirmation_event(&EventRoute::new(TreePath::new()), event, ctx);
         }
-        if self.display_only {
+        if self.display_only || self.disabled {
             if let TuiEvent::Key(key) = event {
                 if let Some(outcome) = self.handle_flat_range_selection_key(*key, ctx) {
                     return outcome;
@@ -348,20 +348,21 @@ where
             {
                 return outcome;
             }
-            if self.display_only
+            if (self.display_only || self.disabled)
                 && let TuiEvent::Key(key) = event
                 && let Some(outcome) = self.handle_display_data_key(*key, ctx)
             {
                 return outcome;
             }
-            if self.display_only
+            if (self.display_only || self.disabled)
                 && let TuiEvent::Key(key) = event
                 && self.display_suppresses_global_key(*key)
             {
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
             }
-            if let TuiEvent::Key(key) = event
+            if !self.disabled
+                && let TuiEvent::Key(key) = event
                 && let Some(outcome) = self.handle_control_key(*key, route, ctx)
             {
                 return outcome;
@@ -372,12 +373,14 @@ where
         }
         if route.path.is_empty()
             && !self.editor_active()
+            && !self.disabled
             && let TuiEvent::Key(key) = event
             && let Some(outcome) = self.handle_reorder_key(*key, ctx)
         {
             return outcome;
         }
         if route.path.is_empty()
+            && !self.disabled
             && let TuiEvent::Key(key) = event
             && let Some(outcome) = self.handle_control_key(*key, route, ctx)
         {

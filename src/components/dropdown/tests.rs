@@ -24,6 +24,33 @@ fn multi_dropdown() -> Dropdown<&'static str, &'static str> {
     Dropdown::multi(ROWS, |row| *row, |row| row.to_string())
 }
 
+#[test]
+fn multi_summary_can_show_and_style_each_selected_label() {
+    let mut dropdown = multi_dropdown()
+        .selected(["Alpha", "Beta"])
+        .show_multi_labels(true);
+    dropdown.set_selected_style_by(|id| {
+        (*id == "Beta").then_some(Style::default().fg(Color::Green).bg(Color::Blue))
+    });
+    let area = Rect::new(0, 0, 30, 3);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, area))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let row = (0..area.width)
+        .map(|x| buffer.cell((x, 1)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("Alpha, Beta"));
+    assert!(
+        buffer.content().iter().any(|cell| {
+            cell.symbol() == "B" && cell.fg == Color::Green && cell.bg == Color::Blue
+        })
+    );
+}
+
 fn numeric_dropdown(count: u8) -> Dropdown<u8, u8> {
     Dropdown::single(0..count, |row| *row, |row| row.to_string())
 }

@@ -48,6 +48,23 @@ fn table(row_count: usize) -> ListControl<Row, usize> {
     .headers(true)
 }
 
+#[test]
+fn disabled_state_restores_the_configured_panel_border() {
+    let mut control = table(1).panel(Panel::new().border(crate::BorderKind::Rounded));
+
+    control.set_disabled(true);
+    assert_eq!(
+        control.panel_ref().border_kind(),
+        Some(crate::BorderKind::AsciiDashed)
+    );
+
+    control.set_disabled(false);
+    assert_eq!(
+        control.panel_ref().border_kind(),
+        Some(crate::BorderKind::Rounded)
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TreeRow {
     id: usize,

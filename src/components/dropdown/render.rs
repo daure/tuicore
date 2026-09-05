@@ -200,16 +200,15 @@ where
                 placeholder_style,
             )
         } else {
-            Line::from(Span::styled(
-                self.selected_summary(),
-                self.field_text_style.unwrap_or_else(|| {
+            Line::from(
+                self.selected_summary_spans(self.field_text_style.unwrap_or_else(|| {
                     Style::default().fg(if self.disabled {
                         theme.muted_fg()
                     } else {
                         theme.text_fg()
                     })
-                }),
-            ))
+                })),
+            )
         };
         frame.render_widget(Paragraph::new(text), text_area);
         if inner.width > 0 {
@@ -322,10 +321,7 @@ where
                     placeholder_style,
                 )
             } else {
-                Line::from(Span::styled(
-                    self.selected_summary(),
-                    self.field_text_style.unwrap_or(base_style),
-                ))
+                Line::from(self.selected_summary_spans(self.field_text_style.unwrap_or(base_style)))
             };
             frame.render_widget(Paragraph::new(text), text_area);
         }
@@ -482,7 +478,7 @@ where
         } else {
             base_style
         };
-        spans.push(Span::styled(self.selected_summary(), value_style));
+        spans.extend(self.selected_summary_spans(value_style));
 
         if let Some(hotkey) = &self.hotkey {
             spans.extend(hotkey_label_spans(
@@ -504,7 +500,7 @@ where
         } else {
             base_style
         };
-        let mut spans = vec![Span::styled(self.selected_summary(), value_style)];
+        let mut spans = self.selected_summary_spans(value_style);
         if let Some(hotkey) = &self.hotkey {
             spans.extend(hotkey_label_spans(
                 "",

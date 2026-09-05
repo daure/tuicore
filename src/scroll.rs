@@ -557,6 +557,10 @@ impl ScrollState {
         let chars = self.scrollbars.style.chars();
 
         if let Some(area) = layout.vertical_bar {
+            let area = area.intersection(frame.area());
+            if area.is_empty() {
+                return;
+            }
             let viewport_height = layout.viewport.height as usize;
             let content_length = content
                 .height
@@ -579,6 +583,10 @@ impl ScrollState {
         }
 
         if let Some(area) = layout.horizontal_bar {
+            let area = area.intersection(frame.area());
+            if area.is_empty() {
+                return;
+            }
             let viewport_width = layout.viewport.width as usize;
             let content_length = content
                 .width
@@ -601,7 +609,10 @@ impl ScrollState {
         }
 
         if let Some(area) = layout.corner {
-            frame.render_widget(Paragraph::new(" ").style(track_style), area);
+            let area = area.intersection(frame.area());
+            if !area.is_empty() {
+                frame.render_widget(Paragraph::new(" ").style(track_style), area);
+            }
         }
     }
 

@@ -5,9 +5,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::{
-    ChoiceDropdown, DATA_VIEW_FOCUS, DataView, DataViewInteraction, DataViewVerticalScroll,
-    FILTER_DROPDOWN_SLOT, HEADER_PICK_TIMEOUT, ReorderHighlightPhase, SEARCH_SLOT,
-    TEXT_INPUT_FOCUS,
+    ChoiceDropdown, DataView, DataViewInteraction, DataViewVerticalScroll, FILTER_DROPDOWN_SLOT,
+    HEADER_PICK_TIMEOUT, ReorderHighlightPhase, SEARCH_SLOT, TEXT_INPUT_FOCUS,
 };
 use crate::{
     Animated, AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
@@ -112,7 +111,7 @@ where
                 let activation = self.activate_highlighted();
                 ctx.focus(FocusRequest::TargetAt {
                     path: ctx.current_path(),
-                    id: FocusId::new(DATA_VIEW_FOCUS),
+                    id: self.focus_id.clone(),
                 });
                 if highlight.index_changed
                     || highlight.selection_changed
@@ -213,19 +212,19 @@ where
             .collect::<Vec<_>>();
         if !hotkeys.is_empty() {
             ctx.register_focusable_with_hotkey_sequences(
-                FocusId::new(DATA_VIEW_FOCUS),
+                self.focus_id.clone(),
                 focus_area,
                 true,
                 hotkeys,
             );
         } else {
-            ctx.register_focusable(FocusId::new(DATA_VIEW_FOCUS), focus_area, true);
+            ctx.register_focusable(self.focus_id.clone(), focus_area, true);
         }
         ctx.set_focus_receives_events_before_global_hotkeys(
-            FocusId::new(DATA_VIEW_FOCUS),
+            self.focus_id.clone(),
             self.focused_events_before_global_hotkeys,
         );
-        ctx.set_focus_control(FocusId::new(DATA_VIEW_FOCUS), true);
+        ctx.set_focus_control(self.focus_id.clone(), true);
         self.layout_children::<M>(area, ctx);
         LayoutResult::new(area)
     }

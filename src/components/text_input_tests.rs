@@ -1,6 +1,6 @@
 use super::*;
 use crate::{FocusRequest, MouseButton, MouseEvent, MouseEventKind, Propagation, TreePath};
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{Terminal, backend::TestBackend, style::Color};
 
 #[test]
 fn plain_character_bubbles_before_insert_mode_for_text_and_password() {
@@ -55,6 +55,29 @@ fn text_input_panel_style_adds_border_space_and_focuses_inner_area() {
 
     assert_eq!(hint.preferred.height, 3);
     assert_eq!(ctx.focus_targets()[0].area, Rect::new(3, 4, 10, 1));
+}
+
+#[test]
+fn text_input_supports_diff_field_and_bottom_label_styles() {
+    let current = Style::default().fg(Color::Green).bg(Color::Blue);
+    let previous = Style::default().fg(Color::Red).bg(Color::Yellow);
+    let mut input = TextInput::<()>::new().value("8").panel("Story points");
+    input.set_field_text_style(current);
+    input.set_bottom_left("5");
+    input.set_bottom_left_style(previous);
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((1, 1)).unwrap().fg, Color::Green);
+    assert!(
+        buffer.content().iter().any(|cell| {
+            cell.symbol() == "5" && cell.fg == Color::Red && cell.bg == Color::Yellow
+        })
+    );
 }
 
 #[test]

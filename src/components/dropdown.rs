@@ -143,6 +143,8 @@ pub struct Dropdown<T, Id> {
     bottom_left: Option<String>,
     bottom_left_style: Option<Style>,
     field_text_style: Option<Style>,
+    selected_style_by: Option<Box<dyn Fn(&Id) -> Option<Style>>>,
+    show_multi_labels: bool,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
     tab_stop: bool,
@@ -285,6 +287,8 @@ where
             bottom_left: None,
             bottom_left_style: None,
             field_text_style: None,
+            selected_style_by: None,
+            show_multi_labels: false,
             hotkey: None,
             hotkey_matcher: HotkeySequenceMatcher::default(),
             tab_stop: true,
@@ -527,6 +531,19 @@ where
 
     pub fn clear_field_text_style(&mut self) {
         self.field_text_style = None;
+    }
+
+    pub fn set_selected_style_by(&mut self, style: impl Fn(&Id) -> Option<Style> + 'static) {
+        self.selected_style_by = Some(Box::new(style));
+    }
+
+    pub fn clear_selected_style_by(&mut self) {
+        self.selected_style_by = None;
+    }
+
+    pub fn show_multi_labels(mut self, show: bool) -> Self {
+        self.show_multi_labels = show;
+        self
     }
 
     pub fn label_position(mut self, position: DropdownLabelPosition) -> Self {
@@ -1335,11 +1352,40 @@ where
         if ids.is_empty() {
             return self.empty_summary();
         }
-        if self.multi && ids.len() > 1 {
+        if self.multi && ids.len() > 1 && !self.show_multi_labels {
             return format!("{} selected", ids.len());
         }
-        self.label_for(&ids[0])
-            .unwrap_or_else(|| self.placeholder.clone())
+        let labels = ids
+            .iter()
+            .filter_map(|id| self.label_for(id))
+            .collect::<Vec<_>>();
+        if labels.is_empty() {
+            self.placeholder.clone()
+        } else {
+            labels.join(", ")
+        }
+    }
+
+    fn selected_summary_spans(&self, default_style: Style) -> Vec<Span<'static>> {
+        if self.committed.is_empty() || !self.show_multi_labels {
+            return vec![Span::styled(self.selected_summary(), default_style)];
+        }
+        let mut spans = Vec::new();
+        for (index, id) in self.committed.iter().enumerate() {
+            let Some(label) = self.label_for(id) else {
+                continue;
+            };
+            if index > 0 {
+                spans.push(Span::styled(", ", default_style));
+            }
+            let style = self
+                .selected_style_by
+                .as_ref()
+                .and_then(|style| style(id))
+                .unwrap_or(default_style);
+            spans.push(Span::styled(label, style));
+        }
+        spans
     }
 
     fn yank_value(&self) -> String {

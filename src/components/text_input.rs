@@ -104,6 +104,9 @@ pub struct TextInput<M = ()> {
     pending_hotkey_prefix: Option<String>,
     chrome: InputChrome,
     panel: Panel,
+    field_text_style: Option<Style>,
+    bottom_left: Option<String>,
+    bottom_left_style: Option<Style>,
     area: Rect,
     last_click: Option<Instant>,
 }
@@ -338,6 +341,9 @@ impl<M> TextInput<M> {
             pending_hotkey_prefix: None,
             chrome: InputChrome::Plain,
             panel: Panel::new(),
+            field_text_style: None,
+            bottom_left: None,
+            bottom_left_style: None,
             area: Rect::default(),
             last_click: None,
         }
@@ -393,6 +399,34 @@ impl<M> TextInput<M> {
         self.sync_panel();
     }
 
+    pub fn set_field_text_style(&mut self, style: Style) {
+        self.field_text_style = Some(style);
+    }
+
+    pub fn clear_field_text_style(&mut self) {
+        self.field_text_style = None;
+    }
+
+    pub fn set_bottom_left(&mut self, text: impl Into<String>) {
+        self.bottom_left = Some(text.into());
+        self.sync_panel();
+    }
+
+    pub fn clear_bottom_left(&mut self) {
+        self.bottom_left = None;
+        self.sync_panel();
+    }
+
+    pub fn set_bottom_left_style(&mut self, style: Style) {
+        self.bottom_left_style = Some(style);
+        self.sync_panel();
+    }
+
+    pub fn clear_bottom_left_style(&mut self) {
+        self.bottom_left_style = None;
+        self.sync_panel();
+    }
+
     fn sync_panel(&mut self) {
         let mut panel = match &self.chrome {
             InputChrome::Plain => Panel::new(),
@@ -400,6 +434,13 @@ impl<M> TextInput<M> {
         };
         if self.disabled {
             panel = panel.border(BorderKind::RoundedDashed);
+        }
+        if let Some(text) = &self.bottom_left {
+            if let Some(style) = self.bottom_left_style {
+                panel.set_bottom_left_line(Line::from(Span::styled(text.clone(), style)));
+            } else {
+                panel.set_bottom_left(text.clone());
+            }
         }
         panel.set_pending_hotkey_prefix(self.pending_hotkey_prefix.clone());
         self.panel = panel;
@@ -852,6 +893,7 @@ impl<M> TextInput<M> {
         } else {
             value_style
         };
+        let value_style = self.field_text_style.unwrap_or(value_style);
         let placeholder_style = if selected {
             if self.disabled {
                 disabled_input_style(Style::default().fg(theme.muted_fg()))

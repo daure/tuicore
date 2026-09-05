@@ -164,6 +164,10 @@ impl<M> Panel<M> {
         self.bottom_left = Some(PanelTitle::standard(title));
     }
 
+    pub fn set_bottom_left_line(&mut self, title: Line<'static>) {
+        self.bottom_left = Some(PanelTitle::styled(title));
+    }
+
     pub fn bottom_right(mut self, title: impl Into<String>) -> Self {
         self.bottom_right = Some(PanelTitle::standard(title));
         self
@@ -247,6 +251,10 @@ impl<M> Panel<M> {
 
     pub fn set_border(&mut self, border: BorderKind) {
         self.border = Some(border);
+    }
+
+    pub fn border_kind(&self) -> Option<BorderKind> {
+        self.border
     }
 
     pub fn clear_border(&mut self) {
@@ -579,20 +587,20 @@ impl<M> Panel<M> {
             return;
         }
 
-        let title = bounded_title(
-            &title.text,
+        let title = title.content_line(
             area.width.saturating_sub(5 + reserved_right) as usize,
+            title_style,
         );
-        let title_width = line_width(&Line::from(title.as_str())).min(area.width as usize);
+        let title_width = line_width(&title).min(area.width as usize);
         if title_width == 0 {
             return;
         }
 
-        let line = Line::from(vec![
-            Span::styled(chars.right_join, border_style),
-            Span::styled(title, title_style),
-            Span::styled(chars.left_join, border_style),
-        ]);
+        let mut spans = Vec::with_capacity(title.spans.len() + 2);
+        spans.push(Span::styled(chars.right_join, border_style));
+        spans.extend(title.spans);
+        spans.push(Span::styled(chars.left_join, border_style));
+        let line = Line::from(spans);
         let width = (title_width + 2).min(u16::MAX as usize) as u16;
         let x = match title_alignment(position) {
             Alignment::Left | Alignment::Center => area.x.saturating_add(1),
@@ -637,6 +645,15 @@ impl PanelTitle {
             spans.extend(line.spans.iter().cloned());
             spans.push(Span::raw(" "));
             return Line::from(spans).style(style);
+        }
+        Line::from(Span::styled(bounded_title(&self.text, max_width), style))
+    }
+
+    fn content_line(&self, max_width: usize, style: Style) -> Line<'static> {
+        if let Some(line) = &self.line
+            && line_width(line) <= max_width
+        {
+            return line.clone().style(style);
         }
         Line::from(Span::styled(bounded_title(&self.text, max_width), style))
     }

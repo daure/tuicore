@@ -54,6 +54,8 @@ struct TagOption<Id> {
     label: String,
 }
 
+type TagStyleFn<Id> = dyn Fn(&SelectedTag<Id>) -> Option<Style>;
+
 pub struct TagInput<Id = String> {
     options: Vec<TagOption<Id>>,
     selected: Vec<SelectedTag<Id>>,
@@ -73,6 +75,7 @@ pub struct TagInput<Id = String> {
     overlay_bounds: Rect,
     cursor_fade: CursorFade,
     events: Vec<TagInputEvent<Id>>,
+    tag_style_by: Option<Box<TagStyleFn<Id>>>,
 }
 
 impl TagInput<String> {
@@ -125,6 +128,7 @@ where
             overlay_bounds: Rect::default(),
             cursor_fade: CursorFade::default(),
             events: Vec::new(),
+            tag_style_by: None,
         }
     }
 
@@ -182,6 +186,14 @@ where
 
     pub fn selected_tags(&self) -> &[SelectedTag<Id>] {
         &self.selected
+    }
+
+    pub fn tag_style_by(
+        mut self,
+        style: impl Fn(&SelectedTag<Id>) -> Option<Style> + 'static,
+    ) -> Self {
+        self.tag_style_by = Some(Box::new(style));
+        self
     }
 
     pub fn query(&self) -> &str {
@@ -566,7 +578,7 @@ where
         let mut used = 0;
 
         for (index, tag) in self.selected.iter().enumerate() {
-            let chip = self.chip_spans(tag.label(), self.highlighted_tag == Some(index));
+            let chip = self.chip_spans(tag, self.highlighted_tag == Some(index));
             let chip_width = line_width(&Line::from(chip.clone()));
             if used > 0 && used + chip_width > width {
                 lines.push(Line::from(std::mem::take(&mut spans)));
@@ -588,7 +600,7 @@ where
         FieldLayout { lines, input_row }
     }
 
-    fn chip_spans(&self, label: &str, highlighted: bool) -> Vec<Span<'static>> {
+    fn chip_spans(&self, tag: &SelectedTag<Id>, highlighted: bool) -> Vec<Span<'static>> {
         let theme = theme();
         let background = if highlighted {
             theme.highlight_bg()
@@ -600,8 +612,7 @@ where
         } else {
             theme.selected_fg()
         };
-        let cap_style = Style::default().fg(background);
-        let chip_style =
+        let default_style =
             Style::default()
                 .fg(foreground)
                 .bg(background)
@@ -610,9 +621,18 @@ where
                 } else {
                     Modifier::empty()
                 });
+        let chip_style = if highlighted {
+            default_style
+        } else {
+            self.tag_style_by
+                .as_ref()
+                .and_then(|style| style(tag))
+                .unwrap_or(default_style)
+        };
+        let cap_style = Style::default().fg(chip_style.bg.unwrap_or(background));
         vec![
             Span::styled(LEFT_CAP, cap_style),
-            Span::styled(format!("{label} ×"), chip_style),
+            Span::styled(format!("{} ×", tag.label()), chip_style),
             Span::styled(RIGHT_CAP, cap_style),
             Span::raw(" "),
         ]
@@ -693,7 +713,7 @@ where
         let tags_width = self
             .selected
             .iter()
-            .map(|tag| line_width(&Line::from(self.chip_spans(tag.label(), false))))
+            .map(|tag| line_width(&Line::from(self.chip_spans(tag, false))))
             .sum::<usize>();
         let input_width = if self.query.is_empty() {
             line_width(&placeholder_line(
@@ -1095,8 +1115,11 @@ mod tests {
     #[test]
     fn persisted_and_removal_target_tags_use_selection_state_styles() {
         let input = TagInput::new(["alpha"]);
-        let persisted = input.chip_spans("alpha", false)[1].style;
-        let removal_target = input.chip_spans("alpha", true)[1].style;
+        let tag = SelectedTag::Custom {
+            label: "alpha".into(),
+        };
+        let persisted = input.chip_spans(&tag, false)[1].style;
+        let removal_target = input.chip_spans(&tag, true)[1].style;
 
         assert_eq!(persisted.fg, Some(theme().selected_fg()));
         assert_eq!(persisted.bg, Some(theme().selected_bg()));
@@ -1104,6 +1127,22 @@ mod tests {
         assert_eq!(removal_target.fg, Some(theme().highlight_fg()));
         assert_eq!(removal_target.bg, Some(theme().highlight_bg()));
         assert!(removal_target.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn selected_tags_can_receive_individual_styles() {
+        let custom = Style::default()
+            .fg(ratatui::style::Color::Red)
+            .bg(ratatui::style::Color::Blue);
+        let input = TagInput::new(["alpha", "beta"])
+            .selected(["alpha", "beta"])
+            .tag_style_by(move |tag| (tag.label() == "beta").then_some(custom));
+
+        let alpha = input.chip_spans(&input.selected[0], false)[1].style;
+        let beta = input.chip_spans(&input.selected[1], false)[1].style;
+
+        assert_eq!(alpha.fg, Some(theme().selected_fg()));
+        assert_eq!(beta, custom);
     }
 
     #[test]
