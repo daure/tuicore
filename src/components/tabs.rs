@@ -30,6 +30,7 @@ pub struct Tab<M = ()> {
 struct TabsActionHotkey<M> {
     sequence: String,
     enabled: bool,
+    visible: bool,
     on_trigger: Box<dyn Fn(usize) -> M>,
 }
 
@@ -295,6 +296,7 @@ where
         self.action_hotkeys.push(TabsActionHotkey {
             sequence: sequence.into(),
             enabled: true,
+            visible: true,
             on_trigger: Box::new(on_trigger),
         });
         self.rebuild_hotkey_matcher();
@@ -315,6 +317,17 @@ where
         }
         action.enabled = enabled;
         self.rebuild_hotkey_matcher();
+    }
+
+    pub fn set_action_hotkey_visible(&mut self, sequence: &str, visible: bool) {
+        let normalized = crate::hotkey::normalize_hotkey(sequence);
+        if let Some(action) = self
+            .action_hotkeys
+            .iter_mut()
+            .find(|action| crate::hotkey::normalize_hotkey(&action.sequence) == normalized)
+        {
+            action.visible = visible;
+        }
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -1352,7 +1365,7 @@ where
             .chain(
                 self.action_hotkeys
                     .iter()
-                    .filter(|action| action.enabled)
+                    .filter(|action| action.enabled && action.visible)
                     .map(|action| action.sequence.clone()),
             )
             .collect::<Vec<_>>();
@@ -1389,7 +1402,7 @@ where
             .chain(
                 self.action_hotkeys
                     .iter()
-                    .filter(|action| action.enabled)
+                    .filter(|action| action.enabled && action.visible)
                     .map(|action| &action.sequence),
             )
             .any(|hotkey| crate::hotkey::normalize_hotkey(hotkey).starts_with(prefix))
@@ -2499,6 +2512,40 @@ mod tests {
             EventOutcome::Handled
         );
         assert_eq!(ctx.messages(), &[("clear", 1)]);
+    }
+
+    #[test]
+    fn hidden_tabs_action_hotkeys_stay_registered_and_active() {
+        let mut tabs = Tabs::new(vec![Tab::text("One", "Body")])
+            .action_hotkey("show", |_| "show")
+            .action_hotkey("hide", |_| "hide");
+        tabs.set_action_hotkey_visible("hide", false);
+        let area = Rect::new(0, 0, 24, 5);
+        let mut layout = LayoutCtx::new();
+        tabs.layout(area, &mut layout);
+        let mut terminal = Terminal::new(TestBackend::new(24, 5)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| render_node(&tabs, frame, frame.area()))
+            .expect("tabs should render");
+        let bottom = (0..24)
+            .map(|x| terminal.backend().buffer().cell((x, 4)).unwrap().symbol())
+            .collect::<String>();
+
+        assert_eq!(
+            layout.focus_targets()[0].hotkey_sequences,
+            vec!["show", "hide"]
+        );
+        assert!(bottom.ends_with("┤show│"), "{bottom}");
+        let mut ctx = EventCtx::default();
+        assert_eq!(
+            tabs.event(
+                &TuiEvent::Hotkey(HotkeyEvent::Commit("hide".to_string())),
+                &mut ctx,
+            ),
+            EventOutcome::Handled
+        );
+        assert_eq!(ctx.messages(), &["hide"]);
     }
 
     #[test]
