@@ -6,7 +6,7 @@ usage() {
 Usage: ./scripts/release.sh [major|minor|patch]
 
 Bump the package version (default: minor), validate the crate, create a release
-commit and annotated tag, then publish to crates.io. The script never pushes.
+commit and annotated tag, publish to crates.io, and push to origin.
 EOF
 }
 
@@ -206,6 +206,6 @@ if ! cargo publish --registry crates-io; then
     exit 1
 fi
 
-printf '\nPublished %s. Push release commit and tag when ready:\n' "$tag"
-printf 'git push origin %s\n' "$branch"
-printf 'git push origin %s\n' "$tag"
+printf '\nPublished %s. Pushing release commit and tag to origin...\n' "$tag"
+git push origin "$branch"
+git push origin "$tag"
