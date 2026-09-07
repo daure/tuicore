@@ -262,7 +262,7 @@ where
     let dialog = Dialog::new()
         .top_left(title)
         .actions([yes, no])
-        .content([description]);
+        .content(description.split('\n'));
     match on_outcome {
         Some(handler) => {
             dialog.on_close(move |reason| handler(ConfirmationDialogOutcome::Closed(reason)))
@@ -366,6 +366,35 @@ mod tests {
             .collect::<String>();
         assert!(narrow.preferred.height > wide.preferred.height);
         assert!(second_body_row.contains("five six"), "{second_body_row}");
+    }
+
+    #[test]
+    fn confirmation_dialog_preserves_description_line_breaks() {
+        let dialog =
+            ConfirmationDialog::<()>::new("Continue?", "First line\n\nWARNING: recovery data");
+        let mut terminal = Terminal::new(TestBackend::new(30, 5)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("confirmation dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let body_rows = (1..4)
+            .map(|y| {
+                (0..30)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert!(body_rows[0].contains("First line"), "{body_rows:?}");
+        assert!(
+            body_rows[1].trim_matches(['│', ' ']).is_empty(),
+            "{body_rows:?}"
+        );
+        assert!(
+            body_rows[2].contains("WARNING: recovery data"),
+            "{body_rows:?}"
+        );
     }
 
     #[test]
