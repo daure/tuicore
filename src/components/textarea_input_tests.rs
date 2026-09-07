@@ -2190,6 +2190,42 @@ fn plain_textarea_keeps_match_status_after_query_is_submitted() {
 }
 
 #[test]
+fn textarea_only_underlines_and_bolds_the_active_search_match() {
+    let mut input = TextareaInput::<()>::new()
+        .value("stage stage")
+        .focused(true);
+    let mut ctx = EventCtx::default();
+    for key in [
+        Key::Char('/'),
+        Key::Char('s'),
+        Key::Char('t'),
+        Key::Char('a'),
+        Key::Enter,
+    ] {
+        input.event(&TuiEvent::Key(key.into()), &mut ctx);
+    }
+
+    let line = &input.visible_lines(20, 1).lines[0];
+    for span in [&line.spans[0], &line.spans[6]] {
+        assert_eq!(span.style.fg, Some(theme().accent_fg()));
+    }
+    assert!(
+        line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
+    assert!(
+        !line.spans[6]
+            .style
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert!(!line.spans[6].style.add_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
 fn unfocused_plain_textarea_uses_the_search_capacity_row_for_content() {
     let input = TextareaInput::<()>::new()
         .value("one\ntwo\nthree\nfour")

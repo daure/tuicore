@@ -220,16 +220,11 @@ pub(crate) fn split_search_area(area: Rect, active: bool) -> (Rect, Option<Rect>
 }
 
 pub(crate) fn search_match_style(current: bool) -> Style {
-    let theme = theme();
+    let style = Style::default().fg(theme().accent_fg());
     if current {
-        Style::default()
-            .fg(theme.highlight_fg())
-            .bg(theme.highlight_bg())
-            .add_modifier(Modifier::BOLD)
+        style.add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
     } else {
-        Style::default()
-            .fg(theme.accent_fg())
-            .add_modifier(Modifier::UNDERLINED)
+        style
     }
 }
 
