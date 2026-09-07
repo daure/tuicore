@@ -18,8 +18,8 @@ use super::ordered_selection::OrderedSelection;
 use super::{
     ActivationMode, Column, ConfirmationDialog, ConfirmationDialogKeyBindings, DataView,
     DataViewOutcome, DataViewTypedEvent, Dropdown, DropdownPopupDirection, DropdownSearchMode,
-    DropdownVariant, Panel,
-    SeasonalEmptyState, SelectionMode, SelectionTrigger, SortDirection, TextInput,
+    DropdownVariant, Panel, SeasonalEmptyState, SelectionMode, SelectionTrigger, SortDirection,
+    TextInput,
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
@@ -589,9 +589,7 @@ where
                             options.clone(),
                             |option| option.0.clone(),
                             |option| option.1.clone(),
-                            move |option, query, mode| {
-                                renderer(&option.0, &option.1, query, mode)
-                            },
+                            move |option, query, mode| renderer(&option.0, &option.1, query, mode),
                         )
                     } else {
                         Dropdown::single(

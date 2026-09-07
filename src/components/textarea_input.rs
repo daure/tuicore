@@ -16,6 +16,10 @@ use crate::event::{
     HotkeyEvent, Key, KeyEvent, KeyModifiers, MouseButton, MouseEventKind, TuiEvent,
 };
 use crate::hotkey::normalize_hotkey;
+use crate::search::{
+    SearchAction, SearchState, TextMatchRange, search_match_style, split_search_area,
+    text_match_ranges,
+};
 use crate::{
     AxisProposal, BorderKind, EventCtx, EventOutcome, FocusCtx, FocusId, FocusRequest, KeySpec,
     LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, ThemeName, TuiNode,
@@ -58,6 +62,7 @@ pub struct TextareaInput<M = ()> {
     preserve_scroll_position: bool,
     focused: bool,
     insert_mode: bool,
+    search: SearchState,
     max_lines: Option<usize>,
     min_rows: usize,
     max_rows: Option<usize>,
@@ -209,6 +214,7 @@ impl<M> TextareaInput<M> {
             preserve_scroll_position: false,
             focused: false,
             insert_mode: false,
+            search: SearchState::default(),
             max_lines: None,
             min_rows: 1,
             max_rows: None,
@@ -545,6 +551,7 @@ impl<M> TextareaInput<M> {
     }
 
     fn begin_insert_mode(&mut self) -> bool {
+        self.search.clear();
         let reset_cursor = self.cursor_reset_on_edit;
         if reset_cursor {
             self.cursor = 0;
@@ -556,6 +563,7 @@ impl<M> TextareaInput<M> {
     }
 
     fn begin_external_editor_mode(&mut self) {
+        self.search.clear();
         self.cursor = self.len_chars();
         self.cursor_reset_on_edit = false;
         self.preserve_scroll_position = false;
@@ -664,7 +672,8 @@ impl<M> TextareaInput<M> {
         self
     }
 
-    /// Sets maximum content rows. Panel chrome adds two outer rows.
+    /// Sets maximum searchable content rows. Plain chrome can use one additional outer row for
+    /// content while search is inactive; panel chrome adds two outer rows.
     ///
     /// Zero becomes one. Minimum and maximum normalize so minimum never exceeds maximum,
     /// regardless of builder order.
@@ -867,6 +876,7 @@ impl<M> TextareaInput<M> {
             Style::default()
         };
         let area = self.render_chrome(frame, area);
+        let (area, search_area) = split_search_area(area, self.search_row_visible());
         let geometry = self.scroll_geometry(area);
         let visible = self.visible_lines_from(
             geometry.layout.viewport.width as usize,
@@ -879,15 +889,22 @@ impl<M> TextareaInput<M> {
         );
         self.scroll
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
+        if let Some(search_area) = search_area {
+            frame.render_widget(
+                Paragraph::new(self.search.line(self.search_matches().len())),
+                search_area,
+            );
+        }
     }
 
     fn content_area(&self, area: Rect) -> Rect {
         let height = self.visible_outer_height(area.width, area.height);
         let area = Rect::new(area.x, area.y, area.width, height);
-        match self.chrome {
+        let area = match self.chrome {
             InputChrome::Plain => area,
             InputChrome::Panel(_) => Panel::inner_area(area),
-        }
+        };
+        split_search_area(area, self.search_row_visible()).0
     }
 
     fn render_chrome(&self, frame: &mut Frame, area: Rect) -> Rect {
@@ -911,9 +928,13 @@ impl<M> TextareaInput<M> {
             InputChrome::Plain => width,
             InputChrome::Panel(_) => width.saturating_add(2),
         };
-        let height = height.saturating_add(chrome_height);
-        let min_height =
-            (self.min_rows.min(u16::MAX as usize) as u16).saturating_add(chrome_height);
+        let search_height = u16::from(self.search_row_visible());
+        let height = height
+            .saturating_add(chrome_height)
+            .saturating_add(search_height);
+        let min_height = (self.min_rows.min(u16::MAX as usize) as u16)
+            .saturating_add(chrome_height)
+            .saturating_add(search_height);
         let mut hint = LayoutSizeHint::content(width, height);
         hint.min.height = min_height;
         hint.normalized(proposal)
@@ -923,12 +944,18 @@ impl<M> TextareaInput<M> {
         if self.fill_height {
             return available;
         }
-        let content = self.preferred_rows(self.content_rows_for_width(self.inner_width(width)));
-        let content = content.min(u16::MAX as usize) as u16;
+        let content_rows = self.content_rows_for_width(self.inner_width(width));
+        let preferred_rows = self.preferred_rows(content_rows);
+        let content = preferred_rows
+            .saturating_add(usize::from(
+                self.plain_search_row_holds_content(content_rows, preferred_rows),
+            ))
+            .min(u16::MAX as usize) as u16;
         let height = match self.chrome {
             InputChrome::Plain => content,
             InputChrome::Panel(_) => content.saturating_add(2),
-        };
+        }
+        .saturating_add(u16::from(self.search_row_visible()));
         height.min(available)
     }
 
@@ -937,6 +964,19 @@ impl<M> TextareaInput<M> {
             InputChrome::Plain => width as usize,
             InputChrome::Panel(_) => width.saturating_sub(2) as usize,
         }
+    }
+
+    fn search_row_visible(&self) -> bool {
+        match self.chrome {
+            InputChrome::Plain => self.focused && self.search.is_active(),
+            InputChrome::Panel(_) => self.search.is_active(),
+        }
+    }
+
+    fn plain_search_row_holds_content(&self, content_rows: usize, preferred_rows: usize) -> bool {
+        matches!(self.chrome, InputChrome::Plain)
+            && !self.search_row_visible()
+            && content_rows > preferred_rows
     }
 
     fn visible_lines(&self, width: usize, height: usize) -> VisibleLines {
@@ -1036,6 +1076,8 @@ impl<M> TextareaInput<M> {
             Style::default().fg(theme.muted_fg())
         };
         let cursor_style = self.cursor_fade.style(value_style);
+        let search_matches = self.search_matches();
+        let current_search_match = self.search.selected(search_matches.len());
         if !self.syntax_render_ready(theme_name) {
             return VisibleLines {
                 lines: vec![Line::default(); height],
@@ -1054,6 +1096,8 @@ impl<M> TextareaInput<M> {
                 cursor_style,
                 theme_name,
                 &ranges,
+                &search_matches,
+                current_search_match,
             );
         }
         let (cursor_line, cursor_col) = cursor.unwrap_or((usize::MAX, 0));
@@ -1085,6 +1129,8 @@ impl<M> TextareaInput<M> {
                     .then_some(hotkey_style),
                     cursor_style,
                     theme_name,
+                    &search_matches,
+                    current_search_match,
                 )
             })
             .collect();
@@ -1102,6 +1148,8 @@ impl<M> TextareaInput<M> {
         cursor_style: Style,
         theme_name: ThemeName,
         ranges: &[LineRange],
+        search_matches: &[TextMatchRange],
+        current_search_match: Option<usize>,
     ) -> VisibleLines {
         let rows = self.visual_rows(width, ranges);
         let (cursor_line, cursor_col) = cursor.unwrap_or((usize::MAX, 0));
@@ -1123,6 +1171,8 @@ impl<M> TextareaInput<M> {
                         .then_some(hotkey_style),
                     cursor_style,
                     theme_name,
+                    search_matches,
+                    current_search_match,
                 )
             })
             .collect();
@@ -1139,6 +1189,8 @@ impl<M> TextareaInput<M> {
         hotkey_style: Option<Style>,
         cursor_style: Style,
         theme_name: ThemeName,
+        search_matches: &[TextMatchRange],
+        current_search_match: Option<usize>,
     ) -> Line<'static> {
         let chars = self.value.chars().collect::<Vec<_>>();
         let mut spans = Vec::new();
@@ -1172,16 +1224,24 @@ impl<M> TextareaInput<M> {
             {
                 let text = display_char(*value, remaining);
                 drawn += cell_width(&text);
-                spans.push(Span::styled(
-                    text,
-                    self.syntax_style(
-                        position,
-                        *value,
-                        value_style,
-                        syntax_navigation_focused,
-                        theme_name,
-                    ),
-                ));
+                let style = self.syntax_style(
+                    position,
+                    *value,
+                    value_style,
+                    syntax_navigation_focused,
+                    theme_name,
+                );
+                let current =
+                    current_search_match.filter(|index| search_matches[*index].contains(position));
+                let matched = current.or_else(|| {
+                    search_matches
+                        .iter()
+                        .position(|matched| matched.contains(position))
+                });
+                let style = matched.map_or(style, |index| {
+                    style.patch(search_match_style(current_search_match == Some(index)))
+                });
+                spans.push(Span::styled(text, style));
             }
         }
         if let Some(hotkey_style) = hotkey_style {
@@ -1575,6 +1635,10 @@ impl<M> TextareaInput<M> {
 
     fn scroll_area(&self, area: Rect) -> Rect {
         let height = self.max_rows.map_or(area.height, |max_rows| {
+            let content_rows = self.content_rows_for_width(area.width.saturating_sub(1) as usize);
+            let max_rows = max_rows.saturating_add(usize::from(
+                self.plain_search_row_holds_content(content_rows, max_rows),
+            ));
             (area.height as usize).min(max_rows) as u16
         });
         Rect::new(area.x, area.y, area.width, height)
@@ -1632,6 +1696,95 @@ impl<M> TextareaInput<M> {
                 || bindings.bottom_matches(key)
                 || bindings.home_matches(key)
                 || bindings.end_matches(key))
+    }
+
+    fn search_matches(&self) -> Vec<TextMatchRange> {
+        if !self.search.is_active() {
+            return Vec::new();
+        }
+        text_match_ranges(self.search.query(), &self.value)
+    }
+
+    fn handle_search_paste(&mut self, value: &str, ctx: &mut EventCtx<M>) -> bool {
+        if !self.focused || self.insert_mode || !self.search.is_editing() {
+            return false;
+        }
+        if self.search.append(value) {
+            self.center_search_match(self.area, ctx.animation());
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
+        ctx.stop_propagation();
+        true
+    }
+
+    fn handle_search_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
+        if !self.focused || self.insert_mode {
+            return false;
+        }
+        let action = self.search.handle_key(key);
+        if action == SearchAction::Unhandled {
+            return false;
+        }
+
+        let matches = self.search_matches();
+        match action {
+            SearchAction::Next => self.search.select_next(matches.len()),
+            SearchAction::Previous => self.search.select_previous(matches.len()),
+            _ => {}
+        }
+        if !matches.is_empty()
+            && matches!(
+                action,
+                SearchAction::Started
+                    | SearchAction::QueryChanged
+                    | SearchAction::Submitted
+                    | SearchAction::Next
+                    | SearchAction::Previous
+            )
+        {
+            let area = self.content_area(self.outer_area);
+            self.center_search_match(area, ctx.animation());
+        }
+        if matches!(
+            action,
+            SearchAction::Started
+                | SearchAction::QueryChanged
+                | SearchAction::Submitted
+                | SearchAction::Cleared
+        ) {
+            ctx.request_layout();
+        }
+        ctx.request_redraw();
+        ctx.stop_propagation();
+        true
+    }
+
+    fn center_search_match(&mut self, area: Rect, settings: AnimationSettings) -> bool {
+        if area.is_empty() {
+            return false;
+        }
+        let matches = self.search_matches();
+        let Some(selected) = self.search.selected(matches.len()) else {
+            return false;
+        };
+        let geometry = self.scroll_geometry(area);
+        let ranges = self.line_ranges();
+        let rows = self.visual_rows(geometry.viewport.width, &ranges);
+        let Some(row) = rows.iter().position(|row| {
+            row.range.start <= matches[selected].start && row.range.end > matches[selected].start
+        }) else {
+            return false;
+        };
+        let target = row.saturating_sub(geometry.viewport.height / 2);
+        self.scroll
+            .scroll_to(
+                ScrollOffset::new(self.scroll.target_offset().x, target),
+                geometry.viewport,
+                geometry.content,
+                settings,
+            )
+            .changed
     }
 
     fn handle_scroll_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
@@ -2026,19 +2179,30 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             }
             lines
         };
-        let width = lines
+        let mut width = lines
             .iter()
             .map(|line| line_width(&Line::from(line.as_str())))
             .max()
             .unwrap_or(1)
             .min(u16::MAX as usize) as u16;
+        if self.search_row_visible() {
+            width = width.max(
+                line_width(&self.search.line(self.search_matches().len())).min(u16::MAX as usize)
+                    as u16,
+            );
+        }
         let content_width = self.measure_content_width(width, proposal);
         let rows = if self.wrap {
             content_width.map_or(lines.len(), |width| wrapped_text_rows(&lines, width))
         } else {
             lines.len()
         };
-        let height = self.preferred_rows(rows).min(u16::MAX as usize) as u16;
+        let preferred_rows = self.preferred_rows(rows);
+        let height = preferred_rows
+            .saturating_add(usize::from(
+                self.plain_search_row_holds_content(rows, preferred_rows),
+            ))
+            .min(u16::MAX as usize) as u16;
         self.chrome_measure(width.max(1), height, proposal)
     }
 
@@ -2073,14 +2237,18 @@ impl<M> TuiNode<M> for TextareaInput<M> {
                 self.area,
                 true,
                 hotkeys,
-                self.insert_mode || (self.focused && self.focused_events_before_global_hotkeys),
+                self.insert_mode
+                    || self.search.is_editing()
+                    || (self.focused && self.focused_events_before_global_hotkeys),
             );
         } else {
             ctx.register_text_entry_focusable(
                 FocusId::new(TEXTAREA_FOCUS),
                 self.area,
                 true,
-                self.insert_mode || (self.focused && self.focused_events_before_global_hotkeys),
+                self.insert_mode
+                    || self.search.is_editing()
+                    || (self.focused && self.focused_events_before_global_hotkeys),
             );
         }
         LayoutResult::new(area)
@@ -2141,6 +2309,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         if let TuiEvent::Paste(value) = event {
+            if self.handle_search_paste(value, ctx) {
+                return EventOutcome::Handled;
+            }
             if !self.insert_mode {
                 ctx.stop_propagation();
                 return EventOutcome::Handled;
@@ -2173,6 +2344,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.handle_search_key(*key, ctx) {
+            return EventOutcome::Handled;
+        }
         if self.disabled && self.insert_mode {
             self.insert_mode = false;
             ctx.request_layout();
@@ -2207,6 +2381,7 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             return EventOutcome::Handled;
         }
         if delete_forward_key(*key) {
+            self.search.clear();
             self.insert_mode = true;
             self.cursor_reset_on_edit = false;
             self.preserve_scroll_position = false;
@@ -2310,6 +2485,9 @@ impl<M> TuiNode<M> for TextareaInput<M> {
             self.cursor_fade.reset();
         } else if was_editing && let Some(on_edit_end) = &self.on_edit_end {
             ctx.emit(on_edit_end(self.value.clone()));
+        }
+        if matches!(self.chrome, InputChrome::Plain) {
+            ctx.request_layout();
         }
         ctx.request_redraw();
     }

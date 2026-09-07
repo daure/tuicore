@@ -1,3 +1,9 @@
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+
+use crate::{Key, KeyEvent, KeyModifiers, theme};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchMode {
     Contains,
@@ -21,6 +27,228 @@ pub struct RankedSearchMatch {
     pub index: usize,
     pub score: i64,
     pub spans: Vec<MatchSpan>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TextMatchRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl TextMatchRange {
+    pub(crate) fn contains(self, position: usize) -> bool {
+        position >= self.start && position < self.end
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchAction {
+    Started,
+    QueryChanged,
+    Submitted,
+    Cleared,
+    Next,
+    Previous,
+    Handled,
+    Unhandled,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SearchState {
+    query: String,
+    active: bool,
+    editing: bool,
+    selected: usize,
+}
+
+impl SearchState {
+    pub(crate) fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn is_editing(&self) -> bool {
+        self.editing
+    }
+
+    pub(crate) fn clear(&mut self) -> bool {
+        let changed = self.active || self.editing || !self.query.is_empty() || self.selected != 0;
+        self.query.clear();
+        self.active = false;
+        self.editing = false;
+        self.selected = 0;
+        changed
+    }
+
+    pub(crate) fn append(&mut self, value: &str) -> bool {
+        if !self.editing {
+            return false;
+        }
+        let previous_len = self.query.len();
+        self.query
+            .extend(value.chars().filter(|value| !value.is_control()));
+        if self.query.len() != previous_len {
+            self.selected = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> SearchAction {
+        if self.active && cancel_key(key) {
+            self.clear();
+            return SearchAction::Cleared;
+        }
+
+        if self.editing {
+            return match key.code {
+                Key::Enter if key.modifiers.user_modifiers().is_empty() => {
+                    self.editing = false;
+                    SearchAction::Submitted
+                }
+                Key::Backspace if key.modifiers.user_modifiers().is_empty() => {
+                    self.query.pop();
+                    self.selected = 0;
+                    SearchAction::QueryChanged
+                }
+                Key::Char(value)
+                    if !value.is_control()
+                        && !key
+                            .modifiers
+                            .user_modifiers()
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.query.push(value);
+                    self.selected = 0;
+                    SearchAction::QueryChanged
+                }
+                _ => SearchAction::Handled,
+            };
+        }
+
+        if plain_char(key, '/') {
+            self.query.clear();
+            self.active = true;
+            self.editing = true;
+            self.selected = 0;
+            return SearchAction::Started;
+        }
+        if self.active && plain_char(key, 'n') {
+            return SearchAction::Next;
+        }
+        if self.active && shifted_n(key) {
+            return SearchAction::Previous;
+        }
+        SearchAction::Unhandled
+    }
+
+    pub(crate) fn select_next(&mut self, match_count: usize) {
+        if match_count > 0 {
+            self.selected = (self.selected + 1) % match_count;
+        }
+    }
+
+    pub(crate) fn select_previous(&mut self, match_count: usize) {
+        if match_count > 0 {
+            self.selected = (self.selected + match_count - 1) % match_count;
+        }
+    }
+
+    pub(crate) fn selected(&self, match_count: usize) -> Option<usize> {
+        (match_count > 0).then(|| self.selected.min(match_count - 1))
+    }
+
+    pub(crate) fn line(&self, match_count: usize) -> Line<'static> {
+        let theme = theme();
+        let current = self
+            .selected(match_count)
+            .map_or(0, |selected| selected + 1);
+        let mut spans = vec![
+            Span::styled("/", Style::default().fg(theme.accent_fg())),
+            Span::styled(self.query.clone(), Style::default().fg(theme.text_fg())),
+        ];
+        if self.editing {
+            spans.push(Span::styled(
+                " ",
+                Style::default()
+                    .fg(theme.highlight_fg())
+                    .bg(theme.highlight_bg()),
+            ));
+        }
+        spans.push(Span::styled(
+            format!("  {current}/{match_count}"),
+            Style::default().fg(theme.muted_fg()),
+        ));
+        Line::from(spans)
+    }
+}
+
+pub(crate) fn text_match_ranges(query: &str, candidate: &str) -> Vec<TextMatchRange> {
+    let query = query.chars().collect::<Vec<_>>();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let candidate = candidate.chars().collect::<Vec<_>>();
+    if query.len() > candidate.len() {
+        return Vec::new();
+    }
+
+    (0..=candidate.len() - query.len())
+        .filter(|start| {
+            query.iter().enumerate().all(|(offset, expected)| {
+                chars_eq_ignore_case(candidate[*start + offset], *expected)
+            })
+        })
+        .map(|start| TextMatchRange {
+            start,
+            end: start + query.len(),
+        })
+        .collect()
+}
+
+pub(crate) fn split_search_area(area: Rect, active: bool) -> (Rect, Option<Rect>) {
+    if !active || area.height == 0 {
+        return (area, None);
+    }
+    let content = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
+    let search = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+    (content, Some(search))
+}
+
+pub(crate) fn search_match_style(current: bool) -> Style {
+    let theme = theme();
+    if current {
+        Style::default()
+            .fg(theme.highlight_fg())
+            .bg(theme.highlight_bg())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme.accent_fg())
+            .add_modifier(Modifier::UNDERLINED)
+    }
+}
+
+fn cancel_key(key: KeyEvent) -> bool {
+    key.code == Key::Esc
+        || (key.code == Key::Char('[') && key.modifiers.user_modifiers() == KeyModifiers::CONTROL)
+}
+
+fn plain_char(key: KeyEvent, expected: char) -> bool {
+    key.code == Key::Char(expected) && key.modifiers.user_modifiers().is_empty()
+}
+
+fn shifted_n(key: KeyEvent) -> bool {
+    (key.code == Key::Char('N')
+        && matches!(
+            key.modifiers.user_modifiers(),
+            KeyModifiers::NONE | KeyModifiers::SHIFT
+        ))
+        || (key.code == Key::Char('n') && key.modifiers.user_modifiers() == KeyModifiers::SHIFT)
 }
 
 pub fn search_match(query: &str, candidate: &str, mode: SearchMode) -> Option<SearchMatch> {
@@ -271,5 +499,57 @@ mod tests {
 
         assert_eq!(matched.score, 0);
         assert!(matched.spans.is_empty());
+    }
+
+    #[test]
+    fn text_ranges_find_overlapping_unicode_matches_case_insensitively() {
+        assert_eq!(
+            text_match_ranges("Éé", "éÉé"),
+            vec![
+                TextMatchRange { start: 0, end: 2 },
+                TextMatchRange { start: 1, end: 3 },
+            ]
+        );
+    }
+
+    #[test]
+    fn search_navigation_wraps_in_both_directions() {
+        let mut search = SearchState::default();
+        assert_eq!(
+            search.handle_key(Key::Char('/').into()),
+            SearchAction::Started
+        );
+        assert_eq!(
+            search.handle_key(Key::Char('x').into()),
+            SearchAction::QueryChanged
+        );
+        assert_eq!(
+            search.handle_key(Key::Enter.into()),
+            SearchAction::Submitted
+        );
+
+        search.select_previous(3);
+        assert_eq!(search.selected(3), Some(2));
+        search.select_next(3);
+        assert_eq!(search.selected(3), Some(0));
+    }
+
+    #[test]
+    fn escape_and_control_bracket_clear_search() {
+        for key in [
+            KeyEvent::from(Key::Esc),
+            KeyEvent {
+                code: Key::Char('['),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        ] {
+            let mut search = SearchState::default();
+            search.handle_key(Key::Char('/').into());
+            search.handle_key(Key::Char('x').into());
+
+            assert_eq!(search.handle_key(key), SearchAction::Cleared);
+            assert!(!search.is_active());
+            assert!(search.query().is_empty());
+        }
     }
 }

@@ -4,12 +4,15 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use similar::{Algorithm, DiffOp, capture_diff_slices};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::search::{
+    SearchAction, SearchState, TextMatchRange, split_search_area, text_match_ranges,
+};
 use crate::{
     Animated, AnimationSettings, AxisProposal, EventCtx, EventOutcome, FocusCtx, FocusId,
     LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, ScrollAxes, ScrollBehavior,
@@ -60,6 +63,7 @@ pub struct DiffViewer {
     focused: bool,
     area: Rect,
     pending_top_prefix: bool,
+    search: SearchState,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +113,12 @@ struct StyledLine {
     location: Option<DiffLocation>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DiffSearchMatch {
+    row: usize,
+    range: TextMatchRange,
+}
+
 impl DiffViewer {
     pub fn new(old_text: impl Into<String>, new_text: impl Into<String>) -> Self {
         let mut viewer = Self {
@@ -131,6 +141,7 @@ impl DiffViewer {
             focused: false,
             area: Rect::default(),
             pending_top_prefix: false,
+            search: SearchState::default(),
         };
         viewer.rebuild();
         viewer
@@ -273,6 +284,7 @@ impl DiffViewer {
     }
 
     pub fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
+        let area = split_search_area(area, self.search.is_active()).0;
         self.scroll.geometry(area, self.content)
     }
 
@@ -287,6 +299,37 @@ impl DiffViewer {
         settings: AnimationSettings,
     ) -> ScrollOutcome {
         let key = key.into();
+        if self.focused {
+            let action = self.search.handle_key(key);
+            if action != SearchAction::Unhandled {
+                let matches = self.search_matches();
+                let previous_selection = self.search.selected(matches.len());
+                match action {
+                    SearchAction::Next => self.search.select_next(matches.len()),
+                    SearchAction::Previous => self.search.select_previous(matches.len()),
+                    _ => {}
+                }
+                let selection_changed = previous_selection != self.search.selected(matches.len());
+                let centered = if action == SearchAction::Cleared {
+                    self.center_selection(
+                        area,
+                        AnimationSettings {
+                            enabled: false,
+                            ..settings
+                        },
+                    )
+                } else {
+                    self.center_search_match(area, settings)
+                };
+                return ScrollOutcome {
+                    handled: true,
+                    changed: !matches!(action, SearchAction::Next | SearchAction::Previous)
+                        || selection_changed
+                        || centered.changed,
+                    active: centered.active,
+                };
+            }
+        }
         let bindings = keybindings();
         let data_keys = bindings.data_view();
         let viewport = self.scroll_geometry(area).viewport.height.max(1);
@@ -370,6 +413,80 @@ impl DiffViewer {
         }
         self.scroll
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
+        if let Some(search_area) = split_search_area(area, self.search.is_active()).1 {
+            frame.render_widget(
+                Paragraph::new(self.search.line(self.search_matches().len())),
+                search_area,
+            );
+        }
+    }
+
+    fn search_matches(&self) -> Vec<DiffSearchMatch> {
+        if !self.search.is_active() {
+            return Vec::new();
+        }
+        self.display_parts
+            .iter()
+            .enumerate()
+            .flat_map(|(row, line)| {
+                let text = line
+                    .parts
+                    .iter()
+                    .map(|part| part.text.as_str())
+                    .collect::<String>();
+                text_match_ranges(self.search.query(), &text)
+                    .into_iter()
+                    .map(move |range| DiffSearchMatch { row, range })
+            })
+            .collect()
+    }
+
+    fn center_search_match(&mut self, area: Rect, settings: AnimationSettings) -> ScrollOutcome {
+        let matches = self.search_matches();
+        let Some(selected) = self.search.selected(matches.len()) else {
+            let geometry = self.scroll_geometry(area);
+            return self.scroll.clamp_to(
+                geometry.viewport,
+                geometry.content,
+                AnimationSettings {
+                    enabled: false,
+                    ..settings
+                },
+            );
+        };
+        let matched = matches[selected];
+        let previous_selected = self.selected;
+        if let Some(location) = self.display_parts[matched.row].location {
+            self.selected = Some(location);
+        }
+        let selection_changed = self.selected != previous_selected;
+        let geometry = self.scroll_geometry(area);
+        let viewport = geometry.viewport;
+        let target = self.scroll.target_offset();
+        let y = matched.row.saturating_sub(viewport.height / 2);
+        let line = self.display_parts[matched.row]
+            .parts
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect::<String>();
+        let start = display_width(&line.chars().take(matched.range.start).collect::<String>());
+        let end = display_width(&line.chars().take(matched.range.end).collect::<String>());
+        let x = if start < target.x {
+            start
+        } else if end > target.x.saturating_add(viewport.width) {
+            end.saturating_sub(viewport.width)
+        } else {
+            target.x
+        };
+        let mut outcome = self.scroll.scroll_to(
+            crate::ScrollOffset::new(x, y),
+            viewport,
+            geometry.content,
+            settings,
+        );
+        outcome.handled |= selection_changed;
+        outcome.changed |= selection_changed;
+        outcome
     }
 
     fn rebuild(&mut self) {
@@ -560,41 +677,53 @@ impl DiffViewer {
             .collect()
     }
 
-    fn styled_lines(&self) -> Vec<Line<'_>> {
+    fn styled_lines(&self) -> Vec<Line<'static>> {
         let theme = theme();
+        let search_matches = self.search_matches();
+        let current_search_match = self.search.selected(search_matches.len());
         self.display_parts
             .iter()
-            .map(|line| {
+            .enumerate()
+            .map(|(row, line)| {
                 let selected = self.focused && line.location == self.selected;
+                let mut position = 0;
+                let mut segments: Vec<(String, Style)> = Vec::new();
+                for part in &line.parts {
+                    let base_style = if selected {
+                        Style::default()
+                            .fg(theme.highlight_fg())
+                            .bg(theme.highlight_bg())
+                    } else {
+                        diff_role_style(part.role)
+                    };
+                    for value in part.text.chars() {
+                        let current = current_search_match.filter(|index| {
+                            search_matches[*index].row == row
+                                && search_matches[*index].range.contains(position)
+                        });
+                        let matched = current.or_else(|| {
+                            search_matches.iter().position(|matched| {
+                                matched.row == row && matched.range.contains(position)
+                            })
+                        });
+                        let style = matched.map_or(base_style, |index| {
+                            base_style
+                                .patch(diff_search_match_style(current_search_match == Some(index)))
+                        });
+                        if let Some((text, previous_style)) = segments.last_mut()
+                            && *previous_style == style
+                        {
+                            text.push(value);
+                        } else {
+                            segments.push((value.to_string(), style));
+                        }
+                        position += 1;
+                    }
+                }
                 Line::from(
-                    line.parts
-                        .iter()
-                        .map(|part| {
-                            let style = if selected {
-                                Style::default()
-                                    .fg(theme.highlight_fg())
-                                    .bg(theme.highlight_bg())
-                            } else {
-                                match part.role {
-                                    DiffRole::Normal => Style::default().fg(theme.text_fg()),
-                                    DiffRole::Muted => Style::default().fg(theme.muted_fg()),
-                                    DiffRole::Accent => Style::default().fg(theme.accent_fg()),
-                                    DiffRole::Added => Style::default()
-                                        .fg(theme.diff_added_fg())
-                                        .bg(theme.diff_added_bg()),
-                                    DiffRole::Removed => Style::default()
-                                        .fg(theme.diff_removed_fg())
-                                        .bg(theme.diff_removed_bg()),
-                                    DiffRole::AddedEmphasis => Style::default()
-                                        .fg(theme.diff_added_fg())
-                                        .bg(theme.diff_added_emphasis_bg()),
-                                    DiffRole::RemovedEmphasis => Style::default()
-                                        .fg(theme.diff_removed_fg())
-                                        .bg(theme.diff_removed_emphasis_bg()),
-                                }
-                            };
-                            Span::styled(part.text.as_str(), style)
-                        })
+                    segments
+                        .into_iter()
+                        .map(|(text, style)| Span::styled(text, style))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -868,13 +997,20 @@ impl Animated for DiffViewer {
 
 impl<M> TuiNode<M> for DiffViewer {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        let width = self.content.width.min(u16::MAX as usize) as u16;
+        let mut width = self.content.width.min(u16::MAX as usize) as u16;
+        if self.search.is_active() {
+            width = width.max(
+                line_width(&self.search.line(self.search_matches().len())).min(u16::MAX as usize)
+                    as u16,
+            );
+        }
         let height = self
             .content
             .height
             .max(self.min_rows)
             .min(self.max_rows)
             .min(u16::MAX as usize) as u16;
+        let height = height.saturating_add(u16::from(self.search.is_active()));
         let width = match proposal.width {
             AxisProposal::Unbounded => width,
             AxisProposal::AtMost(max) => width.min(max),
@@ -888,17 +1024,21 @@ impl<M> TuiNode<M> for DiffViewer {
         self.area = area;
         self.refresh_projection();
         if resized {
-            self.center_selection(
-                area,
-                AnimationSettings {
-                    enabled: false,
-                    ..crate::animation_settings()
-                },
-            );
+            let settings = AnimationSettings {
+                enabled: false,
+                ..crate::animation_settings()
+            };
+            if self.search.is_active() {
+                self.center_search_match(area, settings);
+            } else {
+                self.center_selection(area, settings);
+            }
         } else {
             self.clamp_scroll();
         }
-        ctx.register_focusable(FocusId::new(DIFF_FOCUS), area, true);
+        let focus = FocusId::new(DIFF_FOCUS);
+        ctx.register_focusable(focus.clone(), area, true);
+        ctx.set_focus_text_entry_active(focus, self.search.is_editing());
         LayoutResult::new(area)
     }
 
@@ -907,10 +1047,35 @@ impl<M> TuiNode<M> for DiffViewer {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Paste(value) = event
+            && self.focused
+            && self.search.is_editing()
+        {
+            if self.search.append(value) {
+                self.center_search_match(self.area, ctx.animation());
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        let previous_search = (
+            self.search.is_active(),
+            self.search.is_editing(),
+            self.search.query().len(),
+        );
         let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
+        let current_search = (
+            self.search.is_active(),
+            self.search.is_editing(),
+            self.search.query().len(),
+        );
+        if previous_search != current_search {
+            ctx.request_layout();
+        }
         if outcome.needs_redraw() {
             ctx.request_redraw();
         }
@@ -1246,6 +1411,36 @@ fn part(text: impl Into<String>, role: DiffRole) -> StyledPart {
     StyledPart {
         text: text.into(),
         role,
+    }
+}
+
+fn diff_role_style(role: DiffRole) -> Style {
+    let theme = theme();
+    match role {
+        DiffRole::Normal => Style::default().fg(theme.text_fg()),
+        DiffRole::Muted => Style::default().fg(theme.muted_fg()),
+        DiffRole::Accent => Style::default().fg(theme.accent_fg()),
+        DiffRole::Added => Style::default()
+            .fg(theme.diff_added_fg())
+            .bg(theme.diff_added_bg()),
+        DiffRole::Removed => Style::default()
+            .fg(theme.diff_removed_fg())
+            .bg(theme.diff_removed_bg()),
+        DiffRole::AddedEmphasis => Style::default()
+            .fg(theme.diff_added_fg())
+            .bg(theme.diff_added_emphasis_bg()),
+        DiffRole::RemovedEmphasis => Style::default()
+            .fg(theme.diff_removed_fg())
+            .bg(theme.diff_removed_emphasis_bg()),
+    }
+}
+
+fn diff_search_match_style(current: bool) -> Style {
+    let style = Style::default().fg(theme().accent_fg());
+    if current {
+        style.add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
+    } else {
+        style
     }
 }
 

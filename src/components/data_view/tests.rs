@@ -773,6 +773,35 @@ fn wrapping_can_align_continuations_after_a_row_prefix() {
 }
 
 #[test]
+fn wrapping_keeps_adjacent_styled_spans_on_the_same_line() {
+    let view = DataView::new(["row"], |row| *row)
+        .column(Column::multiline(
+            "title",
+            "",
+            Constraint::Fill(1),
+            |_, _| {
+                Text::from(Line::from(vec![
+                    Span::raw("abc "),
+                    Span::styled("", Style::default()),
+                    Span::styled("BE", Style::default()),
+                    Span::styled("", Style::default()),
+                ]))
+            },
+        ))
+        .wrap_cells();
+    let area = Rect::new(0, 0, 7, 2);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.cell((4, 0)).unwrap().symbol(), " ");
+    assert_eq!(buffer.cell((2, 1)).unwrap().symbol(), "");
+    assert_eq!(buffer.cell((3, 1)).unwrap().symbol(), "B");
+    assert_eq!(buffer.cell((5, 1)).unwrap().symbol(), "");
+}
+
+#[test]
 fn multi_column_wrapping_excludes_inter_column_padding() {
     let view = DataView::new(["abcd e", "next"], |value| *value)
         .columns([

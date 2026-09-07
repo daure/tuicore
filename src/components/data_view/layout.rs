@@ -773,14 +773,28 @@ fn wrap_line(line: Line<'static>, width: u16, continuation_indent: usize) -> Vec
     let mut lines = Vec::new();
     let mut spans = Vec::new();
     let mut pending_whitespace = Vec::new();
+    let mut word = Vec::new();
     let mut used_width = 0usize;
+    let mut word_width = 0usize;
     let mut has_content = false;
 
     for span in line.spans {
         for token in span.content.split_inclusive(char::is_whitespace) {
-            let token_width = line_width(&Line::from(token));
-            let whitespace = token.chars().all(char::is_whitespace);
-            if whitespace {
+            if token.chars().all(char::is_whitespace) {
+                append_word(
+                    &mut lines,
+                    &mut spans,
+                    &mut pending_whitespace,
+                    &mut word,
+                    &mut used_width,
+                    &mut word_width,
+                    &mut has_content,
+                    width,
+                    continuation_indent,
+                    line_style,
+                    alignment,
+                );
+                let token_width = line_width(&Line::from(token));
                 if has_content {
                     pending_whitespace.push(Span::styled(token.to_owned(), span.style));
                 } else {
@@ -790,33 +804,48 @@ fn wrap_line(line: Line<'static>, width: u16, continuation_indent: usize) -> Vec
                 continue;
             }
 
-            let pending_width = pending_whitespace
-                .iter()
-                .map(|span| line_width(&Line::from(span.clone())))
-                .sum::<usize>();
-            if has_content
-                && used_width
-                    .saturating_add(pending_width)
-                    .saturating_add(token_width)
-                    > width
-            {
-                lines.push(Line {
-                    spans,
-                    style: line_style,
+            let word_end = token.trim_end_matches(char::is_whitespace);
+            word_width = word_width.saturating_add(line_width(&Line::from(word_end)));
+            word.push(Span::styled(word_end.to_owned(), span.style));
+            if word_end.len() < token.len() {
+                append_word(
+                    &mut lines,
+                    &mut spans,
+                    &mut pending_whitespace,
+                    &mut word,
+                    &mut used_width,
+                    &mut word_width,
+                    &mut has_content,
+                    width,
+                    continuation_indent,
+                    line_style,
                     alignment,
-                });
-                spans = vec![Span::raw(" ".repeat(continuation_indent))];
-                used_width = continuation_indent;
-                pending_whitespace.clear();
-            } else {
-                used_width = used_width.saturating_add(pending_width);
-                spans.append(&mut pending_whitespace);
+                );
+                let whitespace = &token[word_end.len()..];
+                let whitespace_width = line_width(&Line::from(whitespace));
+                if has_content {
+                    pending_whitespace.push(Span::styled(whitespace.to_owned(), span.style));
+                } else {
+                    spans.push(Span::styled(whitespace.to_owned(), span.style));
+                    used_width = used_width.saturating_add(whitespace_width);
+                }
             }
-            spans.push(Span::styled(token.to_owned(), span.style));
-            used_width = used_width.saturating_add(token_width);
-            has_content = true;
         }
     }
+
+    append_word(
+        &mut lines,
+        &mut spans,
+        &mut pending_whitespace,
+        &mut word,
+        &mut used_width,
+        &mut word_width,
+        &mut has_content,
+        width,
+        continuation_indent,
+        line_style,
+        alignment,
+    );
 
     if !has_content {
         return vec![original];
@@ -827,4 +856,49 @@ fn wrap_line(line: Line<'static>, width: u16, continuation_indent: usize) -> Vec
         alignment,
     });
     lines
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_word(
+    lines: &mut Vec<Line<'static>>,
+    spans: &mut Vec<Span<'static>>,
+    pending_whitespace: &mut Vec<Span<'static>>,
+    word: &mut Vec<Span<'static>>,
+    used_width: &mut usize,
+    word_width: &mut usize,
+    has_content: &mut bool,
+    width: usize,
+    continuation_indent: usize,
+    line_style: ratatui::style::Style,
+    alignment: Option<ratatui::layout::Alignment>,
+) {
+    if word.is_empty() {
+        return;
+    }
+    let pending_width = pending_whitespace
+        .iter()
+        .map(|span| line_width(&Line::from(span.clone())))
+        .sum::<usize>();
+    if *has_content
+        && used_width
+            .saturating_add(pending_width)
+            .saturating_add(*word_width)
+            > width
+    {
+        lines.push(Line {
+            spans: std::mem::take(spans),
+            style: line_style,
+            alignment,
+        });
+        *spans = vec![Span::raw(" ".repeat(continuation_indent))];
+        *used_width = continuation_indent;
+        pending_whitespace.clear();
+    } else {
+        *used_width = used_width.saturating_add(pending_width);
+        spans.append(pending_whitespace);
+    }
+    spans.append(word);
+    *used_width = used_width.saturating_add(*word_width);
+    *word_width = 0;
+    *has_content = true;
 }

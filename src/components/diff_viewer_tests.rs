@@ -2,6 +2,7 @@ use super::*;
 use crate::{Key, KeyEvent, KeyModifiers, ScrollOffset, ScrollbarVisibility};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::style::Modifier;
 
 fn rendered(viewer: &DiffViewer, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -24,6 +25,10 @@ fn layout(viewer: &mut DiffViewer, width: u16, height: u16) {
         Rect::new(0, 0, width, height),
         &mut LayoutCtx::new(),
     );
+}
+
+fn modified_key(code: Key, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent { code, modifiers }
 }
 
 #[test]
@@ -775,4 +780,200 @@ fn focused_selection_paints_the_entire_viewport_row() {
         theme().highlight_bg(),
         "highlight should fill beyond line content"
     );
+}
+
+#[test]
+fn focused_diff_search_navigates_and_wraps_in_both_directions() {
+    let mut viewer = DiffViewer::new(
+        "needle\none\ntwo\nneedle\nthree\nneedle\n",
+        "needle\nONE\ntwo\nneedle\nTHREE\nneedle\n",
+    )
+    .style(DiffStyle::Inline)
+    .context_lines(10)
+    .focused(true);
+    let area = Rect::new(0, 0, 30, 4);
+    layout(&mut viewer, area.width, area.height);
+
+    for key in [
+        Key::Char('/'),
+        Key::Char('n'),
+        Key::Char('e'),
+        Key::Char('e'),
+        Key::Char('d'),
+        Key::Char('l'),
+        Key::Char('e'),
+        Key::Enter,
+    ] {
+        assert!(
+            viewer
+                .on_key_with_settings(key, area, AnimationSettings::default())
+                .handled
+        );
+    }
+    let count = viewer.search_matches().len();
+    assert!(count >= 3);
+    assert_eq!(viewer.search.selected(count), Some(0));
+    let first = viewer.search_matches()[0];
+    assert_eq!(
+        viewer.selected_location(),
+        viewer.display_parts[first.row].location
+    );
+
+    for expected in 1..count {
+        viewer.on_key_with_settings(Key::Char('n'), area, AnimationSettings::default());
+        assert_eq!(viewer.search.selected(count), Some(expected));
+        let matched = viewer.search_matches()[expected];
+        assert_eq!(
+            viewer.selected_location(),
+            viewer.display_parts[matched.row].location
+        );
+    }
+    viewer.on_key_with_settings(Key::Char('n'), area, AnimationSettings::default());
+    assert_eq!(viewer.search.selected(count), Some(0));
+    viewer.on_key_with_settings(
+        modified_key(Key::Char('n'), KeyModifiers::SHIFT),
+        area,
+        AnimationSettings::default(),
+    );
+    assert_eq!(viewer.search.selected(count), Some(count - 1));
+}
+
+#[test]
+fn diff_search_renders_on_an_extra_bottom_row_and_escape_clears_it() {
+    let mut viewer = DiffViewer::new("before\n", "needle\nafter\n")
+        .style(DiffStyle::Inline)
+        .focused(true);
+    let before = <DiffViewer as TuiNode<()>>::measure(&viewer, LayoutProposal::unbounded())
+        .preferred
+        .height;
+    let area = Rect::new(0, 0, 24, before + 1);
+    for key in [
+        Key::Char('/'),
+        Key::Char('n'),
+        Key::Char('e'),
+        Key::Char('e'),
+        Key::Char('d'),
+        Key::Char('l'),
+        Key::Char('e'),
+    ] {
+        viewer.on_key_with_settings(key, area, AnimationSettings::default());
+    }
+    assert_eq!(
+        <DiffViewer as TuiNode<()>>::measure(&viewer, LayoutProposal::unbounded())
+            .preferred
+            .height,
+        before + 1
+    );
+
+    let output = rendered(&viewer, area.width, area.height);
+    assert!(output.lines().last().unwrap().starts_with("/needle"));
+    assert!(output.lines().last().unwrap().contains("1/1"));
+
+    viewer.on_key_with_settings(Key::Esc, area, AnimationSettings::default());
+    assert!(!viewer.search.is_active());
+}
+
+#[test]
+fn selected_diff_search_match_keeps_semantic_accent_and_underline() {
+    let mut viewer = DiffViewer::new("before\nbefore\n", "after\nbefore\n")
+        .style(DiffStyle::Inline)
+        .show_headers(false)
+        .wrap(false)
+        .focused(true);
+    let area = Rect::new(0, 0, 40, 4);
+    layout(&mut viewer, area.width, area.height);
+    for key in [
+        Key::Char('/'),
+        Key::Char('b'),
+        Key::Char('e'),
+        Key::Char('f'),
+        Key::Char('o'),
+        Key::Char('r'),
+        Key::Char('e'),
+        Key::Enter,
+    ] {
+        viewer.on_key_with_settings(key, area, AnimationSettings::default());
+    }
+
+    let matched = viewer
+        .styled_lines()
+        .into_iter()
+        .flat_map(|line| line.spans)
+        .filter(|span| span.content.contains("before"))
+        .collect::<Vec<_>>();
+    assert_eq!(matched.len(), 2);
+    assert!(
+        matched
+            .iter()
+            .all(|span| span.style.fg == Some(theme().accent_fg()))
+    );
+    assert!(matched[0].style.add_modifier.contains(Modifier::UNDERLINED));
+    assert!(matched[0].style.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(matched[0].style.bg, Some(theme().highlight_bg()));
+    assert!(!matched[1].style.add_modifier.contains(Modifier::UNDERLINED));
+    assert!(!matched[1].style.add_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn clearing_diff_search_reanchors_navigation_to_the_selected_line() {
+    let text = (0..16)
+        .map(|line| {
+            if line == 8 {
+                "prefix words that wrap across several rows before needle\n".to_string()
+            } else {
+                format!("line {line}\n")
+            }
+        })
+        .collect::<String>();
+    let mut viewer = DiffViewer::new(&text, &text)
+        .style(DiffStyle::Inline)
+        .show_headers(false)
+        .wrap(true)
+        .focused(true);
+    let area = Rect::new(0, 0, 20, 5);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+    layout(&mut viewer, area.width, area.height);
+    for key in [
+        Key::Char('/'),
+        Key::Char('n'),
+        Key::Char('e'),
+        Key::Char('e'),
+        Key::Char('d'),
+        Key::Char('l'),
+        Key::Char('e'),
+        Key::Enter,
+    ] {
+        viewer.on_key_with_settings(key, area, settings);
+    }
+
+    viewer.on_key_with_settings(Key::Esc, area, settings);
+
+    let selected = viewer
+        .selected_location()
+        .expect("search should select a line");
+    let selected_row = viewer
+        .display_parts
+        .iter()
+        .position(|line| line.location == Some(selected))
+        .expect("selected line should be displayed");
+    let geometry = viewer.scroll_geometry(area);
+    let expected = selected_row
+        .saturating_sub(geometry.viewport.height / 2)
+        .min(
+            geometry
+                .content
+                .height
+                .saturating_sub(geometry.viewport.height),
+        );
+    assert_eq!(viewer.scroll.offset().y, expected);
+
+    viewer.on_key_with_settings(Key::Char('k'), area, settings);
+    let offset_above = viewer.scroll.offset().y;
+    viewer.on_key_with_settings(Key::Char('j'), area, settings);
+    assert_eq!(viewer.selected_location(), Some(selected));
+    assert!(viewer.scroll.offset().y > offset_above);
+    assert_eq!(viewer.scroll.offset().y, expected);
 }

@@ -580,7 +580,7 @@ fn measure_counts_wrapped_rows_for_bounded_width() {
 }
 
 #[test]
-fn measure_respects_min_and_max_rows_without_clamping_value() {
+fn measure_includes_plain_search_capacity_without_clamping_value() {
     let input = TextareaInput::<()>::new()
         .min_rows(2)
         .max_rows(3)
@@ -589,7 +589,7 @@ fn measure_respects_min_and_max_rows_without_clamping_value() {
     let hint = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded());
 
     assert_eq!(hint.min.height, 2);
-    assert_eq!(hint.preferred.height, 3);
+    assert_eq!(hint.preferred.height, 4);
     assert_eq!(input.current_value(), "one\ntwo\nthree\nfour");
 }
 
@@ -609,7 +609,7 @@ fn min_rows_is_measured_minimum_with_panel_chrome() {
     let panel_hint = panel.measure(LayoutProposal::unbounded());
 
     assert_eq!(plain_hint.min.height, 2);
-    assert_eq!(plain_hint.preferred.height, 3);
+    assert_eq!(plain_hint.preferred.height, 4);
     assert_eq!(panel_hint.min.height, 4);
     assert_eq!(panel_hint.preferred.height, 5);
 }
@@ -2029,4 +2029,218 @@ fn line_text(line: &Line<'_>) -> String {
 
 fn modified_key(code: Key, modifiers: KeyModifiers) -> KeyEvent {
     KeyEvent { code, modifiers }
+}
+
+#[test]
+fn focused_textarea_search_navigates_wraps_and_clears_when_editing_starts() {
+    let mut input = TextareaInput::<()>::new()
+        .value("needle\none\ntwo\nneedle\nthree\nneedle")
+        .max_rows(2)
+        .focused(true);
+    input.layout(Rect::new(0, 0, 20, 3), &mut LayoutCtx::new());
+    let mut ctx = EventCtx::default();
+
+    for key in [
+        Key::Char('/'),
+        Key::Char('n'),
+        Key::Char('e'),
+        Key::Char('e'),
+        Key::Char('d'),
+        Key::Char('l'),
+        Key::Char('e'),
+        Key::Enter,
+    ] {
+        assert_eq!(
+            input.event(&TuiEvent::Key(key.into()), &mut ctx),
+            EventOutcome::Handled
+        );
+    }
+    assert_eq!(input.search.selected(input.search_matches().len()), Some(0));
+
+    input.event(&TuiEvent::Key(Key::Char('n').into()), &mut ctx);
+    assert_eq!(input.search.selected(input.search_matches().len()), Some(1));
+    input.event(&TuiEvent::Key(Key::Char('n').into()), &mut ctx);
+    input.event(&TuiEvent::Key(Key::Char('n').into()), &mut ctx);
+    assert_eq!(input.search.selected(input.search_matches().len()), Some(0));
+    input.event(
+        &TuiEvent::Key(modified_key(Key::Char('n'), KeyModifiers::SHIFT)),
+        &mut ctx,
+    );
+    assert_eq!(input.search.selected(input.search_matches().len()), Some(2));
+
+    input.event(&TuiEvent::Key(Key::Enter.into()), &mut ctx);
+    assert!(input.insert_mode());
+    assert!(!input.search.is_active());
+}
+
+#[test]
+fn plain_textarea_search_reuses_the_bottom_focus_row() {
+    let mut input = TextareaInput::<()>::new()
+        .value("needle\none\ntwo\nthree")
+        .max_rows(2)
+        .focused(true);
+    let before = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded())
+        .preferred
+        .height;
+    let mut terminal = Terminal::new(TestBackend::new(20, before)).expect("terminal should build");
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+    let bottom_before = (0..20)
+        .map(|x| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((x, before - 1))
+                .unwrap()
+                .symbol()
+        })
+        .collect::<String>();
+    assert!(bottom_before.starts_with("two"));
+
+    let mut ctx = EventCtx::default();
+    for key in [
+        Key::Char('/'),
+        Key::Char('n'),
+        Key::Char('e'),
+        Key::Char('e'),
+        Key::Char('d'),
+        Key::Char('l'),
+        Key::Char('e'),
+    ] {
+        input.event(&TuiEvent::Key(key.into()), &mut ctx);
+    }
+    let after = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded())
+        .preferred
+        .height;
+    assert_eq!(after, before);
+
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+    let bottom = (0..20)
+        .map(|x| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((x, before - 1))
+                .unwrap()
+                .symbol()
+        })
+        .collect::<String>();
+    assert!(bottom.starts_with("/needle"));
+    assert!(bottom.contains("1/1"));
+}
+
+#[test]
+fn plain_textarea_keeps_match_status_after_query_is_submitted() {
+    let mut input = TextareaInput::<()>::new()
+        .value("needle\none\ntwo\nthree")
+        .max_rows(2)
+        .focused(true);
+    let before = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded())
+        .preferred
+        .height;
+    let mut ctx = EventCtx::default();
+    for key in [Key::Char('/'), Key::Char('n'), Key::Enter] {
+        input.event(&TuiEvent::Key(key.into()), &mut ctx);
+    }
+
+    assert!(input.search.is_active());
+    assert!(!input.search.is_editing());
+    assert_eq!(
+        <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded())
+            .preferred
+            .height,
+        before
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(20, before)).expect("terminal should build");
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+    let bottom = (0..20)
+        .map(|x| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((x, before - 1))
+                .unwrap()
+                .symbol()
+        })
+        .collect::<String>();
+    assert!(bottom.contains("1/"));
+
+    let match_count = input.search_matches().len();
+    input.event(&TuiEvent::Key(Key::Char('n').into()), &mut ctx);
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+    let bottom = (0..20)
+        .map(|x| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((x, before - 1))
+                .unwrap()
+                .symbol()
+        })
+        .collect::<String>();
+    assert!(bottom.contains(&format!("2/{match_count}")));
+}
+
+#[test]
+fn unfocused_plain_textarea_uses_the_search_capacity_row_for_content() {
+    let input = TextareaInput::<()>::new()
+        .value("one\ntwo\nthree\nfour")
+        .max_rows(2);
+    let height = <TextareaInput<()> as TuiNode<()>>::measure(&input, LayoutProposal::unbounded())
+        .preferred
+        .height;
+    assert_eq!(height, 3);
+
+    let mut terminal = Terminal::new(TestBackend::new(20, height)).expect("terminal should build");
+    terminal
+        .draw(|frame| input.render(frame, frame.area()))
+        .expect("textarea should render");
+    let bottom = (0..20)
+        .map(|x| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((x, height - 1))
+                .unwrap()
+                .symbol()
+        })
+        .collect::<String>();
+    assert!(bottom.starts_with("three"));
+}
+
+#[test]
+fn every_textarea_edit_entry_path_clears_search() {
+    let mut input = TextareaInput::<()>::new().value("needle").focused(true);
+
+    input.search.handle_key(Key::Char('/').into());
+    input.search.handle_key(Key::Char('n').into());
+    input.set_insert_mode(true);
+    assert!(input.insert_mode());
+    assert!(!input.search.is_active());
+
+    input.set_insert_mode(false);
+    input.search.handle_key(Key::Char('/').into());
+    input.search.handle_key(Key::Char('n').into());
+    input.begin_external_editor_mode();
+    assert!(input.insert_mode());
+    assert!(!input.search.is_active());
+
+    input.set_insert_mode(false);
+    input.search.handle_key(Key::Char('/').into());
+    input.search.handle_key(Key::Char('n').into());
+    input.search.handle_key(Key::Enter.into());
+    input.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('\u{7f}'))),
+        &mut EventCtx::default(),
+    );
+    assert!(input.insert_mode());
+    assert!(!input.search.is_active());
 }
