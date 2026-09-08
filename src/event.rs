@@ -32,6 +32,14 @@ pub struct ExternalEditorRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalDiffRequest {
+    pub old: String,
+    pub new: String,
+    pub old_label: String,
+    pub new_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalEditorResponse {
     pub value: String,
     pub line: usize,

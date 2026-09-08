@@ -1062,6 +1062,16 @@ impl<M> TuiNode<M> for DiffViewer {
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        if self.focused && keybindings().diff_viewer().external_diff_matches(*key) {
+            ctx.request_external_diff(
+                self.old_text.clone(),
+                self.new_text.clone(),
+                self.old_label.clone(),
+                self.new_label.clone(),
+            );
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let previous_search = (
             self.search.is_active(),
             self.search.is_editing(),

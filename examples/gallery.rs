@@ -24,8 +24,9 @@ use gallery_demo::dropdowns::{
 use gallery_demo::forms::{FormControlId, ValidatedForm};
 use gallery_demo::images::ImageDemo;
 use gallery_demo::inputs::{
-    button_layout, chip_layout, date_time_showcase_layout, password_input_showcase_layout,
-    text_input_showcase_layout, textarea_showcase_layout, toggle_layout, typography_showcase,
+    button_group_layout, button_group_showcase, button_layout, chip_layout,
+    date_time_showcase_layout, password_input_showcase_layout, text_input_showcase_layout,
+    textarea_showcase_layout, toggle_layout, typography_showcase,
 };
 use gallery_demo::layouts::{
     DemoBox, layout_demo_body, layout_flex_demo, layout_grid_demo, layout_layered_demo,
@@ -88,8 +89,8 @@ use std::thread;
 use time::{Date, Month, PrimitiveDateTime, Time};
 use tuicore::components::{AiDock, LlmEvent, StoreDebugView, ToolPolicy};
 use tuicore::{
-    ActivationMode, Animated, AnimationSettings, Button, Calendar, CalendarEntryRole, CalendarSpan,
-    CalendarTypedEvent, ChildKey, Chip, ChipColorRole, ConfirmationDialog,
+    ActivationMode, Animated, AnimationSettings, Button, ButtonGroup, Calendar, CalendarEntryRole,
+    CalendarSpan, CalendarTypedEvent, ChildKey, Chip, ChipColorRole, ConfirmationDialog,
     ConfirmationDialogOutcome, DataView, DataViewTypedEvent, DatePicker, DatePickerDropdown,
     DateTimePicker, DateTimePickerDropdown, DateTimePickerLayout, DialogBackdrop,
     DialogCloseReason, DialogHost, DialogLayer, DialogLayerPlacement, DispatchOutcome, DockSpec,
@@ -790,6 +791,7 @@ struct PreviewState {
     button: Button<Msg>,
     disabled_button: Button<Msg>,
     button_presses: u32,
+    button_group: ButtonGroup<&'static str, Msg>,
     chips: [Chip; 7],
     tag_input: TagInput,
     tag_input_panel: TagInput,
@@ -1012,6 +1014,7 @@ impl PreviewState {
             button: Button::new("Enabled").hotkey("b"),
             disabled_button: Button::new("Disabled").hotkey("d").disabled(true),
             button_presses: 0,
+            button_group: button_group_showcase(),
             chips: [
                 Chip::new("Chip value"),
                 Chip::new("Prepend").prepend_icon(""),
@@ -1161,6 +1164,10 @@ impl PreviewState {
             }
             PreviewKind::NotificationTriggers => self.layout_notification_triggers(area, ctx),
             PreviewKind::Button => self.layout_button(area, ctx),
+            PreviewKind::ButtonGroup => {
+                let [_, group, _] = button_group_layout(area);
+                self.button_group.layout(group, ctx);
+            }
             PreviewKind::Toggle => self.layout_toggle(area, ctx),
             PreviewKind::TextInput => {
                 let [_, input, panel, numbers, disabled] = text_input_showcase_layout(area);
@@ -1451,6 +1458,7 @@ impl PreviewState {
             PreviewKind::Calendar => self.render_calendar(frame, area, ctx),
             PreviewKind::StatusBar => self.render_status_bar(frame, area, ctx),
             PreviewKind::Button => self.render_button(frame, area),
+            PreviewKind::ButtonGroup => self.render_button_group(frame, area),
             PreviewKind::Chip => self.render_chips(frame, area),
             PreviewKind::TagInput => self.render_tag_input(frame, area, ctx),
             PreviewKind::Toggle => self.render_toggle(frame, area),
@@ -1682,6 +1690,9 @@ impl PreviewState {
         }
         if preview == PreviewKind::Button {
             return self.button_dispatch_event(route, event, ctx);
+        }
+        if preview == PreviewKind::ButtonGroup {
+            return self.button_group.dispatch_event(route, event, ctx);
         }
         if preview == PreviewKind::TagInput {
             if let Some(route) = route
@@ -2020,6 +2031,7 @@ impl PreviewState {
                 );
             }
             PreviewKind::Button => self.button.dispatch_focus(target, focused, ctx),
+            PreviewKind::ButtonGroup => self.button_group.dispatch_focus(target, focused, ctx),
             PreviewKind::TagInput => {
                 if dispatch_focus_child(
                     &mut self.tag_input,
@@ -2133,6 +2145,7 @@ impl PreviewState {
                 settings,
             ))
             .merge(Animated::tick(&mut self.button, dt, settings))
+            .merge(Animated::tick(&mut self.button_group, dt, settings))
             .merge(Animated::tick(
                 &mut self.notification_buttons[0],
                 dt,
@@ -3360,6 +3373,24 @@ impl PreviewState {
         );
     }
 
+    fn render_button_group(&self, frame: &mut Frame, area: Rect) {
+        let [instructions, group, status] = button_group_layout(area);
+        frame.render_widget(
+            Paragraph::new(
+                "A single focus target with one selected item. Left/Right or h/l changes selection; s, w, and p select items directly.",
+            ),
+            instructions,
+        );
+        self.button_group.render(frame, group);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Selected: {}",
+                self.button_group.selected_id().copied().unwrap_or("none")
+            )),
+            status,
+        );
+    }
+
     fn render_chips(&self, frame: &mut Frame, area: Rect) {
         let [instructions, chips_area, _] = chip_layout(area);
         frame.render_widget(
@@ -4282,6 +4313,7 @@ enum ComponentKind {
     LayoutScrollDataViews,
     Inputs,
     Button,
+    ButtonGroup,
     Chip,
     TagInput,
     TextInput,
@@ -4326,7 +4358,7 @@ enum ComponentKind {
 }
 
 impl ComponentKind {
-    const ALL: [Self; 64] = [
+    const ALL: [Self; 65] = [
         Self::Tabs,
         Self::Panel,
         Self::PanelVariants,
@@ -4350,6 +4382,7 @@ impl ComponentKind {
         Self::LayoutScrollDataViews,
         Self::Inputs,
         Self::Button,
+        Self::ButtonGroup,
         Self::Chip,
         Self::TagInput,
         Self::TextInput,
@@ -4418,6 +4451,7 @@ impl ComponentKind {
             Self::LayoutScrollDataViews => "Scroll: DataViews",
             Self::Inputs => "Inputs",
             Self::Button => "Button",
+            Self::ButtonGroup => "Button Group",
             Self::Chip => "Chip",
             Self::TagInput => "Tag Input",
             Self::TextInput => "Text",
@@ -4478,6 +4512,7 @@ impl ComponentKind {
             | Self::ListReorder
             | Self::ListReorderTree => Some(Self::ListControl),
             Self::Button
+            | Self::ButtonGroup
             | Self::Chip
             | Self::TagInput
             | Self::TextInput
@@ -4533,6 +4568,7 @@ impl ComponentKind {
             Self::LayoutScrollMixed => PreviewKind::LayoutScrollMixed,
             Self::LayoutScrollDataViews => PreviewKind::LayoutScrollDataViews,
             Self::Inputs | Self::Button => PreviewKind::Button,
+            Self::ButtonGroup => PreviewKind::ButtonGroup,
             Self::Chip => PreviewKind::Chip,
             Self::TagInput => PreviewKind::TagInput,
             Self::TextInput => PreviewKind::TextInput,
@@ -4603,6 +4639,7 @@ enum PreviewKind {
     Calendar,
     StatusBar,
     Button,
+    ButtonGroup,
     Chip,
     TagInput,
     Toggle,
@@ -4664,6 +4701,7 @@ impl PreviewKind {
             Self::Calendar => "Calendar",
             Self::StatusBar => "Status Bar",
             Self::Button => "Button",
+            Self::ButtonGroup => "Button Group",
             Self::Chip => "Chip",
             Self::TagInput => "Tag Input",
             Self::Toggle => "Toggle",

@@ -527,6 +527,7 @@ where
         hotkey: HotkeyEvent,
     ) -> (
         Option<(EventRoute, crate::ExternalEditorRequest)>,
+        Option<crate::ExternalDiffRequest>,
         Option<String>,
     ) {
         let route = EventRoute::new(target.path.clone());
@@ -537,9 +538,14 @@ where
             self.animation_settings,
         );
         let external_editor = effects.external_editor.clone();
+        let external_diff = effects.external_diff.clone();
         let clipboard = effects.clipboard.clone();
         flags.merge(self.handle_effects(effects));
-        (external_editor.map(|request| (route, request)), clipboard)
+        (
+            external_editor.map(|request| (route, request)),
+            external_diff,
+            clipboard,
+        )
     }
 
     fn dispatch_yank_event(
@@ -656,6 +662,7 @@ where
                     self.animation_settings,
                 );
                 let external_editor = effects.external_editor.clone();
+                let external_diff = effects.external_diff.clone();
                 let clipboard = effects.clipboard.clone();
                 let focus_request = focus_request_from_event(&event, &effects);
                 let handled = effects.outcome.handled();
@@ -666,6 +673,9 @@ where
                 if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_editor)
                 {
                     self.handle_external_editor(flags, dispatcher, terminal, route, request);
+                }
+                if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_diff) {
+                    self.handle_external_diff(flags, terminal, request);
                 }
                 if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
                     let _ = write_clipboard_osc52(terminal, &value);
@@ -709,7 +719,7 @@ where
                             HotkeyEvent::Canceled,
                         );
                         if let Some((sequence, target)) = sequence_targets.get(index) {
-                            let (external_editor, clipboard) = self
+                            let (external_editor, external_diff, clipboard) = self
                                 .dispatch_hotkey_event_to_target(
                                     flags,
                                     dispatcher,
@@ -722,6 +732,11 @@ where
                                 self.handle_external_editor(
                                     flags, dispatcher, terminal, route, request,
                                 );
+                            }
+                            if let (Some(terminal), Some(request)) =
+                                (terminal.as_deref_mut(), external_diff)
+                            {
+                                self.handle_external_diff(flags, terminal, request);
                             }
                             if let (Some(terminal), Some(value)) =
                                 (terminal.as_deref_mut(), clipboard)
@@ -830,6 +845,7 @@ where
         let effects =
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
         let external_editor = effects.external_editor.clone();
+        let external_diff = effects.external_diff.clone();
         let clipboard = effects.clipboard.clone();
         let focus_request = focus_request_from_event(&event, &effects);
         flags.merge(self.handle_effects(effects));
@@ -838,6 +854,9 @@ where
         }
         if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_editor) {
             self.handle_external_editor(flags, dispatcher, terminal, route, request);
+        }
+        if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_diff) {
+            self.handle_external_diff(flags, terminal, request);
         }
         if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
             let _ = write_clipboard_osc52(terminal, &value);
@@ -899,6 +918,24 @@ where
         let effects =
             dispatcher.dispatch_event(&mut self.root, &route, &event, self.animation_settings);
         flags.merge(self.handle_effects(effects));
+    }
+
+    fn handle_external_diff(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        terminal: &mut TerminalGuard,
+        request: crate::ExternalDiffRequest,
+    ) {
+        flags.clear = true;
+        if let Err(error) = view_external_diff(terminal, request) {
+            self.handle_notifications(
+                flags,
+                VecDeque::from([Notification::error(
+                    "External diff failed",
+                    error.to_string(),
+                )]),
+            );
+        }
     }
 
     #[cfg(test)]
@@ -1098,6 +1135,24 @@ fn edit_in_external_editor(
     terminal.suspend(|| monitor_external_editor(&temp_files, &request, &mut on_update))
 }
 
+fn view_external_diff(
+    terminal: &mut TerminalGuard,
+    request: crate::ExternalDiffRequest,
+) -> std::io::Result<()> {
+    let temp_files = create_diff_temp_files(&request)?;
+    terminal.suspend(|| {
+        let status =
+            external_diff_command(temp_files.old_path(), temp_files.new_path()).status()?;
+        if status.success() || status.code() == Some(1) {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "git difftool exited with {status}"
+            )))
+        }
+    })
+}
+
 const EXTERNAL_EDITOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 fn monitor_external_editor(
@@ -1185,6 +1240,32 @@ struct EditorTempFiles {
     pos_path: Option<PathBuf>,
 }
 
+struct DiffTempFiles {
+    old_path: PathBuf,
+    new_path: Option<PathBuf>,
+}
+
+impl DiffTempFiles {
+    fn old_path(&self) -> &Path {
+        &self.old_path
+    }
+
+    fn new_path(&self) -> &Path {
+        self.new_path
+            .as_deref()
+            .expect("new diff temp file should exist")
+    }
+}
+
+impl Drop for DiffTempFiles {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.old_path);
+        if let Some(path) = &self.new_path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 impl EditorTempFiles {
     fn pos_path(&self) -> &Path {
         self.pos_path
@@ -1220,6 +1301,28 @@ fn create_editor_temp_files(
     temp_files.pos_path = Some(pos_path);
 
     Ok(temp_files)
+}
+
+fn create_diff_temp_files(request: &crate::ExternalDiffRequest) -> std::io::Result<DiffTempFiles> {
+    let old_extension = diff_label_extension(&request.old_label).unwrap_or("txt");
+    let new_extension = diff_label_extension(&request.new_label).unwrap_or("txt");
+    let (old_path, mut old_file) = create_unique_temp_file("diff-old", old_extension)?;
+    let mut temp_files = DiffTempFiles {
+        old_path,
+        new_path: None,
+    };
+    old_file.write_all(request.old.as_bytes())?;
+    drop(old_file);
+
+    let (new_path, mut new_file) = create_unique_temp_file("diff-new", new_extension)?;
+    new_file.write_all(request.new.as_bytes())?;
+    drop(new_file);
+    temp_files.new_path = Some(new_path);
+    Ok(temp_files)
+}
+
+fn diff_label_extension(label: &str) -> Option<&str> {
+    valid_editor_file_extension(Path::new(label).extension()?.to_str())
 }
 
 fn valid_editor_file_extension(file_extension: Option<&str>) -> Option<&str> {
@@ -1273,6 +1376,13 @@ fn spawn_editor(
         .unwrap_or_else(|_| "vi".to_string());
     let mut cmd = editor_command(&editor, temp_path, pos_path, line, col);
     cmd.spawn()
+}
+
+fn external_diff_command(old_path: &Path, new_path: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.args(["difftool", "--no-prompt", "--no-index", "--"]);
+    command.arg(old_path).arg(new_path);
+    command
 }
 
 fn editor_command(
@@ -1601,6 +1711,7 @@ mod tests {
         consume_char: Option<char>,
         consume_enter: bool,
         copy_on_hotkey: Option<&'static str>,
+        external_diff_on_hotkey: bool,
         key_events: usize,
         key_chars: String,
         hotkey_commits: usize,
@@ -2298,6 +2409,9 @@ mod tests {
                     if let Some(value) = self.copy_on_hotkey {
                         ctx.copy_to_clipboard(value);
                     }
+                    if self.external_diff_on_hotkey {
+                        ctx.request_external_diff("before", "after", "before.rs", "after.rs");
+                    }
                     if self.preserve_focus_on_hotkey {
                         ctx.focus(FocusRequest::Keep);
                     }
@@ -2369,6 +2483,7 @@ mod tests {
             propagation,
             clear: false,
             external_editor: None,
+            external_diff: None,
             clipboard: None,
             notifications: Vec::new(),
         }
@@ -2918,6 +3033,57 @@ mod tests {
         assert!(command.get_args().any(|arg| arg == "-u"));
         assert!(command.get_args().any(|arg| arg == "NONE"));
         assert!(command.get_args().any(|arg| arg == temp_path.as_os_str()));
+    }
+
+    #[test]
+    fn external_diff_command_delegates_tool_selection_to_git() {
+        let old_path = Path::new("/tmp/tuicore old.rs");
+        let new_path = Path::new("/tmp/tuicore new.rs");
+
+        let command = external_diff_command(old_path, new_path);
+        let args = command.get_args().collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "git");
+        assert_eq!(
+            args,
+            [
+                "difftool",
+                "--no-prompt",
+                "--no-index",
+                "--",
+                old_path.to_str().unwrap(),
+                new_path.to_str().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_temp_files_preserve_contents_and_label_extensions() {
+        let request = crate::ExternalDiffRequest {
+            old: "before".into(),
+            new: "after".into(),
+            old_label: "old.rs".into(),
+            new_label: "new.rs".into(),
+        };
+
+        let temp_files = create_diff_temp_files(&request).expect("diff temp files should exist");
+        let old_path = temp_files.old_path().to_owned();
+        let new_path = temp_files.new_path().to_owned();
+
+        assert_eq!(
+            old_path.extension().and_then(|value| value.to_str()),
+            Some("rs")
+        );
+        assert_eq!(
+            new_path.extension().and_then(|value| value.to_str()),
+            Some("rs")
+        );
+        assert_eq!(std::fs::read_to_string(&old_path).unwrap(), "before");
+        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), "after");
+
+        drop(temp_files);
+        assert!(!old_path.exists());
+        assert!(!new_path.exists());
     }
 
     #[test]
@@ -3485,7 +3651,7 @@ mod tests {
             .expect("hotkey action should be registered")
             .clone();
 
-        let (_, clipboard) = app.dispatch_hotkey_event_to_target(
+        let (_, _, clipboard) = app.dispatch_hotkey_event_to_target(
             &mut flags,
             &mut dispatcher,
             &target,
@@ -3493,6 +3659,49 @@ mod tests {
         );
 
         assert_eq!(clipboard.as_deref(), Some("agent command"));
+    }
+
+    #[test]
+    fn global_hotkey_dispatch_returns_external_diff_request() {
+        let mut app = TreeApp::new(HotkeyPrecedenceProbe {
+            hotkeys: vec!["do"],
+            external_diff_on_hotkey: true,
+            ..HotkeyPrecedenceProbe::default()
+        });
+        let mut layout_engine = LayoutEngine::new();
+        let mut focus_manager = FocusManager::new();
+        let mut dispatcher = TreeDispatcher::new();
+        let mut flags = app.mount_root();
+        app.layout_root(
+            &mut flags,
+            &mut focus_manager,
+            &mut layout_engine,
+            &mut dispatcher,
+            Rect::new(0, 0, 10, 1),
+        );
+        let target = layout_engine
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == "action")
+            .expect("hotkey action should be registered")
+            .clone();
+
+        let (_, external_diff, _) = app.dispatch_hotkey_event_to_target(
+            &mut flags,
+            &mut dispatcher,
+            &target,
+            HotkeyEvent::Commit("do".into()),
+        );
+
+        assert_eq!(
+            external_diff,
+            Some(crate::ExternalDiffRequest {
+                old: "before".into(),
+                new: "after".into(),
+                old_label: "before.rs".into(),
+                new_label: "after.rs".into(),
+            })
+        );
     }
 
     #[test]

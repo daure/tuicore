@@ -30,7 +30,7 @@ impl<M: 'static> DiffDemo<M> {
             wrap: Toggle::new("Wrap lines").checked(true),
             panel: Panel::new()
                 .top_left(title)
-                .bottom_left("20 rows · scroll to inspect")
+                .bottom_left("20 rows · Ctrl+O external diff")
                 .host(
                     DiffViewer::new(old, new)
                         .labels("before", "after")

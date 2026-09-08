@@ -20,6 +20,7 @@ pub struct DispatchEffects<M> {
     pub propagation: Propagation,
     pub clear: bool,
     pub external_editor: Option<crate::ExternalEditorRequest>,
+    pub external_diff: Option<crate::ExternalDiffRequest>,
     pub clipboard: Option<String>,
     pub notifications: Vec<Notification>,
 }
@@ -89,6 +90,7 @@ impl TreeDispatcher {
             propagation: Propagation::Continue,
             clear: false,
             external_editor: ctx.take_external_editor_request(),
+            external_diff: None,
             clipboard: None,
             notifications: Vec::new(),
         }
@@ -128,6 +130,7 @@ impl<M> DispatchEffects<M> {
             propagation: Propagation::Continue,
             clear: false,
             external_editor: None,
+            external_diff: None,
             clipboard: None,
             notifications: Vec::new(),
         }
@@ -142,6 +145,7 @@ impl<M> DispatchEffects<M> {
         let focus_repair = ctx.focus_repair();
         let propagation = ctx.propagation();
         let external_editor = ctx.take_external_editor_request();
+        let external_diff = ctx.take_external_diff_request();
         let clipboard = ctx.take_clipboard_request();
         let notifications = ctx.drain_notifications().collect();
         let messages = ctx.drain_messages().collect();
@@ -159,6 +163,7 @@ impl<M> DispatchEffects<M> {
             propagation,
             clear,
             external_editor,
+            external_diff,
             clipboard,
             notifications,
         }

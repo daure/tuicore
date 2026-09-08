@@ -4,7 +4,7 @@ use ratatui::{Frame, layout::Rect};
 
 use crate::animation::{AnimationSettings, TickResult};
 use crate::components::Notification;
-use crate::event::{ExternalEditorRequest, KeyEvent, TuiEvent};
+use crate::event::{ExternalDiffRequest, ExternalEditorRequest, KeyEvent, TuiEvent};
 use crate::overlay::{OverlayLayoutEntry, OverlayManager, OverlaySpec, RenderCtx};
 
 pub trait TuiNode<M = ()> {
@@ -149,6 +149,7 @@ pub struct EventCtx<M> {
     animation: AnimationSettings,
     clear: bool,
     external_editor: Option<ExternalEditorRequest>,
+    external_diff: Option<ExternalDiffRequest>,
     clipboard: Option<String>,
     notifications: Vec<Notification>,
     reveal_request: Option<(Rect, RevealAlignment)>,
@@ -345,6 +346,7 @@ impl<M> EventCtx<M> {
             animation,
             clear: false,
             external_editor: None,
+            external_diff: None,
             clipboard: None,
             notifications: Vec::new(),
             reveal_request: None,
@@ -408,6 +410,22 @@ impl<M> EventCtx<M> {
             line,
             col,
             file_extension: Some(file_extension.into()),
+        });
+        self.redraw = true;
+    }
+
+    pub fn request_external_diff(
+        &mut self,
+        old: impl Into<String>,
+        new: impl Into<String>,
+        old_label: impl Into<String>,
+        new_label: impl Into<String>,
+    ) {
+        self.external_diff = Some(ExternalDiffRequest {
+            old: old.into(),
+            new: new.into(),
+            old_label: old_label.into(),
+            new_label: new_label.into(),
         });
         self.redraw = true;
     }
@@ -482,6 +500,10 @@ impl<M> EventCtx<M> {
         self.external_editor.as_ref()
     }
 
+    pub fn external_diff_request(&self) -> Option<&ExternalDiffRequest> {
+        self.external_diff.as_ref()
+    }
+
     pub fn clipboard_request(&self) -> Option<&str> {
         self.clipboard.as_deref()
     }
@@ -517,6 +539,10 @@ impl<M> EventCtx<M> {
         }
         if let Some(request) = child.take_external_editor_request() {
             self.external_editor = Some(request);
+            self.request_redraw();
+        }
+        if let Some(request) = child.take_external_diff_request() {
+            self.external_diff = Some(request);
             self.request_redraw();
         }
         if let Some(value) = child.take_clipboard_request() {
@@ -560,6 +586,10 @@ impl<M> EventCtx<M> {
 
     pub(crate) fn take_external_editor_request(&mut self) -> Option<ExternalEditorRequest> {
         self.external_editor.take()
+    }
+
+    pub(crate) fn take_external_diff_request(&mut self) -> Option<ExternalDiffRequest> {
+        self.external_diff.take()
     }
 
     pub(crate) fn take_clipboard_request(&mut self) -> Option<String> {

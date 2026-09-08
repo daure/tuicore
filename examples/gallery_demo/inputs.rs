@@ -1,5 +1,19 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use tuicore::{Flex, FlexItem, Header, Paragraph, ParagraphOverflow};
+use tuicore::{ButtonGroup, ButtonGroupItem, Flex, FlexItem, Header, Paragraph, ParagraphOverflow};
+
+pub(crate) fn button_group_showcase<M>() -> ButtonGroup<&'static str, M> {
+    ButtonGroup::new([
+        ButtonGroupItem::new("success", "Success")
+            .prepend_icon("")
+            .hotkey("s"),
+        ButtonGroupItem::new("warning", "Warning")
+            .prepend_icon("")
+            .hotkey("w"),
+        ButtonGroupItem::new("prepend", "Prepend")
+            .prepend_icon("")
+            .hotkey("p"),
+    ])
+}
 
 pub(crate) fn typography_showcase<M: 'static>() -> Flex<M> {
     Flex::column()
@@ -79,6 +93,17 @@ pub(crate) fn toggle_layout(area: Rect) -> [Rect; 5] {
 }
 
 pub(crate) fn button_layout(area: Rect) -> [Rect; 3] {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(area)
+}
+
+pub(crate) fn button_group_layout(area: Rect) -> [Rect; 3] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([

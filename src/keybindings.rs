@@ -14,6 +14,7 @@ pub struct KeyBindings {
     tabs: TabsKeyBindings,
     toggle: ToggleKeyBindings,
     data_view: DataViewKeyBindings,
+    diff_viewer: DiffViewerKeyBindings,
     dropdown: DropdownKeyBindings,
     date_time_picker: DateTimePickerKeyBindings,
 }
@@ -81,6 +82,11 @@ pub struct DataViewKeyBindings {
     clear_filters: Vec<KeySpec>,
     top_prefix: Vec<KeySpec>,
     bottom: Vec<KeySpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffViewerKeyBindings {
+    external_diff: Vec<KeySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,6 +220,17 @@ impl Default for DataViewKeyBindings {
     }
 }
 
+impl Default for DiffViewerKeyBindings {
+    fn default() -> Self {
+        Self {
+            external_diff: vec![KeySpec::key_with_modifiers(
+                Key::Char('o'),
+                KeyModifiers::CONTROL,
+            )],
+        }
+    }
+}
+
 impl Default for DropdownKeyBindings {
     fn default() -> Self {
         Self {
@@ -273,6 +290,7 @@ impl Default for KeyBindings {
             tabs: TabsKeyBindings::default(),
             toggle: ToggleKeyBindings::default(),
             data_view: DataViewKeyBindings::default(),
+            diff_viewer: DiffViewerKeyBindings::default(),
             dropdown: DropdownKeyBindings::default(),
             date_time_picker: DateTimePickerKeyBindings::default(),
         }
@@ -423,6 +441,12 @@ impl KeyBindings {
             "bottom",
             &mut bindings.data_view.bottom,
         )?;
+        set_keys(
+            &value,
+            "diff_viewer",
+            "external_diff",
+            &mut bindings.diff_viewer.external_diff,
+        )?;
         set_keys(&value, "dropdown", "next", &mut bindings.dropdown.next)?;
         set_keys(
             &value,
@@ -531,6 +555,10 @@ impl KeyBindings {
 
     pub fn data_view(&self) -> &DataViewKeyBindings {
         &self.data_view
+    }
+
+    pub fn diff_viewer(&self) -> &DiffViewerKeyBindings {
+        &self.diff_viewer
     }
 
     pub fn button(&self) -> &ButtonKeyBindings {
@@ -849,6 +877,18 @@ impl KeyBindings {
 
     pub fn with_data_view_bottom(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.set_data_view_bottom(keys);
+        self
+    }
+
+    pub fn set_diff_viewer_external_diff(&mut self, keys: impl IntoIterator<Item = KeySpec>) {
+        self.diff_viewer.external_diff = keys.into_iter().collect();
+    }
+
+    pub fn with_diff_viewer_external_diff(
+        mut self,
+        keys: impl IntoIterator<Item = KeySpec>,
+    ) -> Self {
+        self.set_diff_viewer_external_diff(keys);
         self
     }
 
@@ -1285,6 +1325,16 @@ impl DataViewKeyBindings {
 
     pub fn bottom_matches(&self, key: impl Into<KeyEvent>) -> bool {
         matches_any(&self.bottom, key.into())
+    }
+}
+
+impl DiffViewerKeyBindings {
+    pub fn external_diff_matches(&self, key: impl Into<KeyEvent>) -> bool {
+        matches_any(&self.external_diff, key.into())
+    }
+
+    pub fn external_diff_label(&self) -> String {
+        labels(&self.external_diff)
     }
 }
 
@@ -1875,6 +1925,9 @@ mod tests {
             top_prefix = "g"
             bottom = "shift+g"
 
+            [diff_viewer]
+            external_diff = "ctrl+x"
+
             [dropdown]
             next = "ctrl+j"
             previous = "ctrl+k"
@@ -1993,6 +2046,10 @@ mod tests {
             code: Key::Char('G'),
             modifiers: KeyModifiers::SHIFT,
         }));
+        assert!(bindings.diff_viewer().external_diff_matches(KeyEvent {
+            code: Key::Char('x'),
+            modifiers: KeyModifiers::CONTROL,
+        }));
         assert!(bindings.dropdown().next_matches(KeyEvent {
             code: Key::Char('j'),
             modifiers: KeyModifiers::CONTROL,
@@ -2067,6 +2124,7 @@ mod tests {
             .with_data_view_filter([KeySpec::plain('f')])
             .with_data_view_top_prefix([KeySpec::plain('t')])
             .with_data_view_bottom([KeySpec::plain('b')])
+            .with_diff_viewer_external_diff([KeySpec::plain('o')])
             .with_dropdown_next([KeySpec::plain('j')])
             .with_dropdown_previous([KeySpec::plain('k')])
             .with_dropdown_page_next([KeySpec::plain('d')])
@@ -2176,6 +2234,7 @@ mod tests {
             code: Key::Char('b'),
             modifiers: KeyModifiers::NONE,
         }));
+        assert!(bindings.diff_viewer().external_diff_matches(Key::Char('o')));
         assert!(bindings.dropdown().next_matches(KeyEvent {
             code: Key::Char('j'),
             modifiers: KeyModifiers::NONE,
@@ -2255,6 +2314,18 @@ mod tests {
             code: Key::Char(' '),
             modifiers: KeyModifiers::CONTROL,
         }));
+    }
+
+    #[test]
+    fn default_diff_viewer_external_diff_binding_is_ctrl_o() {
+        assert!(
+            KeyBindings::default()
+                .diff_viewer()
+                .external_diff_matches(KeyEvent {
+                    code: Key::Char('o'),
+                    modifiers: KeyModifiers::CONTROL,
+                })
+        );
     }
 
     #[test]

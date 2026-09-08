@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Key, KeyEvent, KeyModifiers, ScrollOffset, ScrollbarVisibility};
+use crate::{Key, KeyEvent, KeyModifiers, Propagation, ScrollOffset, ScrollbarVisibility};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
@@ -976,4 +976,30 @@ fn clearing_diff_search_reanchors_navigation_to_the_selected_line() {
     assert_eq!(viewer.selected_location(), Some(selected));
     assert!(viewer.scroll.offset().y > offset_above);
     assert_eq!(viewer.scroll.offset().y, expected);
+}
+
+#[test]
+fn focused_ctrl_o_requests_external_diff_with_current_text_and_labels() {
+    let mut viewer = DiffViewer::new("before\n", "after\n")
+        .labels("before.rs", "after.rs")
+        .focused(true);
+    let mut ctx = EventCtx::default();
+
+    let outcome = <DiffViewer as TuiNode<()>>::event(
+        &mut viewer,
+        &TuiEvent::Key(modified_key(Key::Char('o'), KeyModifiers::CONTROL)),
+        &mut ctx,
+    );
+
+    assert_eq!(outcome, EventOutcome::Handled);
+    assert_eq!(ctx.propagation(), Propagation::Stopped);
+    assert_eq!(
+        ctx.external_diff_request(),
+        Some(&crate::ExternalDiffRequest {
+            old: "before\n".into(),
+            new: "after\n".into(),
+            old_label: "before.rs".into(),
+            new_label: "after.rs".into(),
+        })
+    );
 }

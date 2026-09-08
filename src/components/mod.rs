@@ -1,4 +1,5 @@
 mod button;
+mod button_group;
 mod calendar;
 mod checklist;
 mod chip;
@@ -47,6 +48,7 @@ pub use ai_dock::{AiDock, AiDockKeyBindings, LlmEvent, LlmEventKind, ToolPolicy}
 pub use crate::separator::{GridSeparatorAxes, GridSeparators, Separator, SeparatorColorRole};
 pub use crate::spacing::{Gap, Padding};
 pub use button::{Button, ButtonOutcome};
+pub use button_group::{ButtonGroup, ButtonGroupItem, ButtonGroupOutcome};
 pub use calendar::{
     Calendar, CalendarEntryRole, CalendarKeyBindings, CalendarOutcome, CalendarSpan,
     CalendarTypedEvent, CalendarView,

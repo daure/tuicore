@@ -25,8 +25,9 @@ Prefer `TreeApp::new(root).run()`; configure `animation_settings`, `terminal_foc
 `runtime_keybindings`, `initial_focus`, `on_message`, `on_notification`, and `notifications`.
 `run(root)` is shorthand for `TuiNode<()>`. `TerminalFocusEffect` is `Disabled` or
 `Dim(FocusDimSettings)`. `EventCtx` emits messages and requests focus, redraw, layout, clear, quit,
-notifications, clipboard, or external-editor work. `FocusCtx` and `LifecycleCtx` expose relevant
-subsets. `EventOutcome::{Ignored, Handled}` and `Propagation::{Continue, Stopped}` describe routing.
+notifications, clipboard, external-editor work, or external diffs. `FocusCtx` and `LifecycleCtx`
+expose relevant subsets. `EventOutcome::{Ignored, Handled}` and `Propagation::{Continue, Stopped}`
+describe routing.
 Cursor-owning children can request an ancestor viewport reveal with `EventCtx::request_reveal` or
 `request_reveal_centered`; only events initiate these requests.
 
@@ -40,7 +41,8 @@ Measurement vocabulary: `AxisProposal`, `LayoutProposal`, `LayoutSize`, `AxisExp
 `HitRegion`. Input values are `KeyEvent`, `Key`, `KeyModifiers`, `MouseEvent`, `MouseEventKind`,
 `MouseButton`, `HotkeyEvent`, `ExternalEditorRequest`, `ExternalEditorResponse`, and
 `UnsupportedEvent`. Mouse capture is enabled by `TreeApp`: interactive components register hit
-regions during layout, handle state changes in `event`, and keep render pure. Built-in buttons,
+regions during layout, handle state changes in `event`, and keep render pure. `ExternalDiffRequest`
+passes two labeled text snapshots to Git's configured difftool. Built-in buttons,
 text inputs, toggles, dropdowns, menus, calendars, tabs, DataViews, panels, and scroll containers
 accept basic clicks or wheel scrolling.
 
@@ -101,6 +103,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `disabled(bool)`/`set_disabled` and inspect it with `is_disabled`. Disabled buttons use muted
   styling, skip focus traversal and hotkeys, and ignore presses. Direct operations return
   `ButtonOutcome`. `HotkeyLabelMode` controls label rendering.
+- `ButtonGroup<Id, M>`: one selected action from `ButtonGroupItem::new(id, label)` values. Items
+  configure a Nerd Font icon and hotkey; Left/Right or h/l selects while focused, clicks and item
+  hotkeys select directly, and `on_select` emits the selected ID.
 - `Toggle<M>`: `new(label)`, checked/value/style/hotkey/`on_change`; `ToggleStyle`, `ToggleOutcome`.
 - `TextInput<M>` / `PasswordInput<M>`: `new`, value, placeholder, panel/style, hotkey, focus,
   max length, optional ASCII digit-only input via `numbers_only(true)`, submit/change/edit-end
@@ -209,6 +214,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   left, right, or bottom border. Types: `TabsSelectionMemory`, `ModalCloseReason`.
 - `FormField<C, M>`: `new(label, child)`, embedded mode, error and child access.
 - `Chip`: `new(label)`, icons and `ChipColorRole`. `Header`: `new(text)`, optional icon.
+- `DiffViewer`: side-by-side, inline, word, or raw-patch views with selection, search, scrolling,
+  and `Ctrl+O` external diff through Git's configured `diff.tool`. Types: `DiffStyle`,
+  `DiffLocation`, `DiffViewerKeyBindings`.
 - `Image`: `from_path`, `from_url`, `from_base64`, or `from_bytes`; configure fit-content
   dimensions with `size`. The default `ImageProtocol::Auto` selects a compatible graphics backend;
   `ImageProtocol::Kitty` uses renderer-owned direct placements, while `KittyPlaceholder` uses
