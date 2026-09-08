@@ -292,12 +292,12 @@ impl<Id, M> ButtonGroup<Id, M> {
             (theme.highlight_bg(), theme.highlight_fg())
         } else if index.is_multiple_of(2) {
             (
-                lerp_color(theme.surface_bg(), theme.background_bg(), 0.2),
+                lerp_color(theme.surface_bg(), theme.background_bg(), 0.05),
                 theme.text_fg(),
             )
         } else {
             (
-                lerp_color(theme.surface_bg(), theme.text_fg(), 0.2),
+                lerp_color(theme.surface_bg(), theme.text_fg(), 0.05),
                 theme.text_fg(),
             )
         }
@@ -502,7 +502,7 @@ mod tests {
         let right_cap = terminal.backend().buffer().cell((32, 0)).unwrap();
         assert_eq!(
             right_cap.fg,
-            lerp_color(theme().surface_bg(), theme().background_bg(), 0.2)
+            lerp_color(theme().surface_bg(), theme().background_bg(), 0.05)
         );
         let selected = terminal.backend().buffer().cell((3, 0)).unwrap();
         let light = terminal.backend().buffer().cell((14, 0)).unwrap();
@@ -511,11 +511,11 @@ mod tests {
         assert!(selected.modifier.contains(Modifier::BOLD));
         assert_eq!(
             light.bg,
-            lerp_color(theme().surface_bg(), theme().text_fg(), 0.2)
+            lerp_color(theme().surface_bg(), theme().text_fg(), 0.05)
         );
         assert_eq!(
             dark.bg,
-            lerp_color(theme().surface_bg(), theme().background_bg(), 0.2)
+            lerp_color(theme().surface_bg(), theme().background_bg(), 0.05)
         );
         assert_ne!(light.bg, dark.bg);
     }
