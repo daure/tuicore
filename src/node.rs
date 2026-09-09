@@ -41,6 +41,11 @@ pub trait TuiNode<M = ()> {
         None
     }
 
+    /// Root-owned asynchronous clipboard output, drained by TreeApp after ticks.
+    fn take_pending_clipboard_request(&mut self) -> Option<String> {
+        None
+    }
+
     fn focus(&mut self, _target: Option<&FocusId>, _focused: bool, _ctx: &mut FocusCtx<M>) {}
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
@@ -101,6 +106,10 @@ where
 
     fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
         self.as_mut().take_pending_focus_request()
+    }
+
+    fn take_pending_clipboard_request(&mut self) -> Option<String> {
+        self.as_mut().take_pending_clipboard_request()
     }
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {

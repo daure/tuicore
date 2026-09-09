@@ -324,6 +324,7 @@ fn render_frame<N, M>(frame: &mut ratatui::Frame<'_>, root: &N, area: Rect) -> G
 where
     N: TuiNode<M>,
 {
+    let area = area.intersection(frame.area());
     frame
         .buffer_mut()
         .set_style(area, Style::default().bg(theme().background_bg()));
@@ -344,6 +345,7 @@ fn render_frame_with_toasts_and_fade<N, M>(
 where
     N: TuiNode<M>,
 {
+    let area = area.intersection(frame.area());
     let graphics = render_frame(frame, root, area);
     toasts.render(frame, area);
     restore_theme_background(frame, area);
@@ -436,6 +438,28 @@ mod tests {
         assert_eq!(buffer.cell((1, 1)).unwrap().bg, expected);
         assert_eq!(buffer.cell((3, 2)).unwrap().bg, expected);
         assert_eq!(buffer.cell((0, 0)).unwrap().bg, Color::Reset);
+    }
+
+    #[test]
+    fn runtime_clips_a_stale_render_area_to_the_frame() {
+        let mut terminal = Terminal::new(TestBackend::new(5, 4)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| {
+                render_frame_with_toasts_and_fade(
+                    frame,
+                    &EmptyNode,
+                    &ToastRack::new(),
+                    Rect::new(0, 0, 6, 4),
+                    0.5,
+                );
+            })
+            .expect("frame should render");
+
+        assert_eq!(
+            terminal.backend().buffer().cell((4, 3)).unwrap().bg,
+            theme().background_bg()
+        );
     }
 
     #[test]

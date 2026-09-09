@@ -27,6 +27,9 @@ use super::{
 };
 
 type MessageHandler<N, M> = dyn FnMut(&mut N, M, &mut EventCtx<M>);
+#[cfg(test)]
+#[path = "tests/background_clipboard.rs"]
+mod background_clipboard_tests;
 type NotificationHandler<N, M> = dyn FnMut(&mut N, Notification, &mut EventCtx<M>);
 
 pub struct TreeApp<N, M = ()> {
@@ -303,10 +306,29 @@ where
                 if flags.focus_request.is_none() {
                     flags.focus_request = self.root.take_pending_focus_request();
                 }
+                self.flush_pending_clipboard(flags, |value| {
+                    write_clipboard_osc52(terminal, value)?;
+                    terminal.terminal_mut().backend_mut().flush()
+                });
             }
         }
 
         Ok(())
+    }
+
+    fn flush_pending_clipboard(
+        &mut self,
+        flags: &mut RuntimeFlags,
+        write: impl FnOnce(&str) -> std::io::Result<()>,
+    ) {
+        let Some(value) = self.root.take_pending_clipboard_request() else {
+            return;
+        };
+        let notification = match write(&value) {
+            Ok(()) => Notification::info("Copied to clipboard", format!("\"{value}\"")),
+            Err(error) => Notification::error("Copy failed", error.to_string()),
+        };
+        self.handle_notifications(flags, VecDeque::from([notification]));
     }
 
     fn mount_root(&mut self) -> RuntimeFlags {
@@ -1023,6 +1045,7 @@ where
                 if flags.focus_request.is_none() {
                     flags.focus_request = self.root.take_pending_focus_request();
                 }
+                self.flush_pending_clipboard(&mut flags, |_| Ok(()));
             }
         }
 

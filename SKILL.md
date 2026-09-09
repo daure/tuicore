@@ -28,6 +28,8 @@ Prefer `TreeApp::new(root).run()`; configure `animation_settings`, `terminal_foc
 notifications, clipboard, external-editor work, or external diffs. `FocusCtx` and `LifecycleCtx`
 expose relevant subsets. `EventOutcome::{Ignored, Handled}` and `Propagation::{Continue, Stopped}`
 describe routing.
+For asynchronous copying, the root implements `take_pending_clipboard_request()` and schedules ticks
+while awaiting output. `TreeApp` writes the returned text and then emits the clipboard notification.
 Cursor-owning children can request an ancestor viewport reveal with `EventCtx::request_reveal` or
 `request_reveal_centered`; only events initiate these requests.
 
