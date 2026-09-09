@@ -1229,19 +1229,24 @@ fn trim_cells(line: &str, skip: usize, width: usize) -> String {
 }
 
 fn truncate_cells(value: &str, max_width: usize) -> String {
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let content_width = max_width.saturating_sub(4);
     let mut width = 0;
     let mut truncated = String::new();
 
     for ch in value.chars() {
         let ch_width = char_width(ch);
-        if ch_width > 0 && width + ch_width > max_width {
+        if ch_width > 0 && width + ch_width > content_width {
             break;
         }
         width += ch_width;
         truncated.push(ch);
     }
 
-    truncated
+    format!("{truncated}... ")
 }
 
 fn char_width(ch: char) -> usize {
@@ -1782,6 +1787,24 @@ mod tests {
             .map(|x| buffer.cell((x, 0)).unwrap().symbol())
             .collect::<String>();
         assert_eq!(top, "┌─ Processes ──────────┐");
+    }
+
+    #[test]
+    fn top_titles_ellipsize_when_overflowing() {
+        let panel = Panel::<()>::new()
+            .top_left("A title that overflows")
+            .border(BorderKind::Plain);
+        let mut terminal = Terminal::new(TestBackend::new(24, 2)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| panel.render(frame, frame.area()))
+            .expect("panel should render");
+
+        let buffer = terminal.backend().buffer();
+        let top = (0..24)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert_eq!(top, "┌─ A title that ov... ─┐");
     }
 
     #[test]
