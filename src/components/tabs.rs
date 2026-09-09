@@ -1879,6 +1879,13 @@ where
             .merge(hotkey_tick)
     }
 
+    fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        let key = self.selected_key()?.clone();
+        self.bodies
+            .get_mut(&key)
+            .and_then(|slot| slot.child_mut().take_pending_focus_request())
+    }
+
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.set_focused(focused, ctx.animation());
         ctx.request_redraw();
@@ -2029,6 +2036,22 @@ mod tests {
         ticks: Rc<RefCell<usize>>,
     }
 
+    struct PendingFocusProbe {
+        pending_focus: Option<FocusRequest>,
+    }
+
+    impl TuiNode<()> for PendingFocusProbe {
+        fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+            LayoutResult::new(area)
+        }
+
+        fn render(&self, _frame: &mut Frame, _area: Rect, _ctx: &mut crate::RenderCtx<'_>) {}
+
+        fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+            self.pending_focus.take()
+        }
+    }
+
     impl TuiNode<()> for TickProbe {
         fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
             ctx.register_focusable(FocusId::new("body"), area, true);
@@ -2041,6 +2064,22 @@ mod tests {
             *self.ticks.borrow_mut() += 1;
             TickResult::IDLE
         }
+    }
+
+    #[test]
+    fn forwards_pending_focus_from_the_selected_body() {
+        let mut tabs = Tabs::new(vec![Tab::new(
+            "One",
+            PendingFocusProbe {
+                pending_focus: Some(FocusRequest::Target(FocusId::new("body"))),
+            },
+        )]);
+
+        assert_eq!(
+            tabs.take_pending_focus_request(),
+            Some(FocusRequest::Target(FocusId::new("body")))
+        );
+        assert_eq!(tabs.take_pending_focus_request(), None);
     }
 
     #[test]

@@ -129,6 +129,7 @@ pub struct Dropdown<T, Id> {
     commit_mode: DropdownCommitMode,
     close_on_select: bool,
     max_popup_height: Option<u16>,
+    max_popup_width: Option<u16>,
     auto_focus_search: bool,
     placeholder: String,
     variant: DropdownVariant,
@@ -143,6 +144,8 @@ pub struct Dropdown<T, Id> {
     bottom_left: Option<String>,
     bottom_left_style: Option<Style>,
     field_text_style: Option<Style>,
+    field_padding_left: u16,
+    selected_label_by: Option<Box<dyn Fn(&str) -> String>>,
     selected_style_by: Option<Box<dyn Fn(&Id) -> Option<Style>>>,
     show_multi_labels: bool,
     hotkey: Option<String>,
@@ -273,6 +276,7 @@ where
             commit_mode: DropdownCommitMode::Explicit,
             close_on_select: !multi,
             max_popup_height: None,
+            max_popup_width: None,
             auto_focus_search: true,
             placeholder: String::from("Select..."),
             variant: DropdownVariant::Bordered,
@@ -287,6 +291,8 @@ where
             bottom_left: None,
             bottom_left_style: None,
             field_text_style: None,
+            field_padding_left: 0,
+            selected_label_by: None,
             selected_style_by: None,
             show_multi_labels: false,
             hotkey: None,
@@ -374,6 +380,11 @@ where
 
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
+        self
+    }
+
+    pub fn field_padding_left(mut self, padding: u16) -> Self {
+        self.field_padding_left = padding;
         self
     }
 
@@ -476,6 +487,19 @@ where
         self.max_popup_height
     }
 
+    pub fn max_popup_width(mut self, width: u16) -> Self {
+        self.set_max_popup_width(width);
+        self
+    }
+
+    pub fn set_max_popup_width(&mut self, width: u16) {
+        self.max_popup_width = Some(width.max(1));
+    }
+
+    pub fn configured_max_popup_width(&self) -> Option<u16> {
+        self.max_popup_width
+    }
+
     pub fn auto_focus_search(mut self, auto_focus: bool) -> Self {
         self.auto_focus_search = auto_focus;
         self
@@ -531,6 +555,11 @@ where
 
     pub fn clear_field_text_style(&mut self) {
         self.field_text_style = None;
+    }
+
+    pub fn selected_label_by(mut self, formatter: impl Fn(&str) -> String + 'static) -> Self {
+        self.selected_label_by = Some(Box::new(formatter));
+        self
     }
 
     pub fn set_selected_style_by(&mut self, style: impl Fn(&Id) -> Option<Style> + 'static) {
@@ -1358,6 +1387,7 @@ where
         let labels = ids
             .iter()
             .filter_map(|id| self.label_for(id))
+            .map(|label| self.format_selected_label(label))
             .collect::<Vec<_>>();
         if labels.is_empty() {
             self.placeholder.clone()
@@ -1383,7 +1413,7 @@ where
                 .as_ref()
                 .and_then(|style| style(id))
                 .unwrap_or(default_style);
-            spans.push(Span::styled(label, style));
+            spans.push(Span::styled(self.format_selected_label(label), style));
         }
         spans
     }
@@ -1421,6 +1451,13 @@ where
             .map(|index| self.labels[index].clone())
     }
 
+    fn format_selected_label(&self, label: String) -> String {
+        match self.selected_label_by.as_ref() {
+            Some(formatter) => formatter(&label),
+            None => label,
+        }
+    }
+
     #[cfg(test)]
     fn areas(&self, area: Rect) -> [Rect; 2] {
         let field_area = self.field_area(area);
@@ -1448,7 +1485,7 @@ where
         }
 
         if self.centered {
-            let popup_width = field_area.width.max(40).min(bounds.width);
+            let popup_width = self.centered_popup_width(field_area, bounds);
             let popup_height = self
                 .popup_content_height(popup_width)
                 .min(self.effective_max_popup_height())
@@ -1459,8 +1496,9 @@ where
             return clip_rect(popup_area, bounds);
         }
 
+        let popup_width = self.popup_width(field_area, bounds);
         let desired_height = self
-            .popup_content_height(field_area.width)
+            .popup_content_height(popup_width)
             .min(self.effective_max_popup_height());
         let direction = self.resolved_popup_direction(field_area, bounds, desired_height);
         let (popup_y, available_height) = match direction {
@@ -1480,9 +1518,36 @@ where
             }
         };
         let popup_height = desired_height.min(available_height);
-        let popup_area = Rect::new(field_area.x, popup_y, field_area.width, popup_height);
+        let popup_x = field_area
+            .x
+            .min(
+                bounds
+                    .x
+                    .saturating_add(bounds.width)
+                    .saturating_sub(popup_width),
+            )
+            .max(bounds.x);
+        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
 
         clip_rect(popup_area, bounds)
+    }
+
+    fn centered_popup_width(&self, field_area: Rect, bounds: Rect) -> u16 {
+        if self.max_popup_width.is_some() {
+            self.popup_width(field_area, bounds)
+        } else {
+            field_area.width.max(40).min(bounds.width)
+        }
+    }
+
+    fn popup_width(&self, field_area: Rect, bounds: Rect) -> u16 {
+        let Some(max_popup_width) = self.max_popup_width else {
+            return field_area.width.min(bounds.width);
+        };
+        let maximum = max_popup_width.max(field_area.width).min(bounds.width);
+        self.measured_popup_width()
+            .max(field_area.width)
+            .min(maximum)
     }
 
     fn resolved_popup_direction(
@@ -1570,14 +1635,30 @@ where
         content_width > viewport_width as usize
     }
 
+    fn measured_popup_width(&self) -> u16 {
+        let prefix_width = if self.multi { 2 } else { 0 };
+        let content_width = self
+            .labels
+            .iter()
+            .map(|label| line_width(&Line::from(label.as_str())).saturating_add(prefix_width))
+            .max()
+            .unwrap_or_else(|| line_width(&Line::from("No results")));
+        content_width
+            .saturating_add(usize::from(self.popup_has_border()) * 2)
+            .min(u16::MAX as usize) as u16
+    }
+
     fn measured_field_width(&self) -> u16 {
-        let summary_width = line_width(&Line::from(self.selected_summary()));
+        let summary_width = line_width(&Line::from(self.selected_summary()))
+            .saturating_add(usize::from(self.field_padding_left));
         let mut width = match self.variant {
             DropdownVariant::Bordered => summary_width.saturating_add(5),
             DropdownVariant::Filled
                 if self.alt_style && self.label_position == DropdownLabelPosition::Inline =>
             {
-                line_width(&self.inline_filled_line(Style::default())).saturating_add(2)
+                line_width(&self.inline_filled_line(Style::default()))
+                    .saturating_add(usize::from(self.field_padding_left))
+                    .saturating_add(2)
             }
             DropdownVariant::Filled if self.alt_style => summary_width.saturating_add(2),
             DropdownVariant::Filled => {

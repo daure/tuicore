@@ -127,8 +127,10 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   searchable, and navigable while locking committed selection and `on_select` callbacks. Search results can require `min_search_chars`, be capped with `max_filtered_items`,
   and use `visible_without_search` for a default subset before querying all options. Replace options
   with `set_rows` while preserving open/query state, and set a query programmatically with
-  `set_search_query`. Switch matching at runtime with `set_search_mode`.
-  `DropdownSearchMode::External` keeps search input active but disables local filtering and match
+   `set_search_query`. Switch matching at runtime with `set_search_mode`.
+   Set `max_popup_width` to keep the popup at least as wide as its field while expanding to its
+   widest row up to the configured cap; without it, the popup matches the field width.
+   `DropdownSearchMode::External` keeps search input active but disables local filtering and match
   highlighting so a remote service can own results. Configure its loading state with
   `external_loading`/`set_external_loading` and a custom message with
   `external_loading_message`/`set_external_loading_message`; loading renders the shared `Spinner`.

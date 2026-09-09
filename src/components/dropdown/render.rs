@@ -53,7 +53,7 @@ where
         let popup_area = self.popup_area_for(field_area, bounds);
         if !popup_area.is_empty() {
             let desired_height = self
-                .popup_content_height(field_area.width)
+                .popup_content_height(popup_area.width)
                 .min(self.effective_max_popup_height());
             let popup_direction = self.resolved_popup_direction(field_area, bounds, desired_height);
             let backdrop = self.backdrop_tween.value();
@@ -183,9 +183,12 @@ where
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let text_area = Rect::new(
-            inner.x,
+            inner.x.saturating_add(self.field_padding_left),
             inner.y,
-            inner.width.saturating_sub(3),
+            inner
+                .width
+                .saturating_sub(3)
+                .saturating_sub(self.field_padding_left),
             inner.height,
         );
         let text = if self.committed.is_empty() {
@@ -305,6 +308,12 @@ where
                 1,
             )
         };
+        let text_area = Rect::new(
+            text_area.x.saturating_add(self.field_padding_left),
+            text_area.y,
+            text_area.width.saturating_sub(self.field_padding_left),
+            text_area.height,
+        );
         if !text_area.is_empty() {
             let text = if inline_trigger {
                 self.inline_filled_line(base_style)

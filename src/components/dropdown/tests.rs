@@ -51,6 +51,25 @@ fn multi_summary_can_show_and_style_each_selected_label() {
     );
 }
 
+#[test]
+fn selected_summary_can_use_a_compact_label() {
+    let dropdown = multi_dropdown()
+        .selected(["Alpha"])
+        .selected_label_by(|label| label[..1].to_owned());
+    let area = Rect::new(0, 0, 30, 3);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, area))
+        .unwrap();
+
+    let row = (0..area.width)
+        .map(|x| terminal.backend().buffer().cell((x, 1)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.contains("A"));
+    assert!(!row.contains("Alpha"));
+}
+
 fn numeric_dropdown(count: u8) -> Dropdown<u8, u8> {
     Dropdown::single(0..count, |row| *row, |row| row.to_string())
 }
@@ -1637,6 +1656,61 @@ fn filled_alt_top_label_trigger_has_no_leading_padding() {
 }
 
 #[test]
+fn field_padding_left_insets_filled_placeholders_and_selected_values() {
+    let placeholder = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .alt_style(true)
+        .label_position(DropdownLabelPosition::Inline)
+        .placeholder("Items")
+        .field_padding_left(1);
+    let selected = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .alt_style(true)
+        .label_position(DropdownLabelPosition::Inline)
+        .field_padding_left(1)
+        .selected_one("Alpha");
+    let area = Rect::new(0, 0, 16, 1);
+
+    for (dropdown, expected) in [(&placeholder, "I"), (&selected, "A")] {
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("terminal should build");
+        terminal
+            .draw(|frame| render_dropdown(dropdown, frame, area))
+            .expect("dropdown should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), " ");
+        assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), expected);
+    }
+}
+
+#[test]
+fn field_padding_left_preserves_an_inline_hotkey_closer() {
+    let dropdown = single_dropdown()
+        .variant(DropdownVariant::Filled)
+        .alt_style(true)
+        .label_position(DropdownLabelPosition::Inline)
+        .placeholder("Type")
+        .field_padding_left(1)
+        .hotkey("t");
+    let width = <Dropdown<_, _> as TuiNode<()>>::measure(&dropdown, LayoutProposal::unbounded())
+        .preferred
+        .width;
+    let area = Rect::new(0, 0, width, 1);
+    let mut terminal =
+        Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, area))
+        .expect("dropdown should render");
+
+    let row = (0..area.width)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert!(row.starts_with(" Type |t|"));
+}
+
+#[test]
 fn placeholder_renders_in_field_while_no_selection_text_renders_in_popup() {
     let mut dropdown = single_dropdown()
         .variant(DropdownVariant::Filled)
@@ -2577,6 +2651,41 @@ fn max_popup_height_overrides_preset_max() {
     let area = open_list_area(&mut dropdown, Rect::new(0, 0, 24, 60));
 
     assert_eq!(area.height, 2);
+}
+
+#[test]
+fn max_popup_width_grows_to_the_widest_row_up_to_its_cap() {
+    let mut dropdown =
+        Dropdown::single(["12345678901234567890"], |row| *row, |row| row.to_string())
+            .max_popup_width(18);
+    dropdown.open();
+    layout_dropdown(
+        &mut dropdown,
+        Rect::new(0, 0, 8, 3),
+        Rect::new(0, 0, 30, 20),
+    );
+
+    assert_eq!(
+        dropdown.popup_overlay_area(Rect::new(0, 0, 30, 20)).width,
+        18
+    );
+}
+
+#[test]
+fn max_popup_width_preserves_the_field_width() {
+    let mut dropdown =
+        Dropdown::single(["Small"], |row| *row, |row| row.to_string()).max_popup_width(8);
+    dropdown.open();
+    layout_dropdown(
+        &mut dropdown,
+        Rect::new(0, 0, 12, 3),
+        Rect::new(0, 0, 30, 20),
+    );
+
+    assert_eq!(
+        dropdown.popup_overlay_area(Rect::new(0, 0, 30, 20)).width,
+        12
+    );
 }
 
 #[test]
