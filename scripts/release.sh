@@ -10,15 +10,6 @@ commit and annotated tag, publish to crates.io, and push to origin.
 EOF
 }
 
-confirm() {
-    local prompt="$1"
-    local answer
-
-    [[ -t 0 ]] || return 1
-    read -r -p "$prompt [y/N] " answer || return 1
-    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
-}
-
 case "${1:-minor}" in
     -h|--help)
         usage
@@ -172,11 +163,7 @@ cargo test
 
 printf '\nVersion: %s -> %s\n' "$old_version" "$new_version"
 git --no-pager diff -- Cargo.toml Cargo.lock
-printf 'Next: create commit %q, then validate the clean crates.io package.\n' "release: $tag"
-if ! confirm "Commit, tag, and publish $tag to crates.io?"; then
-    printf 'Release canceled; version changes remain in working tree.\n' >&2
-    exit 1
-fi
+printf 'Creating commit %q, then validating the clean crates.io package.\n' "release: $tag"
 
 git add Cargo.toml Cargo.lock
 git commit -m "release: $tag"
