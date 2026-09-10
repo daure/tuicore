@@ -62,6 +62,8 @@ impl DialogKeyBindings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DialogTitle {
     text: String,
+    muted_prefix: Option<String>,
+    ellipsize: bool,
 }
 
 pub struct DialogAction<M = ()> {
@@ -133,6 +135,15 @@ impl<M> Dialog<M> {
 
     pub fn set_top_left(&mut self, title: impl Into<String>) {
         self.top_left = Some(DialogTitle::standard(title));
+    }
+
+    pub fn top_left_keyed(mut self, key: impl Into<String>, title: impl Into<String>) -> Self {
+        self.set_top_left_keyed(key, title);
+        self
+    }
+
+    pub fn set_top_left_keyed(&mut self, key: impl Into<String>, title: impl Into<String>) {
+        self.top_left = Some(DialogTitle::keyed(key, title));
     }
 
     pub fn top_right(mut self, title: impl Into<String>) -> Self {
@@ -682,6 +693,8 @@ impl<M> Dialog<M> {
                 .map(DialogAction::display_label)
                 .collect::<Vec<_>>()
                 .join(" · "),
+            muted_prefix: None,
+            ellipsize: false,
         };
         self.render_plain_title(
             frame,
@@ -706,8 +719,12 @@ impl<M> Dialog<M> {
             return;
         }
         let max_width = area.width.saturating_sub(4 + reserved_right) as usize;
-        let title = bounded_title(&title.text, max_width);
-        let width = line_width(&Line::from(title.as_str())).min(u16::MAX as usize) as u16;
+        let title_text = if title.ellipsize {
+            bounded_title_with_ellipsis(&title.text, max_width)
+        } else {
+            bounded_title(&title.text, max_width)
+        };
+        let width = line_width(&Line::from(title_text.as_str())).min(u16::MAX as usize) as u16;
         if width == 0 {
             return;
         }
@@ -723,10 +740,21 @@ impl<M> Dialog<M> {
         let style = Style::default()
             .fg(self.visible_title_color())
             .add_modifier(Modifier::BOLD);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(title, style))),
-            Rect::new(x, y, width, 1),
-        );
+        let line = if let Some(prefix) = &title.muted_prefix {
+            let prefix_chars = prefix.chars().count().saturating_add(1);
+            let split = title_text
+                .char_indices()
+                .nth(prefix_chars)
+                .map_or(title_text.len(), |(index, _)| index);
+            let (prefix, remainder) = title_text.split_at(split);
+            Line::from(vec![
+                Span::styled(prefix.to_owned(), style.fg(theme().muted_fg())),
+                Span::styled(remainder.to_owned(), style),
+            ])
+        } else {
+            Line::from(Span::styled(title_text, style))
+        };
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
     }
 
     fn render_close_label(
@@ -946,7 +974,20 @@ impl<M> Dialog<M> {
 
 impl DialogTitle {
     fn standard(title: impl Into<String>) -> Self {
-        Self { text: title.into() }
+        Self {
+            text: title.into(),
+            muted_prefix: None,
+            ellipsize: false,
+        }
+    }
+
+    fn keyed(key: impl Into<String>, title: impl Into<String>) -> Self {
+        let key = key.into();
+        Self {
+            text: format!("{key} {}", title.into()),
+            muted_prefix: Some(key),
+            ellipsize: true,
+        }
     }
 }
 
@@ -1309,6 +1350,17 @@ fn bounded_title(title: &str, max_width: usize) -> String {
         value = truncate_cells(&value, max_width);
     }
     value
+}
+
+fn bounded_title_with_ellipsis(title: &str, max_width: usize) -> String {
+    let value = format!(" {title} ");
+    if line_width(&Line::from(value.as_str())) <= max_width {
+        return value;
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+    format!("{}...", truncate_cells(&value, max_width - 3))
 }
 
 fn truncate_cells(value: &str, max_width: usize) -> String {
@@ -1830,6 +1882,30 @@ mod tests {
             .collect::<String>();
 
         assert!(top.ends_with("┤x│"), "{top}");
+    }
+
+    #[test]
+    fn keyed_dialog_title_mutes_the_key_and_ellipsizes_overflow() {
+        let dialog = Dialog::<()>::new()
+            .edge_borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .top_left_keyed(
+                "KAN-24",
+                "Here is a title that is too long for the snackbar",
+            )
+            .content(["Body"]);
+        let mut terminal = Terminal::new(TestBackend::new(32, 6)).expect("terminal should build");
+
+        terminal
+            .draw(|frame| dialog.render(frame, frame.area()))
+            .expect("dialog should render");
+
+        let buffer = terminal.backend().buffer();
+        let top = (0..32)
+            .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+            .collect::<String>();
+        assert!(top.contains("KAN-24 Here is a tit..."), "{top}");
+        let key_x = top.find("KAN-24").expect("key should render") as u16;
+        assert_eq!(buffer.cell((key_x, 0)).unwrap().fg, theme().muted_fg());
     }
 
     #[test]

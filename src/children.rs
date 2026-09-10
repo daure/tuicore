@@ -4,8 +4,8 @@ use ratatui::{Frame, layout::Rect};
 
 use crate::{
     AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusRepair, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
-    LifecycleCtx, RenderCtx, TickResult, TuiEvent, TuiNode,
+    FocusRepair, FocusRequest, FocusTarget, LayoutCtx, LayoutProposal, LayoutResult,
+    LayoutSizeHint, LifecycleCtx, RenderCtx, TickResult, TuiEvent, TuiNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,6 +387,12 @@ impl<M> Children<M> {
             .fold(TickResult::IDLE, |result, slot| {
                 result.merge(slot.tick(dt, settings))
             })
+    }
+
+    pub fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        self.slots
+            .iter_mut()
+            .find_map(|slot| slot.child_mut().take_pending_focus_request())
     }
 
     pub fn layout_child(

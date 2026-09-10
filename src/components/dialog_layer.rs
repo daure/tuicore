@@ -603,6 +603,14 @@ where
         }
     }
 
+    fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        if self.active {
+            self.layer.take_pending_focus_request()
+        } else {
+            self.base.take_pending_focus_request()
+        }
+    }
+
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {
         let first = ChildKey::first();
         if let Some(target) = target.for_child(&first) {

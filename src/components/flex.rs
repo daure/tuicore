@@ -6,9 +6,9 @@ use ratatui::layout::{Direction, Rect};
 use crate::spacing::Padding;
 use crate::{
     AnimationSettings, AxisProposal, ChildKey, Children, DuplicateChildKey, EventCtx, EventOutcome,
-    EventRoute, FocusCtx, FocusTarget, HintSource, LayoutAxis, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSize, LayoutSizeHint, LifecycleCtx, MissingChildKey, OverflowPolicyName,
-    TickResult, TuiEvent, TuiNode,
+    EventRoute, FocusCtx, FocusRequest, FocusTarget, HintSource, LayoutAxis, LayoutCtx,
+    LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint, LifecycleCtx, MissingChildKey,
+    OverflowPolicyName, TickResult, TuiEvent, TuiNode,
 };
 use crate::{Separator, separator};
 
@@ -426,6 +426,10 @@ impl<M> TuiNode<M> for Flex<M> {
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.children.tick(dt, settings)
+    }
+
+    fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        self.children.take_pending_focus_request()
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {

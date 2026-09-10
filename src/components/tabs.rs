@@ -2083,6 +2083,29 @@ mod tests {
     }
 
     #[test]
+    fn forwards_pending_focus_through_the_app_shell_composites() {
+        let tabs = Tabs::new(vec![Tab::new(
+            "One",
+            PendingFocusProbe {
+                pending_focus: Some(FocusRequest::Target(FocusId::new("data-view"))),
+            },
+        )]);
+        let base = crate::Flex::column().child("tabs", tabs, crate::FlexItem::fill(1));
+        let mut root = crate::DialogLayer::new(
+            base,
+            PendingFocusProbe {
+                pending_focus: None,
+            },
+        )
+        .active(false);
+
+        assert_eq!(
+            root.take_pending_focus_request(),
+            Some(FocusRequest::Target(FocusId::new("data-view")))
+        );
+    }
+
+    #[test]
     fn select_index_with_settings_uses_component_animation_spec() {
         let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]).animation(
             AnimationSpec {
