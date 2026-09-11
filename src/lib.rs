@@ -86,8 +86,8 @@ pub use mermaid::{
     mermaid_host_theme,
 };
 pub use node::{
-    AxisExpand, AxisProposal, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusRepair, FocusRequest, FocusTarget, HintSource, HitRegion, LayoutAxis, LayoutCtx,
+    AxisExpand, AxisProposal, ChildKey, CopyRegion, EventCtx, EventOutcome, EventRoute, FocusCtx,
+    FocusId, FocusRepair, FocusRequest, FocusTarget, HintSource, HitRegion, LayoutAxis, LayoutCtx,
     LayoutOverflowDiagnostic, LayoutProposal, LayoutResult, LayoutSize, LayoutSizeHint,
     LifecycleCtx, NonFocusable, OnBlur, OverflowPolicyName, Propagation, TreePath, TuiNode,
 };

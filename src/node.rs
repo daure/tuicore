@@ -189,6 +189,7 @@ pub struct LayoutCtx {
     focus_paths: Vec<FocusTarget>,
     replaced_subtrees: Vec<TreePath>,
     hit_regions: Vec<HitRegion>,
+    copy_regions: Vec<CopyRegion>,
     overflow_diagnostics: Vec<LayoutOverflowDiagnostic>,
     overlays: OverlayManager,
     overlay_bounds: Rect,
@@ -333,6 +334,12 @@ pub struct EventRoute {
 pub struct HitRegion {
     pub path: TreePath,
     pub area: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyRegion {
+    area: Rect,
+    soft_wrap_rows: Vec<u16>,
 }
 
 impl<M> Default for EventCtx<M> {
@@ -642,6 +649,7 @@ impl Default for LayoutCtx {
             focus_paths: Vec::new(),
             replaced_subtrees: Vec::new(),
             hit_regions: Vec::new(),
+            copy_regions: Vec::new(),
             overflow_diagnostics: Vec::new(),
             overlays: OverlayManager::new(),
             overlay_bounds: Rect::default(),
@@ -1142,6 +1150,10 @@ impl LayoutCtx {
         self.hit_regions.len()
     }
 
+    pub(crate) fn copy_region_count(&self) -> usize {
+        self.copy_regions.len()
+    }
+
     pub(crate) fn overlay_count(&self) -> usize {
         self.overlays.entries().len()
     }
@@ -1170,6 +1182,18 @@ impl LayoutCtx {
         }
     }
 
+    pub(crate) fn translate_copy_regions_from(
+        &mut self,
+        start: usize,
+        x_offset: i32,
+        y_offset: i32,
+        clip: Rect,
+    ) {
+        for region in &mut self.copy_regions[start..] {
+            region.translate_and_clip(x_offset, y_offset, clip);
+        }
+    }
+
     pub(crate) fn translate_overlays_from(&mut self, start: usize, x_offset: i32, y_offset: i32) {
         self.overlays
             .translate_entries_from(start, x_offset, y_offset);
@@ -1185,6 +1209,17 @@ impl LayoutCtx {
 
     pub fn hit_regions(&self) -> &[HitRegion] {
         &self.hit_regions
+    }
+
+    pub fn register_copy_region(&mut self, region: impl Into<CopyRegion>) {
+        let region = region.into();
+        if !region.area.is_empty() {
+            self.copy_regions.push(region);
+        }
+    }
+
+    pub fn copy_regions(&self) -> &[CopyRegion] {
+        &self.copy_regions
     }
 
     pub fn overlays(&self) -> &[OverlayLayoutEntry] {
@@ -1606,6 +1641,17 @@ mod tests {
     }
 
     #[test]
+    fn copy_regions_translate_and_clip_with_scrolled_content() {
+        let mut ctx = LayoutCtx::new();
+        ctx.register_copy_region(CopyRegion::new(Rect::new(1, 4, 8, 4)).soft_wrap_rows([5]));
+
+        ctx.translate_copy_regions_from(0, 2, -3, Rect::new(2, 2, 6, 3));
+
+        assert_eq!(ctx.copy_regions()[0].area(), Rect::new(3, 2, 5, 3));
+        assert!(ctx.copy_regions()[0].joins_after(2));
+    }
+
+    #[test]
     fn tree_path_strip_suffix_matches_whole_structural_suffix() {
         let path = TreePath::from_keys([
             ChildKey::new("preview"),
@@ -1965,6 +2011,46 @@ impl HitRegion {
             && column < self.area.x.saturating_add(self.area.width)
             && row >= self.area.y
             && row < self.area.y.saturating_add(self.area.height)
+    }
+}
+
+impl CopyRegion {
+    pub fn new(area: Rect) -> Self {
+        Self {
+            area,
+            soft_wrap_rows: Vec::new(),
+        }
+    }
+
+    pub fn soft_wrap_rows(mut self, rows: impl IntoIterator<Item = u16>) -> Self {
+        self.soft_wrap_rows = rows.into_iter().collect();
+        self
+    }
+
+    pub fn area(&self) -> Rect {
+        self.area
+    }
+
+    pub fn joins_after(&self, row: u16) -> bool {
+        self.soft_wrap_rows.contains(&row)
+    }
+
+    fn translate_and_clip(&mut self, x_offset: i32, y_offset: i32, clip: Rect) {
+        self.area = translate_and_clip(self.area, x_offset, y_offset, clip);
+        self.soft_wrap_rows = self
+            .soft_wrap_rows
+            .iter()
+            .filter_map(|row| {
+                let row = i32::from(*row).saturating_add(y_offset);
+                (row >= i32::from(clip.y) && row < i32::from(clip.bottom())).then_some(row as u16)
+            })
+            .collect();
+    }
+}
+
+impl From<Rect> for CopyRegion {
+    fn from(area: Rect) -> Self {
+        Self::new(area)
     }
 }
 

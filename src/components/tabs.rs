@@ -1704,6 +1704,7 @@ where
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.focus_path = ctx.current_path();
         self.body_area = self.calculate_body_area(area);
+        ctx.register_copy_region(self.body_area);
         self.tab_header_area = Rect::new(
             area.x,
             area.y,
@@ -2939,6 +2940,7 @@ mod tests {
         };
 
         assert_eq!(tabs.body_area, Rect::new(0, 1, 18, 5));
+        assert_eq!(layout.copy_regions()[0].area(), tabs.body_area);
         assert!(row(0).contains("One"), "{}", row(0));
         assert!(row(0).contains('─'), "{}", row(0));
         assert!(row(1).starts_with("Body"), "{}", row(1));

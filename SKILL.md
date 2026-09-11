@@ -22,7 +22,12 @@ never `render`. Merge child ticks: `changed` redraws, `layout` relayouts, `activ
 use stable `ChildKey`s. `Handled` does not stop bubbling; call `EventCtx::stop_propagation`.
 
 Prefer `TreeApp::new(root).run()`; configure `animation_settings`, `terminal_focus_effect`,
-`runtime_keybindings`, `initial_focus`, `on_message`, `on_notification`, and `notifications`.
+`runtime_keybindings`, `initial_focus`, `on_message`, `on_notification`, `notifications`, and
+`mouse_copy`. Drag-copy is enabled by default: dragging over rendered cells highlights terminal
+text, then copies it through OSC 52 on release. Plain clicks are dispatched when released.
+Bordered containers register their inner rectangle with `LayoutCtx::register_copy_region`, so
+multiline drag-copy wraps within the deepest visible container instead of the terminal width.
+Visual rows that reach that boundary are copied as one line with normalized single-space joins.
 `run(root)` is shorthand for `TuiNode<()>`. `TerminalFocusEffect` is `Disabled` or
 `Dim(FocusDimSettings)`. `EventCtx` emits messages and requests focus, redraw, layout, clear, quit,
 notifications, clipboard, external-editor work, or external diffs. `FocusCtx` and `LifecycleCtx`

@@ -1,7 +1,8 @@
 use ratatui::layout::Rect;
 
 use crate::{
-    FocusTarget, HitRegion, LayoutCtx, LayoutResult, OverlayLayoutEntry, TreePath, TuiNode,
+    CopyRegion, FocusTarget, HitRegion, LayoutCtx, LayoutResult, OverlayLayoutEntry, TreePath,
+    TuiNode,
 };
 
 #[derive(Debug, Clone)]
@@ -61,6 +62,10 @@ impl LayoutEngine {
 
     pub fn hit_regions(&self) -> &[HitRegion] {
         self.ctx.hit_regions()
+    }
+
+    pub fn copy_regions(&self) -> &[CopyRegion] {
+        self.ctx.copy_regions()
     }
 
     pub fn overlays(&self) -> &[OverlayLayoutEntry] {

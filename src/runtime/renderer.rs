@@ -16,7 +16,10 @@ use ratatui::{
 
 use crate::{OverlayLayer, RenderCtx, ToastRack, TuiNode, fade_buffer, theme};
 
-use super::Result;
+use super::{
+    Result,
+    mouse_copy::{CellSelection, apply_selection},
+};
 
 pub(crate) const BASE_DIRECT_KITTY_Z_INDEX: i32 = -1_000_000_000;
 const KITTY_LAYER_SPAN: i32 = 190_000_000;
@@ -280,18 +283,27 @@ impl Renderer {
         toasts: &ToastRack,
         area: Rect,
         fade_amount: f64,
-    ) -> Result<()>
+        selection: Option<CellSelection>,
+    ) -> Result<ratatui::buffer::Buffer>
     where
         W: Write,
         N: TuiNode<M>,
     {
+        let mut rendered_buffer = None;
         let graphics = draw_frame(terminal, |frame| {
-            render_frame_with_toasts_and_fade(frame, root, toasts, area, fade_amount)
+            let graphics =
+                render_frame_with_toasts_and_fade(frame, root, toasts, area, fade_amount);
+            rendered_buffer = Some(frame.buffer_mut().clone());
+            if let Some(selection) = selection {
+                apply_selection(frame.buffer_mut(), selection);
+            }
+            graphics
         })?;
         emit_direct_kitty(
             terminal.backend_mut(),
             self.direct_kitty.reconcile(graphics),
-        )
+        )?;
+        Ok(rendered_buffer.expect("draw callback should capture the rendered buffer"))
     }
 
     pub(crate) fn clear_direct_kitty<W>(

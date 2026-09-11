@@ -24,6 +24,7 @@ use crate::{
 use super::{
     DispatchEffects, EventSource, FocusManager, LayoutEngine, Renderer, Result, Scheduler,
     TerminalGuard, TreeDispatcher,
+    mouse_copy::{CellPoint, MouseCopy, MouseCopyRelease},
 };
 
 type MessageHandler<N, M> = dyn FnMut(&mut N, M, &mut EventCtx<M>);
@@ -43,6 +44,7 @@ pub struct TreeApp<N, M = ()> {
     on_message: Option<Box<MessageHandler<N, M>>>,
     on_notification: Option<Box<NotificationHandler<N, M>>>,
     notifications: ToastRack,
+    mouse_copy: MouseCopy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -106,6 +108,7 @@ impl<N, M> TreeApp<N, M> {
             on_message: None,
             on_notification: None,
             notifications: ToastRack::new(),
+            mouse_copy: MouseCopy::default(),
         }
     }
 
@@ -151,6 +154,11 @@ impl<N, M> TreeApp<N, M> {
 
     pub fn notifications(mut self, notifications: ToastRack) -> Self {
         self.notifications = notifications;
+        self
+    }
+
+    pub fn mouse_copy(mut self, enabled: bool) -> Self {
+        self.mouse_copy.set_enabled(enabled);
         self
     }
 }
@@ -243,13 +251,15 @@ where
                 if flags.layout || layout_engine.area() != area {
                     self.layout_root(flags, focus_manager, layout_engine, dispatcher, area);
                 }
-                renderer.render_with_toasts_and_fade_to_crossterm(
+                let buffer = renderer.render_with_toasts_and_fade_to_crossterm(
                     terminal.terminal_mut(),
                     &self.root,
                     &self.notifications,
                     area,
                     self.terminal_focus_dim.value(),
+                    self.mouse_copy.selection(),
                 )?;
+                self.mouse_copy.set_buffer(buffer);
                 flags.redraw = false;
             }
 
@@ -451,6 +461,7 @@ where
         area: ratatui::layout::Rect,
     ) {
         layout_engine.layout(&mut self.root, area);
+        self.mouse_copy.set_regions(layout_engine.copy_regions());
         flags.layout = false;
         flags.redraw = true;
         let transition = if flags.focus_request.is_some() {
@@ -653,7 +664,10 @@ where
         clipboard_hotkeys: &mut HotkeySequenceMatcher,
         event: TuiEvent,
     ) {
-        let event = event;
+        let Some(event) = self.handle_mouse_copy_event(terminal.as_deref_mut(), flags, event)
+        else {
+            return;
+        };
         self.update_terminal_focus(&event, flags);
         if let TuiEvent::Key(key) = &event {
             let live_keybindings;
@@ -882,6 +896,62 @@ where
         }
         if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
             let _ = write_clipboard_osc52(terminal, &value);
+        }
+    }
+
+    fn handle_mouse_copy_event(
+        &mut self,
+        terminal: Option<&mut TerminalGuard>,
+        flags: &mut RuntimeFlags,
+        event: TuiEvent,
+    ) -> Option<TuiEvent> {
+        if !self.mouse_copy.is_enabled() {
+            return Some(event);
+        }
+        let TuiEvent::Mouse(mouse) = event else {
+            return Some(event);
+        };
+        let point = CellPoint::new(mouse.column, mouse.row);
+        match mouse.kind {
+            crate::MouseEventKind::Down(crate::MouseButton::Left) => {
+                self.mouse_copy.press(point);
+                None
+            }
+            crate::MouseEventKind::Drag(crate::MouseButton::Left) => {
+                let dragging = self.mouse_copy.drag(point);
+                flags.redraw |= dragging;
+                (!dragging).then_some(TuiEvent::Mouse(mouse))
+            }
+            crate::MouseEventKind::Up(crate::MouseButton::Left) => {
+                let Some(release) = self.mouse_copy.release(point) else {
+                    return Some(TuiEvent::Mouse(mouse));
+                };
+                match release {
+                    MouseCopyRelease::Click(point) => Some(TuiEvent::Mouse(crate::MouseEvent {
+                        kind: crate::MouseEventKind::Down(crate::MouseButton::Left),
+                        column: point.x,
+                        row: point.y,
+                        modifiers: mouse.modifiers,
+                    })),
+                    MouseCopyRelease::Selection(text) => {
+                        flags.redraw = true;
+                        if let (Some(terminal), Some(value)) = (terminal, text) {
+                            let notification = match write_clipboard_osc52(terminal, &value)
+                                .and_then(|()| terminal.terminal_mut().backend_mut().flush())
+                            {
+                                Ok(()) => Notification::info(
+                                    "Copied to clipboard",
+                                    format!("\"{value}\""),
+                                ),
+                                Err(error) => Notification::error("Copy failed", error.to_string()),
+                            };
+                            self.handle_notifications(flags, VecDeque::from([notification]));
+                        }
+                        None
+                    }
+                }
+            }
+            _ => Some(TuiEvent::Mouse(mouse)),
         }
     }
 
@@ -2542,6 +2612,24 @@ mod tests {
         })
     }
 
+    fn mouse_up_at(column: u16, row: u16) -> TuiEvent {
+        TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn mouse_drag_at(column: u16, row: u16) -> TuiEvent {
+        TuiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
     #[test]
     fn test_loop_seam_mounts_dispatches_quit_and_unmounts() {
         let app = TreeApp::new(QuitNode::default());
@@ -3473,14 +3561,9 @@ mod tests {
     #[test]
     fn mouse_events_dispatch_to_overlay_route_before_underlying_region() {
         let app = TreeApp::new(OverlayMouseRouteNode::new());
-        let event = TuiEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        });
+        let events = [mouse_down_at(2, 0), mouse_up_at(2, 0)];
 
-        let app = app.run_test_events([event], Rect::new(0, 0, 10, 1));
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
 
         assert_eq!(app.root.event_log.borrow().as_slice(), ["overlay_owner"]);
     }
@@ -3488,14 +3571,28 @@ mod tests {
     #[test]
     fn mouse_events_dispatch_to_hit_flex_child() {
         let app = TreeApp::new(MouseRouteNode::new());
-        let event = TuiEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 7,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        });
+        let events = [mouse_down_at(7, 0), mouse_up_at(7, 0)];
 
-        let app = app.run_test_events([event], Rect::new(0, 0, 10, 1));
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(app.root.event_log.borrow().as_slice(), ["right"]);
+    }
+
+    #[test]
+    fn mouse_drag_copy_does_not_activate_the_control_under_the_press() {
+        let app = TreeApp::new(MouseRouteNode::new());
+        let events = [mouse_down_at(7, 0), mouse_drag_at(8, 0), mouse_up_at(8, 0)];
+
+        let app = app.run_test_events(events, Rect::new(0, 0, 10, 1));
+
+        assert!(app.root.event_log.borrow().is_empty());
+    }
+
+    #[test]
+    fn disabled_mouse_copy_dispatches_the_press_immediately() {
+        let app = TreeApp::new(MouseRouteNode::new()).mouse_copy(false);
+
+        let app = app.run_test_events([mouse_down_at(7, 0)], Rect::new(0, 0, 10, 1));
 
         assert_eq!(app.root.event_log.borrow().as_slice(), ["right"]);
     }

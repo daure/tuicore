@@ -3,6 +3,7 @@ mod dispatcher;
 mod event_source;
 mod focus;
 mod layout;
+mod mouse_copy;
 pub(crate) mod renderer;
 mod scheduler;
 mod terminal;

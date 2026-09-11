@@ -2449,16 +2449,16 @@ where
 }
 
 fn horizontal_jump_direction(keys: &KeyBindings, key: KeyEvent) -> Option<isize> {
-    let plain_shift = key.modifiers.contains(KeyModifiers::SHIFT)
+    let plain_control = key.modifiers.contains(KeyModifiers::CONTROL)
         && !key
             .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
         && matches!(key.code, Key::Char(_));
-    if !plain_shift {
+    if !plain_control {
         return None;
     }
 
-    let base_key = unshift_key(key);
+    let base_key = uncontrol_key(key);
     if keys.line_left_matches(base_key) {
         Some(-1)
     } else if keys.line_right_matches(base_key) {
@@ -2468,8 +2468,8 @@ fn horizontal_jump_direction(keys: &KeyBindings, key: KeyEvent) -> Option<isize>
     }
 }
 
-fn unshift_key(mut key: KeyEvent) -> KeyEvent {
-    key.modifiers.remove(KeyModifiers::SHIFT);
+fn uncontrol_key(mut key: KeyEvent) -> KeyEvent {
+    key.modifiers.remove(KeyModifiers::CONTROL);
     if let Key::Char(c) = key.code {
         key.code = Key::Char(c.to_ascii_lowercase());
     }

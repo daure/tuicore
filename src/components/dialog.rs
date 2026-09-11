@@ -9,11 +9,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind, TuiEvent};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, AxisProposal, BorderKind, ChildKey, ColorTween,
-    EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget, KeySpec,
-    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, Padding, ScrollAxes,
-    ScrollBehavior, ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset, ScrollOutcome,
-    ScrollSize, ScrollState, TickResult, TuiNode, border_set, keybindings, line_width,
-    paragraph_scroll, preset, theme,
+    CopyRegion, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusRequest, FocusTarget,
+    KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, Padding,
+    ScrollAxes, ScrollBehavior, ScrollDelta, ScrollGeometry, ScrollLayout, ScrollOffset,
+    ScrollOutcome, ScrollSize, ScrollState, TickResult, TuiNode, border_set, keybindings,
+    line_width, paragraph_scroll, preset, theme,
 };
 
 use super::dialog_layer::DockChrome;
@@ -494,6 +494,35 @@ impl<M> Dialog<M> {
                     .saturating_add(self.content_padding.bottom),
             ),
         )
+    }
+
+    fn copy_region(&self, area: Rect) -> CopyRegion {
+        let geometry = self.scroll_geometry(area);
+        let viewport = geometry.layout.viewport;
+        if !self.wrap || viewport.is_empty() {
+            return CopyRegion::new(viewport);
+        }
+
+        let scroll_y = self
+            .scroll
+            .as_ref()
+            .map(|scroll| scroll.offset().y)
+            .unwrap_or(0);
+        let mut source_y = 0usize;
+        let mut soft_wrap_rows = Vec::new();
+        for line in &self.content {
+            let row_count = wrapped_text_line_count(&line_text(line), viewport.width, usize::MAX);
+            for row in source_y..source_y.saturating_add(row_count.saturating_sub(1)) {
+                let Some(visible_y) = row.checked_sub(scroll_y) else {
+                    continue;
+                };
+                if visible_y < usize::from(viewport.height) {
+                    soft_wrap_rows.push(viewport.y.saturating_add(visible_y as u16));
+                }
+            }
+            source_y = source_y.saturating_add(row_count);
+        }
+        CopyRegion::new(viewport).soft_wrap_rows(soft_wrap_rows)
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -1063,6 +1092,7 @@ impl<M> TuiNode<M> for Dialog<M> {
         if width_changed && let Some(scroll) = &mut self.scroll {
             scroll.snap_horizontal_to_start();
         }
+        ctx.register_copy_region(self.copy_region(area));
         ctx.register_focusable(FocusId::new(DIALOG_FOCUS), area, true);
         LayoutResult::new(area)
     }
@@ -1182,6 +1212,7 @@ where
             .dialog
             .content_area_for(area, self.dialog.resolved_edge_borders());
         self.child_area = inner;
+        ctx.register_copy_region(self.dialog.copy_region(area));
         let fallback_inserted = ctx
             .with_focus_fallback_status(FocusId::new(DIALOG_FOCUS), area, |ctx| {
                 ctx.push_slot(ChildKey::body(), inner, |ctx| {
@@ -1672,11 +1703,14 @@ mod tests {
 
     #[test]
     fn content_padding_affects_measurement_and_rendered_body_area() {
-        let dialog = Dialog::<()>::new()
+        let mut dialog = Dialog::<()>::new()
             .content(["Body"])
             .content_padding(Padding::all(1));
         let size = dialog.measure(LayoutProposal::unbounded()).preferred;
         assert_eq!(size, crate::LayoutSize::new(8, 5));
+        let mut layout = LayoutCtx::new();
+        dialog.layout(Rect::new(0, 0, size.width, size.height), &mut layout);
+        assert_eq!(layout.copy_regions()[0].area(), Rect::new(2, 2, 4, 1));
         let mut terminal = Terminal::new(TestBackend::new(size.width, size.height))
             .expect("terminal should build");
 
@@ -1689,6 +1723,33 @@ mod tests {
         assert_eq!(buffer.cell((1, 2)).unwrap().symbol(), " ");
         assert_eq!(buffer.cell((2, 2)).unwrap().symbol(), "B");
         assert_eq!(buffer.cell((1, 3)).unwrap().symbol(), " ");
+    }
+
+    #[test]
+    fn dialog_copy_region_marks_word_wrapped_rows_as_soft_breaks() {
+        let mut dialog = Dialog::<()>::new()
+            .content(["This uses the Dialog chrome only, with text content inside."]);
+        let area = Rect::new(0, 0, 56, 5);
+        let mut layout = LayoutCtx::new();
+
+        dialog.layout(area, &mut layout);
+
+        let region = &layout.copy_regions()[0];
+        assert_eq!(region.area(), Rect::new(1, 1, 54, 3));
+        assert!(region.joins_after(1));
+        assert!(!region.joins_after(2));
+    }
+
+    #[test]
+    fn dialog_host_preserves_dialog_soft_wrap_rows() {
+        let mut host = Dialog::<()>::new()
+            .content(["This uses the Dialog chrome only, with text content inside."])
+            .host(StaticBody);
+        let mut layout = LayoutCtx::new();
+
+        host.layout(Rect::new(0, 0, 56, 5), &mut layout);
+
+        assert!(layout.copy_regions()[0].joins_after(1));
     }
 
     #[test]

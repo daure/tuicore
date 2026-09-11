@@ -2524,7 +2524,7 @@ fn cells_have_right_padding_except_for_the_last_column() {
 }
 
 #[test]
-fn shifted_horizontal_keys_scroll_by_seventy_percent_of_assigned_width() {
+fn ctrl_horizontal_keys_scroll_by_seventy_percent_of_assigned_width() {
     let new_view = |content_width| {
         DataView::new([Row::new(1, "A"), Row::new(2, "B")], |row| row.id).column(Column::text(
             "name",
@@ -2537,11 +2537,11 @@ fn shifted_horizontal_keys_scroll_by_seventy_percent_of_assigned_width() {
     settings.enabled = false;
     let jump_right = KeyEvent {
         code: Key::Char('l'),
-        modifiers: KeyModifiers::SHIFT,
+        modifiers: KeyModifiers::CONTROL,
     };
     let jump_left = KeyEvent {
         code: Key::Char('h'),
-        modifiers: KeyModifiers::SHIFT,
+        modifiers: KeyModifiers::CONTROL,
     };
     let mut wide = new_view(100);
 
@@ -2573,15 +2573,15 @@ fn shifted_horizontal_keys_scroll_by_seventy_percent_of_assigned_width() {
     let _ = zero.on_key_with_settings(jump_right, Rect::new(0, 0, 0, 2), settings);
     assert_eq!(zero.scroll.offset().x, 0);
 
-    let old_right = wide.on_key_with_settings(
+    let shifted_right = wide.on_key_with_settings(
         KeyEvent {
             code: Key::Char('l'),
-            modifiers: KeyModifiers::CONTROL,
+            modifiers: KeyModifiers::SHIFT,
         },
         Rect::new(0, 0, 50, 2),
         settings,
     );
-    assert!(!old_right.handled);
+    assert!(!shifted_right.handled);
     assert_eq!(wide.scroll.offset().x, 0);
 }
 
@@ -2601,8 +2601,8 @@ fn width_change_resets_horizontal_scroll_to_start() {
     <DataView<Row, usize> as TuiNode<()>>::layout(&mut view, narrow, &mut layout);
     let outcome = view.on_key_with_settings(
         KeyEvent {
-            code: Key::Char('L'),
-            modifiers: KeyModifiers::SHIFT,
+            code: Key::Char('l'),
+            modifiers: KeyModifiers::CONTROL,
         },
         narrow,
         settings,
@@ -2848,7 +2848,7 @@ fn focus_target_registers_single_multiletter_and_cleared_hotkeys() {
 }
 
 #[test]
-fn shifted_horizontal_navigation_scrolls_tree_without_expanding() {
+fn ctrl_horizontal_navigation_scrolls_tree_without_expanding() {
     let mut view = DataView::new(
         [
             Row {
@@ -2876,8 +2876,8 @@ fn shifted_horizontal_navigation_scrolls_tree_without_expanding() {
 
     let outcome = view.on_key_with_settings(
         KeyEvent {
-            code: Key::Char('L'),
-            modifiers: KeyModifiers::SHIFT,
+            code: Key::Char('l'),
+            modifiers: KeyModifiers::CONTROL,
         },
         Rect::new(0, 0, 8, 3),
         settings,
@@ -2889,7 +2889,7 @@ fn shifted_horizontal_navigation_scrolls_tree_without_expanding() {
 }
 
 #[test]
-fn shifted_horizontal_scrolling_uses_configured_navigation_keys() {
+fn ctrl_horizontal_scrolling_uses_configured_navigation_keys() {
     let bindings = KeyBindings::new()
         .with_nav_line_left([
             KeySpec::key(Key::Left),
@@ -2912,8 +2912,8 @@ fn shifted_horizontal_scrolling_uses_configured_navigation_keys() {
 
     let right = view.on_key_with_settings_and_bindings(
         KeyEvent {
-            code: Key::Char('D'),
-            modifiers: KeyModifiers::SHIFT,
+            code: Key::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
         },
         area,
         settings,
@@ -2924,8 +2924,8 @@ fn shifted_horizontal_scrolling_uses_configured_navigation_keys() {
 
     let left = view.on_key_with_settings_and_bindings(
         KeyEvent {
-            code: Key::Char('A'),
-            modifiers: KeyModifiers::SHIFT,
+            code: Key::Char('a'),
+            modifiers: KeyModifiers::CONTROL,
         },
         area,
         settings,

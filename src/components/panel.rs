@@ -786,6 +786,7 @@ impl<M> TuiNode<M> for Panel<M> {
         self.area = area;
         self.layout_path = ctx.current_path();
         ctx.register_hit_region(crate::HitRegion::new(self.layout_path.clone(), area));
+        ctx.register_copy_region(self.content_area(area));
         if width_changed && let Some(scroll) = &mut self.scroll {
             scroll.snap_horizontal_to_start();
         }
@@ -922,6 +923,7 @@ where
         }
         let inner = self.panel.content_area(area);
         self.child_area = inner;
+        ctx.register_copy_region(inner);
         let hotkeys = self.panel.hotkey_sequences();
         let fallback_inserted = if hotkeys.is_empty() {
             ctx.with_focus_fallback_status(FocusId::new(PANEL_FOCUS), area, |ctx| {
@@ -1379,6 +1381,17 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(ctx.propagation(), crate::Propagation::Stopped);
+    }
+
+    #[test]
+    fn panel_layout_registers_its_inner_copy_region() {
+        let mut panel = Panel::<()>::new();
+        let area = Rect::new(3, 4, 12, 6);
+        let mut layout = LayoutCtx::new();
+
+        panel.layout(area, &mut layout);
+
+        assert_eq!(layout.copy_regions()[0].area(), Rect::new(4, 5, 10, 4));
     }
 
     #[test]

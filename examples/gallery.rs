@@ -585,6 +585,8 @@ impl TuiNode<Msg> for Gallery {
             preview_body: Panel::inner_area(preview_panel),
             footer,
         };
+        ctx.register_copy_region(self.areas.list_body);
+        ctx.register_copy_region(self.areas.preview_body);
         ctx.push_slot(gallery_list_child_key(), self.areas.list_body, |ctx| {
             <DataView<ComponentKind, ComponentKind> as TuiNode<Msg>>::layout(
                 &mut self.component_list,
@@ -5250,6 +5252,27 @@ mod tests {
                 TreePath::from_keys([gallery_list_child_key()])
             );
         }
+    }
+
+    #[test]
+    fn gallery_layout_registers_both_panel_copy_regions() {
+        let mut gallery = Gallery::new();
+        let mut layout = LayoutCtx::new();
+
+        gallery.layout(Rect::new(0, 0, 100, 30), &mut layout);
+
+        assert!(
+            layout
+                .copy_regions()
+                .iter()
+                .any(|region| region.area() == gallery.areas.list_body)
+        );
+        assert!(
+            layout
+                .copy_regions()
+                .iter()
+                .any(|region| region.area() == gallery.areas.preview_body)
+        );
     }
 
     #[test]

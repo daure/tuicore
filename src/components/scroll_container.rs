@@ -343,6 +343,7 @@ where
 
         let focus_start = ctx.focus_target_count();
         let hit_start = ctx.hit_region_count();
+        let copy_start = ctx.copy_region_count();
         let overlay_start = ctx.overlay_count();
         self.child.layout(self.content_area, ctx);
         self.focus_areas = ctx.focus_targets()[focus_start..].to_vec();
@@ -366,6 +367,12 @@ where
         );
         ctx.translate_hit_regions_from(
             hit_start,
+            x_offset,
+            y_offset,
+            self.geometry.layout.viewport,
+        );
+        ctx.translate_copy_regions_from(
+            copy_start,
             x_offset,
             y_offset,
             self.geometry.layout.viewport,
