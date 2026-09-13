@@ -786,7 +786,7 @@ impl<M> TuiNode<M> for Panel<M> {
         self.area = area;
         self.layout_path = ctx.current_path();
         ctx.register_hit_region(crate::HitRegion::new(self.layout_path.clone(), area));
-        ctx.register_copy_region(self.content_area(area));
+        ctx.register_copy_region(self.scroll_geometry(area).layout.viewport);
         if width_changed && let Some(scroll) = &mut self.scroll {
             scroll.snap_horizontal_to_start();
         }
@@ -1392,6 +1392,25 @@ mod tests {
         panel.layout(area, &mut layout);
 
         assert_eq!(layout.copy_regions()[0].area(), Rect::new(4, 5, 10, 4));
+    }
+
+    #[test]
+    fn scrollable_panel_copy_region_excludes_the_vertical_scrollbar_gutter() {
+        let mut panel = Panel::<()>::new().content((0..8).map(|line| format!("line {line}")));
+        panel.scroll = Some(
+            ScrollState::new(ScrollAxes::Vertical).scrollbars(ScrollbarConfig {
+                vertical: ScrollbarVisibility::Always,
+                horizontal: ScrollbarVisibility::Never,
+                gutter: ScrollbarGutter::Reserve,
+                style: ScrollbarStyle::ThinTrack,
+            }),
+        );
+        let area = Rect::new(0, 0, 10, 5);
+        let mut layout = LayoutCtx::new();
+
+        panel.layout(area, &mut layout);
+
+        assert_eq!(layout.copy_regions()[0].area(), Rect::new(1, 1, 7, 3));
     }
 
     #[test]

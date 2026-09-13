@@ -68,7 +68,7 @@ path = "examples/scroll_container.rs"
 [dependencies]
 base64 = "0.22"
 crossterm = "0.29"
-ratatui = { version = "0.30", features = ["widget-calendar"] }
+ratatui = { version = "0.30", features = ["widget-calendar", "unstable-rendered-line-info"] }
 time = { version = "0.3", features = ["local-offset"] }
 toml = "0.9"
 rig = "0.39"

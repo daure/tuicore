@@ -237,6 +237,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `render_*_with_theme(..., &theme())` to apply active semantic colors to SVG/PNG output.
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,
   must tick. `SeasonalEmptyState`: `new(message)`, `SeasonalGlyphs`, must tick when live.
+- `SyntaxHighlighter::new(text, language)`: highlighted, scrollable source; `.wrap(true)` enables
+  word wrapping with keyboard navigation across visual rows for prose detail panes.
 - `SpeedReader`: `new(plain_text)` or `markdown(source)`; configure title, WPM, natural pauses, and
   `SpeedReaderKeyBindings`; inspect `SpeedReaderState`/progress and tick while playing. `dialog`
   wraps it in a `DialogHost`.

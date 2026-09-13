@@ -1,7 +1,12 @@
 use ansi_to_tui::IntoText;
 pub use lumis::languages::Language;
 use lumis::{TerminalBuilder, formatters::Formatter, themes};
-use ratatui::{Frame, layout::Rect, text::Text, widgets::Paragraph};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    text::Text,
+    widgets::{Paragraph, Wrap},
+};
 use std::time::Duration;
 
 use crate::{
@@ -25,6 +30,7 @@ pub struct SyntaxHighlighter {
     focused: bool,
     selected_line: Option<usize>,
     pending_top_prefix: bool,
+    wrap: bool,
 }
 
 impl SyntaxHighlighter {
@@ -40,6 +46,7 @@ impl SyntaxHighlighter {
             focused: false,
             selected_line: None,
             pending_top_prefix: false,
+            wrap: false,
         }
     }
 
@@ -48,11 +55,27 @@ impl SyntaxHighlighter {
         self
     }
 
+    /// Wrap long lines at word boundaries and navigate the resulting visual rows.
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.set_wrap(wrap);
+        self
+    }
+
+    pub fn set_wrap(&mut self, wrap: bool) {
+        if self.wrap != wrap {
+            self.wrap = wrap;
+            self.selected_line = None;
+            self.scroll = ScrollState::default();
+            self.refresh_content_size();
+        }
+    }
+
     pub fn set_code(&mut self, code: impl Into<String>) {
         self.code = code.into();
         self.cached_text = None; // Invalidate cache
         self.selected_line = None;
         self.scroll = ScrollState::default();
+        self.refresh_content_size();
     }
 
     pub fn language(mut self, language: Language) -> Self {
@@ -73,6 +96,43 @@ impl SyntaxHighlighter {
 
     fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
         self.scroll.geometry(area, self.content_size)
+    }
+
+    fn display_line_count(&self) -> usize {
+        if self.wrap {
+            self.content_size.height
+        } else {
+            self.code.lines().count()
+        }
+    }
+
+    fn refresh_content_size(&mut self) {
+        if self.wrap {
+            let text = self
+                .cached_text
+                .clone()
+                .unwrap_or_else(|| Text::raw(self.code.clone()));
+            let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+            self.content_size = ScrollSize::new(
+                self.area.width as usize,
+                paragraph.line_count(self.area.width),
+            );
+            // Account for the vertical scrollbar's gutter using the same wrapping as rendering.
+            let viewport = self.scroll_geometry(self.area).layout.viewport;
+            self.content_size = ScrollSize::new(
+                viewport.width as usize,
+                paragraph.line_count(viewport.width),
+            );
+        } else {
+            self.content_size = ScrollSize::new(
+                self.code
+                    .lines()
+                    .map(|line| line.chars().count())
+                    .max()
+                    .unwrap_or(0),
+                self.code.lines().count(),
+            );
+        }
     }
 
     fn clamp_scroll(&mut self) {
@@ -108,7 +168,7 @@ impl SyntaxHighlighter {
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
-        let lines_count = self.code.lines().count();
+        let lines_count = self.display_line_count();
         if lines_count == 0 {
             return ScrollOutcome::idle();
         }
@@ -129,7 +189,7 @@ impl SyntaxHighlighter {
         area: Rect,
         settings: AnimationSettings,
     ) -> ScrollOutcome {
-        let lines_count = self.code.lines().count();
+        let lines_count = self.display_line_count();
         if lines_count == 0 {
             return ScrollOutcome::idle();
         }
@@ -194,7 +254,7 @@ impl SyntaxHighlighter {
             }
         }
         if bindings.end_matches(key) || data_keys.bottom_matches(key) {
-            let lines_count = self.code.lines().count();
+            let lines_count = self.display_line_count();
             let selection = self.select_index(lines_count.saturating_sub(1), area, settings);
             if selection.changed {
                 return selection;
@@ -321,6 +381,14 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
             AxisProposal::AtMost(max) => max_width.min(max),
             AxisProposal::Exact(exact) => exact,
         };
+        let lines = if self.wrap {
+            Paragraph::new(self.code.as_str())
+                .wrap(Wrap { trim: false })
+                .line_count(width)
+                .min(u16::MAX as usize) as u16
+        } else {
+            lines
+        };
         LayoutSizeHint::content(width, lines).normalized(proposal)
     }
 
@@ -328,17 +396,12 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         let resized = self.area.width != area.width || self.area.height != area.height;
         self.area = area;
 
-        let lines = self.code.lines().count();
-        let max_width = self
-            .code
-            .lines()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap_or(0);
-        self.content_size = ScrollSize {
-            width: max_width,
-            height: lines,
-        };
+        self.refresh_content_size();
+        if self.wrap
+            && let Some(selected) = &mut self.selected_line
+        {
+            *selected = (*selected).min(self.content_size.height.saturating_sub(1));
+        }
 
         if resized {
             self.center_selection(
@@ -352,6 +415,7 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
             self.clamp_scroll();
         }
 
+        ctx.register_copy_region(self.scroll_geometry(area).layout.viewport);
         ctx.register_focusable(FocusId::new(SYNTAX_FOCUS), area, true);
         LayoutResult::new(area)
     }
@@ -392,8 +456,12 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
                 }
             }
 
+            let mut paragraph = Paragraph::new(text);
+            if self.wrap {
+                paragraph = paragraph.wrap(Wrap { trim: false });
+            }
             frame.render_widget(
-                Paragraph::new(text).scroll(paragraph_scroll(self.scroll.offset())),
+                paragraph.scroll(paragraph_scroll(self.scroll.offset())),
                 geometry.layout.viewport,
             );
         }
@@ -453,6 +521,11 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
             self.cached_text = Some(self.highlight(current_theme));
             self.last_theme = Some(current_theme);
             result = TickResult::CHANGED;
+            if self.wrap {
+                self.refresh_content_size();
+                self.clamp_scroll();
+                result.layout = true;
+            }
         }
 
         result.merge(Animated::tick(&mut self.scroll, dt, settings))
@@ -460,36 +533,5 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Key;
-
-    #[test]
-    fn line_navigation_scrolls_to_selected_line_without_tweening() {
-        let code = (0..20)
-            .map(|line| format!("line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut highlighter = SyntaxHighlighter::new(code, Language::Rust);
-        highlighter.content_size = ScrollSize::new(7, 20);
-        let area = Rect::new(0, 0, 7, 4);
-
-        for _ in 0..8 {
-            highlighter.on_key_with_settings(Key::Char('j'), area, AnimationSettings::default());
-        }
-
-        assert_eq!(
-            highlighter.scroll.offset(),
-            highlighter.scroll.target_offset()
-        );
-        assert!(!highlighter.scroll.is_active());
-
-        highlighter.on_key_with_settings(Key::Char('k'), area, AnimationSettings::default());
-
-        assert_eq!(
-            highlighter.scroll.offset(),
-            highlighter.scroll.target_offset()
-        );
-        assert!(!highlighter.scroll.is_active());
-    }
-}
+#[path = "tests/syntax_highlighter.rs"]
+mod tests;

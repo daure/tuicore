@@ -329,6 +329,7 @@ where
             ctx.current_path(),
             self.geometry.layout.outer,
         ));
+        ctx.register_copy_region(self.geometry.layout.viewport);
         let _ = self.scroll.clamp_to(
             self.geometry.viewport,
             self.geometry.content,
@@ -701,6 +702,28 @@ mod tests {
 
         assert_eq!(outcome, EventOutcome::Handled);
         assert_eq!(node.offset().y, 1);
+    }
+
+    #[test]
+    fn copy_region_excludes_the_vertical_scrollbar_gutter() {
+        let mut node = ScrollContainer::vertical(Lines(vec![
+            "one", "two", "three", "four", "five", "six", "seven", "eight",
+        ]))
+        .scrollbars(ScrollbarConfig {
+            vertical: ScrollbarVisibility::Always,
+            horizontal: ScrollbarVisibility::Never,
+            gutter: ScrollbarGutter::Reserve,
+            style: ScrollbarStyle::ThinTrack,
+        });
+        let mut layout = LayoutCtx::new();
+
+        node.layout(Rect::new(0, 0, 8, 3), &mut layout);
+
+        assert_eq!(layout.copy_regions().len(), 1);
+        assert_eq!(
+            layout.copy_regions()[0].area(),
+            node.scroll_geometry().layout.viewport
+        );
     }
 
     #[test]

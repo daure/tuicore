@@ -1114,8 +1114,8 @@ fn palette_for(name: ThemeName) -> Palette {
             [128, 128, 128],
             [238, 121, 72],
             [236, 91, 43],
-            [107, 161, 230],
-            [236, 91, 43],
+            [127, 216, 143],
+            [245, 167, 66],
             [224, 108, 117],
         ),
         ThemeName::OsakaJade => palette(
@@ -1396,7 +1396,7 @@ mod tests {
     }
 
     #[test]
-    fn orng_uses_the_official_opencode_dark_palette() {
+    fn orng_uses_semantic_status_colors() {
         let theme = Theme::named(ThemeName::Orng);
 
         assert_eq!(theme.background_bg(), Color::Rgb(0x0a, 0x0a, 0x0a));
@@ -1407,8 +1407,8 @@ mod tests {
         assert_eq!(theme.muted_fg(), Color::Rgb(0x80, 0x80, 0x80));
         assert_eq!(theme.key_fg(), Color::Rgb(0xee, 0x79, 0x48));
         assert_eq!(theme.accent_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
-        assert_eq!(theme.success_fg(), Color::Rgb(0x6b, 0xa1, 0xe6));
-        assert_eq!(theme.warning_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
+        assert_eq!(theme.success_fg(), Color::Rgb(0x7f, 0xd8, 0x8f));
+        assert_eq!(theme.warning_fg(), Color::Rgb(0xf5, 0xa7, 0x42));
         assert_eq!(theme.error_fg(), Color::Rgb(0xe0, 0x6c, 0x75));
     }
 

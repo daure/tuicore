@@ -75,7 +75,11 @@ impl MouseCopy {
             .regions
             .iter()
             .rev()
-            .find(|region| region.area().contains((point.x, point.y).into()))
+            .filter(|region| region.area().contains((point.x, point.y).into()))
+            .min_by_key(|region| {
+                let area = region.area();
+                u32::from(area.width) * u32::from(area.height)
+            })
             .cloned();
     }
 
@@ -433,6 +437,23 @@ mod tests {
             Some(MouseCopyRelease::Selection(Some(format!(
                 "{first}\n{second}"
             ))))
+        );
+    }
+
+    #[test]
+    fn wrapped_copy_prefers_the_content_region_over_an_overlapping_scrollbar_region() {
+        let mut copy = MouseCopy::default();
+        copy.set_buffer(buffer_with_text(&["wrapped │", "  text  │"], 9));
+        copy.set_regions(&[
+            CopyRegion::new(Rect::new(0, 0, 8, 2)).soft_wrap_rows([0]),
+            CopyRegion::new(Rect::new(0, 0, 9, 2)).soft_wrap_rows([0]),
+        ]);
+        copy.press(CellPoint::new(0, 0));
+        copy.drag(CellPoint::new(5, 1));
+
+        assert_eq!(
+            copy.release(CellPoint::new(5, 1)),
+            Some(MouseCopyRelease::Selection(Some("wrapped text".into())))
         );
     }
 }
