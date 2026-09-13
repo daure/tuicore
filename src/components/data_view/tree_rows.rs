@@ -4,7 +4,7 @@ use std::hash::Hash;
 use super::model::{LevelFn, ParentIdFn, SortFn};
 use super::{
     DataView, DataViewTransformMode, DisplayRow, SelectionOverlay, SelectionOverlayPosition,
-    SortDirection, TreeAdapter, VisibleRow,
+    SortDirection, TreeAdapter, TreeProjectionCache, TreeRowProjection, VisibleRow,
 };
 use crate::search::search_match;
 
@@ -76,7 +76,11 @@ where
     }
 
     pub(super) fn all_visible_rows(&self) -> Vec<VisibleRow<'_, T, Id>> {
-        match &self.tree {
+        if let Some(rows) = self.cached_tree_rows() {
+            return rows;
+        }
+
+        let rows = match &self.tree {
             Some(TreeAdapter::ParentId(parent_id))
             | Some(TreeAdapter::MutableParentId { parent_id, .. }) => {
                 let sorted = self.sorted_rows();
@@ -98,7 +102,64 @@ where
                     expanded: false,
                 })
                 .collect(),
+        };
+        self.cache_tree_rows(&rows);
+        rows
+    }
+
+    fn cached_tree_rows(&self) -> Option<Vec<VisibleRow<'_, T, Id>>> {
+        self.tree.as_ref()?;
+        let cache = self.tree_projection_cache.borrow();
+        let cache = cache
+            .as_ref()
+            .filter(|cache| cache.revision == self.metric_revision)?;
+        Some(
+            cache
+                .rows
+                .iter()
+                .map(|row| VisibleRow {
+                    row: self.rows.get(row.source_index).expect(
+                        "DataView tree projection points at a row removed without invalidation",
+                    ),
+                    id: row.id.clone(),
+                    parent_id: row.parent_id.clone(),
+                    depth: row.depth,
+                    has_children: row.has_children,
+                    expanded: row.expanded,
+                })
+                .collect(),
+        )
+    }
+
+    fn cache_tree_rows(&self, rows: &[VisibleRow<'_, T, Id>]) {
+        if self.tree.is_none() {
+            return;
         }
+        let source_indices = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row as *const T as usize, index))
+            .collect::<HashMap<_, _>>();
+        let rows = rows
+            .iter()
+            .map(|row| TreeRowProjection {
+                source_index: *source_indices
+                    .get(&(row.row as *const T as usize))
+                    .expect("DataView tree projection must contain only source rows"),
+                id: row.id.clone(),
+                parent_id: row.parent_id.clone(),
+                depth: row.depth,
+                has_children: row.has_children,
+                expanded: row.expanded,
+            })
+            .collect();
+        self.tree_projection_cache
+            .borrow_mut()
+            .replace(TreeProjectionCache {
+                revision: self.metric_revision,
+                rows,
+            });
     }
 
     pub(super) fn expandable_ids(&self) -> impl Iterator<Item = Id> + '_ {

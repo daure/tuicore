@@ -1704,6 +1704,123 @@ fn wrapped_line_navigation_cell_measurement_scales_linearly() {
 }
 
 #[test]
+fn wrapped_tree_navigation_reuses_cached_geometry_and_remeasures_highlighted_rows() {
+    const ROWS: usize = 128;
+    const VIEWPORT_HEIGHT: u16 = 5;
+
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let renderer_calls = calls.clone();
+    let mut view = DataView::new(
+        (0..ROWS).map(|id| (id, (id > 0).then_some(0))),
+        |row: &(usize, Option<usize>)| row.0,
+    )
+    .column(
+        Column::rich(
+            "value",
+            "",
+            Constraint::Percentage(100),
+            move |row: &(usize, Option<usize>), context| {
+                renderer_calls.set(renderer_calls.get() + 1);
+                Line::from(if context.highlighted {
+                    format!("row {} expands across this narrow wrapped cell", row.0)
+                } else {
+                    format!("row {}", row.0)
+                })
+            },
+        )
+        .constrained(),
+    )
+    .tree(TreeAdapter::parent_id(|row: &(usize, Option<usize>)| row.1))
+    .expanded([0])
+    .row_height_by(|row| u16::from(row.1.is_some()).saturating_add(1))
+    .wrap_cells()
+    .wrap_geometry_epoch(0)
+    .focused(true);
+    let area = Rect::new(0, 0, 16, VIEWPORT_HEIGHT);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..AnimationSettings::default()
+    };
+
+    <DataView<_, _> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+    let initial = view.visible_row_geometry();
+    assert!(initial.span(0).unwrap().1 > 1);
+    assert!(calls.get() >= ROWS);
+
+    calls.set(0);
+    view.on_key_with_settings(Key::Down, area, settings);
+    let navigated = view.visible_row_geometry();
+    assert_eq!(navigated.span(0).unwrap().1, 1);
+    assert!(navigated.span(1).unwrap().1 - navigated.span(1).unwrap().0 > 2);
+
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|frame| view.render(frame, area)).unwrap();
+    assert!(calls.get() <= 12, "calls={}", calls.get());
+}
+
+#[test]
+fn wrapped_geometry_cache_invalidates_for_epoch_and_row_updates() {
+    let external_text = std::rc::Rc::new(std::cell::RefCell::new(
+        "a long external value that wraps across several lines".to_string(),
+    ));
+    let renderer_text = external_text.clone();
+    let mut view = DataView::new([(1usize, "short".to_string())], |row| row.0)
+        .column(
+            Column::rich(
+                "value",
+                "",
+                Constraint::Percentage(100),
+                move |row: &(usize, String), _| {
+                    Line::from(format!("{} {}", row.1, renderer_text.borrow()))
+                },
+            )
+            .constrained(),
+        )
+        .wrap_cells()
+        .wrap_geometry_epoch(0);
+    let area = Rect::new(0, 0, 12, 8);
+
+    let initial_height = view.scroll_geometry(area).content.height;
+    *external_text.borrow_mut() = "brief".to_string();
+    view.set_wrap_geometry_epoch(1);
+    let epoch_height = view.scroll_geometry(area).content.height;
+    assert!(epoch_height < initial_height);
+
+    view.update_row(&1, |row| {
+        row.1 = "a row update that wraps across several lines".to_string();
+    })
+    .unwrap();
+    let row_update_height = view.scroll_geometry(area).content.height;
+    assert!(row_update_height > epoch_height);
+}
+
+#[test]
+fn expanded_tree_reuses_its_projection_until_expansion_changes() {
+    let parent_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let parent_calls_for_tree = parent_calls.clone();
+    let mut view = DataView::list(rows(), |row| row.id, |row| row.name.to_string())
+        .tree(TreeAdapter::parent_id(move |row: &Row| {
+            parent_calls_for_tree.set(parent_calls_for_tree.get() + 1);
+            row.parent
+        }))
+        .expanded([1]);
+
+    assert_eq!(visible_ids(&view), vec![1, 2, 3]);
+    parent_calls.set(0);
+
+    assert_eq!(visible_ids(&view), vec![1, 2, 3]);
+    assert_eq!(parent_calls.get(), 0);
+
+    parent_calls.set(0);
+    view.expand_all();
+    assert!(parent_calls.get() > 0);
+    parent_calls.set(0);
+
+    assert_eq!(visible_ids(&view), vec![1, 2, 4, 5, 3, 6, 7]);
+    assert_eq!(parent_calls.get(), 0);
+}
+
+#[test]
 fn constrained_columns_skip_intrinsic_cell_measurement() {
     let row_id_calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let counted_row_id = row_id_calls.clone();

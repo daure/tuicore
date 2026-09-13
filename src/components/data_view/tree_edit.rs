@@ -215,7 +215,9 @@ where
     }
 
     pub(crate) fn expand_tree_row(&mut self, id: Id) {
-        self.expanded.insert(id);
+        if self.expanded.insert(id) {
+            self.invalidate_tree_projection();
+        }
     }
 
     pub fn tree_expansion_snapshot(&self) -> HashSet<Id> {
@@ -223,7 +225,10 @@ where
     }
 
     pub fn restore_tree_expansion(&mut self, expanded: HashSet<Id>) {
-        self.expanded = expanded;
+        if self.expanded != expanded {
+            self.expanded = expanded;
+            self.invalidate_tree_projection();
+        }
     }
 
     pub(crate) fn move_tree_sibling(
@@ -250,7 +255,9 @@ where
         let target = self.tree_children(Some(&new_parent)).len();
         let result = self.reparent_tree_row(id, Some(new_parent.clone()), target);
         if result.is_some() {
-            self.expanded.insert(new_parent);
+            if self.expanded.insert(new_parent) {
+                self.invalidate_tree_projection();
+            }
         }
         result
     }
@@ -277,6 +284,7 @@ where
         else {
             return;
         };
+        let mut changed = false;
         for row in &mut self.rows {
             let id = (self.row_id)(row);
             let Some(staged_parent) = staged.parents.get(&id) else {
@@ -286,6 +294,7 @@ where
                 && let Some(original_parent) = original.parents.get(&id)
             {
                 set_parent_id(row, original_parent.clone());
+                changed = true;
                 assert!(
                     (self.row_id)(row) == id,
                     "TreeAdapter parent setter must preserve the row ID"
@@ -298,6 +307,10 @@ where
         }
         if self.row_ids() == staged.ids {
             self.reorder_source_rows(&original.ids);
+            changed = true;
+        }
+        if changed {
+            self.invalidate_tree_projection();
         }
         self.clamp_visible_state();
     }
@@ -470,6 +483,7 @@ where
         };
         remaining.splice(insertion..insertion, moving);
         self.rows = remaining;
+        self.invalidate_tree_projection();
         self.clamp_visible_state();
         self.reposition_highlight_silently(id);
         Some(TreeMoveResult {

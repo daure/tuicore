@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::time::Duration;
@@ -29,6 +30,7 @@ use super::{
     DropdownVariant, SeasonalEmptyState, text_input::TextInput,
 };
 
+use layout::VisibleRowGeometry;
 pub(crate) use model::SelectionOverlayPosition;
 pub use model::{
     ActivationMode, CellContext, CheckState, Column, ColumnSizing, DataViewEvent, DataViewFilter,
@@ -65,6 +67,51 @@ struct DataViewMetricCache {
     revision: u64,
     viewport_width: usize,
     rendered_column_widths: Vec<usize>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum WrappedRowMetric<Id> {
+    Data {
+        id: Id,
+        depth: usize,
+        has_children: bool,
+        expanded: bool,
+        highlighted: bool,
+        focused: bool,
+        prefix_width: usize,
+    },
+    SelectionPlaceholder {
+        count: usize,
+        depth: usize,
+        focused: bool,
+    },
+}
+
+struct WrappedRowGeometryCache<Id> {
+    epoch: u64,
+    entries: Vec<WrappedRowGeometryCacheEntry<Id>>,
+}
+
+struct WrappedRowGeometryCacheEntry<Id> {
+    column_widths: Vec<usize>,
+    rows: Vec<WrappedRowMetric<Id>>,
+    heights: Vec<u16>,
+    geometry: VisibleRowGeometry,
+}
+
+#[derive(Clone)]
+pub(super) struct TreeRowProjection<Id> {
+    pub(super) source_index: usize,
+    pub(super) id: Id,
+    pub(super) parent_id: Option<Id>,
+    pub(super) depth: usize,
+    pub(super) has_children: bool,
+    pub(super) expanded: bool,
+}
+
+pub(super) struct TreeProjectionCache<Id> {
+    pub(super) revision: u64,
+    pub(super) rows: Vec<TreeRowProjection<Id>>,
 }
 
 pub(crate) fn search_focus_id() -> FocusId {
@@ -137,6 +184,9 @@ pub struct DataView<T, Id> {
     selection_overlay: Option<SelectionOverlay<Id>>,
     metric_revision: u64,
     metric_cache: Option<DataViewMetricCache>,
+    wrap_geometry_epoch: Option<u64>,
+    wrapped_row_geometry_cache: RefCell<Option<WrappedRowGeometryCache<Id>>>,
+    tree_projection_cache: RefCell<Option<TreeProjectionCache<Id>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -248,6 +298,9 @@ where
             selection_overlay: None,
             metric_revision: 0,
             metric_cache: None,
+            wrap_geometry_epoch: None,
+            wrapped_row_geometry_cache: RefCell::new(None),
+            tree_projection_cache: RefCell::new(None),
         }
     }
 
@@ -377,6 +430,23 @@ where
         self.invalidate_metrics();
     }
 
+    /// Enables wrapped-row geometry caching for this caller-owned renderer epoch.
+    ///
+    /// Advance `epoch` whenever captured renderer, continuation-indent, row-height, or gutter
+    /// state can change a wrapped row's height. DataView tracks its own row and tree changes.
+    pub fn wrap_geometry_epoch(mut self, epoch: u64) -> Self {
+        self.set_wrap_geometry_epoch(epoch);
+        self
+    }
+
+    /// Replaces the caller-owned epoch used by wrapped-row geometry caching.
+    pub fn set_wrap_geometry_epoch(&mut self, epoch: u64) {
+        if self.wrap_geometry_epoch != Some(epoch) {
+            self.wrap_geometry_epoch = Some(epoch);
+            self.wrapped_row_geometry_cache.get_mut().take();
+        }
+    }
+
     /// Sets a per-row style policy.
     pub fn row_style_by(
         mut self,
@@ -492,7 +562,7 @@ where
     pub fn set_focused(&mut self, focused: bool) {
         if self.focused != focused {
             self.focused = focused;
-            self.invalidate_metrics();
+            self.invalidate_renderer_metrics();
         }
         if !focused {
             self.clear_reorder_highlight_immediately();
@@ -663,6 +733,17 @@ where
     }
 
     fn invalidate_metrics(&mut self) {
+        self.metric_revision = self.metric_revision.wrapping_add(1);
+        self.metric_cache = None;
+        self.wrapped_row_geometry_cache.get_mut().take();
+        self.invalidate_tree_projection();
+    }
+
+    pub(super) fn invalidate_tree_projection(&mut self) {
+        self.tree_projection_cache.get_mut().take();
+    }
+
+    fn invalidate_renderer_metrics(&mut self) {
         self.metric_revision = self.metric_revision.wrapping_add(1);
         self.metric_cache = None;
     }
@@ -1366,6 +1447,7 @@ where
             .map(|id| self.visible_tree_ancestor_ids(id))
             .unwrap_or_default();
         self.expanded.clear();
+        self.invalidate_tree_projection();
         let visible_ids = self
             .all_visible_rows()
             .into_iter()
@@ -1419,6 +1501,7 @@ where
             return DataViewOutcome::IDLE;
         }
         self.expanded = ids;
+        self.invalidate_tree_projection();
         let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
             handled: true,
@@ -1876,6 +1959,7 @@ where
         if !self.expanded.remove(&id) {
             self.expanded.insert(id);
         }
+        self.invalidate_tree_projection();
         self.clamp_visible_state();
         self.ensure_highlight_visible(area, settings)
             .into_data_view_outcome(true, true)
@@ -1897,6 +1981,7 @@ where
             let id = row.id.clone();
             drop(visible);
             self.expanded.insert(id);
+            self.invalidate_tree_projection();
             return self
                 .ensure_highlight_visible(area, settings)
                 .into_data_view_outcome(true, true);
@@ -1921,6 +2006,7 @@ where
             let id = row.id.clone();
             drop(visible);
             self.expanded.remove(&id);
+            self.invalidate_tree_projection();
             self.clamp_visible_state();
             return self
                 .ensure_highlight_visible(area, settings)
@@ -2404,7 +2490,7 @@ where
         self.highlighted = highlighted;
         let after_id = self.highlighted_id();
         if before_id != after_id {
-            self.invalidate_metrics();
+            self.invalidate_renderer_metrics();
         }
         if before_id == after_id {
             return HighlightUpdate {

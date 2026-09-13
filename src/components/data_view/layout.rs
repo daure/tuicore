@@ -1,25 +1,29 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
 
 use super::{
     CELL_RIGHT_PADDING, CellContext, Column, DataView, DataViewInteraction, DisplayRow,
-    FILTER_DROPDOWN_SLOT, SEARCH_SLOT, SelectionMode, SortDirection, VisibleRow, column_key,
+    FILTER_DROPDOWN_SLOT, SEARCH_SLOT, SelectionMode, SortDirection, VisibleRow,
+    WrappedRowGeometryCache, WrappedRowGeometryCacheEntry, WrappedRowMetric, column_key,
 };
 use crate::{
     ChildKey, LayoutCtx, ScrollGeometry, ScrollOffset, ScrollSize, TuiNode, line_width, preset,
 };
 
+#[derive(Clone)]
 pub(super) struct VisibleRowGeometry {
     kind: VisibleRowGeometryKind,
 }
 
+#[derive(Clone)]
 enum VisibleRowGeometryKind {
     Uniform { count: usize, height: usize },
-    Variable { offsets: Vec<usize> },
+    Variable { offsets: Arc<[usize]> },
 }
 
 pub(super) enum IntersectingRows<'a> {
@@ -71,7 +75,9 @@ impl VisibleRowGeometry {
             );
         }
         Self {
-            kind: VisibleRowGeometryKind::Variable { offsets },
+            kind: VisibleRowGeometryKind::Variable {
+                offsets: offsets.into(),
+            },
         }
     }
 
@@ -288,16 +294,146 @@ where
         let selection_descendants = self.selection_descendants_by_id();
         let show_tree_gutter = self.shows_tree_gutter();
         let highlighted_id = self.highlighted_id();
-        VisibleRowGeometry::new(self.display_rows().into_iter().map(|row| match row {
-            DisplayRow::Data(row) => self.wrapped_row_height(
-                &row,
-                column_widths,
-                &selection_descendants,
-                show_tree_gutter,
-                highlighted_id.as_ref(),
-            ),
-            DisplayRow::SelectionPlaceholder { .. } => self.row_height,
-        }))
+        let display_rows = self.display_rows();
+        let metrics = display_rows
+            .iter()
+            .map(|row| {
+                self.wrapped_row_metric(
+                    row,
+                    &selection_descendants,
+                    show_tree_gutter,
+                    highlighted_id.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(geometry) = self.cached_wrapped_row_geometry(column_widths, &metrics) {
+            return geometry;
+        }
+
+        let cache = self.wrapped_row_geometry_cache.borrow();
+        let cached = self.wrap_geometry_epoch.and_then(|epoch| {
+            cache
+                .as_ref()
+                .filter(|cache| cache.epoch == epoch)
+                .and_then(|cache| {
+                    cache
+                        .entries
+                        .iter()
+                        .find(|entry| entry.column_widths == column_widths)
+                })
+        });
+        let heights = display_rows
+            .iter()
+            .zip(&metrics)
+            .enumerate()
+            .map(|(index, (row, metric))| {
+                cached
+                    .filter(|entry| entry.rows.get(index) == Some(metric))
+                    .and_then(|entry| entry.heights.get(index))
+                    .copied()
+                    .unwrap_or_else(|| match row {
+                        DisplayRow::Data(row) => self.wrapped_row_height(
+                            row,
+                            column_widths,
+                            &selection_descendants,
+                            show_tree_gutter,
+                            highlighted_id.as_ref(),
+                        ),
+                        DisplayRow::SelectionPlaceholder { .. } => self.row_height,
+                    })
+            })
+            .collect::<Vec<_>>();
+        drop(cache);
+        let geometry = VisibleRowGeometry::new(heights.iter().copied());
+        self.cache_wrapped_row_geometry(column_widths, metrics, heights, geometry.clone());
+        geometry
+    }
+
+    fn wrapped_row_metric(
+        &self,
+        row: &DisplayRow<'_, T, Id>,
+        selection_descendants: &HashMap<Id, Vec<Id>>,
+        show_tree_gutter: bool,
+        highlighted_id: Option<&Id>,
+    ) -> WrappedRowMetric<Id> {
+        match row {
+            DisplayRow::Data(row) => WrappedRowMetric::Data {
+                id: row.id.clone(),
+                depth: row.depth,
+                has_children: row.has_children,
+                expanded: row.expanded,
+                highlighted: highlighted_id == Some(&row.id),
+                focused: self.focused,
+                prefix_width: self.row_prefix_width(row, selection_descendants, show_tree_gutter),
+            },
+            DisplayRow::SelectionPlaceholder {
+                count,
+                depth,
+                focused,
+            } => WrappedRowMetric::SelectionPlaceholder {
+                count: *count,
+                depth: *depth,
+                focused: *focused,
+            },
+        }
+    }
+
+    fn cached_wrapped_row_geometry(
+        &self,
+        column_widths: &[usize],
+        rows: &[WrappedRowMetric<Id>],
+    ) -> Option<VisibleRowGeometry> {
+        let epoch = self.wrap_geometry_epoch?;
+        self.wrapped_row_geometry_cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| cache.epoch == epoch)
+            .and_then(|cache| {
+                cache
+                    .entries
+                    .iter()
+                    .find(|entry| entry.column_widths == column_widths && entry.rows == rows)
+            })
+            .map(|entry| entry.geometry.clone())
+    }
+
+    fn cache_wrapped_row_geometry(
+        &self,
+        column_widths: &[usize],
+        rows: Vec<WrappedRowMetric<Id>>,
+        heights: Vec<u16>,
+        geometry: VisibleRowGeometry,
+    ) {
+        let Some(epoch) = self.wrap_geometry_epoch else {
+            return;
+        };
+        let mut cache = self.wrapped_row_geometry_cache.borrow_mut();
+        let cache = cache.get_or_insert_with(|| WrappedRowGeometryCache {
+            epoch,
+            entries: Vec::new(),
+        });
+        if cache.epoch != epoch {
+            cache.epoch = epoch;
+            cache.entries.clear();
+        }
+        let entry = WrappedRowGeometryCacheEntry {
+            column_widths: column_widths.to_vec(),
+            rows,
+            heights,
+            geometry,
+        };
+        if let Some(index) = cache
+            .entries
+            .iter()
+            .position(|cached| cached.column_widths == column_widths)
+        {
+            cache.entries[index] = entry;
+        } else {
+            if cache.entries.len() == 2 {
+                cache.entries.clear();
+            }
+            cache.entries.push(entry);
+        }
     }
 
     fn configured_visible_row_geometry(&self) -> VisibleRowGeometry {
