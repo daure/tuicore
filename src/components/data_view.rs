@@ -1156,8 +1156,8 @@ where
         self.start_reorder_highlight_with_colors(
             id,
             settings,
-            theme.highlight_fg(),
-            theme.highlight_bg(),
+            theme.inactive_selected_bg(),
+            theme.selected_bg(),
         );
     }
 
@@ -1165,8 +1165,8 @@ where
         &mut self,
         id: Id,
         settings: AnimationSettings,
-        foreground: ratatui::style::Color,
-        background: ratatui::style::Color,
+        start_background: ratatui::style::Color,
+        end_background: ratatui::style::Color,
     ) {
         let same_row = self.reorder_highlight_id.as_ref() == Some(&id);
         if !same_row {
@@ -1175,7 +1175,7 @@ where
         self.reorder_highlight_id = Some(id);
         self.reorder_highlight_phase = ReorderHighlightPhase::Active;
         self.reorder_highlight_crossfades = matches!(
-            (foreground, background),
+            (start_background, end_background),
             (
                 ratatui::style::Color::Rgb(_, _, _),
                 ratatui::style::Color::Rgb(_, _, _)

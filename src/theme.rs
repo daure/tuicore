@@ -231,6 +231,7 @@ pub struct Theme {
     name: ThemeName,
     selected_fg: Color,
     selected_bg: Color,
+    inactive_selected_bg: Color,
     background_bg: Color,
     surface_bg: Color,
     dialog_bg: Color,
@@ -279,6 +280,7 @@ impl Theme {
             name,
             selected_fg: palette.text,
             selected_bg,
+            inactive_selected_bg: mix_color(palette.base, selected_bg, 0.35),
             background_bg: if transparent_background {
                 Color::Reset
             } else {
@@ -367,6 +369,9 @@ impl Theme {
     }
     pub fn selected_bg(&self) -> Color {
         self.selected_bg
+    }
+    pub fn inactive_selected_bg(&self) -> Color {
+        self.inactive_selected_bg
     }
     pub fn background_bg(&self) -> Color {
         self.background_bg
@@ -459,6 +464,7 @@ impl Theme {
         match role {
             "selected_fg" => self.selected_fg = color,
             "selected_bg" => self.selected_bg = color,
+            "inactive_selected_bg" => self.inactive_selected_bg = color,
             "background_bg" => self.background_bg = color,
             "surface_bg" => self.surface_bg = color,
             "dialog_bg" => self.dialog_bg = color,
@@ -1488,6 +1494,12 @@ mod tests {
             let theme = Theme::named(name);
 
             assert_ne!(theme.selected_bg(), theme.highlight_bg(), "{name:?}");
+            let base = palette_for(name).base;
+            assert!(
+                color_distance_squared(theme.inactive_selected_bg(), base)
+                    < color_distance_squared(theme.selected_bg(), base),
+                "{name:?} inactive selection should be subtler"
+            );
             assert!(
                 color_distance_squared(theme.highlight_bg(), theme.success_fg())
                     >= MIN_INTERACTION_DISTANCE_SQUARED,
@@ -1512,12 +1524,13 @@ mod tests {
     #[test]
     fn selection_role_overrides_still_win() {
         let theme = Theme::from_toml_str(
-            "[colors]\nselected_fg = \"#112233\"\nselected_bg = \"#445566\"\nhighlight_fg = \"#778899\"\nhighlight_bg = \"#aabbcc\"\n",
+            "[colors]\nselected_fg = \"#112233\"\nselected_bg = \"#445566\"\ninactive_selected_bg = \"#223344\"\nhighlight_fg = \"#778899\"\nhighlight_bg = \"#aabbcc\"\n",
         )
         .expect("selection overrides should parse");
 
         assert_eq!(theme.selected_fg(), Color::Rgb(0x11, 0x22, 0x33));
         assert_eq!(theme.selected_bg(), Color::Rgb(0x44, 0x55, 0x66));
+        assert_eq!(theme.inactive_selected_bg(), Color::Rgb(0x22, 0x33, 0x44));
         assert_eq!(theme.highlight_fg(), Color::Rgb(0x77, 0x88, 0x99));
         assert_eq!(theme.highlight_bg(), Color::Rgb(0xaa, 0xbb, 0xcc));
     }

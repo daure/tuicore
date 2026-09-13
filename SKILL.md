@@ -159,7 +159,9 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   per-row `row_height_by`. Both height paths clamp to at least one; `set_row_height` clears a
   dynamic policy and `configured_row_height` remains its fixed fallback. Mutate with set/push/
   append/update/remove APIs. Drain `DataViewTypedEvent<Id>` using `take_events`/`drain_events`;
-  direct operations return `DataViewOutcome`.
+   direct operations return `DataViewOutcome`. Row focus uses `selected_bg`; inactive selection
+   uses the subtler `inactive_selected_bg` role. Rich text and chip colors are preserved, and
+   reorder animation blends between these neutral backgrounds.
 - Columns use `Column::text`/`rich` or `Column::multiline`, then sortable/reorderable/search/filter/
   sizing/visibility builders. Multiline output never auto-grows rows: declared fixed or per-row
   height is authoritative and clips extra lines. Trees use `TreeAdapter`; supporting types:

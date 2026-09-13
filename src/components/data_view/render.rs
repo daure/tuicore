@@ -140,7 +140,7 @@ where
                     self.row_style(highlighted, row, &selection_descendants, base_row_style)
                 }
                 DisplayRow::SelectionPlaceholder { focused, .. } => Some(if *focused {
-                    self.reorder_placeholder_style()
+                    self.highlighted_row_style()
                 } else {
                     self.selected_row_style()
                 }),
@@ -326,26 +326,6 @@ where
                     )
                 })
                 .collect();
-            let selected_style = self.selected_row_style();
-            if (self.row_has_reorder_highlight(&row.id)
-                || highlighted && self.focused
-                || row_style == Some(selected_style))
-                && !self.is_selection_disabled_for_row(row.row)
-            {
-                if let Some(style) = row_style
-                    && let (Some(foreground), Some(background)) = (style.fg, style.bg)
-                {
-                    for line in &mut text.lines {
-                        for span in &mut line.spans {
-                            if span.style.bg.is_some() {
-                                span.style = span.style.fg(background).bg(foreground);
-                            } else if span.style.bg.is_none() {
-                                span.style = span.style.fg(foreground);
-                            }
-                        }
-                    }
-                }
-            }
             let mut paragraph = Paragraph::new(text).scroll((clip_y, cell_area.scroll_x));
             if let Some(style) = row_style {
                 paragraph = paragraph.style(style);
@@ -584,37 +564,27 @@ where
     }
 
     fn highlighted_row_style(&self) -> Style {
-        let theme = theme();
-        Style::default()
-            .fg(theme.highlight_fg())
-            .bg(theme.highlight_bg())
+        self.selected_row_style()
+            .bg(theme().selected_bg())
             .add_modifier(Modifier::BOLD)
     }
 
     fn reorder_highlighted_row_style(&self) -> Style {
         let theme = theme();
-        self.reorder_highlighted_row_style_with_colors(theme.highlight_fg(), theme.highlight_bg())
-    }
-
-    fn reorder_placeholder_style(&self) -> Style {
-        let theme = theme();
-        Style::default()
-            .fg(theme.highlight_bg())
-            .bg(theme.highlight_fg())
-            .add_modifier(Modifier::BOLD)
+        self.reorder_highlighted_row_style_with_colors(
+            theme.inactive_selected_bg(),
+            theme.selected_bg(),
+        )
     }
 
     pub(super) fn reorder_highlighted_row_style_with_colors(
         &self,
-        base_foreground: ratatui::style::Color,
-        base_background: ratatui::style::Color,
+        start_background: ratatui::style::Color,
+        end_background: ratatui::style::Color,
     ) -> Style {
         let progress = self.reorder_highlight_progress();
-        let foreground = lerp_color(base_foreground, base_background, progress);
-        let background = lerp_color(base_background, base_foreground, progress);
-        Style::default()
-            .fg(foreground)
-            .bg(background)
+        self.selected_row_style()
+            .bg(lerp_color(start_background, end_background, progress))
             .add_modifier(Modifier::BOLD)
     }
 
@@ -622,7 +592,7 @@ where
         let theme = theme();
         Style::default()
             .fg(theme.selected_fg())
-            .bg(theme.selected_bg())
+            .bg(theme.inactive_selected_bg())
     }
 
     fn column_areas(

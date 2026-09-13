@@ -1093,7 +1093,7 @@ fn selected_day_entry_highlight_fills_the_view_width() {
     for x in inner.x..inner.right() {
         assert_eq!(
             buffer.cell((x, inner.y)).unwrap().bg,
-            crate::theme().highlight_bg(),
+            crate::theme().selected_bg(),
             "highlight should fill cell at x={x}"
         );
     }
@@ -1254,7 +1254,7 @@ fn shift_selected_day_entries_remain_visible_through_focus_loss_and_gain() {
     for y in inner.y..inner.y + 2 {
         assert_eq!(
             terminal.backend().buffer().cell((inner.x, y)).unwrap().bg,
-            crate::theme().selected_bg(),
+            crate::theme().inactive_selected_bg(),
             "shift-selected row {y} should remain visible"
         );
     }
@@ -1426,7 +1426,7 @@ fn transient_selected_ids_returns_sparse_ctrl_selection_in_display_order() {
     for y in [inner.y, inner.y + 2] {
         assert_eq!(
             terminal.backend().buffer().cell((inner.x, y)).unwrap().bg,
-            crate::theme().selected_bg(),
+            crate::theme().inactive_selected_bg(),
             "ctrl-selected row {y} should remain visible"
         );
     }
@@ -2003,7 +2003,7 @@ fn day_reordering_uses_semantic_highlight_and_emits_scoped_order() {
             .cell((inner.x, inner.y))
             .unwrap()
             .bg,
-        crate::theme().highlight_bg()
+        crate::theme().inactive_selected_bg()
     );
 
     calendar.on_key(Key::Down);

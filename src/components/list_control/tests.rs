@@ -115,7 +115,7 @@ fn removing_tree_row_removes_its_complete_subtree() {
 }
 
 #[test]
-fn tree_reorder_inverts_the_moving_row_highlight() {
+fn tree_reorder_highlights_the_moving_row_with_neutral_colors() {
     let mut control: ListControl<TreeRow, usize> = ListControl::list(
         [
             TreeRow {
@@ -165,8 +165,8 @@ fn tree_reorder_inverts_the_moving_row_highlight() {
         .expect("tree should render");
     let cell = terminal.backend().buffer().cell((0, 1)).unwrap();
     let theme = crate::theme();
-    assert_eq!(cell.fg, theme.highlight_bg());
-    assert_eq!(cell.bg, theme.highlight_fg());
+    assert_eq!(cell.fg, theme.selected_fg());
+    assert_eq!(cell.bg, theme.selected_bg());
 }
 
 fn layout_adding(control: &mut ListControl<Row, usize>, area: Rect) {

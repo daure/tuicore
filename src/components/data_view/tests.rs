@@ -94,7 +94,7 @@ fn assert_embedded_chip_styles(
         assert_eq!(cap.bg, background);
     }
     let content = buffer.cell((1, 0)).unwrap();
-    assert_eq!(content.fg, background);
+    assert_eq!(content.fg, theme().highlight_fg());
     assert_eq!(content.bg, foreground);
 }
 
@@ -1091,13 +1091,13 @@ fn row_height_changes_measurement_and_render_spacing() {
     for y in 0..3 {
         assert_eq!(
             buffer.cell((0, y)).unwrap().bg,
-            crate::theme().highlight_bg()
+            crate::theme().selected_bg()
         );
     }
 }
 
 #[test]
-fn selected_non_cursor_row_normalizes_embedded_chip_colors() {
+fn selected_non_cursor_row_preserves_embedded_chip_colors() {
     let chip = crate::Chip::new("chip")
         .color_role(crate::ChipColorRole::Highlight)
         .line();
@@ -1126,8 +1126,8 @@ fn selected_non_cursor_row_normalizes_embedded_chip_colors() {
     assert_embedded_chip_styles(
         terminal.backend().buffer(),
         chip_width,
-        theme.selected_fg(),
-        theme.selected_bg(),
+        theme.highlight_bg(),
+        theme.inactive_selected_bg(),
     );
 }
 
@@ -2504,8 +2504,8 @@ fn focused_tree_selection_placeholder_uses_target_depth_and_reorder_style() {
         .expect("placeholder label should be indented");
     let theme = theme();
     assert_eq!(cell.symbol(), "M");
-    assert_eq!(cell.fg, theme.highlight_bg());
-    assert_eq!(cell.bg, theme.highlight_fg());
+    assert_eq!(cell.fg, theme.selected_fg());
+    assert_eq!(cell.bg, theme.selected_bg());
 }
 
 #[test]
@@ -3196,13 +3196,13 @@ fn highlighted_row_style_is_applied_to_rendered_cell_content() {
 
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, theme.highlight_fg());
-    assert_eq!(cell.bg, theme.highlight_bg());
+    assert_eq!(cell.fg, theme.selected_fg());
+    assert_eq!(cell.bg, theme.selected_bg());
     assert!(cell.modifier.contains(Modifier::BOLD));
 }
 
 #[test]
-fn focused_highlight_normalizes_embedded_chip_colors() {
+fn focused_highlight_preserves_embedded_chip_colors() {
     let chip = crate::Chip::new("chip")
         .color_role(crate::ChipColorRole::Highlight)
         .line();
@@ -3225,13 +3225,13 @@ fn focused_highlight_normalizes_embedded_chip_colors() {
     assert_embedded_chip_styles(
         terminal.backend().buffer(),
         chip_width,
-        theme.highlight_fg(),
         theme.highlight_bg(),
+        theme.selected_bg(),
     );
 }
 
 #[test]
-fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_clears() {
+fn unfocused_reorder_highlight_blends_neutral_backgrounds_and_clears() {
     let mut view = DataView::list(
         [Row::new(1, "moving"), Row::new(2, "other")],
         |row| row.id,
@@ -3250,13 +3250,10 @@ fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_cl
 
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(
-        cell.fg,
-        lerp_color(theme.highlight_fg(), theme.highlight_bg(), 0.5)
-    );
+    assert_eq!(cell.fg, theme.selected_fg());
     assert_eq!(
         cell.bg,
-        lerp_color(theme.highlight_bg(), theme.highlight_fg(), 0.5)
+        lerp_color(theme.inactive_selected_bg(), theme.selected_bg(), 0.5)
     );
     assert!(cell.modifier.contains(Modifier::BOLD));
     assert!(!cell.modifier.contains(Modifier::REVERSED));
@@ -3271,8 +3268,8 @@ fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_cl
         .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 2)))
         .expect("data view should render");
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, theme.highlight_bg());
-    assert_eq!(cell.bg, theme.highlight_fg());
+    assert_eq!(cell.fg, theme.selected_fg());
+    assert_eq!(cell.bg, theme.selected_bg());
 
     view.clear_reorder_highlight(settings);
     Animated::tick(&mut view, Duration::from_millis(100), settings);
@@ -3282,11 +3279,11 @@ fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_cl
         .expect("data view should render");
     assert_eq!(
         terminal.backend().buffer().cell((0, 0)).unwrap().fg,
-        lerp_color(theme.highlight_fg(), theme.highlight_bg(), 0.5)
+        theme.selected_fg()
     );
     assert_eq!(
         terminal.backend().buffer().cell((0, 0)).unwrap().bg,
-        lerp_color(theme.highlight_bg(), theme.highlight_fg(), 0.5)
+        lerp_color(theme.inactive_selected_bg(), theme.selected_bg(), 0.5)
     );
 
     Animated::tick(&mut view, Duration::from_millis(100), settings);
@@ -3301,7 +3298,7 @@ fn unfocused_reorder_highlight_crossfades_only_moving_row_to_full_inverse_and_cl
 }
 
 #[test]
-fn disabled_animation_snaps_reorder_render_to_inverse_and_normal() {
+fn disabled_animation_snaps_reorder_background_to_selected_and_normal() {
     let mut view = DataView::list(
         [Row::new(1, "moving")],
         |row| row.id,
@@ -3319,8 +3316,8 @@ fn disabled_animation_snaps_reorder_render_to_inverse_and_normal() {
         .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
         .expect("data view should render");
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, theme.highlight_bg());
-    assert_eq!(cell.bg, theme.highlight_fg());
+    assert_eq!(cell.fg, theme.selected_fg());
+    assert_eq!(cell.bg, theme.selected_bg());
 
     view.clear_reorder_highlight(settings);
     terminal
@@ -3332,9 +3329,9 @@ fn disabled_animation_snaps_reorder_render_to_inverse_and_normal() {
 }
 
 #[test]
-fn highlighted_row_forces_readable_foreground_and_preserves_rich_modifiers() {
+fn highlighted_row_preserves_semantic_foreground_and_rich_modifiers() {
     let semantic_color = crate::theme().error_fg();
-    let view = DataView::new([Row::new(1, "BIG")], |row| row.id)
+    let mut view = DataView::new([Row::new(1, "BIG")], |row| row.id)
         .column(Column::rich(
             "size",
             "Size",
@@ -3348,7 +3345,8 @@ fn highlighted_row_forces_readable_foreground_and_preserves_rich_modifiers() {
                 ))
             },
         ))
-        .focused(true);
+        .focused(true)
+        .show_inactive_highlight(true);
     let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal should build");
 
     terminal
@@ -3356,14 +3354,26 @@ fn highlighted_row_forces_readable_foreground_and_preserves_rich_modifiers() {
         .expect("data view should render");
 
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
-    assert_eq!(cell.fg, crate::theme().highlight_fg());
-    assert_eq!(cell.bg, crate::theme().highlight_bg());
+    assert_eq!(cell.symbol(), "B");
+    assert_eq!(cell.fg, semantic_color);
+    assert_eq!(cell.bg, crate::theme().selected_bg());
     assert!(cell.modifier.contains(Modifier::BOLD));
+    assert!(cell.modifier.contains(Modifier::UNDERLINED));
+
+    view.set_focused(false);
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+    let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+    assert_eq!(cell.symbol(), "B");
+    assert_eq!(cell.fg, semantic_color);
+    assert_eq!(cell.bg, theme().inactive_selected_bg());
+    assert!(!cell.modifier.contains(Modifier::BOLD));
     assert!(cell.modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]
-fn moving_rich_row_overrides_span_color_and_preserves_modifiers_at_full_inverse() {
+fn moving_rich_row_preserves_semantic_colors_and_modifiers() {
     let semantic_color = crate::theme().error_fg();
     let settings = AnimationSettings::default();
     let theme = crate::theme();
@@ -3396,15 +3406,15 @@ fn moving_rich_row_overrides_span_color_and_preserves_modifiers_at_full_inverse(
 
         let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
         assert_eq!(cell.symbol(), "m");
-        assert_eq!(cell.fg, theme.highlight_bg());
-        assert_eq!(cell.bg, theme.highlight_fg());
+        assert_eq!(cell.fg, semantic_color);
+        assert_eq!(cell.bg, theme.selected_bg());
         assert!(cell.modifier.contains(Modifier::BOLD));
         assert!(cell.modifier.contains(Modifier::UNDERLINED));
     }
 }
 
 #[test]
-fn ansi_and_indexed_reorder_colors_snap_inverse_until_animated_exit_finishes() {
+fn ansi_and_indexed_reorder_backgrounds_snap_until_animated_exit_finishes() {
     let settings = AnimationSettings::default();
 
     for (foreground, background) in [
@@ -3419,8 +3429,8 @@ fn ansi_and_indexed_reorder_colors_snap_inverse_until_animated_exit_finishes() {
         view.start_reorder_highlight_with_colors(1, settings, foreground, background);
         assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
         let style = view.reorder_highlighted_row_style_with_colors(foreground, background);
-        assert_eq!(style.fg, Some(background));
-        assert_eq!(style.bg, Some(foreground));
+        assert_eq!(style.fg, Some(theme().selected_fg()));
+        assert_eq!(style.bg, Some(background));
 
         Animated::tick(&mut view, Duration::from_secs(1), settings);
         assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
@@ -3429,8 +3439,8 @@ fn ansi_and_indexed_reorder_colors_snap_inverse_until_animated_exit_finishes() {
         Animated::tick(&mut view, Duration::from_millis(100), settings);
         assert_eq!(view.reorder_highlight_progress_for_test(), 1.0);
         let style = view.reorder_highlighted_row_style_with_colors(foreground, background);
-        assert_eq!(style.fg, Some(background));
-        assert_eq!(style.bg, Some(foreground));
+        assert_eq!(style.fg, Some(theme().selected_fg()));
+        assert_eq!(style.bg, Some(background));
 
         Animated::tick(&mut view, Duration::from_millis(50), settings);
         assert_eq!(view.reorder_highlight_progress_for_test(), 0.0);
@@ -3479,8 +3489,8 @@ fn focused_reorder_exit_clears_at_normal_highlight_without_extra_frame() {
         .draw(|frame| view.render(frame, Rect::new(0, 0, 10, 1)))
         .expect("data view should render");
     let endpoint = terminal.backend().buffer().cell((0, 0)).unwrap().clone();
-    assert_eq!(endpoint.fg, theme.highlight_fg());
-    assert_eq!(endpoint.bg, theme.highlight_bg());
+    assert_eq!(endpoint.fg, theme.selected_fg());
+    assert_eq!(endpoint.bg, theme.selected_bg());
 
     Animated::tick(&mut view, Duration::from_millis(1), settings);
     terminal
@@ -3566,8 +3576,8 @@ fn previous_highlight_background_is_cleared_after_navigation() {
     let theme = crate::theme();
     let old_highlight_cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     let current_highlight_cell = terminal.backend().buffer().cell((0, 1)).unwrap();
-    assert_ne!(old_highlight_cell.bg, theme.highlight_bg());
-    assert_eq!(current_highlight_cell.bg, theme.highlight_bg());
+    assert_ne!(old_highlight_cell.bg, theme.selected_bg());
+    assert_eq!(current_highlight_cell.bg, theme.selected_bg());
 }
 
 #[test]
@@ -3607,11 +3617,11 @@ fn inactive_highlight_uses_selected_style_when_enabled() {
     let theme = crate::theme();
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     assert_eq!(cell.fg, theme.selected_fg());
-    assert_eq!(cell.bg, theme.selected_bg());
+    assert_eq!(cell.bg, theme.inactive_selected_bg());
 }
 
 #[test]
-fn inactive_highlight_normalizes_embedded_chip_colors() {
+fn inactive_highlight_preserves_embedded_chip_colors() {
     let chip = crate::Chip::new("chip")
         .color_role(crate::ChipColorRole::Highlight)
         .line();
@@ -3634,8 +3644,8 @@ fn inactive_highlight_normalizes_embedded_chip_colors() {
     assert_embedded_chip_styles(
         terminal.backend().buffer(),
         chip_width,
-        theme.selected_fg(),
-        theme.selected_bg(),
+        theme.highlight_bg(),
+        theme.inactive_selected_bg(),
     );
 }
 
@@ -3683,8 +3693,8 @@ fn focused_selected_cursor_uses_focus_style_and_keeps_selection_glyph() {
     let glyph_cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     let content_cell = terminal.backend().buffer().cell((4, 0)).unwrap();
     assert_eq!(glyph_cell.symbol(), "[");
-    assert_eq!(glyph_cell.fg, theme.highlight_fg());
-    assert_eq!(content_cell.bg, theme.highlight_bg());
+    assert_eq!(glyph_cell.fg, theme.selected_fg());
+    assert_eq!(content_cell.bg, theme.selected_bg());
     assert!(content_cell.modifier.contains(Modifier::BOLD));
 }
 
@@ -3707,7 +3717,7 @@ fn single_selection_styles_row_without_selection_glyph() {
     let first_content_cell = terminal.backend().buffer().cell((0, 1)).unwrap();
     assert_eq!(first_content_cell.symbol(), "s");
     assert_eq!(first_content_cell.fg, theme.selected_fg());
-    assert_eq!(first_content_cell.bg, theme.selected_bg());
+    assert_eq!(first_content_cell.bg, theme.inactive_selected_bg());
 }
 
 #[test]
