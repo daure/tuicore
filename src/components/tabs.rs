@@ -367,6 +367,12 @@ where
         }
     }
 
+    pub fn clear_last_focused_target(&mut self, selected: usize) {
+        if let Some(target) = self.last_focused_targets.get_mut(selected) {
+            *target = None;
+        }
+    }
+
     fn reset_selection(&mut self) {
         self.selected = self.clamp_selected(0);
         self.previous_selected = self.selected;

@@ -383,6 +383,10 @@ where
         self
     }
 
+    pub fn set_placeholder(&mut self, placeholder: impl Into<String>) {
+        self.placeholder = placeholder.into();
+    }
+
     pub fn field_padding_left(mut self, padding: u16) -> Self {
         self.field_padding_left = padding;
         self

@@ -94,6 +94,11 @@ where
         self.menu.is_open()
     }
 
+    pub fn close(&mut self) {
+        self.menu.close();
+        self.sync_trigger_label();
+    }
+
     fn trigger_key() -> ChildKey {
         ChildKey::new(TRIGGER_SLOT)
     }

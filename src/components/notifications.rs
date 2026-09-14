@@ -306,7 +306,7 @@ impl ToastRack {
     fn render_toast(&self, frame: &mut Frame, toast: &ActiveToast, area: Rect) {
         let palette = theme();
         let accent = match toast.notification.kind() {
-            NotificationKind::Info => palette.accent_fg(),
+            NotificationKind::Info => palette.info_fg(),
             NotificationKind::Success => palette.success_fg(),
             NotificationKind::Warning => palette.warning_fg(),
             NotificationKind::Error => palette.error_fg(),

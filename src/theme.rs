@@ -240,6 +240,7 @@ pub struct Theme {
     muted_fg: Color,
     subtle_fg: Color,
     accent_fg: Color,
+    info_fg: Color,
     success_fg: Color,
     error_fg: Color,
     diff_added_fg: Color,
@@ -274,6 +275,7 @@ impl Theme {
         let selected_bg = neutral_selection_background(&palette);
         let highlight_bg = interaction_highlight_background(&palette);
         let highlight_fg = strongest_contrast(palette.base, palette.text, highlight_bg);
+        let info_fg = readable_info_foreground(info_source_color(name, &palette), &palette);
         let diff = diff_palette_for(&palette);
         let transparent_background = name == ThemeName::LucentOrng;
         Self {
@@ -301,6 +303,7 @@ impl Theme {
             muted_fg: palette.muted,
             subtle_fg: palette.subtle,
             accent_fg: palette.cyan,
+            info_fg,
             success_fg: palette.green,
             error_fg: palette.red,
             diff_added_fg: diff.added_fg,
@@ -400,6 +403,9 @@ impl Theme {
     pub fn accent_fg(&self) -> Color {
         self.accent_fg
     }
+    pub fn info_fg(&self) -> Color {
+        self.info_fg
+    }
     pub fn success_fg(&self) -> Color {
         self.success_fg
     }
@@ -473,6 +479,7 @@ impl Theme {
             "muted_fg" => self.muted_fg = color,
             "subtle_fg" => self.subtle_fg = color,
             "accent_fg" => self.accent_fg = color,
+            "info_fg" => self.info_fg = color,
             "success_fg" => self.success_fg = color,
             "error_fg" => self.error_fg = color,
             "diff_added_fg" => self.diff_added_fg = color,
@@ -611,6 +618,36 @@ fn readable_against(color: Color, background: Color, text: Color) -> Color {
         }
     }
     color
+}
+
+fn info_source_color(name: ThemeName, palette: &Palette) -> Color {
+    match name {
+        ThemeName::Dracula => rgb([0xbd, 0x93, 0xf9]),
+        ThemeName::Matrix => rgb([0x66, 0xb3, 0xff]),
+        ThemeName::LucentOrng => rgb([0x7d, 0xcf, 0xff]),
+        ThemeName::Orng => rgb([0x7a, 0xa2, 0xf7]),
+        ThemeName::Everforest => rgb([0x7f, 0x9f, 0xce]),
+        ThemeName::Monokai => rgb([0xae, 0x81, 0xff]),
+        ThemeName::Nord => rgb([0xb4, 0x8e, 0xad]),
+        ThemeName::Synthwave84 => rgb([0xb5, 0x8c, 0xff]),
+        ThemeName::Zenburn => rgb([0x8c, 0xb4, 0xd8]),
+        _ => palette.blue,
+    }
+}
+
+fn readable_info_foreground(source: Color, palette: &Palette) -> Color {
+    if contrast_ratio(source, palette.base) >= 4.5 {
+        return source;
+    }
+
+    let mut foreground = source;
+    for _ in 0..16 {
+        foreground = mix_color(foreground, palette.text, 0.18);
+        if contrast_ratio(foreground, palette.base) >= 4.5 {
+            return foreground;
+        }
+    }
+    palette.text
 }
 
 fn neutral_selection_background(palette: &Palette) -> Color {
@@ -1366,6 +1403,14 @@ mod tests {
     }
 
     #[test]
+    fn info_role_toml_override_wins() {
+        let theme = Theme::from_toml_str("[colors]\ninfo_fg = \"#112233\"\n")
+            .expect("info override should parse");
+
+        assert_eq!(theme.info_fg(), Color::Rgb(0x11, 0x22, 0x33));
+    }
+
+    #[test]
     fn persisted_theme_name_survives_reload_without_discarding_other_config() {
         let path = temp_theme_path();
         fs::create_dir_all(path.parent().unwrap()).expect("temp config directory should build");
@@ -1482,6 +1527,39 @@ mod tests {
                 theme.weather_rain_fg(),
             ] {
                 assert!(contrast_ratio(color, contrast_background) >= 3.0);
+            }
+        }
+    }
+
+    #[test]
+    fn info_roles_keep_accessible_contrast_against_theme_base() {
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+
+            assert!(
+                contrast_ratio(theme.info_fg(), palette_for(name).base) >= 4.5,
+                "{name:?} info contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn info_roles_are_distinct_from_semantic_roles_for_built_in_themes() {
+        const MIN_INFO_DISTANCE_SQUARED: u32 = 40 * 40;
+
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+
+            for (role, color) in [
+                ("accent", theme.accent_fg()),
+                ("success", theme.success_fg()),
+                ("warning", theme.warning_fg()),
+                ("error", theme.error_fg()),
+            ] {
+                assert!(
+                    color_distance_squared(theme.info_fg(), color) >= MIN_INFO_DISTANCE_SQUARED,
+                    "{name:?} info/{role} distance"
+                );
             }
         }
     }

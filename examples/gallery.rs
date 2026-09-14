@@ -3041,6 +3041,7 @@ impl PreviewState {
             ("muted_fg", theme.muted_fg()),
             ("subtle_fg", theme.subtle_fg()),
             ("accent_fg", theme.accent_fg()),
+            ("info_fg", theme.info_fg()),
             ("success_fg", theme.success_fg()),
             ("error_fg", theme.error_fg()),
             ("border_fg", theme.border_fg()),
