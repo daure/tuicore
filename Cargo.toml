@@ -89,3 +89,8 @@ merman = { version = "0.7", default-features = false, features = ["raster"] }
 
 [dev-dependencies]
 dotenvy = { version = "0.15" }
+
+[profile.dist]
+inherits = "release"
+lto = "off"
+strip = "symbols"

@@ -4,14 +4,21 @@ Reusable `ratatui` components and direct `crossterm` tree runtime helpers.
 
 ## Add to your app
 
-After release, add the crates.io version to your app's `Cargo.toml`:
+Add the crates.io version to your app's `Cargo.toml`:
 
 ```toml
 [dependencies]
-tuicore = "0.1"
+tuicore = "0.40"
 ```
 
-For local development, use `tuicore = { path = "../tuicore" }` instead.
+For local development against your working copy, keep the version dependency in the app and add a personal override to `~/.cargo/config.toml`:
+
+```toml
+[patch.crates-io]
+tuicore = { path = "/absolute/path/to/tuicore" }
+```
+
+Cargo uses the local version when it satisfies the dependency requirement and is selected by the lockfile; run `cargo update -p tuicore` when needed. CI machines without this override use the published crate. Publish required Tuicore changes before updating consumer applications.
 
 Minimal app:
 
@@ -59,28 +66,48 @@ Useful public exports:
 - Shared state helpers: `ScrollState`, `FocusChain`, `FocusRouter`
 - Runtime config: `init`, `theme`, `preset`, `keybindings`, `animation_settings`
 
-Run examples:
+Run the gallery from source:
 
 ```sh
-cargo run --example gallery
+cargo run --bin gallery
 ```
+
+## Install the gallery
+
+The [latest GitHub Release](https://github.com/daure/tuicore/releases/latest) provides a prebuilt gallery for **Ubuntu 24.04 or newer on x86_64**, plus the library's `.crate` package and SHA-256 checksums. Rust is not required to run the gallery.
+
+```sh
+installer="$(mktemp)"
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/daure/tuicore/releases/latest/download/tuicore-installer.sh \
+  -o "$installer" && sh "$installer"
+rm -f "$installer"
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+gallery --version
+gallery
+```
+
+The installer places `gallery` in `$CARGO_HOME/bin` (default `~/.cargo/bin`). Close the gallery and rerun the installer commands to update it. A terminal is required for interactive use; `gallery --help` and `gallery --version` work without one. Applications use Tuicore through Cargo, independently of the gallery installation.
 
 ## Release
 
-Prerequisites: Bash, Git, Cargo, Python 3, a clean working tree, and crates.io
-credentials configured with `cargo login`.
+From a clean `main` checkout with Git push access, Python 3.11+, Rust, and an authenticated GitHub CLI (`gh auth login`):
 
 ```sh
-cargo patch
-cargo minor
-cargo major
+cargo release          # patch release
+cargo release minor
+cargo release major
+# Equivalent command without compiling the tiny Cargo helper:
+./scripts/release.sh patch
 ```
 
-These repository-local Cargo aliases work directly inside the Tuicore checkout.
-Direct fallback: `./scripts/release.sh [major|minor|patch]`. With no argument, it
-bumps the minor version (for example, `0.1.0` to `0.2.0`).
-It updates the lockfile, tests, asks once before committing, validating, tagging, and
-publishing. It never pushes; successful publishing prints the exact push commands.
+The command checks the branch and version availability, bumps Tuicore, updates the lockfile without personal Cargo overrides, commits, and atomically pushes `main` and its `vX.Y.Z` tag. It returns without waiting for compilation. Existing `cargo patch`, `cargo minor`, and `cargo major` aliases use the same release flow.
+
+The [Release workflow](https://github.com/daure/tuicore/actions/workflows/release.yml) checks formatting, runs strict Clippy and tests, validates the crate package, then builds and smoke-tests the gallery with cargo-dist. After checks pass it publishes the library to crates.io using the encrypted `CARGO_REGISTRY_TOKEN` repository secret, then publishes the GitHub Release containing the library package, gallery archive, installer, and checksums. Configure that secret with a token authorized to publish `tuicore`.
+
+Normal pushes to `main` run checks and warm debug and optimized dependency caches. Tagged releases restore those caches; only `main` saves them so later tags can access them. Release-version commits skip the redundant branch build. Gallery builds disable LTO and strip symbols to favor build speed. No temporary Actions artifact uploads are needed. First builds after cache eviction or toolchain/dependency changes can take longer. To warm the cache manually without publishing, run `gh workflow run release.yml --ref main`.
+
+Inspect runs with `gh run list --workflow release.yml` and `gh run watch RUN_ID`. Retry transient failures with `gh run rerun RUN_ID --failed`; an already-published, non-yanked crate version is skipped. For a source fix, commit the fix and make a new patch release. Tags are immutable: do not move a published tag. If the local push fails, inspect the release commit/tag and use the retry command printed by the script.
 
 ## License
 

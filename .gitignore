@@ -4,3 +4,4 @@
 /.rig-chatgpt/
 *.log
 *.tmp
+__pycache__/
