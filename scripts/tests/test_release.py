@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -107,6 +109,25 @@ class PublishTests(unittest.TestCase):
         with patch.object(self.module, "registry_version", return_value=None), patch.dict(self.module.os.environ, {"CARGO_REGISTRY_TOKEN": "test"}), patch.object(self.module.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "cargo")):
             with self.assertRaises(subprocess.CalledProcessError):
                 self.module.main()
+
+
+class PublishedCrateTests(unittest.TestCase):
+    def test_only_verified_bytes_are_saved(self):
+        spec = importlib.util.spec_from_file_location("fetch_crate", SCRIPTS / "fetch-crate.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        data = b"published package"
+        checksum = hashlib.sha256(data).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            with patch.object(module, "registry_version", return_value={"yanked": False, "checksum": checksum}), patch.object(module.urllib.request, "urlopen", return_value=io.BytesIO(data)):
+                module.fetch_crate("0.40.1", destination)
+            self.assertEqual((destination / "tuicore-0.40.1.crate").read_bytes(), data)
+            self.assertIn(checksum, (destination / "tuicore-0.40.1.crate.sha256").read_text())
+            with patch.object(module, "registry_version", return_value={"yanked": False, "checksum": "wrong"}), patch.object(module.urllib.request, "urlopen", return_value=io.BytesIO(data)):
+                with self.assertRaisesRegex(ValueError, "checksum"):
+                    module.fetch_crate("0.40.2", destination)
+            self.assertFalse((destination / "tuicore-0.40.2.crate").exists())
 
 
 if __name__ == "__main__":
