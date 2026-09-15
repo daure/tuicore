@@ -203,13 +203,13 @@ where
             ctx.stop_propagation();
             return Some(EventOutcome::Handled);
         }
-        if let Some(direction) = direction {
-            if shift || control {
-                self.update_tree_selection(direction, shift, ctx.animation());
-                ctx.request_redraw();
-                ctx.stop_propagation();
-                return Some(EventOutcome::Handled);
-            }
+        if let Some(direction) = direction
+            && (shift || control)
+        {
+            self.update_tree_selection(direction, shift, ctx.animation());
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return Some(EventOutcome::Handled);
         }
         None
     }
@@ -404,12 +404,8 @@ where
         if !shift && !control {
             return None;
         }
-        let Some(delta) = direction else {
-            return None;
-        };
-        let Some(current) = self.data_view.highlighted_id() else {
-            return None;
-        };
+        let delta = direction?;
+        let current = self.data_view.highlighted_id()?;
         let ids = self.flat_scope_ids(&current, self.data_view.reorder_visible_ids());
         if self
             .flat_range_selection
@@ -418,9 +414,7 @@ where
         {
             self.clear_flat_range_selection();
         }
-        let Some(current_index) = ids.iter().position(|id| id == &current) else {
-            return None;
-        };
+        let current_index = ids.iter().position(|id| id == &current)?;
         let destination_index = current_index
             .saturating_add_signed(delta)
             .min(ids.len().saturating_sub(1));

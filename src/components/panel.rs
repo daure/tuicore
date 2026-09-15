@@ -1349,8 +1349,10 @@ mod tests {
 
     #[test]
     fn clamp_scroll_clamps_offset_after_content_shrinks() {
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let area = Rect::new(0, 0, 10, 5);
         let mut panel = Panel::<()>::new()
             .content((0..20).map(|line| format!("line {line}")))
@@ -1425,8 +1427,10 @@ mod tests {
 
     #[test]
     fn focus_changes_snap_when_global_animations_are_disabled() {
-        let mut animation = AnimationSettings::default();
-        animation.enabled = false;
+        let animation = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
 
         let mut panel = Panel::<()>::new().focused(true);
         panel.start_focus_color_transition(false, animation);

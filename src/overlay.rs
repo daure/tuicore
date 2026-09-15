@@ -82,9 +82,12 @@ struct PortalTask<'a> {
     render: PortalRender<'a>,
 }
 
+type PortalRenderFn<'a> = dyn FnOnce(&mut Frame<'_>, Rect) + 'a;
+type PortalRenderWithCtxFn<'a> = dyn FnOnce(&mut Frame<'_>, Rect, &mut RenderCtx<'a>) + 'a;
+
 enum PortalRender<'a> {
-    Simple(Box<dyn FnOnce(&mut Frame<'_>, Rect) + 'a>),
-    WithCtx(Box<dyn FnOnce(&mut Frame<'_>, Rect, &mut RenderCtx<'a>) + 'a>),
+    Simple(Box<PortalRenderFn<'a>>),
+    WithCtx(Box<PortalRenderWithCtxFn<'a>>),
 }
 
 impl OverlayId {

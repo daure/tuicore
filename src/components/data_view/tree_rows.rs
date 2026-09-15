@@ -476,6 +476,10 @@ where
         output
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Recursive traversal shares borrowed index tables and cycle detection state"
+    )]
     fn push_parent_tree_rows<'a>(
         &self,
         parent_id: Option<Id>,
@@ -583,6 +587,10 @@ where
         output
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Recursive traversal shares borrowed index tables"
+    )]
     fn push_level_tree_rows<'a>(
         &self,
         index: usize,

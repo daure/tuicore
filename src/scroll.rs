@@ -49,8 +49,9 @@ pub struct ScrollDelta {
     pub y: isize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScrollAxes {
+    #[default]
     Vertical,
     Horizontal,
     Both,
@@ -828,12 +829,6 @@ impl ScrollAxes {
     }
 }
 
-impl Default for ScrollAxes {
-    fn default() -> Self {
-        Self::Vertical
-    }
-}
-
 impl Default for ScrollBehavior {
     fn default() -> Self {
         Self {
@@ -978,8 +973,10 @@ mod tests {
                 easing: None,
             },
         });
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
 
         let outcome = scroll.scroll_to(
             ScrollOffset::new(99, 99),
@@ -1065,8 +1062,10 @@ mod tests {
     #[test]
     fn controlled_horizontal_vim_keys_jump_eight_columns() {
         let mut scroll = ScrollState::new(ScrollAxes::Horizontal);
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
 
         let right = scroll.on_key(
             KeyEvent {
@@ -1100,8 +1099,10 @@ mod tests {
     #[test]
     fn vim_top_and_bottom_keys_match_home_and_end_scrolling() {
         let mut scroll = ScrollState::new(ScrollAxes::Vertical);
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
 
         let bottom = scroll.on_key(
             KeyEvent::from(Key::Char('G')),

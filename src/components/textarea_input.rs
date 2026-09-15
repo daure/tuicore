@@ -47,6 +47,8 @@ const SHARED_SYNTAX_CACHE_MAX_CHARS: usize = 1_000_000;
 static SYNTAX_WORKER: OnceLock<Option<SyncSender<SyntaxRequest>>> = OnceLock::new();
 static SHARED_SYNTAX_CACHE: OnceLock<Mutex<VecDeque<SyntaxCache>>> = OnceLock::new();
 
+type ActionHotkey<M> = (String, Box<dyn Fn(String) -> M>);
+
 pub struct TextareaInput<M = ()> {
     value: String,
     placeholder: String,
@@ -56,7 +58,7 @@ pub struct TextareaInput<M = ()> {
     hotkey_enters_edit: bool,
     focused_events_before_global_hotkeys: bool,
     editor_hotkey: Option<String>,
-    action_hotkeys: Vec<(String, Box<dyn Fn(String) -> M>)>,
+    action_hotkeys: Vec<ActionHotkey<M>>,
     cursor: usize,
     cursor_reset_on_edit: bool,
     preserve_scroll_position: bool,
@@ -1131,6 +1133,10 @@ impl<M> TextareaInput<M> {
         VisibleLines { lines, first_line }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Text rendering consumes precomputed cursor, search, and style state"
+    )]
     fn visible_wrapped_lines_from_with_cursor(
         &self,
         width: usize,
@@ -1173,6 +1179,10 @@ impl<M> TextareaInput<M> {
         VisibleLines { lines, first_line }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Text rendering consumes precomputed cursor, search, and style state"
+    )]
     fn render_line(
         &self,
         range: LineRange,
@@ -1784,7 +1794,7 @@ impl<M> TextareaInput<M> {
     fn handle_scroll_key(&mut self, key: KeyEvent, ctx: &mut EventCtx<M>) -> bool {
         if self.area.is_empty()
             || !(Self::scroll_page_key(key) || self.scroll_navigation_key(key))
-            || (!self.has_vertical_overflow() && !(self.insert_mode && Self::scroll_page_key(key)))
+            || !(self.has_vertical_overflow() || self.insert_mode && Self::scroll_page_key(key))
         {
             return false;
         }
@@ -1835,12 +1845,8 @@ impl<M> TextareaInput<M> {
         let geometry = self.scroll_geometry(self.area);
         let ranges = self.line_ranges();
         let (cursor_line, cursor_col) = self.cursor_line_col(&ranges);
-        let cursor_row = self.cursor_visual_row(
-            geometry.viewport.width as usize,
-            &ranges,
-            cursor_line,
-            cursor_col,
-        );
+        let cursor_row =
+            self.cursor_visual_row(geometry.viewport.width, &ranges, cursor_line, cursor_col);
         let offset = self.scroll.target_offset();
         let viewport_height = geometry.viewport.height;
         let target_y = if cursor_row < offset.y {
@@ -1867,7 +1873,7 @@ impl<M> TextareaInput<M> {
 
     fn measure_content_width(&self, natural_width: u16, proposal: LayoutProposal) -> Option<usize> {
         match proposal.width {
-            AxisProposal::Unbounded => return None,
+            AxisProposal::Unbounded => None,
             AxisProposal::AtMost(width) => {
                 Some(self.inner_width(width).min(natural_width as usize).max(1))
             }
@@ -1906,7 +1912,7 @@ impl<M> TextareaInput<M> {
         if lines.is_empty() {
             return;
         }
-        let clamped = lines.drain(..).collect::<Vec<_>>().join("\n");
+        let clamped = std::mem::take(&mut lines).join("\n");
         if self.value != clamped {
             self.value = clamped;
             self.invalidate_syntax_cache();
@@ -2113,17 +2119,16 @@ impl<M> TextareaInput<M> {
         if self.language != Some(cache.language) || cache.theme_name != theme_name {
             return value_style;
         }
-        let cache_position = if cache.revision == self.syntax_revision {
-            position
-        } else if position < self.stale_syntax_prefix_len {
-            position
-        } else if let Some(suffix) = self.stale_syntax_suffix
-            && position >= suffix.current_start
-        {
-            suffix.cache_start + position - suffix.current_start
-        } else {
-            return value_style;
-        };
+        let cache_position =
+            if cache.revision == self.syntax_revision || position < self.stale_syntax_prefix_len {
+                position
+            } else if let Some(suffix) = self.stale_syntax_suffix
+                && position >= suffix.current_start
+            {
+                suffix.cache_start + position - suffix.current_start
+            } else {
+                return value_style;
+            };
         if cache.source.get(cache_position) != Some(&value) {
             return value_style;
         }
@@ -2342,10 +2347,8 @@ impl<M> TuiNode<M> for TextareaInput<M> {
         if self.scroll_navigation_key(*key) && self.handle_scroll_key(*key, ctx) {
             return EventOutcome::Handled;
         }
-        if self.disabled || !self.insert_mode {
-            if focus_navigation_key(*key) {
-                return EventOutcome::Ignored;
-            }
+        if (self.disabled || !self.insert_mode) && focus_navigation_key(*key) {
+            return EventOutcome::Ignored;
         }
         if self.handle_scroll_key(*key, ctx) {
             return EventOutcome::Handled;

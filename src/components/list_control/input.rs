@@ -2,8 +2,8 @@ use super::{DROPDOWN_FOCUS, INPUT_FOCUS};
 use crate::components::{Dropdown, TextInput};
 
 pub(super) enum ListControlInput<M> {
-    Text(TextInput<M>),
-    Dropdown(Option<Dropdown<(String, String), String>>),
+    Text(Box<TextInput<M>>),
+    Dropdown(Option<Box<Dropdown<(String, String), String>>>),
 }
 
 impl<M> ListControlInput<M> {
@@ -53,12 +53,12 @@ impl<M> ListControlInput<M> {
                 input.move_cursor_to_end();
             }
             Self::Dropdown(input) => {
-                let dropdown = input.take().expect("dropdown input is present");
-                *input = Some(if value.is_empty() {
+                let dropdown = *input.take().expect("dropdown input is present");
+                *input = Some(Box::new(if value.is_empty() {
                     dropdown.selected([])
                 } else {
                     dropdown.selected_one(value)
-                });
+                }));
             }
         }
     }

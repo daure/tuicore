@@ -4,18 +4,13 @@ use ratatui::style::Style;
 
 use crate::{BorderKind, Theme, border_chars, preset, theme};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SeparatorColorRole {
+    #[default]
     Border,
     Muted,
     Subtle,
     Accent,
-}
-
-impl Default for SeparatorColorRole {
-    fn default() -> Self {
-        Self::Border
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

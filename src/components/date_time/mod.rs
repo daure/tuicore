@@ -200,25 +200,6 @@ fn month_abbr(month: Month) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_canceled_picker_outcomes_request_unfocus() {
-        let mut handled_ctx = EventCtx::<()>::default();
-        request_unfocus_if_canceled(&mut handled_ctx, PickerOutcome::handled(true));
-        assert_eq!(handled_ctx.focus_request(), None);
-
-        let mut canceled_ctx = EventCtx::<()>::default();
-        request_unfocus_if_canceled(&mut canceled_ctx, PickerOutcome::canceled(false));
-        assert_eq!(
-            canceled_ctx.focus_request(),
-            Some(&crate::FocusRequest::Unfocus)
-        );
-    }
-}
-
 fn parse_editor_date(value: &str) -> Option<Date> {
     let value = value.trim().lines().next()?.trim();
     let mut parts = value.split('-');
@@ -324,4 +305,23 @@ fn plain_digit(key: KeyEvent) -> Option<u8> {
         return None;
     };
     ch.to_digit(10).map(|digit| digit as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_canceled_picker_outcomes_request_unfocus() {
+        let mut handled_ctx = EventCtx::<()>::default();
+        request_unfocus_if_canceled(&mut handled_ctx, PickerOutcome::handled(true));
+        assert_eq!(handled_ctx.focus_request(), None);
+
+        let mut canceled_ctx = EventCtx::<()>::default();
+        request_unfocus_if_canceled(&mut canceled_ctx, PickerOutcome::canceled(false));
+        assert_eq!(
+            canceled_ctx.focus_request(),
+            Some(&crate::FocusRequest::Unfocus)
+        );
+    }
 }

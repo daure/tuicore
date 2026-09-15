@@ -206,12 +206,14 @@ where
         let graphics_cleanup = renderer.clear_direct_kitty(terminal.terminal_mut());
         let restore_result = terminal.restore();
 
-        if let Err(error) = run_result {
-            return Err(error);
-        }
+        run_result?;
         graphics_cleanup.and(restore_result)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Runtime loop explicitly borrows independent subsystem state"
+    )]
     fn run_loop(
         &mut self,
         terminal: &mut TerminalGuard,
@@ -653,6 +655,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Event dispatch explicitly borrows independent subsystem state"
+    )]
     fn dispatch_runtime_event(
         &mut self,
         mut terminal: Option<&mut TerminalGuard>,
@@ -894,7 +900,7 @@ where
         if let (Some(terminal), Some(request)) = (terminal.as_deref_mut(), external_diff) {
             self.handle_external_diff(flags, terminal, request);
         }
-        if let (Some(terminal), Some(value)) = (terminal.as_deref_mut(), clipboard) {
+        if let (Some(terminal), Some(value)) = (terminal, clipboard) {
             let _ = write_clipboard_osc52(terminal, &value);
         }
     }
@@ -1879,8 +1885,10 @@ mod tests {
 
     #[test]
     fn disabled_animations_snap_terminal_focus_dim() {
-        let mut animation = AnimationSettings::default();
-        animation.enabled = false;
+        let animation = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut app = TreeApp::new(QuitNode::default()).animation_settings(animation);
         let mut flags = RuntimeFlags::default();
 
@@ -2224,10 +2232,8 @@ mod tests {
         }
 
         fn focus(&mut self, target: Option<&FocusId>, focused: bool, _ctx: &mut FocusCtx<()>) {
-            if focused {
-                if let Some(target) = target {
-                    self.focused.push(target.as_str().to_owned());
-                }
+            if focused && let Some(target) = target {
+                self.focused.push(target.as_str().to_owned());
             }
         }
     }
@@ -4107,8 +4113,10 @@ mod tests {
 
     #[test]
     fn pending_global_hotkey_times_out_when_animations_are_disabled() {
-        let mut animation = AnimationSettings::default();
-        animation.enabled = false;
+        let animation = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut app = TreeApp::new(HotkeyRouteNode::new()).animation_settings(animation);
         let mut scheduler = Scheduler::new(animation);
         let mut layout_engine = LayoutEngine::new();
@@ -4166,8 +4174,10 @@ mod tests {
 
     #[test]
     fn disabled_animation_idle_before_first_pending_key_does_not_cancel_hotkey() {
-        let mut animation = AnimationSettings::default();
-        animation.enabled = false;
+        let animation = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut app = TreeApp::new(HotkeyRouteNode::new()).animation_settings(animation);
         let mut scheduler = Scheduler::new(animation);
         let mut layout_engine = LayoutEngine::new();

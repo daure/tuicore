@@ -185,12 +185,11 @@ impl FocusManager {
                 .unwrap_or(0);
             Some(traversal[index].clone())
         } else if let Some(last) = &self.last_focused {
-            let target = traversal
+            traversal
                 .iter()
                 .find(|target| same_focus(target, last))
                 .map(|&t| t.clone())
-                .or_else(|| nearest_traversal_target(Some(last), targets));
-            target
+                .or_else(|| nearest_traversal_target(Some(last), targets))
         } else {
             Some(traversal[0].clone())
         }
@@ -233,12 +232,11 @@ impl FocusManager {
                 .unwrap_or(0);
             Some(traversal[index].clone())
         } else if let Some(last) = &self.last_focused {
-            let target = traversal
+            traversal
                 .iter()
                 .find(|target| same_focus(target, last))
                 .map(|&t| t.clone())
-                .or_else(|| nearest_traversal_target(Some(last), targets));
-            target
+                .or_else(|| nearest_traversal_target(Some(last), targets))
         } else {
             Some(traversal[0].clone())
         }

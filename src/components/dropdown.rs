@@ -104,6 +104,9 @@ fn search_match_style() -> Style {
         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
+type SelectedLabelFn = dyn Fn(&str) -> String;
+type SelectedStyleFn<Id> = dyn Fn(&Id) -> Option<Style>;
+
 pub struct Dropdown<T, Id> {
     data_view: DataView<T, Id>,
     row_id: Rc<dyn Fn(&T) -> Id>,
@@ -145,8 +148,8 @@ pub struct Dropdown<T, Id> {
     bottom_left_style: Option<Style>,
     field_text_style: Option<Style>,
     field_padding_left: u16,
-    selected_label_by: Option<Box<dyn Fn(&str) -> String>>,
-    selected_style_by: Option<Box<dyn Fn(&Id) -> Option<Style>>>,
+    selected_label_by: Option<Box<SelectedLabelFn>>,
+    selected_style_by: Option<Box<SelectedStyleFn<Id>>>,
     show_multi_labels: bool,
     hotkey: Option<String>,
     hotkey_matcher: HotkeySequenceMatcher,
@@ -1349,11 +1352,11 @@ where
     }
 
     fn target_matches_focus_region(&self, target: Option<&FocusId>) -> bool {
-        match (target.map(FocusId::as_str), self.focus_region) {
-            (Some(SEARCH_FOCUS), Some(DropdownFocusRegion::Search)) => true,
-            (Some(FIELD_FOCUS), Some(DropdownFocusRegion::Field)) => true,
-            _ => false,
-        }
+        matches!(
+            (target.map(FocusId::as_str), self.focus_region),
+            (Some(SEARCH_FOCUS), Some(DropdownFocusRegion::Search))
+                | (Some(FIELD_FOCUS), Some(DropdownFocusRegion::Field))
+        )
     }
 
     fn is_opening_search_field_blur(&self, target: Option<&FocusId>) -> bool {
@@ -1681,13 +1684,13 @@ where
             }
         }
 
-        if self.variant == DropdownVariant::Bordered {
-            if let Some(bottom_left) = &self.bottom_left {
-                let bottom_left_width = line_width(&Line::from(bottom_left.as_str()))
-                    .saturating_add(6)
-                    .saturating_add(self.hotkey.as_deref().map(hotkey_badge_width).unwrap_or(0));
-                width = width.max(bottom_left_width);
-            }
+        if self.variant == DropdownVariant::Bordered
+            && let Some(bottom_left) = &self.bottom_left
+        {
+            let bottom_left_width = line_width(&Line::from(bottom_left.as_str()))
+                .saturating_add(6)
+                .saturating_add(self.hotkey.as_deref().map(hotkey_badge_width).unwrap_or(0));
+            width = width.max(bottom_left_width);
         }
 
         if self.alt_style && self.label_position == DropdownLabelPosition::Top {

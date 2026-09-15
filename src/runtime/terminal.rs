@@ -326,10 +326,10 @@ fn keyboard_enhancement_flags() -> PushKeyboardEnhancementFlags {
 }
 
 fn capture_first(first_error: &mut Option<io::Error>, result: io::Result<()>) {
-    if first_error.is_none() {
-        if let Err(error) = result {
-            capture_first_error(first_error, error);
-        }
+    if first_error.is_none()
+        && let Err(error) = result
+    {
+        capture_first_error(first_error, error);
     }
 }
 

@@ -13,12 +13,15 @@ type CellFn<T, Id> = dyn Fn(&T, &CellContext<Id>) -> Text<'static>;
 type ContinuationIndentFn<T> = dyn Fn(&T) -> usize;
 pub(super) type SortFn<T> = dyn Fn(&T, &T) -> Ordering;
 type TransformKeyFn<T> = dyn Fn(&T) -> String;
+type RankSnapshotFn<T> = dyn Fn(&[T], &[usize]) -> Box<dyn Any>;
+type RankSnapshotMatchesFn<T> = dyn Fn(&[T], &[usize], &dyn Any) -> bool;
+type ApplyRanksFn<T> = dyn Fn(&[T], &[usize], &dyn Any) -> Option<Vec<T>>;
 
 pub(super) struct ReorderOps<T> {
     pub compare: Box<SortFn<T>>,
-    pub snapshot: Box<dyn Fn(&[T], &[usize]) -> Box<dyn Any>>,
-    pub snapshot_matches: Box<dyn Fn(&[T], &[usize], &dyn Any) -> bool>,
-    pub apply: Box<dyn Fn(&[T], &[usize], &dyn Any) -> Option<Vec<T>>>,
+    pub snapshot: Box<RankSnapshotFn<T>>,
+    pub snapshot_matches: Box<RankSnapshotMatchesFn<T>>,
+    pub apply: Box<ApplyRanksFn<T>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,67 +135,42 @@ pub struct DataViewTransformState {
     pub filters: Vec<DataViewFilter>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DataViewTransformMode {
+    #[default]
     Local,
     External,
 }
 
-impl Default for DataViewTransformMode {
-    fn default() -> Self {
-        Self::Local
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivationMode {
     Manual,
+    #[default]
     OnActivateKey,
     OnNavigate,
 }
 
-impl Default for ActivationMode {
-    fn default() -> Self {
-        Self::OnActivateKey
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectionMode {
+    #[default]
     None,
     Single,
     Multi,
 }
 
-impl Default for SelectionMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectionTrigger {
+    #[default]
     Manual,
     OnActivate,
     OnNavigate,
 }
 
-impl Default for SelectionTrigger {
-    fn default() -> Self {
-        Self::Manual
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectionPropagation {
+    #[default]
     None,
     CascadeDescendants,
-}
-
-impl Default for SelectionPropagation {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,9 +409,7 @@ impl<T, Id> Column<T, Id> {
                     .eq(snapshot.iter().cloned())
             }),
             apply: Box::new(move |rows, staged, snapshot| {
-                let Some(keys) = snapshot.downcast_ref::<Vec<K>>() else {
-                    return None;
-                };
+                let keys = snapshot.downcast_ref::<Vec<K>>()?;
                 if staged.len() != keys.len() {
                     return None;
                 }

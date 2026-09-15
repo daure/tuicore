@@ -4,7 +4,7 @@ use crate::event::{Key, KeyEvent, KeyModifiers};
 
 // Large cohesive module; config parsing, defaults, and labels stay aligned.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeyBindings {
     runtime: RuntimeKeyBindings,
     nav: NavKeyBindings,
@@ -275,24 +275,6 @@ impl Default for DateTimePickerKeyBindings {
             )],
             top_prefix: vec![KeySpec::plain('g')],
             bottom: vec![KeySpec::shifted('g')],
-        }
-    }
-}
-
-impl Default for KeyBindings {
-    fn default() -> Self {
-        Self {
-            runtime: RuntimeKeyBindings::default(),
-            nav: NavKeyBindings::default(),
-            focus: FocusKeyBindings::default(),
-            clipboard: ClipboardKeyBindings::default(),
-            button: ButtonKeyBindings::default(),
-            tabs: TabsKeyBindings::default(),
-            toggle: ToggleKeyBindings::default(),
-            data_view: DataViewKeyBindings::default(),
-            diff_viewer: DiffViewerKeyBindings::default(),
-            dropdown: DropdownKeyBindings::default(),
-            date_time_picker: DateTimePickerKeyBindings::default(),
         }
     }
 }
@@ -1854,11 +1836,12 @@ fn keybindings_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    type KeyMatcher<T> = fn(&T, KeyEvent) -> bool;
 
     #[test]
     fn default_navigation_matches_arrows_and_plain_hjkl() {
         let bindings = KeyBindings::default();
-        let cases: [(Key, char, fn(&KeyBindings, KeyEvent) -> bool); 4] = [
+        let cases: [(Key, char, KeyMatcher<KeyBindings>); 4] = [
             (Key::Left, 'h', |bindings: &KeyBindings, key| {
                 bindings.line_left_matches(key)
             }),
@@ -2332,7 +2315,7 @@ mod tests {
     fn default_date_picker_view_and_today_bindings_use_uppercase_shortcuts() {
         let bindings = KeyBindings::default();
         let date_keys = bindings.date_time_picker();
-        let cases: [(char, fn(&DateTimePickerKeyBindings, KeyEvent) -> bool); 4] = [
+        let cases: [(char, KeyMatcher<DateTimePickerKeyBindings>); 4] = [
             ('D', DateTimePickerKeyBindings::day_view_matches),
             ('M', DateTimePickerKeyBindings::month_view_matches),
             ('Y', DateTimePickerKeyBindings::year_view_matches),
@@ -2352,7 +2335,7 @@ mod tests {
     fn default_date_picker_navigation_matches_arrows_and_plain_hjkl_only() {
         let bindings = KeyBindings::default();
         let date_keys = bindings.date_time_picker();
-        let cases: [(Key, char, fn(&DateTimePickerKeyBindings, KeyEvent) -> bool); 4] = [
+        let cases: [(Key, char, KeyMatcher<DateTimePickerKeyBindings>); 4] = [
             (Key::Left, 'h', DateTimePickerKeyBindings::line_left_matches),
             (Key::Down, 'j', DateTimePickerKeyBindings::line_down_matches),
             (Key::Up, 'k', DateTimePickerKeyBindings::line_up_matches),

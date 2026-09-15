@@ -157,6 +157,8 @@ impl FlexItem {
     }
 }
 
+type FlexLayout = (Vec<(ChildKey, Rect)>, Vec<Rect>, Option<(u16, u16)>);
+
 impl<M> Flex<M> {
     pub fn row() -> Self {
         Self::new(Direction::Horizontal)
@@ -462,10 +464,7 @@ impl<M> TuiNode<M> for Flex<M> {
 }
 
 impl<M> Flex<M> {
-    fn calculate_layout(
-        &self,
-        area: Rect,
-    ) -> (Vec<(ChildKey, Rect)>, Vec<Rect>, Option<(u16, u16)>) {
+    fn calculate_layout(&self, area: Rect) -> FlexLayout {
         let inner = self.inner_area(area);
         let main_available = self.main_len(inner);
         let count = self.items.len();

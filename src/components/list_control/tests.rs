@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::{
     Animated, AnimationSettings, FocusCtx, KeyModifiers, LayoutCtx, LayoutProposal, LifecycleCtx,
-    Propagation, ScrollOffset, TreeAdapter, TuiNode,
+    Propagation, ScrollOffset, TreeAdapter, TreePath, TuiNode,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -550,8 +550,10 @@ fn reorder_page_down_and_end_center_moving_row() {
     let mut control = ranked_control(ranked_rows(10));
     control.layout(Rect::new(0, 0, 30, 7), &mut LayoutCtx::new());
     start_reordering(&mut control, 5);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let mut ctx = EventCtx::new(settings);
 
     control.handle_reorder_key(KeyEvent::from(Key::PageDown), &mut ctx);
@@ -566,8 +568,10 @@ fn reorder_page_up_and_gg_center_moving_row() {
     let mut control = ranked_control(ranked_rows(10));
     control.layout(Rect::new(0, 0, 30, 7), &mut LayoutCtx::new());
     start_reordering(&mut control, 5);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let mut ctx = EventCtx::new(settings);
     control.handle_reorder_key(KeyEvent::from(Key::End), &mut ctx);
 
@@ -588,8 +592,10 @@ fn reorder_cancel_restores_exact_scroll_offset_with_animations_disabled() {
     ] {
         let mut control = ranked_control(ranked_rows(10));
         control.layout(Rect::new(0, 0, 30, 7), &mut LayoutCtx::new());
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut ctx = EventCtx::new(settings);
         control.data_view.highlight_id(&5);
         control
@@ -731,8 +737,10 @@ fn reorder_data_change_abort_animates_scroll_restoration() {
 fn reorder_commit_retains_moved_row_scroll_offset() {
     let mut control = ranked_control(ranked_rows(10));
     control.layout(Rect::new(0, 0, 30, 7), &mut LayoutCtx::new());
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let mut ctx = EventCtx::new(settings);
     control.data_view.highlight_id(&0);
     control.handle_reorder_key(
@@ -898,8 +906,10 @@ fn flat_modified_line_selection_scrolls_highlight_into_view() {
         let mut control = ranked_control(ranked_rows(8));
         control.layout(Rect::new(0, 0, 20, 5), &mut LayoutCtx::new());
         control.data_view.highlight_id(&start);
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut ctx = EventCtx::new(settings);
         let route = EventRoute::new(TreePath::from_keys([ChildKey::new(DATA_SLOT)]));
 
@@ -1947,8 +1957,10 @@ fn flat_block_move_commit_keeps_highlight_visible_in_narrow_viewport() {
     let mut control = ranked_control(ranked_rows(6));
     control.layout(Rect::new(0, 0, 30, 1), &mut LayoutCtx::new());
     control.data_view.highlight_id(&0);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let mut ctx = EventCtx::new(settings);
     control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
     control.handle_flat_range_selection_key(modified_key(Key::Down, KeyModifiers::SHIFT), &mut ctx);
@@ -2240,8 +2252,10 @@ fn reorder_highlight_eases_in_stays_active_and_eases_out_after_commit() {
 #[test]
 fn disabled_animations_snap_reorder_progress_between_inverse_and_normal() {
     let mut control = ranked_control([RankedRow { id: 1, rank: 10 }]);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let mut ctx = EventCtx::new(settings);
 
     control.handle_reorder_key(
@@ -2473,7 +2487,7 @@ fn measure_sums_mixed_data_row_heights_up_to_max_rows() {
     let mut control = control;
     control
         .data_view_mut()
-        .set_row_height_by(|row: &Row| if row.0 % 2 == 0 { 1 } else { 2 });
+        .set_row_height_by(|row: &Row| if row.0.is_multiple_of(2) { 1 } else { 2 });
 
     assert_eq!(
         control

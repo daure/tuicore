@@ -21,8 +21,10 @@ fn configured_data_view_activation_key_emits_activation() {
         Constraint::Percentage(100),
         |row: &Row| row.name.to_string(),
     ));
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(
         KeyEvent {

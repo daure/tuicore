@@ -212,10 +212,10 @@ pub(crate) fn ellipsized_text_lines(
     if lines.is_empty() {
         lines.push(String::new());
     }
-    if clipped || lines.iter().any(|line| text_width(line) > width as usize) {
-        if let Some(last) = lines.last_mut() {
-            *last = ellipsize_line(last, width);
-        }
+    if (clipped || lines.iter().any(|line| text_width(line) > width as usize))
+        && let Some(last) = lines.last_mut()
+    {
+        *last = ellipsize_line(last, width);
     }
     for line in &mut lines {
         if text_width(line) > width as usize {

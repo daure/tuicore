@@ -496,15 +496,15 @@ impl DiffViewer {
         let old_missing = !self.old_text.is_empty() && !self.old_text.ends_with('\n');
         let new_missing = !self.new_text.is_empty() && !self.new_text.ends_with('\n');
         let mut rows = rows_from_ops(&ops, &old_lines, &new_lines);
-        if old_missing != new_missing {
-            if let Some(DiffRow::Equal { old, new, text }) = rows.last().cloned() {
-                *rows.last_mut().unwrap() = DiffRow::Pair {
-                    old: Some((old, text.clone())),
-                    new: Some((new, text)),
-                    old_pos: old - 1,
-                    new_pos: new - 1,
-                };
-            }
+        if old_missing != new_missing
+            && let Some(DiffRow::Equal { old, new, text }) = rows.last().cloned()
+        {
+            *rows.last_mut().unwrap() = DiffRow::Pair {
+                old: Some((old, text.clone())),
+                new: Some((new, text)),
+                old_pos: old - 1,
+                new_pos: new - 1,
+            };
         }
         self.rows = if self.old_text == self.new_text {
             rows

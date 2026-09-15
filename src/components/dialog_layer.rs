@@ -579,16 +579,16 @@ where
             return self.event(event, ctx);
         }
         let first = ChildKey::first();
-        if !self.active {
-            if let Some(route) = route.path.without_first_if(&first).map(EventRoute::new) {
-                return self.base.dispatch_event(&route, event, ctx);
-            }
+        if !self.active
+            && let Some(route) = route.path.without_first_if(&first).map(EventRoute::new)
+        {
+            return self.base.dispatch_event(&route, event, ctx);
         }
         let second = ChildKey::second();
-        if self.active {
-            if let Some(route) = route.path.without_first_if(&second).map(EventRoute::new) {
-                return self.layer.dispatch_event(&route, event, ctx);
-            }
+        if self.active
+            && let Some(route) = route.path.without_first_if(&second).map(EventRoute::new)
+        {
+            return self.layer.dispatch_event(&route, event, ctx);
         }
         EventOutcome::Ignored
     }
@@ -618,11 +618,11 @@ where
             return;
         }
         let second = ChildKey::second();
-        if self.active || !focused {
-            if let Some(target) = target.for_child(&second) {
-                self.record_layer_focus(&target, focused);
-                self.layer.dispatch_focus(&target, focused, ctx);
-            }
+        if (self.active || !focused)
+            && let Some(target) = target.for_child(&second)
+        {
+            self.record_layer_focus(&target, focused);
+            self.layer.dispatch_focus(&target, focused, ctx);
         }
     }
 

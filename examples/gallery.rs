@@ -175,6 +175,26 @@ fn gallery(root: &mut AppRoot) -> &mut Gallery {
 }
 
 fn main() -> tuicore::Result<()> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => {}
+        [flag] if flag == "--help" || flag == "-h" => {
+            println!(
+                "Tuicore component gallery\n\nUsage: gallery [--help | --version]\n\nRun without arguments to open the interactive terminal gallery."
+            );
+            return Ok(());
+        }
+        [flag] if flag == "--version" || flag == "-V" => {
+            println!("gallery {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Use gallery --help for usage",
+            ));
+        }
+    }
     tuicore::init();
     let dialog_layer = DialogLayer::new(Gallery::new(), gallery_dialog()).active(false);
     let tabs_layer = DialogLayer::new(dialog_layer, modal_tabs_dialog()).active(false);
@@ -644,14 +664,12 @@ impl TuiNode<Msg> for Gallery {
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        let tick_res = Animated::tick(&mut self.list_panel, dt, settings)
+        Animated::tick(&mut self.list_panel, dt, settings)
             .merge(Animated::tick(&mut self.preview_panel, dt, settings))
             .merge(Animated::tick(&mut self.component_list, dt, settings))
             .merge(self.footer.tick(dt, settings))
             .merge(self.previews.tick(dt, settings))
-            .merge(self.previews.tick_image(self.selected.preview()));
-
-        tick_res
+            .merge(self.previews.tick_image(self.selected.preview()))
     }
 
     fn dispatch_event(
@@ -1524,17 +1542,16 @@ impl PreviewState {
             return outcome;
         }
 
-        if let TuiEvent::Key(key) = event {
-            if matches!(preview, PreviewKind::DataTable | PreviewKind::DataTableTree)
-                && matches!(key.code, Key::Char('s'))
-                && key.modifiers == KeyModifiers::NONE
-            {
-                self.active_data_view_mut(preview).toggle_sort("task");
-                self.record_data_events(preview);
-                ctx.request_redraw();
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
+        if let TuiEvent::Key(key) = event
+            && matches!(preview, PreviewKind::DataTable | PreviewKind::DataTableTree)
+            && matches!(key.code, Key::Char('s'))
+            && key.modifiers == KeyModifiers::NONE
+        {
+            self.active_data_view_mut(preview).toggle_sort("task");
+            self.record_data_events(preview);
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
 
         EventOutcome::Ignored
@@ -1771,7 +1788,7 @@ impl PreviewState {
             return self.panel_tabs_join_demo.dispatch_event(&route, event, ctx);
         }
         if preview == PreviewKind::Dialog {
-            let Some((index, route)) = dialog_demo_child_route(&route) else {
+            let Some((index, route)) = dialog_demo_child_route(route) else {
                 return EventOutcome::Ignored;
             };
             return self
@@ -4287,8 +4304,7 @@ fn delegated_tree_view(title: &str, rows: usize, hotkey: Option<&str>) -> DataVi
     } else {
         view
     };
-    let view = view.hotkey(hotkey.unwrap_or(title));
-    view
+    view.hotkey(hotkey.unwrap_or(title))
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -5758,8 +5774,10 @@ mod tests {
             .previews
             .notification_triggers
             .push(notification_for_index(0).sticky());
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         gallery.tick(Duration::ZERO, settings);
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal should build");

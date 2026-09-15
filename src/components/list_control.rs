@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     ChildKey, EventCtx, EventOutcome, EventRoute, FocusId, FocusRequest, HotkeyEvent, Key,
-    KeyEvent, KeySpec, SearchMode, TreePath, TuiEvent,
+    KeyEvent, KeySpec, SearchMode, TuiEvent,
 };
 use confirmation::DynamicChild;
 use input::ListControlInput;
@@ -384,6 +384,10 @@ impl Default for ListControlKeyBindings {
 }
 
 impl ListControlKeyBindings {
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "This public builder configures the add command, not arithmetic"
+    )]
     pub fn add(mut self, keys: impl IntoIterator<Item = KeySpec>) -> Self {
         self.add = keys.into_iter().collect();
         self
@@ -573,16 +577,16 @@ where
         let inputs = fields
             .iter()
             .map(|field| match &field.kind {
-                ListControlFieldKind::Text => {
-                    ListControlInput::Text(TextInput::new().placeholder(field.placeholder.clone()))
-                }
+                ListControlFieldKind::Text => ListControlInput::Text(Box::new(
+                    TextInput::new().placeholder(field.placeholder.clone()),
+                )),
                 ListControlFieldKind::Dropdown {
                     options,
                     renderer,
                     min_search_chars,
                     max_filtered_items,
                     visible_without_search,
-                } => ListControlInput::Dropdown(Some({
+                } => ListControlInput::Dropdown(Some(Box::new({
                     let mut input = if let Some(renderer) = renderer {
                         let renderer = Rc::clone(renderer);
                         Dropdown::single_rich(
@@ -613,7 +617,7 @@ where
                     } else {
                         input.no_selection_text("No selection")
                     }
-                })),
+                }))),
             })
             .collect();
         let required_fields = fields.iter().map(|field| field.required).collect();
@@ -804,8 +808,10 @@ where
         }
         if disabled {
             self.cancel_editor(false);
-            let mut settings = crate::AnimationSettings::default();
-            settings.enabled = false;
+            let settings = crate::AnimationSettings {
+                enabled: false,
+                ..Default::default()
+            };
             self.cancel_reorder_for_focus_loss(settings);
             self.clear_tree_selection();
             self.clear_flat_range_selection();
@@ -1132,8 +1138,10 @@ where
     }
 
     pub fn data_view_mut(&mut self) -> &mut DataView<T, Id> {
-        let mut settings = crate::AnimationSettings::default();
-        settings.enabled = false;
+        let settings = crate::AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         self.cancel_flat_block_move(settings);
         self.cancel_tree_block_move(settings);
         self.clear_tree_selection();
@@ -1330,9 +1338,7 @@ where
 
     fn focus_child(ctx: &mut EventCtx<M>, route: &EventRoute, slot: &str, id: &str) {
         let current = ctx.current_path();
-        let parent = current
-            .strip_suffix(&route.path)
-            .unwrap_or_else(TreePath::new);
+        let parent = current.strip_suffix(&route.path).unwrap_or_default();
         ctx.focus(FocusRequest::TargetAt {
             path: parent.child(ChildKey::new(slot)),
             id: FocusId::new(id),
@@ -1390,10 +1396,8 @@ where
                 self.restore_data_focus(route, ctx);
             } else if matches!(key.code, Key::Enter) {
                 let final_field = self.active_field_is_last_visible();
-                if self.advance_field(route, ctx) {
-                    if final_field {
-                        self.restore_data_focus(route, ctx);
-                    }
+                if self.advance_field(route, ctx) && final_field {
+                    self.restore_data_focus(route, ctx);
                 }
             } else {
                 return None;

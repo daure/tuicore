@@ -193,9 +193,9 @@ impl<M> Grid<M> {
             let row_end = row
                 .saturating_add(child.item.row_span)
                 .min(self.resolved_rows.len());
-            for r in row..row_end {
-                for c in col..col_end {
-                    occupancy[r][c] = Some(item_index);
+            for occupied_row in occupancy.iter_mut().take(row_end).skip(row) {
+                for cell in occupied_row.iter_mut().take(col_end).skip(col) {
+                    *cell = Some(item_index);
                 }
             }
         }
@@ -698,13 +698,14 @@ impl<M> Grid<M> {
             .fold(0u32, |sum, value| sum.saturating_add(*value));
         let fill_space = available_without_gap.saturating_sub(reserved);
         let mut distributed = 0u32;
-        if fill_weight > 0 {
-            for (index, track) in tracks.iter().enumerate() {
-                if let GridTrack::Fill(weight) = *track {
-                    let share = fill_space.saturating_mul(u32::from(weight)) / fill_weight;
-                    lengths[index] = share;
-                    distributed = distributed.saturating_add(share);
-                }
+        for (index, track) in tracks.iter().enumerate() {
+            if let GridTrack::Fill(weight) = *track
+                && let Some(share) = fill_space
+                    .saturating_mul(u32::from(weight))
+                    .checked_div(fill_weight)
+            {
+                lengths[index] = share;
+                distributed = distributed.saturating_add(share);
             }
         }
         let mut remainder = fill_space.saturating_sub(distributed);

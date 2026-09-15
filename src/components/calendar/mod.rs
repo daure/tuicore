@@ -667,9 +667,7 @@ where
             Some(CalendarKeyAction::PageDown)
         } else if matches_key_specs(&keys.home, key) {
             Some(CalendarKeyAction::Home)
-        } else if matches_key_specs(&keys.end, key) {
-            Some(CalendarKeyAction::End)
-        } else if matches_key_specs(&keys.bottom, key) {
+        } else if matches_key_specs(&keys.end, key) || matches_key_specs(&keys.bottom, key) {
             Some(CalendarKeyAction::End)
         } else {
             None

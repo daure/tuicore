@@ -107,9 +107,7 @@ where
                         }
                     } else if self.error {
                         theme.error_fg()
-                    } else if self.field_is_focused() {
-                        theme.accent_fg()
-                    } else if self.chrome_is_active() {
+                    } else if self.field_is_focused() || self.chrome_is_active() {
                         theme.accent_fg()
                     } else {
                         theme.muted_fg()
@@ -164,9 +162,7 @@ where
                 theme.border_fg()
             } else if self.error {
                 theme.error_fg()
-            } else if self.field_is_focused() {
-                theme.accent_fg()
-            } else if self.chrome_is_active() {
+            } else if self.field_is_focused() || self.chrome_is_active() {
                 theme.accent_fg()
             } else {
                 theme.border_fg()
@@ -599,9 +595,7 @@ where
                 }
             } else if self.error {
                 theme.error_fg()
-            } else if self.field_is_focused() {
-                theme.accent_fg()
-            } else if self.chrome_is_active() {
+            } else if self.field_is_focused() || self.chrome_is_active() {
                 theme.accent_fg()
             } else {
                 theme.muted_fg()
@@ -635,9 +629,7 @@ where
             }
         } else if self.error {
             theme.error_fg()
-        } else if self.field_is_focused() {
-            theme.accent_fg()
-        } else if self.chrome_is_active() {
+        } else if self.field_is_focused() || self.chrome_is_active() {
             theme.accent_fg()
         } else {
             theme.border_fg()
@@ -650,9 +642,7 @@ where
             }
         } else if self.error {
             theme.error_fg()
-        } else if self.field_is_focused() {
-            theme.accent_fg()
-        } else if self.chrome_is_active() {
+        } else if self.field_is_focused() || self.chrome_is_active() {
             theme.accent_fg()
         } else {
             theme.muted_fg()

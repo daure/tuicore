@@ -544,10 +544,10 @@ where
             }
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                 let outcome = self.toggle();
-                if outcome.changed {
-                    if let Some(on_change) = &self.on_change {
-                        ctx.emit(on_change(self.value));
-                    }
+                if outcome.changed
+                    && let Some(on_change) = &self.on_change
+                {
+                    ctx.emit(on_change(self.value));
                 }
                 ctx.focus(FocusRequest::TargetAt {
                     path: ctx.current_path(),
@@ -610,7 +610,7 @@ fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
         return false;
     }
     match (hotkey.code, key.code) {
-        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (Key::Char(a), Key::Char(b)) => a.eq_ignore_ascii_case(&b),
         (a, b) => a == b,
     }
 }

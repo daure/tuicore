@@ -2176,9 +2176,7 @@ where
         let current = self.scroll.target_offset().y;
         let (row_start, row_end) = rows.span(self.highlighted).unwrap_or((0, 0));
         let row_height = row_end.saturating_sub(row_start);
-        let target = if row_height >= viewport_height {
-            row_start
-        } else if row_start < current {
+        let target = if row_height >= viewport_height || row_start < current {
             row_start
         } else if row_end > current.saturating_add(viewport_height) {
             row_end.saturating_sub(viewport_height)

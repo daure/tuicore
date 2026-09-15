@@ -420,18 +420,18 @@ impl ActiveToast {
             tick.changed = true;
         }
 
-        if self.phase != ToastPhase::Exiting {
-            if let Some(ttl) = self.notification.visible_ttl() {
-                self.elapsed = self.elapsed.saturating_add(dt);
-                if self.elapsed >= ttl {
-                    self.start_exit();
-                    tick.changed = true;
-                    if !settings.enabled {
-                        self.offset.snap_to_end();
-                    }
-                } else {
-                    tick.active = true;
+        if self.phase != ToastPhase::Exiting
+            && let Some(ttl) = self.notification.visible_ttl()
+        {
+            self.elapsed = self.elapsed.saturating_add(dt);
+            if self.elapsed >= ttl {
+                self.start_exit();
+                tick.changed = true;
+                if !settings.enabled {
+                    self.offset.snap_to_end();
                 }
+            } else {
+                tick.active = true;
             }
         }
 
@@ -518,8 +518,10 @@ mod tests {
 
     #[test]
     fn finite_notification_expires_without_animation() {
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut center = NotificationCenter::new();
         center.push(Notification::info("Short", "Body").ttl(Duration::from_millis(10)));
 
@@ -532,8 +534,10 @@ mod tests {
 
     #[test]
     fn finite_notification_keeps_scheduler_active_without_animation_until_ttl() {
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut center = NotificationCenter::new();
         center.push(Notification::info("Short", "Body").ttl(Duration::from_millis(10)));
 
@@ -548,8 +552,10 @@ mod tests {
     fn sticky_notification_does_not_keep_scheduler_active_after_entry() {
         let mut center = NotificationCenter::new();
         center.push(Notification::info("Pinned", "Body").sticky());
-        let mut settings = AnimationSettings::default();
-        settings.max_dt = Duration::from_secs(1);
+        let settings = AnimationSettings {
+            max_dt: Duration::from_secs(1),
+            ..Default::default()
+        };
 
         let tick = center.tick(ENTER_DURATION, settings);
 
@@ -562,8 +568,10 @@ mod tests {
     fn dismiss_starts_exit_and_removes_after_tick() {
         let mut center = NotificationCenter::new();
         let id = center.push(Notification::info("Dismiss", "Body").sticky());
-        let mut settings = AnimationSettings::default();
-        settings.max_dt = Duration::from_secs(1);
+        let settings = AnimationSettings {
+            max_dt: Duration::from_secs(1),
+            ..Default::default()
+        };
         center.tick(ENTER_DURATION, settings);
 
         center.dismiss(id);
@@ -578,8 +586,10 @@ mod tests {
     fn toast_render_stays_inside_nonzero_full_width_area() {
         let mut rack = ToastRack::new().max_width(20);
         rack.push(Notification::info("Inside", "Body").sticky());
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         rack.tick(Duration::ZERO, settings);
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal should build");
 
@@ -596,8 +606,10 @@ mod tests {
     fn toast_render_requires_top_margin_space() {
         let mut rack = ToastRack::new().max_width(20);
         rack.push(Notification::info("Hidden", "Body").sticky());
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         rack.tick(Duration::ZERO, settings);
         let mut terminal = Terminal::new(TestBackend::new(24, 3)).expect("terminal should build");
 

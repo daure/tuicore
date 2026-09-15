@@ -31,8 +31,10 @@ mod tests {
 
     #[test]
     fn resolve_disables_when_global_setting_is_disabled() {
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
 
         let resolved = settings.resolve(AnimationSpec {
             enabled: Some(true),
@@ -76,8 +78,10 @@ mod tests {
 
     #[test]
     fn color_tween_snaps_when_disabled() {
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut tween = ColorTween::idle(Color::Rgb(0, 0, 0));
 
         tween.start(Color::Rgb(100, 50, 200), settings, AnimationSpec::default());

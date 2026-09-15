@@ -266,16 +266,17 @@ where
 
     fn render_popup<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         let field_area = self.popup_field_area(area);
-        match &self.interaction {
-            DataViewInteraction::FilterValues { .. } => {
-                if let Some(dropdown) = self.filter_dropdown.as_ref() {
-                    dropdown.render(frame, field_area, ctx);
-                }
-            }
-            _ => {}
+        if let DataViewInteraction::FilterValues { .. } = &self.interaction
+            && let Some(dropdown) = self.filter_dropdown.as_ref()
+        {
+            dropdown.render(frame, field_area, ctx);
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Rendering receives precomputed viewport and selection geometry"
+    )]
     fn render_row(
         &self,
         frame: &mut Frame,
@@ -334,6 +335,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Rendering receives precomputed viewport and selection geometry"
+    )]
     fn render_selection_placeholder(
         &self,
         frame: &mut Frame,
@@ -539,10 +544,9 @@ where
             Some(self.selected_row_style())
         } else if highlighted && self.focused {
             Some(self.highlighted_row_style())
-        } else if highlighted && self.show_inactive_highlight {
-            Some(self.selected_row_style())
-        } else if !self.displays_selection_glyphs()
-            && self.row_is_visually_selected(&row.id, selection_descendants)
+        } else if (highlighted && self.show_inactive_highlight)
+            || (!self.displays_selection_glyphs()
+                && self.row_is_visually_selected(&row.id, selection_descendants))
         {
             Some(self.selected_row_style())
         } else {

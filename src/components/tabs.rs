@@ -1967,7 +1967,7 @@ fn tab_hotkey_matches(hotkey: KeyEvent, key: KeyEvent) -> bool {
         return false;
     }
     match (hotkey.code, key.code) {
-        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (Key::Char(a), Key::Char(b)) => a.eq_ignore_ascii_case(&b),
         (a, b) => a == b,
     }
 }
@@ -2473,8 +2473,10 @@ mod tests {
     #[test]
     fn tabs_key_selection_uses_event_context_animation_settings() {
         let mut tabs = Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "")]);
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut ctx = EventCtx::new(settings);
 
         let outcome = tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char(']'))), &mut ctx);

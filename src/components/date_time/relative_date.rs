@@ -255,13 +255,7 @@ fn next_update_wait_with_offset(
                 + Duration::from_millis(1)
         }
     } else {
-        let unit = if whole_seconds < 60 {
-            60
-        } else if whole_seconds < 3_600 {
-            60
-        } else {
-            3_600
-        };
+        let unit = if whole_seconds < 3_600 { 60 } else { 3_600 };
         Duration::from_secs((whole_seconds / unit + 1) * unit).saturating_sub(elapsed)
     };
     boundary

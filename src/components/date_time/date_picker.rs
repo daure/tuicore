@@ -1086,28 +1086,26 @@ struct DateStyles {
 impl DateStyles {
     fn style(&self, date: Date, surrounding: bool) -> Style {
         let t = theme();
-        let style =
-            if self.min.is_some_and(|min| date < min) || self.max.is_some_and(|max| date > max) {
-                Style::default().fg(t.subtle_fg())
-            } else if self.focused && date == self.cursor {
-                Style::default()
-                    .fg(t.highlight_fg())
-                    .bg(t.highlight_bg())
-                    .add_modifier(Modifier::BOLD)
-            } else if Some(date) == self.selected {
-                Style::default().fg(t.selected_fg()).bg(t.selected_bg())
-            } else if date == self.today {
-                Style::default()
-                    .fg(t.accent_fg())
-                    .add_modifier(Modifier::BOLD)
+        if self.min.is_some_and(|min| date < min) || self.max.is_some_and(|max| date > max) {
+            Style::default().fg(t.subtle_fg())
+        } else if self.focused && date == self.cursor {
+            Style::default()
+                .fg(t.highlight_fg())
+                .bg(t.highlight_bg())
+                .add_modifier(Modifier::BOLD)
+        } else if Some(date) == self.selected {
+            Style::default().fg(t.selected_fg()).bg(t.selected_bg())
+        } else if date == self.today {
+            Style::default()
+                .fg(t.accent_fg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(if surrounding {
+                t.subtle_fg()
             } else {
-                Style::default().fg(if surrounding {
-                    t.subtle_fg()
-                } else {
-                    t.text_fg()
-                })
-            };
-        style
+                t.text_fg()
+            })
+        }
     }
 
     fn day_line(&self, date: Date, surrounding: bool) -> Line<'static> {

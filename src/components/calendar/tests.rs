@@ -761,13 +761,10 @@ fn day_view_transitions_request_layout_and_reject_stale_child_routes() {
     assert_eq!(
         calendar.dispatch_event(
             &route,
-            &TuiEvent::Key(
-                KeyEvent {
-                    code: Key::Char('m'),
-                    modifiers: KeyModifiers::CONTROL,
-                }
-                .into(),
-            ),
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('m'),
+                modifiers: KeyModifiers::CONTROL,
+            },),
             &mut ctx,
         ),
         EventOutcome::Ignored
@@ -832,13 +829,10 @@ fn day_top_prefix_does_not_survive_direct_shift_navigation() {
     );
     assert_eq!(
         calendar.event(
-            &TuiEvent::Key(
-                KeyEvent {
-                    code: Key::Char('j'),
-                    modifiers: KeyModifiers::SHIFT,
-                }
-                .into(),
-            ),
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::SHIFT,
+            },),
             &mut ctx,
         ),
         EventOutcome::Handled
@@ -875,13 +869,10 @@ fn day_top_prefix_does_not_survive_routed_shift_navigation() {
     assert_eq!(
         calendar.dispatch_event(
             &route,
-            &TuiEvent::Key(
-                KeyEvent {
-                    code: Key::Char('j'),
-                    modifiers: KeyModifiers::SHIFT,
-                }
-                .into(),
-            ),
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::SHIFT,
+            },),
             &mut ctx,
         ),
         EventOutcome::Handled

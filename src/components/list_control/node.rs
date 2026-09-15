@@ -397,9 +397,9 @@ where
         ));
         for input in &mut self.inputs {
             result = result.merge(match input {
-                ListControlInput::Text(input) => Animated::tick(input, dt, settings),
+                ListControlInput::Text(input) => Animated::tick(input.as_mut(), dt, settings),
                 ListControlInput::Dropdown(input) => Animated::tick(
-                    input.as_mut().expect("dropdown input is present"),
+                    input.as_deref_mut().expect("dropdown input is present"),
                     dt,
                     settings,
                 ),
@@ -482,8 +482,10 @@ where
     }
 
     fn unmount(&mut self, ctx: &mut LifecycleCtx<M>) {
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         self.cancel_reorder_for_focus_loss(settings);
         self.clear_tree_selection();
         self.clear_flat_range_selection();

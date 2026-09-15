@@ -240,10 +240,10 @@ where
                 .iter()
                 .find(|(candidate, _)| candidate == sequence)
         {
-            if let Some(row) = self.visible_rows().get(self.highlighted) {
-                if let Some(value) = formatter(row.row) {
-                    ctx.copy_to_clipboard(value);
-                }
+            if let Some(row) = self.visible_rows().get(self.highlighted)
+                && let Some(value) = formatter(row.row)
+            {
+                ctx.copy_to_clipboard(value);
             }
             ctx.focus(FocusRequest::Keep);
             ctx.stop_propagation();

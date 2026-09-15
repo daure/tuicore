@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -35,7 +36,7 @@ mod tests {
 
     #[test]
     fn chat_prompt_suppresses_global_hotkeys_while_typing() {
-        let input = Arc::new(Mutex::new(TextareaInput::new()));
+        let input = Rc::new(Mutex::new(TextareaInput::new()));
         let mut body = ChatTabBody {
             messages: Arc::new(Mutex::new(Vec::new())),
             input: input.clone(),
@@ -68,7 +69,7 @@ mod tests {
 
     #[test]
     fn model_inputs_suppress_global_hotkeys_while_typing() {
-        let model_input = Arc::new(Mutex::new(TextInput::new()));
+        let model_input = Rc::new(Mutex::new(TextInput::new()));
         model_input.lock().unwrap().set_insert_mode(true);
         let mut body = ModelTabBody {
             model_input,
@@ -235,7 +236,7 @@ mod tests {
         })));
         let mut body = ChatTabBody {
             messages: Arc::new(Mutex::new(Vec::new())),
-            input: Arc::new(Mutex::new(TextareaInput::new())),
+            input: Rc::new(Mutex::new(TextareaInput::new())),
             pending_approval,
             keybindings: Arc::new(Mutex::new(AiDockKeyBindings::default())),
             log_scroll: ScrollState::from_preset(ScrollAxes::Vertical, preset().scroll()),
@@ -480,14 +481,19 @@ pub enum AiDockMsg {
     Close,
 }
 
+type LlmRunner = dyn Fn(String, Vec<rig::message::Message>, mpsc::Sender<LlmEvent>, u64, String, String)
+    + Send
+    + Sync
+    + 'static;
+
 pub struct AiDock<M = ()> {
     tabs: Tabs<AiDockMsg>,
     messages: Arc<Mutex<Vec<ChatMessage>>>,
     tools: Arc<Mutex<Vec<ToolInfo>>>,
     tool_policies: Arc<Mutex<HashMap<String, ToolPolicy>>>,
     settings: Arc<Mutex<(String, String)>>, // (provider, model)
-    input: Arc<Mutex<TextareaInput<AiDockMsg>>>,
-    model_input: Arc<Mutex<TextInput<AiDockMsg>>>,
+    input: Rc<Mutex<TextareaInput<AiDockMsg>>>,
+    model_input: Rc<Mutex<TextInput<AiDockMsg>>>,
     keybindings: Arc<Mutex<AiDockKeyBindings>>,
     responses_rx: mpsc::Receiver<LlmEvent>,
     responses_tx: mpsc::Sender<LlmEvent>,
@@ -499,12 +505,7 @@ pub struct AiDock<M = ()> {
     request_id: u64,
     pending_interrupt_escape: bool,
     close_requested: bool,
-    runner: Box<
-        dyn Fn(String, Vec<rig::message::Message>, mpsc::Sender<LlmEvent>, u64, String, String)
-            + Send
-            + Sync
-            + 'static,
-    >,
+    runner: Box<LlmRunner>,
     on_close: Option<Box<dyn Fn() -> M>>,
 }
 
@@ -523,14 +524,14 @@ where
 
         let messages = Arc::new(Mutex::new(Vec::new()));
 
-        let input = Arc::new(Mutex::new(
+        let input = Rc::new(Mutex::new(
             TextareaInput::new()
                 .placeholder("Prompt...")
                 .style(prompt_input_chrome(None, "openai", "openai/gpt-5.5"))
                 .hotkey("p")
                 .min_rows(1)
                 .max_rows(8)
-                .on_submit(move |prompt| AiDockMsg::SubmitPrompt(prompt)),
+                .on_submit(AiDockMsg::SubmitPrompt),
         ));
 
         let tools = Arc::new(Mutex::new(Vec::new()));
@@ -541,7 +542,7 @@ where
             "openai/gpt-5.5".to_string(),
         )));
 
-        let model_input = Arc::new(Mutex::new(
+        let model_input = Rc::new(Mutex::new(
             TextInput::new()
                 .value("openai/gpt-5.5")
                 .placeholder("OpenAI model name"),
@@ -736,12 +737,12 @@ where
                     }
                 }
                 LlmEventKind::Chunk(chunk) => {
-                    if let Ok(mut msgs) = self.messages.lock() {
-                        if let Some(msg) = msgs.last_mut() {
-                            if !msg.is_user && !msg.is_system {
-                                msg.text.push_str(&chunk);
-                            }
-                        }
+                    if let Ok(mut msgs) = self.messages.lock()
+                        && let Some(msg) = msgs.last_mut()
+                        && !msg.is_user
+                        && !msg.is_system
+                    {
+                        msg.text.push_str(&chunk);
                     }
                 }
                 LlmEventKind::Complete {
@@ -756,14 +757,13 @@ where
                     self.input_usage =
                         normalize_usage_for_display(usage.unwrap_or_default(), &text);
                     self.sync_input_panel_chrome();
-                    if !text.is_empty() {
-                        if let Ok(mut msgs) = self.messages.lock() {
-                            if let Some(msg) = msgs.last_mut() {
-                                if !msg.is_user && !msg.is_system {
-                                    msg.text = text;
-                                }
-                            }
-                        }
+                    if !text.is_empty()
+                        && let Ok(mut msgs) = self.messages.lock()
+                        && let Some(msg) = msgs.last_mut()
+                        && !msg.is_user
+                        && !msg.is_system
+                    {
+                        msg.text = text;
                     }
                 }
                 LlmEventKind::Error(err) => {
@@ -820,12 +820,11 @@ where
     }
 
     fn resolve_pending_approval(&self, approved: bool) {
-        if let Ok(mut pending) = self.pending_approval.lock() {
-            if let Some(mut approval) = pending.take() {
-                if let Some(tx) = approval.response_tx.take() {
-                    let _ = tx.send(approved);
-                }
-            }
+        if let Ok(mut pending) = self.pending_approval.lock()
+            && let Some(mut approval) = pending.take()
+            && let Some(tx) = approval.response_tx.take()
+        {
+            let _ = tx.send(approved);
         }
     }
 
@@ -1557,14 +1556,14 @@ where
         let tabs_tick = self.tabs.tick(dt, settings);
 
         // Settings Sync
-        if let Ok(mut s) = self.settings.lock() {
-            if let Ok(m_inp) = self.model_input.lock() {
-                let model_name = m_inp.current_value().to_string();
-                if s.1 != model_name {
-                    s.1 = model_name;
-                    drop(s);
-                    self.sync_input_panel_chrome();
-                }
+        if let Ok(mut s) = self.settings.lock()
+            && let Ok(m_inp) = self.model_input.lock()
+        {
+            let model_name = m_inp.current_value().to_string();
+            if s.1 != model_name {
+                s.1 = model_name;
+                drop(s);
+                self.sync_input_panel_chrome();
             }
         }
 
@@ -1636,7 +1635,7 @@ where
 // Bodies implementation
 struct ChatTabBody {
     messages: Arc<Mutex<Vec<ChatMessage>>>,
-    input: Arc<Mutex<TextareaInput<AiDockMsg>>>,
+    input: Rc<Mutex<TextareaInput<AiDockMsg>>>,
     pending_approval: Arc<Mutex<Option<PendingApproval>>>,
     keybindings: Arc<Mutex<AiDockKeyBindings>>,
     log_scroll: ScrollState,
@@ -1872,91 +1871,91 @@ impl TuiNode<AiDockMsg> for ChatTabBody {
             inp.render(frame, input_outer_area);
         }
 
-        if let Ok(ref approval_opt) = self.pending_approval.lock() {
-            if let Some(ref approval) = **approval_opt {
-                let approval_block = Block::bordered()
-                    .border_style(Style::default().fg(theme.warning_fg()))
-                    .title(Span::styled(
-                        " Tool Call Approval Required ",
+        if let Ok(ref approval_opt) = self.pending_approval.lock()
+            && let Some(ref approval) = **approval_opt
+        {
+            let approval_block = Block::bordered()
+                .border_style(Style::default().fg(theme.warning_fg()))
+                .title(Span::styled(
+                    " Tool Call Approval Required ",
+                    Style::default()
+                        .fg(theme.warning_fg())
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+            let (approve_label, deny_label) = self
+                .keybindings
+                .lock()
+                .map(|keys| (keys.approve_label(), keys.deny_label()))
+                .unwrap_or_else(|_| ("A".to_string(), "D".to_string()));
+
+            let approval_text = vec![
+                Line::from(vec![
+                    Span::raw("Tool: "),
+                    Span::styled(
+                        &approval.tool_name,
                         Style::default()
-                            .fg(theme.warning_fg())
+                            .fg(theme.accent_fg())
                             .add_modifier(Modifier::BOLD),
-                    ));
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("Arguments: "),
+                    Span::styled(&approval.args, Style::default().fg(theme.text_fg())),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!("[{approve_label}] Approve  "),
+                        Style::default()
+                            .fg(theme.success_fg())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("[{deny_label}] Deny"),
+                        Style::default()
+                            .fg(theme.error_fg())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+            ];
 
-                let (approve_label, deny_label) = self
-                    .keybindings
-                    .lock()
-                    .map(|keys| (keys.approve_label(), keys.deny_label()))
-                    .unwrap_or_else(|_| ("A".to_string(), "D".to_string()));
-
-                let approval_text = vec![
-                    Line::from(vec![
-                        Span::raw("Tool: "),
-                        Span::styled(
-                            &approval.tool_name,
-                            Style::default()
-                                .fg(theme.accent_fg())
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::raw("Arguments: "),
-                        Span::styled(&approval.args, Style::default().fg(theme.text_fg())),
-                    ]),
-                    Line::raw(""),
-                    Line::from(vec![
-                        Span::styled(
-                            format!("[{approve_label}] Approve  "),
-                            Style::default()
-                                .fg(theme.success_fg())
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("[{deny_label}] Deny"),
-                            Style::default()
-                                .fg(theme.error_fg())
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                ];
-
-                let popup_area = Rect::new(
-                    area.x + area.width / 6,
-                    area.y + area.height / 4,
-                    (area.width * 2) / 3,
-                    (area.height / 2).max(6).min(area.height),
-                );
-                frame.render_widget(ratatui::widgets::Clear, popup_area);
-                frame.render_widget(
-                    Paragraph::new(approval_text)
-                        .block(approval_block)
-                        .wrap(Wrap { trim: false }),
-                    popup_area,
-                );
-            }
+            let popup_area = Rect::new(
+                area.x + area.width / 6,
+                area.y + area.height / 4,
+                (area.width * 2) / 3,
+                (area.height / 2).max(6).min(area.height),
+            );
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            frame.render_widget(
+                Paragraph::new(approval_text)
+                    .block(approval_block)
+                    .wrap(Wrap { trim: false }),
+                popup_area,
+            );
         }
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<AiDockMsg>) -> EventOutcome {
-        if let Ok(ref approval_opt) = self.pending_approval.lock() {
-            if approval_opt.is_some() {
-                if let TuiEvent::Key(key) = event
-                    && let Ok(keys) = self.keybindings.lock()
-                {
-                    if keys.approve_matches(*key) {
-                        ctx.emit(AiDockMsg::ApprovePending);
-                        ctx.stop_propagation();
-                        return EventOutcome::Handled;
-                    }
-                    if keys.deny_matches(*key) {
-                        ctx.emit(AiDockMsg::DenyPending);
-                        ctx.stop_propagation();
-                        return EventOutcome::Handled;
-                    }
+        if let Ok(ref approval_opt) = self.pending_approval.lock()
+            && approval_opt.is_some()
+        {
+            if let TuiEvent::Key(key) = event
+                && let Ok(keys) = self.keybindings.lock()
+            {
+                if keys.approve_matches(*key) {
+                    ctx.emit(AiDockMsg::ApprovePending);
+                    ctx.stop_propagation();
+                    return EventOutcome::Handled;
                 }
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
+                if keys.deny_matches(*key) {
+                    ctx.emit(AiDockMsg::DenyPending);
+                    ctx.stop_propagation();
+                    return EventOutcome::Handled;
+                }
             }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
 
         let input_insert_mode = self
@@ -1964,18 +1963,16 @@ impl TuiNode<AiDockMsg> for ChatTabBody {
             .lock()
             .map(|input| input.insert_mode())
             .unwrap_or(false);
-        if !input_insert_mode {
-            if let TuiEvent::Key(key) = event {
-                if self.handle_log_scroll_key(*key, ctx) {
-                    return EventOutcome::Handled;
-                }
-                let bindings = crate::keybindings();
-                if bindings.tabs().previous_matches(*key)
-                    || bindings.tabs().next_matches(*key)
-                    || bindings.tabs().close_matches(*key)
-                {
-                    return EventOutcome::Ignored;
-                }
+        if !input_insert_mode && let TuiEvent::Key(key) = event {
+            if self.handle_log_scroll_key(*key, ctx) {
+                return EventOutcome::Handled;
+            }
+            let bindings = crate::keybindings();
+            if bindings.tabs().previous_matches(*key)
+                || bindings.tabs().next_matches(*key)
+                || bindings.tabs().close_matches(*key)
+            {
+                return EventOutcome::Ignored;
             }
         }
 
@@ -2142,7 +2139,7 @@ impl TuiNode<AiDockMsg> for ToolsTabBody {
 }
 
 struct ModelTabBody {
-    model_input: Arc<Mutex<TextInput<AiDockMsg>>>,
+    model_input: Rc<Mutex<TextInput<AiDockMsg>>>,
     focused: bool,
 }
 
@@ -2198,15 +2195,13 @@ impl TuiNode<AiDockMsg> for ModelTabBody {
             .map(|model| model.insert_mode())
             .unwrap_or(false);
 
-        if !current_insert_mode {
-            if let TuiEvent::Key(key) = event {
-                let bindings = crate::keybindings();
-                if bindings.tabs().previous_matches(*key)
-                    || bindings.tabs().next_matches(*key)
-                    || bindings.tabs().close_matches(*key)
-                {
-                    return EventOutcome::Ignored;
-                }
+        if !current_insert_mode && let TuiEvent::Key(key) = event {
+            let bindings = crate::keybindings();
+            if bindings.tabs().previous_matches(*key)
+                || bindings.tabs().next_matches(*key)
+                || bindings.tabs().close_matches(*key)
+            {
+                return EventOutcome::Ignored;
             }
         }
 

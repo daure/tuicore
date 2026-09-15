@@ -375,8 +375,10 @@ mod tests {
                 focused_events_before_global_hotkeys: false,
             }),
         };
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let mut dispatcher = TreeDispatcher::new();
 
         dispatcher.dispatch_focus(&mut root, transition, settings);

@@ -494,7 +494,7 @@ fn keys_match(hotkey: KeyEvent, key: KeyEvent) -> bool {
         return false;
     }
     match (hotkey.code, key.code) {
-        (Key::Char(a), Key::Char(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        (Key::Char(a), Key::Char(b)) => a.eq_ignore_ascii_case(&b),
         (a, b) => a == b,
     }
 }

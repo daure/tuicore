@@ -1528,7 +1528,7 @@ impl FocusTarget {
             enabled: self.enabled,
             tab_stop: self.tab_stop,
             control: self.control,
-            hotkey: self.hotkey.clone(),
+            hotkey: self.hotkey,
             hotkeys: self.hotkeys.clone(),
             hotkey_sequences: self.hotkey_sequences.clone(),
             suppress_global_hotkeys: self.suppress_global_hotkeys,
@@ -1614,6 +1614,10 @@ impl ChildKey {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "Contract tests are adjacent to declarations; wrapper implementations follow"
+)]
 mod tests {
     use super::*;
 

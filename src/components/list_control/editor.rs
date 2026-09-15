@@ -163,7 +163,13 @@ where
         self.inputs
             .iter()
             .zip(self.visible_fields())
-            .map(|(input, visible)| visible.then(|| input.value()).unwrap_or_default())
+            .map(|(input, visible)| {
+                if visible {
+                    input.value()
+                } else {
+                    Default::default()
+                }
+            })
             .collect()
     }
 

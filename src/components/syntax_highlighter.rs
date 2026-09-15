@@ -289,9 +289,11 @@ pub(crate) fn highlight_text(
     theme_name: ThemeName,
 ) -> Text<'static> {
     let append_terminal_newline = language == Language::Markdown && !code.ends_with('\n');
-    let source = append_terminal_newline
-        .then(|| format!("{code}\n"))
-        .unwrap_or_else(|| code.to_owned());
+    let source = if append_terminal_newline {
+        format!("{code}\n")
+    } else {
+        code.to_owned()
+    };
     let lumis_theme_name = match theme_name {
         ThemeName::Amoled => "matte_black",
         ThemeName::Aura => "aura_dark",
@@ -341,27 +343,24 @@ pub(crate) fn highlight_text(
         .unwrap();
 
     let mut output = Vec::new();
-    if formatter.format(&source, &mut output).is_ok() {
-        if let Ok(ansi_str) = String::from_utf8(output) {
-            if let Ok(mut text) = ansi_str.into_text() {
-                if append_terminal_newline
-                    && text.lines.last().is_some_and(|line| line.spans.is_empty())
-                {
-                    text.lines.pop();
+    if formatter.format(&source, &mut output).is_ok()
+        && let Ok(ansi_str) = String::from_utf8(output)
+        && let Ok(mut text) = ansi_str.into_text()
+    {
+        if append_terminal_newline && text.lines.last().is_some_and(|line| line.spans.is_empty()) {
+            text.lines.pop();
+        }
+        for line in &mut text.lines {
+            for span in &mut line.spans {
+                if span.style.bg == Some(ratatui::style::Color::Reset) {
+                    span.style.bg = None;
                 }
-                for line in &mut text.lines {
-                    for span in &mut line.spans {
-                        if span.style.bg == Some(ratatui::style::Color::Reset) {
-                            span.style.bg = None;
-                        }
-                        if span.style.fg == Some(ratatui::style::Color::Reset) {
-                            span.style.fg = None;
-                        }
-                    }
+                if span.style.fg == Some(ratatui::style::Color::Reset) {
+                    span.style.fg = None;
                 }
-                return text;
             }
         }
+        return text;
     }
 
     Text::raw(code.to_owned())
@@ -435,24 +434,24 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         let geometry = self.scroll_geometry(area);
         if !geometry.layout.viewport.is_empty() {
             // Render full-width selection background if focused
-            if self.focused {
-                if let Some(selected) = self.selected_line {
-                    let offset = self.scroll.offset().y;
-                    let bottom = offset.saturating_add(geometry.viewport.height as usize);
-                    if selected >= offset && selected < bottom {
-                        let style = ratatui::style::Style::default()
-                            .fg(theme().highlight_fg())
-                            .bg(theme().highlight_bg());
-                        frame.render_widget(
-                            ratatui::widgets::Block::default().style(style),
-                            Rect::new(
-                                geometry.layout.viewport.x,
-                                geometry.layout.viewport.y + (selected - offset) as u16,
-                                geometry.layout.viewport.width,
-                                1,
-                            ),
-                        );
-                    }
+            if self.focused
+                && let Some(selected) = self.selected_line
+            {
+                let offset = self.scroll.offset().y;
+                let bottom = offset.saturating_add(geometry.viewport.height);
+                if selected >= offset && selected < bottom {
+                    let style = ratatui::style::Style::default()
+                        .fg(theme().highlight_fg())
+                        .bg(theme().highlight_bg());
+                    frame.render_widget(
+                        ratatui::widgets::Block::default().style(style),
+                        Rect::new(
+                            geometry.layout.viewport.x,
+                            geometry.layout.viewport.y + (selected - offset) as u16,
+                            geometry.layout.viewport.width,
+                            1,
+                        ),
+                    );
                 }
             }
 
@@ -502,7 +501,7 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.focused = focused;
         if focused && self.selected_line.is_none() {
-            self.selected_line = Some(self.scroll.offset().y as usize);
+            self.selected_line = Some(self.scroll.offset().y);
         }
         ctx.request_redraw();
     }

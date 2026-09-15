@@ -564,8 +564,10 @@ mod tests {
     #[test]
     fn jira_tickets_enter_cascades_selection_and_a_selects_all() {
         let mut view = DataViewMode::JiraTickets.data_view();
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let area = Rect::new(0, 0, 80, 10);
 
         view.on_key_with_settings(Key::Enter, area, settings);

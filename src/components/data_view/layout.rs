@@ -490,6 +490,10 @@ where
             .max(minimum)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Cell wrapping needs column, row, and tree selection geometry"
+    )]
     pub(super) fn wrapped_cell_text(
         &self,
         column_index: usize,
@@ -871,16 +875,16 @@ where
     }
 
     fn selection_placeholder_prefix_width(&self, depth: usize, show_tree_gutter: bool) -> usize {
-        show_tree_gutter
-            .then(|| {
-                depth
-                    .saturating_mul(preset().data_view().tree_indent_width())
-                    .saturating_add(line_width(&Line::from(format!(
-                        "{} ",
-                        self.tree_glyphs.leaf
-                    ))))
-            })
-            .unwrap_or(0)
+        if show_tree_gutter {
+            depth
+                .saturating_mul(preset().data_view().tree_indent_width())
+                .saturating_add(line_width(&Line::from(format!(
+                    "{} ",
+                    self.tree_glyphs.leaf
+                ))))
+        } else {
+            0
+        }
     }
 }
 

@@ -4,28 +4,24 @@ use crate::animation::{AnimationSettings, Easing};
 use crate::config::config_dir;
 use crate::scroll::{ScrollPreset, ScrollbarGutter, ScrollbarStyle, ScrollbarVisibility};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TabsVariant {
     Minimal,
     Underline,
+    #[default]
     Boxed,
     OneRow,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BorderKind {
     Plain,
+    #[default]
     Rounded,
     Double,
     Thick,
     RoundedDashed,
     AsciiDashed,
-}
-
-impl Default for BorderKind {
-    fn default() -> Self {
-        Self::Rounded
-    }
 }
 
 impl FromStr for BorderKind {
@@ -41,12 +37,6 @@ impl FromStr for BorderKind {
             "ascii-dashed" => Ok(Self::AsciiDashed),
             other => Err(PresetError(format!("Unknown border `{other}`"))),
         }
-    }
-}
-
-impl Default for TabsVariant {
-    fn default() -> Self {
-        Self::Boxed
     }
 }
 
@@ -526,8 +516,10 @@ mod tests {
 
     #[test]
     fn preset_builders_customize_public_settings() {
-        let mut animation = AnimationSettings::default();
-        animation.enabled = false;
+        let animation = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
         let scroll = ScrollPreset {
             line_step: 4,
             ..ScrollPreset::default()

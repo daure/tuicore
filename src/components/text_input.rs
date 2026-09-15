@@ -116,8 +116,9 @@ pub struct PasswordInput<M = ()> {
     mask_char: char,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum InputChrome {
+    #[default]
     Plain,
     Panel(InputPanelChrome),
 }
@@ -217,12 +218,6 @@ impl InputPanelChrome {
         }
         panel.set_hotkey_badge(hotkey);
         panel
-    }
-}
-
-impl Default for InputChrome {
-    fn default() -> Self {
-        Self::Plain
     }
 }
 
@@ -1233,12 +1228,11 @@ impl<M> TextInput<M> {
             .strip_suffix("\r\n")
             .or_else(|| value.strip_suffix('\n'))
             .unwrap_or(value);
-        let editor_value = if self.numbers_only {
+        if self.numbers_only {
             editor_value.trim_matches(' ')
         } else {
             editor_value
-        };
-        editor_value
+        }
     }
 
     fn emit_change_if_needed(&self, previous_value: &str, ctx: &mut EventCtx<M>) {
@@ -1429,9 +1423,7 @@ impl<M> PasswordInput<M> {
             );
         }
 
-        let chars = std::iter::repeat(self.mask_char)
-            .take(self.input.len_chars())
-            .collect::<Vec<_>>();
+        let chars = std::iter::repeat_n(self.mask_char, self.input.len_chars()).collect::<Vec<_>>();
         let len = chars.len();
         let start = if self.input.focused && self.input.insert_mode {
             visible_start_for_cursor(&chars, self.input.cursor, width)
@@ -1738,9 +1730,8 @@ impl<M> TuiNode<M> for PasswordInput<M> {
                 self.input.inline_hotkey().as_deref(),
             )
         } else {
-            let value = std::iter::repeat(self.mask_char)
-                .take(self.input.len_chars())
-                .collect::<String>();
+            let value =
+                std::iter::repeat_n(self.mask_char, self.input.len_chars()).collect::<String>();
             label_with_visible_hotkey(
                 &value,
                 self.input.inline_hotkey().as_deref(),

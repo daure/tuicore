@@ -248,11 +248,9 @@ impl Renderer {
         N: TuiNode<M>,
         std::io::Error: From<B::Error>,
     {
-        terminal
-            .draw(|frame| {
-                render_frame(frame, root, area);
-            })
-            .map_err(Into::into)?;
+        terminal.draw(|frame| {
+            render_frame(frame, root, area);
+        })?;
         Ok(())
     }
 
@@ -268,11 +266,9 @@ impl Renderer {
         N: TuiNode<M>,
         std::io::Error: From<B::Error>,
     {
-        terminal
-            .draw(|frame| {
-                render_frame_with_toasts_and_fade(frame, root, toasts, area, 0.0);
-            })
-            .map_err(Into::into)?;
+        terminal.draw(|frame| {
+            render_frame_with_toasts_and_fade(frame, root, toasts, area, 0.0);
+        })?;
         Ok(())
     }
 
@@ -326,9 +322,7 @@ where
     std::io::Error: From<B::Error>,
 {
     let mut graphics = GraphicsFrame::default();
-    terminal
-        .draw(|frame| graphics = render(frame))
-        .map_err(Into::into)?;
+    terminal.draw(|frame| graphics = render(frame))?;
     Ok(graphics)
 }
 

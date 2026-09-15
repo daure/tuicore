@@ -10,7 +10,7 @@ use ratatui::style::Color;
 
 use crate::config::config_dir;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ThemeName {
     Amoled,
     Aura,
@@ -45,6 +45,7 @@ pub enum ThemeName {
     Solarized,
     Synthwave84,
     TokyoNight,
+    #[default]
     Vercel,
     Vesper,
     Zenburn,
@@ -170,12 +171,6 @@ impl ThemeName {
             Self::Vesper => "Vesper",
             Self::Zenburn => "Zenburn",
         }
-    }
-}
-
-impl Default for ThemeName {
-    fn default() -> Self {
-        Self::Vercel
     }
 }
 
@@ -1281,6 +1276,10 @@ fn palette_for(name: ThemeName) -> Palette {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Palette rows explicitly specify each semantic color slot"
+)]
 fn palette(
     base: [u8; 3],
     surface: [u8; 3],

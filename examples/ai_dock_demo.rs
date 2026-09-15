@@ -231,14 +231,13 @@ impl TuiNode<Msg> for DemoApp {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        if let TuiEvent::Key(KeyEvent { code, modifiers }) = event {
-            if *code == tuicore::Key::Char('q')
-                && modifiers.contains(tuicore::KeyModifiers::CONTROL)
-            {
-                ctx.request_quit();
-                ctx.stop_propagation();
-                return EventOutcome::Handled;
-            }
+        if let TuiEvent::Key(KeyEvent { code, modifiers }) = event
+            && *code == tuicore::Key::Char('q')
+            && modifiers.contains(tuicore::KeyModifiers::CONTROL)
+        {
+            ctx.request_quit();
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
         self.dialog_layer.event(event, ctx)
     }

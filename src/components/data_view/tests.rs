@@ -884,8 +884,10 @@ fn partially_top_clipped_row_renders_its_continuation_line() {
         .row_height(2);
     let area = Rect::new(0, 0, 12, 2);
     let geometry = view.scroll_geometry(area);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     view.scroll.scroll_to(
         ScrollOffset::new(0, 1),
         geometry.viewport,
@@ -1027,8 +1029,10 @@ fn mixed_row_heights_drive_measurement_content_reveal_centering_and_paging() {
     );
     assert_eq!(view.visible_page_step(area), 2);
 
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     view.highlight_id(&3);
     view.ensure_highlight_visible(area, settings);
     assert_eq!(view.scroll.target_offset().y, 2);
@@ -1042,8 +1046,10 @@ fn mixed_row_height_paging_uses_capacity_at_current_viewport() {
     let mut view = DataView::list(1..=6, |row| *row, |row| row.to_string())
         .row_height_by(|row| if *row == 1 { 4 } else { 1 });
     let geometry = view.scroll_geometry(area);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     view.highlight_id(&3);
     view.scroll.scroll_to(
         ScrollOffset::new(0, 4),
@@ -1135,8 +1141,10 @@ fn selected_non_cursor_row_preserves_embedded_chip_colors() {
 fn row_height_uses_physical_lines_for_page_visibility() {
     let area = Rect::new(0, 0, 20, 4);
     let mut view = DataView::list(1..=8, |row| *row, |row| row.to_string()).row_height(2);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     view.on_key_with_settings(Key::PageDown, area, settings);
 
@@ -2346,8 +2354,10 @@ fn horizontal_scroll_offsets_rendered_cells() {
         Constraint::Length(12),
         |row: &Row| row.name.to_string(),
     ));
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(
         KeyEvent {
@@ -2392,8 +2402,10 @@ fn tree_selection_placeholder_sizes_and_scrolls_its_first_cell() {
     );
     let area = Rect::new(0, 0, 10, 10);
     let geometry = view.scroll_geometry(area);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     assert!(geometry.content.width >= "2 items selected".len());
     view.scroll.scroll_to(
@@ -2650,8 +2662,10 @@ fn ctrl_horizontal_keys_scroll_by_seventy_percent_of_assigned_width() {
             |row: &Row| row.name.to_string(),
         ))
     };
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let jump_right = KeyEvent {
         code: Key::Char('l'),
         modifiers: KeyModifiers::CONTROL,
@@ -2709,8 +2723,10 @@ fn width_change_resets_horizontal_scroll_to_start() {
             row.name.to_string()
         }),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let narrow = Rect::new(0, 0, 10, 2);
     let wide = Rect::new(0, 0, 18, 2);
     let mut layout = LayoutCtx::new();
@@ -2988,8 +3004,10 @@ fn ctrl_horizontal_navigation_scrolls_tree_without_expanding() {
         |row: &Row| row.name.to_string(),
     ))
     .tree(TreeAdapter::parent_id(|row: &Row| row.parent));
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(
         KeyEvent {
@@ -3023,8 +3041,10 @@ fn ctrl_horizontal_scrolling_uses_configured_navigation_keys() {
             row.name.to_string()
         }),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 10, 2);
 
     let right = view.on_key_with_settings_and_bindings(
@@ -3059,8 +3079,10 @@ fn horizontal_scroll_extent_uses_rendered_content_width() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 10, 2);
 
     for _ in 0..10 {
@@ -3754,8 +3776,10 @@ fn tree_prefix_preserves_line_style_and_alignment() {
 #[test]
 fn tree_navigation_keeps_right_arrow_expansion_before_horizontal_scroll() {
     let mut view = tree_view();
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(
         KeyEvent {
@@ -3779,8 +3803,10 @@ fn page_change_clamps_scroll_target_to_new_page() {
         |row| row.name.to_string(),
     )
     .pagination(10);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 20, 5);
 
     let _ = view.on_key_with_settings(
@@ -3813,8 +3839,10 @@ fn line_navigation_keeps_highlight_centered_without_scroll_animation() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 20, 5);
 
     for _ in 0..3 {
@@ -3840,8 +3868,10 @@ fn page_navigation_centers_highlight_when_not_near_edges() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 20, 21);
 
     let _ = view.on_key_with_settings(
@@ -3878,8 +3908,10 @@ fn navigation_scrolls_up_when_highlight_moves_above_viewport_middle() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 20, 5);
 
     for _ in 0..8 {
@@ -3964,8 +3996,10 @@ fn activation_mode_controls_key_and_navigation_activation() {
         |row| row.name.to_string(),
     )
     .activation_mode(ActivationMode::OnNavigate);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = navigate.on_key_with_settings(down_key(), Rect::new(0, 0, 20, 2), settings);
     assert!(outcome.activated);
@@ -4004,8 +4038,10 @@ fn manual_activation_mode_still_applies_activate_selection() {
     .activation_mode(ActivationMode::Manual)
     .selection_mode(SelectionMode::Single)
     .selection_trigger(SelectionTrigger::OnActivate);
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(enter_key(), Rect::new(0, 0, 20, 1), settings);
 
@@ -4031,8 +4067,10 @@ fn unbound_selection_key_is_not_handled_when_selection_is_disabled() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(
         KeyEvent {
@@ -4049,8 +4087,10 @@ fn unbound_selection_key_is_not_handled_when_selection_is_disabled() {
 
 #[test]
 fn expansion_keys_are_idle_without_tree_actions() {
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
     let area = Rect::new(0, 0, 20, 3);
     let mut plain = DataView::list(
         [Row::new(1, "one")],
@@ -4299,8 +4339,10 @@ fn activate_key_emits_legacy_and_typed_activation_by_default() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings(enter_key(), Rect::new(0, 0, 20, 1), settings);
 
@@ -4324,8 +4366,10 @@ fn configured_activate_key_emits_activation() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     let outcome = view.on_key_with_settings_and_bindings(
         KeyEvent {
@@ -4796,8 +4840,10 @@ fn filtering_preserves_highlight_by_row_id() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     view.highlight_line_with_settings(2, Rect::new(0, 0, 20, 4), settings);
     let outcome = view.set_visible_row_ids([4, 3]);
@@ -4818,8 +4864,10 @@ fn filtering_falls_back_to_first_visible_row_when_highlight_is_hidden() {
         |row| row.id,
         |row| row.name.to_string(),
     );
-    let mut settings = AnimationSettings::default();
-    settings.enabled = false;
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
 
     view.highlight_line_with_settings(2, Rect::new(0, 0, 20, 3), settings);
     view.set_visible_row_ids([2]);

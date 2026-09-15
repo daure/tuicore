@@ -533,6 +533,10 @@ struct OpenMeteoPeriod {
     precipitation: String,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The upstream response stores hourly weather fields in parallel arrays"
+)]
 fn open_meteo_period(
     label: &str,
     date: &str,
@@ -912,10 +916,14 @@ fn colorized_lines(lines: impl IntoIterator<Item = impl Into<String>>) -> Vec<Li
 
     let mut art_palettes = vec![None; chars.len()];
     for (index, line) in chars.iter().enumerate() {
-        if line.iter().any(|ch| *ch == '°') {
+        if line.contains(&'°') {
             let palettes = period_art_palettes(&chars, index);
-            for target in index.saturating_sub(1)..=(index + 3).min(chars.len().saturating_sub(1)) {
-                art_palettes[target] = Some(palettes.clone());
+            for target in art_palettes
+                .iter_mut()
+                .take(index.saturating_add(4))
+                .skip(index.saturating_sub(1))
+            {
+                *target = Some(palettes.clone());
             }
         }
     }

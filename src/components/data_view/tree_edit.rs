@@ -254,10 +254,8 @@ where
         let new_parent = siblings.get(current.checked_sub(1)?).cloned()?;
         let target = self.tree_children(Some(&new_parent)).len();
         let result = self.reparent_tree_row(id, Some(new_parent.clone()), target);
-        if result.is_some() {
-            if self.expanded.insert(new_parent) {
-                self.invalidate_tree_projection();
-            }
+        if result.is_some() && self.expanded.insert(new_parent) {
+            self.invalidate_tree_projection();
         }
         result
     }

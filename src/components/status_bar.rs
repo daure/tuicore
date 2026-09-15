@@ -703,18 +703,17 @@ where
             return outcome;
         }
 
-        if self.ai_enabled {
-            if let Some(route) = route
+        if self.ai_enabled
+            && let Some(route) = route
                 .path
                 .without_first_if(&status_bar_ai_key())
                 .map(EventRoute::new)
-            {
-                let outcome = self.ai.dispatch_event(&route, event, ctx);
-                if outcome.handled() && !self.custom_ai_open {
-                    self.open_ai_dock(ctx);
-                }
-                return outcome;
+        {
+            let outcome = self.ai.dispatch_event(&route, event, ctx);
+            if outcome.handled() && !self.custom_ai_open {
+                self.open_ai_dock(ctx);
             }
+            return outcome;
         }
 
         if let Some(route) = route
@@ -761,24 +760,23 @@ where
             return self.weather_dialog.dispatch_event(&route, event, ctx);
         }
 
-        if self.ai_enabled {
-            if let Some(route) = route
+        if self.ai_enabled
+            && let Some(route) = route
                 .path
                 .without_first_if(&status_bar_ai_dock_key())
                 .map(EventRoute::new)
-            {
-                let outcome = self.ai_dock.dispatch_event(&route, event, ctx);
-                self.close_ai_dock_if_requested(ctx);
-                if outcome.handled() {
-                    return outcome;
-                }
-                if ai_dock_close_event(event) {
-                    self.close_ai_dock(ctx);
-                    return EventOutcome::Handled;
-                }
-                ctx.stop_propagation();
+        {
+            let outcome = self.ai_dock.dispatch_event(&route, event, ctx);
+            self.close_ai_dock_if_requested(ctx);
+            if outcome.handled() {
+                return outcome;
+            }
+            if ai_dock_close_event(event) {
+                self.close_ai_dock(ctx);
                 return EventOutcome::Handled;
             }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
         }
 
         EventOutcome::Ignored

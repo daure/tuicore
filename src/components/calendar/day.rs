@@ -35,6 +35,10 @@ pub(super) struct CalendarDayRow {
 }
 
 impl CalendarDayRow {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Row construction combines identity, time, and presentation metadata"
+    )]
     pub(super) fn new(
         key: CalendarDayRowKey,
         entry_index: usize,

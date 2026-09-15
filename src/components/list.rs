@@ -140,6 +140,10 @@ impl List {
             .into_list_outcome(true, changed)
     }
 
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "This public method moves the selected row; it does not consume an iterator"
+    )]
     pub fn next(&mut self) -> ListOutcome {
         self.select_index(self.selected_index().saturating_add(1))
     }

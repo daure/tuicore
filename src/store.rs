@@ -331,8 +331,10 @@ mod tests {
         amount: i32,
     }
 
+    type RecordedCall = (u64, &'static str, Option<DispatchOutcome>);
+
     struct RecordingObserver {
-        calls: Rc<RefCell<Vec<(u64, &'static str, Option<DispatchOutcome>)>>>,
+        calls: Rc<RefCell<Vec<RecordedCall>>>,
     }
 
     impl StoreObserver<SecretEvent> for RecordingObserver {

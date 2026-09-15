@@ -126,8 +126,10 @@ mod tests {
     #[test]
     fn spinner_stays_idle_when_animations_disabled() {
         let mut spinner = Spinner::new();
-        let mut settings = AnimationSettings::default();
-        settings.enabled = false;
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
 
         assert_eq!(spinner.glyph(), "⠋");
 
