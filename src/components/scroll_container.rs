@@ -384,7 +384,9 @@ where
 
     fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut RenderCtx<'a>) {
         let viewport = self.geometry.layout.viewport;
-        if !viewport.is_empty() && !self.content_area.is_empty() {
+        // The terminal can shrink between layout and draw; keep translation anchored to layout.
+        let visible = viewport.intersection(frame.area());
+        if !visible.is_empty() && !self.content_area.is_empty() {
             let mut terminal = Terminal::new(TestBackend::new(
                 self.content_area.width,
                 self.content_area.height,
@@ -409,23 +411,26 @@ where
                     .checked_sub(offset.y)
                     .filter(|y| *y < usize::from(viewport.height));
                 if let (Some(x), Some(y)) = (visible_x, visible_y) {
-                    frame.set_cursor_position((viewport.x + x as u16, viewport.y + y as u16));
+                    let position = (viewport.x + x as u16, viewport.y + y as u16).into();
+                    if visible.contains(position) {
+                        frame.set_cursor_position(position);
+                    }
                 }
             }
             let source = terminal.backend().buffer();
             let destination = frame.buffer_mut();
-            for row in 0..viewport.height {
-                let source_y = offset.y.saturating_add(usize::from(row));
+            for y in visible.y..visible.bottom() {
+                let source_y = offset.y.saturating_add(usize::from(y - viewport.y));
                 if source_y >= usize::from(self.content_area.height) {
                     break;
                 }
-                for column in 0..viewport.width {
-                    let source_x = offset.x.saturating_add(usize::from(column));
+                for x in visible.x..visible.right() {
+                    let source_x = offset.x.saturating_add(usize::from(x - viewport.x));
                     if source_x >= usize::from(self.content_area.width) {
                         break;
                     }
                     if let Some(cell) = source.cell((source_x as u16, source_y as u16)) {
-                        destination[(viewport.x + column, viewport.y + row)] = cell.clone();
+                        destination[(x, y)] = cell.clone();
                     }
                 }
             }
@@ -546,6 +551,10 @@ fn reveal_axis(
         offset
     }
 }
+
+#[cfg(test)]
+#[path = "tests/scroll_container_render.rs"]
+mod render_tests;
 
 #[cfg(test)]
 mod tests {
