@@ -643,8 +643,8 @@ impl DiffViewer {
         let offset = self.scroll.offset().y;
         let bottom = offset.saturating_add(geometry.viewport.height);
         let style = Style::default()
-            .fg(theme().highlight_fg())
-            .bg(theme().highlight_bg());
+            .fg(theme().selected_fg())
+            .bg(theme().selected_bg());
         for (index, line) in self.display_parts.iter().enumerate() {
             if line.location != Some(selected) || index < offset || index >= bottom {
                 continue;
@@ -691,8 +691,8 @@ impl DiffViewer {
                 for part in &line.parts {
                     let base_style = if selected {
                         Style::default()
-                            .fg(theme.highlight_fg())
-                            .bg(theme.highlight_bg())
+                            .fg(theme.selected_fg())
+                            .bg(theme.selected_bg())
                     } else {
                         diff_role_style(part.role)
                     };

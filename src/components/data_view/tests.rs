@@ -3203,6 +3203,19 @@ fn mixed_columns_expand_only_intrinsic_content() {
 }
 
 #[test]
+fn fit_content_columns_leave_remaining_width_to_fill_columns() {
+    let view = DataView::new([Row::new(1, "Name")], |row| row.id).columns([
+        Column::text("name", "", Constraint::Fill(1), |row: &Row| {
+            row.name.to_string()
+        })
+        .constrained(),
+        Column::text("size", "", Constraint::Min(0), |_| String::from("MiB")).fit_content(),
+    ]);
+
+    assert_eq!(view.column_widths(20), vec![17, 3]);
+}
+
+#[test]
 fn highlighted_row_style_is_applied_to_rendered_cell_content() {
     let view = DataView::list(
         [Row::new(1, "selected")],

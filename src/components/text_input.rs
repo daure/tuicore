@@ -93,6 +93,7 @@ pub struct TextInput<M = ()> {
     focused: bool,
     insert_mode: bool,
     numbers_only: bool,
+    allowed_chars: Option<String>,
     max_len: Option<usize>,
     on_change: Option<Box<dyn Fn(String) -> M>>,
     on_submit: Option<Box<dyn Fn(String) -> M>>,
@@ -325,6 +326,7 @@ impl<M> TextInput<M> {
             focused: false,
             insert_mode: false,
             numbers_only: false,
+            allowed_chars: None,
             max_len: None,
             on_change: None,
             on_submit: None,
@@ -672,6 +674,11 @@ impl<M> TextInput<M> {
 
     pub fn numbers_only(mut self, numbers_only: bool) -> Self {
         self.set_numbers_only(numbers_only);
+        self
+    }
+
+    pub fn allowed_chars(mut self, allowed_chars: impl Into<String>) -> Self {
+        self.allowed_chars = Some(allowed_chars.into());
         self
     }
 
@@ -1170,7 +1177,11 @@ impl<M> TextInput<M> {
     }
 
     fn accepts_value(&self, value: &str) -> bool {
-        !self.numbers_only || value.chars().all(|value| value.is_ascii_digit())
+        (!self.numbers_only || value.chars().all(|value| value.is_ascii_digit()))
+            && self
+                .allowed_chars
+                .as_ref()
+                .is_none_or(|allowed| value.chars().all(|value| allowed.contains(value)))
     }
 
     fn trim_numbers_only_value(&mut self) {

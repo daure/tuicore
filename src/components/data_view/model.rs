@@ -270,6 +270,7 @@ pub enum ColumnSizing {
     #[default]
     Intrinsic,
     Constrained,
+    FitContent,
 }
 
 pub struct Column<T, Id> {
@@ -440,6 +441,10 @@ impl<T, Id> Column<T, Id> {
 
     pub fn constrained(self) -> Self {
         self.sizing(ColumnSizing::Constrained)
+    }
+
+    pub fn fit_content(self) -> Self {
+        self.sizing(ColumnSizing::FitContent)
     }
 
     pub fn hidden(self) -> Self {

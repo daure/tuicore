@@ -8,13 +8,17 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 use std::time::Duration;
+use unicode_segmentation::UnicodeSegmentation;
 
+use crate::search::{SearchState, split_search_area};
 use crate::{
     Animated, AnimationSettings, AxisProposal, EventCtx, EventOutcome, EventRoute, FocusCtx,
     FocusId, FocusTarget, KeyEvent, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
     RenderCtx, ScrollGeometry, ScrollOutcome, ScrollSize, ScrollState, ThemeName, TickResult,
     TuiEvent, TuiNode, keybindings, paragraph_scroll, theme,
 };
+
+mod search;
 
 const SYNTAX_FOCUS: &str = "syntax-highlighter";
 
@@ -31,6 +35,7 @@ pub struct SyntaxHighlighter {
     selected_line: Option<usize>,
     pending_top_prefix: bool,
     wrap: bool,
+    search: SearchState,
 }
 
 impl SyntaxHighlighter {
@@ -40,13 +45,14 @@ impl SyntaxHighlighter {
             language,
             cached_text: None,
             last_theme: None,
-            scroll: ScrollState::default(),
+            scroll: Self::new_scroll(false),
             content_size: ScrollSize::default(),
             area: Rect::default(),
             focused: false,
             selected_line: None,
             pending_top_prefix: false,
             wrap: false,
+            search: SearchState::default(),
         }
     }
 
@@ -65,8 +71,9 @@ impl SyntaxHighlighter {
         if self.wrap != wrap {
             self.wrap = wrap;
             self.selected_line = None;
-            self.scroll = ScrollState::default();
+            self.scroll = Self::new_scroll(wrap);
             self.refresh_content_size();
+            self.center_search_match(self.area, crate::animation_settings());
         }
     }
 
@@ -74,8 +81,19 @@ impl SyntaxHighlighter {
         self.code = code.into();
         self.cached_text = None; // Invalidate cache
         self.selected_line = None;
-        self.scroll = ScrollState::default();
+        self.search.clear();
+        self.pending_top_prefix = false;
+        self.scroll = Self::new_scroll(self.wrap);
         self.refresh_content_size();
+    }
+
+    fn new_scroll(wrap: bool) -> ScrollState {
+        let axes = if wrap {
+            crate::ScrollAxes::Vertical
+        } else {
+            crate::ScrollAxes::Both
+        };
+        ScrollState::from_preset(axes, crate::preset().scroll())
     }
 
     pub fn language(mut self, language: Language) -> Self {
@@ -100,6 +118,7 @@ impl SyntaxHighlighter {
     }
 
     fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
+        let area = split_search_area(area, self.search.is_active()).0;
         self.scroll.geometry(area, self.content_size)
     }
 
@@ -132,7 +151,7 @@ impl SyntaxHighlighter {
             self.content_size = ScrollSize::new(
                 self.code
                     .lines()
-                    .map(|line| line.chars().count())
+                    .map(|line| ratatui::text::Line::raw(line).width())
                     .max()
                     .unwrap_or(0),
                 self.code.lines().count(),
@@ -216,6 +235,9 @@ impl SyntaxHighlighter {
         settings: AnimationSettings,
     ) -> ScrollOutcome {
         let key = key.into();
+        if let Some(outcome) = self.handle_search_key(key, area, settings) {
+            return outcome;
+        }
         let bindings = keybindings();
         let data_keys = bindings.data_view();
         let viewport = self.scroll_geometry(area).viewport.height.max(1);
@@ -371,15 +393,59 @@ pub(crate) fn highlight_text(
     Text::raw(code.to_owned())
 }
 
+fn clip_horizontal(text: &mut Text<'static>, offset: usize) {
+    if offset == 0 {
+        return;
+    }
+    for line in &mut text.lines {
+        let mut remaining = offset;
+        line.spans = line
+            .spans
+            .iter()
+            .flat_map(|span| {
+                let mut visible = Vec::new();
+                for (index, grapheme) in span.content.grapheme_indices(true) {
+                    if remaining == 0 {
+                        visible.push(ratatui::text::Span::styled(
+                            span.content[index..].to_owned(),
+                            span.style,
+                        ));
+                        break;
+                    }
+                    let width = ratatui::text::Span::raw(grapheme).width();
+                    if width > remaining {
+                        // Paragraph retains an entire wide grapheme at a partial-cell offset,
+                        // which shifts the right edge and can hide the end of a search match.
+                        visible.push(ratatui::text::Span::styled(
+                            " ".repeat(width - remaining),
+                            span.style,
+                        ));
+                    }
+                    remaining = remaining.saturating_sub(width);
+                }
+                visible
+            })
+            .collect();
+    }
+}
+
 impl<M> TuiNode<M> for SyntaxHighlighter {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         let lines = self.code.lines().count() as u16;
-        let max_width = self
+        let mut max_width = self
             .code
             .lines()
-            .map(|l| l.chars().count())
+            .map(|l| ratatui::text::Line::raw(l).width())
             .max()
             .unwrap_or(0) as u16;
+        if self.search.is_active() {
+            max_width = max_width.max(
+                self.search
+                    .line(self.search_matches().len())
+                    .width()
+                    .min(u16::MAX as usize) as u16,
+            );
+        }
         let width = match proposal.width {
             AxisProposal::Unbounded => max_width,
             AxisProposal::AtMost(max) => max_width.min(max),
@@ -393,7 +459,11 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         } else {
             lines
         };
-        LayoutSizeHint::content(width, lines).normalized(proposal)
+        LayoutSizeHint::content(
+            width,
+            lines.saturating_add(u16::from(self.search.is_active())),
+        )
+        .normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
@@ -408,19 +478,23 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         }
 
         if resized {
-            self.center_selection(
-                area,
-                AnimationSettings {
-                    enabled: false,
-                    ..crate::animation_settings()
-                },
-            );
+            let settings = AnimationSettings {
+                enabled: false,
+                ..crate::animation_settings()
+            };
+            if self.search.is_active() {
+                self.center_search_match(area, settings);
+            } else {
+                self.center_selection(area, settings);
+            }
         } else {
             self.clamp_scroll();
         }
 
         ctx.register_copy_region(self.scroll_geometry(area).layout.viewport);
-        ctx.register_focusable(FocusId::new(SYNTAX_FOCUS), area, true);
+        let focus = FocusId::new(SYNTAX_FOCUS);
+        ctx.register_focusable(focus.clone(), area, true);
+        ctx.set_focus_text_entry_active(focus, self.search.is_editing());
         LayoutResult::new(area)
     }
 
@@ -430,11 +504,12 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
         }
 
         let current_theme = theme().name();
-        let text = if let Some(cached) = &self.cached_text {
+        let mut text = if let Some(cached) = &self.cached_text {
             cached.clone()
         } else {
             self.highlight(current_theme)
         };
+        self.highlight_search_matches(&mut text);
 
         let geometry = self.scroll_geometry(area);
         if !geometry.layout.viewport.is_empty() {
@@ -446,8 +521,8 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
                 let bottom = offset.saturating_add(geometry.viewport.height);
                 if selected >= offset && selected < bottom {
                     let style = ratatui::style::Style::default()
-                        .fg(theme().highlight_fg())
-                        .bg(theme().highlight_bg());
+                        .fg(theme().selected_fg())
+                        .bg(theme().selected_bg());
                     frame.render_widget(
                         ratatui::widgets::Block::default().style(style),
                         Rect::new(
@@ -460,25 +535,52 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
                 }
             }
 
+            let mut offset = self.scroll.offset();
+            if !self.wrap {
+                clip_horizontal(&mut text, offset.x);
+                offset.x = 0;
+            }
             let mut paragraph = Paragraph::new(text);
             if self.wrap {
                 paragraph = paragraph.wrap(Wrap { trim: false });
             }
             frame.render_widget(
-                paragraph.scroll(paragraph_scroll(self.scroll.offset())),
+                paragraph.scroll(paragraph_scroll(offset)),
                 geometry.layout.viewport,
             );
         }
 
         self.scroll
             .render_scrollbars(frame, geometry.layout, geometry.content, self.focused);
+        if let Some(search_area) = split_search_area(area, self.search.is_active()).1 {
+            frame.render_widget(
+                Paragraph::new(self.search.line(self.search_matches().len())),
+                search_area,
+            );
+        }
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        if let TuiEvent::Paste(value) = event
+            && self.focused
+            && self.search.is_editing()
+        {
+            if self.search.append(value) {
+                self.center_search_match(self.area, ctx.animation());
+                ctx.request_layout();
+                ctx.request_redraw();
+            }
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let TuiEvent::Key(key) = event else {
             return EventOutcome::Ignored;
         };
+        let previous_search = self.search_layout_state();
         let outcome = self.on_key_with_settings(*key, self.area, ctx.animation());
+        if previous_search != self.search_layout_state() {
+            ctx.request_layout();
+        }
         if outcome.needs_redraw() {
             ctx.request_redraw();
         }
@@ -505,6 +607,7 @@ impl<M> TuiNode<M> for SyntaxHighlighter {
 
     fn focus(&mut self, _target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<M>) {
         self.focused = focused;
+        self.pending_top_prefix = false;
         if focused && self.selected_line.is_none() {
             self.selected_line = Some(self.scroll.offset().y);
         }

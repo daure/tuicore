@@ -553,8 +553,8 @@ fn focused_selection_uses_data_view_highlight_colors_for_paired_rows() {
         .collect::<Vec<_>>();
     assert!(!highlighted.is_empty());
     assert!(highlighted.iter().all(|span| {
-        span.style.fg == Some(theme().highlight_fg())
-            && span.style.bg == Some(theme().highlight_bg())
+        span.style.fg == Some(theme().selected_fg())
+            && span.style.bg == Some(theme().selected_bg())
     }));
 }
 
@@ -777,7 +777,7 @@ fn focused_selection_paints_the_entire_viewport_row() {
     let buffer = terminal.backend().buffer();
     assert_eq!(
         buffer.cell((39, 0)).unwrap().bg,
-        theme().highlight_bg(),
+        theme().selected_bg(),
         "highlight should fill beyond line content"
     );
 }
@@ -909,7 +909,7 @@ fn selected_diff_search_match_keeps_semantic_accent_and_underline() {
     );
     assert!(matched[0].style.add_modifier.contains(Modifier::UNDERLINED));
     assert!(matched[0].style.add_modifier.contains(Modifier::BOLD));
-    assert_eq!(matched[0].style.bg, Some(theme().highlight_bg()));
+    assert_eq!(matched[0].style.bg, Some(theme().selected_bg()));
     assert!(!matched[1].style.add_modifier.contains(Modifier::UNDERLINED));
     assert!(!matched[1].style.add_modifier.contains(Modifier::BOLD));
 }

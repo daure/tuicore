@@ -950,6 +950,30 @@ fn numbers_only_input_rejects_non_digits_from_keys_and_paste() {
 }
 
 #[test]
+fn allowed_chars_input_rejects_disallowed_keys_and_paste() {
+    let mut input = TextInput::<()>::new().allowed_chars("abc-A").value("ab");
+    input.insert_mode = true;
+
+    assert_eq!(
+        input.on_key(KeyEvent::from(Key::Char(' '))),
+        InputOutcome::HANDLED
+    );
+    assert_eq!(input.on_paste("c/"), InputOutcome::HANDLED);
+    assert_eq!(input.current_value(), "ab");
+
+    assert_eq!(
+        input.on_key(KeyEvent::from(Key::Char('-'))),
+        InputOutcome::CHANGED
+    );
+    assert_eq!(
+        input.on_key(KeyEvent::from(Key::Char('A'))),
+        InputOutcome::CHANGED
+    );
+    assert_eq!(input.on_paste("c"), InputOutcome::CHANGED);
+    assert_eq!(input.current_value(), "ab-Ac");
+}
+
+#[test]
 fn numbers_only_input_filters_programmatic_values() {
     let mut input = TextInput::<()>::new().value("room 101").numbers_only(true);
     assert_eq!(input.current_value(), "101");

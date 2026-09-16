@@ -570,7 +570,7 @@ where
         rendered: &[usize],
     ) -> Vec<usize> {
         let columns = self.visible_columns().collect::<Vec<_>>();
-        let configured = self.configured_column_widths(viewport_width);
+        let configured = self.configured_column_widths(viewport_width, rendered);
 
         configured
             .into_iter()
@@ -582,10 +582,13 @@ where
                 } else {
                     CELL_RIGHT_PADDING
                 };
-                if self.wrap_cells || columns[index].sizing == super::ColumnSizing::Constrained {
-                    configured
-                } else {
-                    configured.max(rendered.saturating_add(padding))
+                match columns[index].sizing {
+                    super::ColumnSizing::Constrained | super::ColumnSizing::FitContent
+                        if !self.wrap_cells =>
+                    {
+                        configured
+                    }
+                    _ => configured.max(rendered.saturating_add(padding)),
                 }
             })
             .collect()
@@ -601,14 +604,14 @@ where
             .min(u16::MAX as usize) as u16
     }
 
-    fn configured_column_widths(&self, viewport_width: usize) -> Vec<usize> {
+    fn configured_column_widths(&self, viewport_width: usize, rendered: &[usize]) -> Vec<usize> {
         let columns = self.visible_columns().collect::<Vec<_>>();
         if columns.is_empty() {
             return Vec::new();
         }
 
         let content_width = self
-            .configured_content_width(viewport_width)
+            .configured_content_width(viewport_width, rendered)
             .min(u16::MAX as usize);
         let column_padding = self.column_padding_width();
         let area = Rect::new(0, 0, content_width.saturating_sub(column_padding) as u16, 1);
@@ -617,7 +620,13 @@ where
             .constraints(
                 columns
                     .iter()
-                    .map(|column| column.width)
+                    .enumerate()
+                    .map(|(index, column)| match column.sizing {
+                        super::ColumnSizing::FitContent if !self.wrap_cells => {
+                            Constraint::Length(rendered[index].min(u16::MAX as usize) as u16)
+                        }
+                        _ => column.width,
+                    })
                     .collect::<Vec<_>>(),
             )
             .split(area)
@@ -634,9 +643,9 @@ where
             .collect()
     }
 
-    fn configured_content_width(&self, viewport_width: usize) -> usize {
+    fn configured_content_width(&self, viewport_width: usize, rendered: &[usize]) -> usize {
         let minimum_width = self
-            .configured_minimum_column_widths()
+            .configured_minimum_column_widths(rendered)
             .into_iter()
             .sum::<usize>()
             .saturating_add(self.column_padding_width());
@@ -649,11 +658,15 @@ where
             .saturating_mul(CELL_RIGHT_PADDING)
     }
 
-    fn configured_minimum_column_widths(&self) -> Vec<usize> {
+    fn configured_minimum_column_widths(&self, rendered: &[usize]) -> Vec<usize> {
         self.visible_columns()
-            .map(|column| match column.width {
-                Constraint::Length(width) | Constraint::Min(width) => width as usize,
-                _ => 0,
+            .enumerate()
+            .map(|(index, column)| match column.sizing {
+                super::ColumnSizing::FitContent if !self.wrap_cells => rendered[index],
+                _ => match column.width {
+                    Constraint::Length(width) | Constraint::Min(width) => width as usize,
+                    _ => 0,
+                },
             })
             .collect()
     }
@@ -663,16 +676,22 @@ where
         let mut widths = vec![0; columns.len()];
 
         if self.wrap_cells
-            || !columns
-                .iter()
-                .any(|column| column.sizing == super::ColumnSizing::Intrinsic)
+            || !columns.iter().any(|column| {
+                matches!(
+                    column.sizing,
+                    super::ColumnSizing::Intrinsic | super::ColumnSizing::FitContent
+                )
+            })
         {
             return widths;
         }
 
         if self.shows_headers() {
             for (index, column) in columns.iter().enumerate() {
-                if column.sizing == super::ColumnSizing::Intrinsic {
+                if matches!(
+                    column.sizing,
+                    super::ColumnSizing::Intrinsic | super::ColumnSizing::FitContent
+                ) {
                     widths[index] = widths[index].max(self.header_width(column));
                 }
             }
@@ -685,7 +704,10 @@ where
             match row {
                 DisplayRow::Data(row) => {
                     for (index, column) in columns.iter().enumerate() {
-                        if column.sizing == super::ColumnSizing::Intrinsic {
+                        if matches!(
+                            column.sizing,
+                            super::ColumnSizing::Intrinsic | super::ColumnSizing::FitContent
+                        ) {
                             widths[index] = widths[index].max(self.rendered_cell_width(
                                 index,
                                 column,
@@ -702,10 +724,12 @@ where
                     depth,
                     focused,
                 } => {
-                    if columns
-                        .first()
-                        .is_some_and(|column| column.sizing == super::ColumnSizing::Intrinsic)
-                        && let Some(width) = widths.first_mut()
+                    if columns.first().is_some_and(|column| {
+                        matches!(
+                            column.sizing,
+                            super::ColumnSizing::Intrinsic | super::ColumnSizing::FitContent
+                        )
+                    }) && let Some(width) = widths.first_mut()
                     {
                         let label = if focused {
                             format!("Moving {count} tasks")
@@ -762,9 +786,12 @@ where
             && self.selection_mode == SelectionMode::None
             && self.selection_overlay.is_none()
             && matches!(self.interaction, DataViewInteraction::Grid)
-            && self
-                .visible_columns()
-                .any(|column| column.sizing == super::ColumnSizing::Intrinsic)
+            && self.visible_columns().any(|column| {
+                matches!(
+                    column.sizing,
+                    super::ColumnSizing::Intrinsic | super::ColumnSizing::FitContent
+                )
+            })
     }
 
     fn header_width(&self, column: &Column<T, Id>) -> usize {

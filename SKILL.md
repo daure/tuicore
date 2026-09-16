@@ -241,7 +241,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,
   must tick. `SeasonalEmptyState`: `new(message)`, `SeasonalGlyphs`, must tick when live.
 - `SyntaxHighlighter::new(text, language)`: highlighted, scrollable source; `.wrap(true)` enables
-  word wrapping with keyboard navigation across visual rows for prose detail panes.
+   word wrapping with keyboard navigation across visual rows for prose detail panes. While focused,
+   `/` starts live search, Enter submits, `n`/`N` cycles matches, and Esc clears the search.
 - `SpeedReader`: `new(plain_text)` or `markdown(source)`; configure title, WPM, natural pauses, and
   `SpeedReaderKeyBindings`; inspect `SpeedReaderState`/progress and tick while playing. `dialog`
   wraps it in a `DialogHost`.
