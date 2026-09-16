@@ -13,6 +13,7 @@ pub(crate) enum ModalTabsExample {
     Left,
     Right,
     BottomSnackbar,
+    BottomOneRow,
 }
 
 impl ModalTabsExample {
@@ -20,6 +21,7 @@ impl ModalTabsExample {
         match self {
             Self::CenterMinimal => TabsVariant::Minimal,
             Self::CenterUnderline => TabsVariant::Underline,
+            Self::BottomOneRow => TabsVariant::OneRow,
             Self::CenterBoxed
             | Self::Top
             | Self::Bottom
@@ -39,6 +41,7 @@ impl ModalTabsExample {
             Self::Left => "Open left tabs dialog",
             Self::Right => "Open right tabs dialog",
             Self::BottomSnackbar => "Open 80% tabs snackbar",
+            Self::BottomOneRow => "Open bottom one-row tabs dialog",
         }
     }
 
@@ -52,6 +55,7 @@ impl ModalTabsExample {
             Self::Left => "tl",
             Self::Right => "tr",
             Self::BottomSnackbar => "ts",
+            Self::BottomOneRow => "to",
         }
     }
 }
@@ -94,14 +98,15 @@ pub(crate) fn modal_tabs_dialog() -> Tabs<Msg> {
 pub(crate) fn modal_tabs_preview_layout(area: Rect) -> [Rect; 2] {
     Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(15.min(area.height)), Constraint::Fill(1)])
+        .constraints([Constraint::Length(17.min(area.height)), Constraint::Fill(1)])
         .areas(area)
 }
 
-pub(crate) fn modal_tabs_button_areas(area: Rect) -> [Rect; 8] {
+pub(crate) fn modal_tabs_button_areas(area: Rect) -> [Rect; 9] {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -124,7 +129,7 @@ pub(crate) fn modal_tabs_open_index(key: &ChildKey) -> Option<usize> {
         .strip_prefix("modal-tabs-open-")?
         .parse()
         .ok()
-        .filter(|index| *index < 8)
+        .filter(|index| *index < 9)
 }
 
 pub(crate) fn modal_tabs_open_child_route(route: &EventRoute) -> Option<(usize, EventRoute)> {

@@ -4,9 +4,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use crate::{
-    AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusTarget,
-    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, TickResult, TuiEvent,
-    TuiNode,
+    AnimationSettings, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusRequest,
+    FocusTarget, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, TickResult,
+    TuiEvent, TuiNode,
 };
 use crate::{Separator, separator};
 
@@ -208,6 +208,12 @@ where
         self.first
             .tick(dt, settings)
             .merge(self.second.tick(dt, settings))
+    }
+
+    fn take_pending_focus_request(&mut self) -> Option<FocusRequest> {
+        self.first
+            .take_pending_focus_request()
+            .or_else(|| self.second.take_pending_focus_request())
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<M>) {

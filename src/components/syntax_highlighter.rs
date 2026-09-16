@@ -94,6 +94,11 @@ impl SyntaxHighlighter {
         highlight_text(&self.code, self.language, theme_name)
     }
 
+    /// Return styled text for embedding in another view using the current theme.
+    pub fn highlighted_text(&self) -> Text<'static> {
+        self.highlight(theme().name())
+    }
+
     fn scroll_geometry(&self, area: Rect) -> ScrollGeometry {
         self.scroll.geometry(area, self.content_size)
     }

@@ -222,7 +222,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `action_hotkey(sequence, |selected_index| message)` for custom bottom-right actions alongside the
   optional focus hotkey. `TabsVariant` provides `Minimal`, `Underline`, `Boxed`, and `OneRow`;
   `OneRow` (preset value `one-row`) matches minimal styling with only the top tab-row border and no
-  left, right, or bottom border. Types: `TabsSelectionMemory`, `ModalCloseReason`.
+   left, right, or bottom border by default; explicit `edge_borders` and dock chrome control its edges.
+   Types: `TabsSelectionMemory`, `ModalCloseReason`.
 - `FormField<C, M>`: `new(label, child)`, embedded mode, error and child access.
 - `Chip`: `new(label)`, icons and `ChipColorRole`. `Header`: `new(text)`, optional icon.
 - `DiffViewer`: side-by-side, inline, word, or raw-patch views with selection, search, scrolling,

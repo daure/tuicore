@@ -297,7 +297,9 @@ fn main() -> tuicore::Result<()> {
                         | ModalTabsExample::CenterUnderline
                         | ModalTabsExample::CenterBoxed => None,
                         ModalTabsExample::Top => Some(DockSpec::top(30)),
-                        ModalTabsExample::Bottom => Some(DockSpec::bottom(30)),
+                        ModalTabsExample::Bottom | ModalTabsExample::BottomOneRow => {
+                            Some(DockSpec::bottom(30))
+                        }
                         ModalTabsExample::Left => Some(DockSpec::left(32)),
                         ModalTabsExample::Right => Some(DockSpec::right(32)),
                         ModalTabsExample::BottomSnackbar => {
@@ -848,7 +850,7 @@ struct PreviewState {
     tabs_boxed: Tabs<Msg>,
     tabs_one_row: Tabs<Msg>,
     tabs_action_status: String,
-    tabs_modal_buttons: [Button<Msg>; 8],
+    tabs_modal_buttons: [Button<Msg>; 9],
     data_list: DataView<DemoRow, usize>,
     data_table: DataView<DemoRow, usize>,
     data_list_tree: DataView<DemoRow, usize>,
@@ -1111,6 +1113,7 @@ impl PreviewState {
                 modal_tabs_button(ModalTabsExample::Left),
                 modal_tabs_button(ModalTabsExample::Right),
                 modal_tabs_button(ModalTabsExample::BottomSnackbar),
+                modal_tabs_button(ModalTabsExample::BottomOneRow),
             ],
             data_list: DataViewMode::List.data_view(),
             data_table: DataViewMode::Table.data_view(),
@@ -2314,6 +2317,11 @@ impl PreviewState {
                 dt,
                 settings,
             ))
+            .merge(Animated::tick(
+                &mut self.tabs_modal_buttons[8],
+                dt,
+                settings,
+            ))
             .merge(Animated::tick(&mut self.data_list, dt, settings))
             .merge(Animated::tick(&mut self.data_table, dt, settings))
             .merge(Animated::tick(&mut self.data_list_tree, dt, settings))
@@ -2527,7 +2535,7 @@ impl PreviewState {
     }
 
     fn modal_tabs_button_mut(&mut self, index: usize) -> &mut Button<Msg> {
-        &mut self.tabs_modal_buttons[index.min(7)]
+        &mut self.tabs_modal_buttons[index.min(8)]
     }
 
     fn dropdown_mut(&mut self, index: usize) -> &mut Dropdown<DropdownDemoItem, &'static str> {

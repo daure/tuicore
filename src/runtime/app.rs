@@ -466,6 +466,9 @@ where
         self.mouse_copy.set_regions(layout_engine.copy_regions());
         flags.layout = false;
         flags.redraw = true;
+        // Responsive layouts can replace the focused path; resolve their request before fallback.
+        let layout_focus = self.root.take_pending_focus_request();
+        flags.focus_request = flags.focus_request.take().or(layout_focus);
         let transition = if flags.focus_request.is_some() {
             flags.focus_repair = None;
             None
@@ -1687,6 +1690,10 @@ fn targets_for_prefix(targets: &[(String, FocusTarget)], prefix: &str) -> Vec<Fo
 fn same_focus_target(a: &FocusTarget, b: &FocusTarget) -> bool {
     a.id == b.id && a.path == b.path
 }
+
+#[cfg(test)]
+#[path = "tests/resize_focus.rs"]
+mod resize_focus_tests;
 
 #[cfg(test)]
 mod tests {

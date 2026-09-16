@@ -495,7 +495,7 @@ where
         if bordered {
             let borders = match variant {
                 TabsVariant::Minimal => Borders::ALL,
-                TabsVariant::OneRow => Borders::TOP,
+                TabsVariant::OneRow => self.edge_borders.unwrap_or(Borders::TOP),
                 TabsVariant::Underline | TabsVariant::Boxed => Borders::NONE,
             };
             if !borders.is_empty() {
@@ -610,7 +610,7 @@ where
         if matches!(variant, TabsVariant::Minimal | TabsVariant::OneRow) {
             let borders = match variant {
                 TabsVariant::Minimal => Borders::ALL,
-                TabsVariant::OneRow => Borders::TOP,
+                TabsVariant::OneRow => self.edge_borders.unwrap_or(Borders::TOP),
                 TabsVariant::Underline | TabsVariant::Boxed => unreachable!(),
             };
             self.render_minimal(frame, area, selected, bordered, border, borders);
@@ -1690,7 +1690,18 @@ where
             }
         };
         let (horizontal_border_pad, vertical_border_pad) = match variant {
-            TabsVariant::OneRow => (0, 0),
+            TabsVariant::OneRow => {
+                let borders = if bordered {
+                    self.edge_borders.unwrap_or(Borders::TOP)
+                } else {
+                    Borders::NONE
+                };
+                (
+                    u16::from(borders.contains(Borders::LEFT))
+                        + u16::from(borders.contains(Borders::RIGHT)),
+                    u16::from(borders.contains(Borders::BOTTOM)),
+                )
+            }
             TabsVariant::Minimal | TabsVariant::Underline | TabsVariant::Boxed => {
                 let border_pad = (bordered as u16).saturating_mul(2);
                 (border_pad, border_pad)
