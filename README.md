@@ -101,7 +101,7 @@ cargo release major
 ./scripts/release.sh patch
 ```
 
-The command checks the branch and version availability, bumps Tuicore, updates the lockfile without personal Cargo overrides, commits, and atomically pushes `main` and its `vX.Y.Z` tag. It returns without waiting for compilation. Existing `cargo patch`, `cargo minor`, and `cargo major` aliases use the same release flow.
+The command checks the branch and version availability, then runs the release workflow's formatting, script tests, Clippy, and Rust tests before changing the version. It bumps Tuicore, updates the lockfile without personal Cargo overrides, creates an annotated tag without opening an editor or pager, commits, and atomically pushes `main` and its `vX.Y.Z` tag. It returns without waiting for GitHub Actions. Existing `cargo patch`, `cargo minor`, and `cargo major` aliases use the same release flow.
 
 The [Release workflow](https://github.com/daure/tuicore/actions/workflows/release.yml) checks formatting, runs strict Clippy and tests, validates the crate package, then builds and smoke-tests the gallery with cargo-dist. After checks pass it publishes the library to crates.io using the encrypted `CARGO_REGISTRY_TOKEN` repository secret, then publishes the GitHub Release containing the library package, gallery archive, installer, and checksums. Configure that secret with a token authorized to publish `tuicore`.
 

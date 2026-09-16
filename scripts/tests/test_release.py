@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -15,6 +15,15 @@ import release
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_run_disables_pagers(self):
+        with patch.object(release.subprocess, "run") as subprocess_run:
+            release.run("git", "status", env={"GIT_EDITOR": "true"})
+        environment = subprocess_run.call_args.kwargs["env"]
+        self.assertEqual(environment["PAGER"], "cat")
+        self.assertEqual(environment["GIT_PAGER"], "cat")
+        self.assertEqual(environment["CARGO_PAGER"], "cat")
+        self.assertEqual(environment["GIT_EDITOR"], "true")
+
     def test_stable_version_bumps(self):
         for bump, expected in [("patch", "0.40.1"), ("minor", "0.41.0"), ("major", "1.0.0")]:
             self.assertEqual(release.next_version("0.40.0", bump), expected)
@@ -69,8 +78,10 @@ class ReleaseGitTests(unittest.TestCase):
             calls = []
 
             def run(*args, **kwargs):
-                calls.append(args)
+                calls.append((args, kwargs))
                 if args[:2] == ("gh", "auth"):
+                    return subprocess.CompletedProcess(args, 0)
+                if args[0] in ("cargo", "python3"):
                     return subprocess.CompletedProcess(args, 0)
                 return real_run(*args, **kwargs)
 
@@ -81,8 +92,27 @@ class ReleaseGitTests(unittest.TestCase):
                 self.assertEqual(git("rev-parse", "HEAD"), git("rev-parse", "v0.40.1^{commit}"))
                 self.assertIn(git("rev-parse", "HEAD"), git("ls-remote", "origin", "refs/heads/main"))
                 self.assertIn("refs/tags/v0.40.1", git("ls-remote", "origin", "refs/tags/v0.40.1"))
-                self.assertIn(("git", "push", "--atomic", "origin", "HEAD:refs/heads/main", "refs/tags/v0.40.1"), calls)
-                cargo.assert_called_once_with("update", "--workspace")
+                self.assertIn(
+                    (("git", "push", "--atomic", "origin", "HEAD:refs/heads/main", "refs/tags/v0.40.1"), {}),
+                    calls,
+                )
+                tag_call = next(
+                    call
+                    for call in calls
+                    if call[0] == ("git", "tag", "-a", "v0.40.1", "-m", "release: v0.40.1")
+                )
+                self.assertEqual(tag_call[1]["env"], {"GIT_EDITOR": "true"})
+                self.assertIn(
+                    (("python3", "-m", "unittest", "discover", "-s", "scripts/tests"), {}),
+                    calls,
+                )
+                cargo.assert_has_calls(
+                    [
+                        call("clippy", "--locked", "--all-targets", "--", "-D", "warnings"),
+                        call("test", "--locked"),
+                        call("update", "--workspace"),
+                    ]
+                )
                 self.assertEqual(git("status", "--porcelain"), "")
             finally:
                 os.chdir(original_cwd)

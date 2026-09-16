@@ -15,7 +15,14 @@ import urllib.request
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, text=True, **kwargs)
+    environment = {
+        **os.environ,
+        "PAGER": "cat",
+        "GIT_PAGER": "cat",
+        "CARGO_PAGER": "cat",
+        **kwargs.pop("env", {}),
+    }
+    return subprocess.run(args, check=True, text=True, env=environment, **kwargs)
 
 
 def output(*args):
@@ -54,8 +61,29 @@ def registry_cargo(*args):
         registry = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "registry"
         if registry.is_dir():
             (home / "registry").symlink_to(registry.resolve(), target_is_directory=True)
-        run("cargo", args[0], "--manifest-path", manifest, *args[1:],
-            cwd=home, env={**os.environ, "CARGO_HOME": str(home)})
+        run(
+            "cargo",
+            args[0],
+            "--manifest-path",
+            manifest,
+            *args[1:],
+            cwd=home,
+            env={"CARGO_HOME": str(home)},
+        )
+
+
+def preflight():
+    run("cargo", "fmt", "--all", "--check")
+    run(
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "tools/release-command/Cargo.toml",
+        "--check",
+    )
+    run("python3", "-m", "unittest", "discover", "-s", "scripts/tests")
+    registry_cargo("clippy", "--locked", "--all-targets", "--", "-D", "warnings")
+    registry_cargo("test", "--locked")
 
 
 def release(bump):
@@ -78,6 +106,7 @@ def release(bump):
         raise ValueError(f"Tag {tag} already exists; rerun its failed workflow instead of retagging")
     if registry_version("tuicore", version) is not None:
         raise ValueError(f"Tuicore {version} already exists on crates.io")
+    preflight()
 
     manifest_path.write_text(manifest.replace(f'version = "{old_version}"', f'version = "{version}"', 1))
     try:
@@ -85,7 +114,15 @@ def release(bump):
         run("git", "diff", "--check")
         run("git", "add", "Cargo.toml", "Cargo.lock")
         run("git", "commit", "-m", f"release: {tag}")
-        run("git", "tag", "-a", tag, "-m", f"release: {tag}")
+        run(
+            "git",
+            "tag",
+            "-a",
+            tag,
+            "-m",
+            f"release: {tag}",
+            env={"GIT_EDITOR": "true"},
+        )
         run("git", "push", "--atomic", "origin", "HEAD:refs/heads/main", f"refs/tags/{tag}")
     except Exception:
         print(f"Release stopped. Inspect git status, git diff, and tag {tag}; do not rerun the bump blindly.", file=sys.stderr)
