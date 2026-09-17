@@ -1829,6 +1829,17 @@ fn expanded_tree_reuses_its_projection_until_expansion_changes() {
 }
 
 #[test]
+fn expand_opens_only_the_requested_tree_branch() {
+    let mut view = DataView::list(rows(), |row| row.id, |row| row.name.to_string())
+        .tree(TreeAdapter::parent_id(|row: &Row| row.parent))
+        .expanded([1]);
+
+    assert!(view.expand(&2).changed);
+    assert_eq!(visible_ids(&view), vec![1, 2, 4, 5, 3]);
+    assert!(!view.expand(&2).changed);
+}
+
+#[test]
 fn constrained_columns_skip_intrinsic_cell_measurement() {
     let row_id_calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let counted_row_id = row_id_calls.clone();
@@ -4864,6 +4875,35 @@ fn filtering_preserves_highlight_by_row_id() {
     assert!(outcome.changed);
     assert_eq!(visible_ids(&view), vec![4, 3]);
     assert_eq!(view.highlighted_id(), Some(3));
+}
+
+#[test]
+fn replacing_rows_selects_the_next_survivor_then_the_previous_at_the_end() {
+    let mut view = DataView::list(
+        [
+            Row::new(1, "Alpha"),
+            Row::new(2, "Beta"),
+            Row::new(3, "Gamma"),
+            Row::new(4, "Delta"),
+        ],
+        |row| row.id,
+        |row| row.name.to_string(),
+    )
+    .visible_row_ids([1, 3, 2, 4]);
+    view.highlight_id(&3);
+    view.set_rows([
+        Row::new(1, "Alpha"),
+        Row::new(2, "Beta"),
+        Row::new(4, "Delta"),
+    ]);
+    assert_eq!(view.highlighted_id(), Some(2));
+    view.highlight_id(&4);
+    view.set_rows([Row::new(1, "Alpha"), Row::new(2, "Beta")]);
+    assert_eq!(view.highlighted_id(), Some(2));
+    view.set_rows([Row::new(1, "Alpha")]);
+    assert_eq!(view.highlighted_id(), Some(1));
+    view.set_rows([]);
+    assert_eq!(view.highlighted_id(), None);
 }
 
 #[test]

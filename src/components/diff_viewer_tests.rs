@@ -553,8 +553,7 @@ fn focused_selection_uses_data_view_highlight_colors_for_paired_rows() {
         .collect::<Vec<_>>();
     assert!(!highlighted.is_empty());
     assert!(highlighted.iter().all(|span| {
-        span.style.fg == Some(theme().selected_fg())
-            && span.style.bg == Some(theme().selected_bg())
+        span.style.fg == Some(theme().selected_fg()) && span.style.bg == Some(theme().selected_bg())
     }));
 }
 

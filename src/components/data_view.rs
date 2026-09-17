@@ -702,6 +702,18 @@ where
 
     pub fn set_rows(&mut self, rows: impl IntoIterator<Item = T>) -> DataViewOutcome {
         let before_id = self.highlighted_id();
+        let neighbors = {
+            let visible = self.all_visible_rows();
+            let index = before_id
+                .as_ref()
+                .and_then(|id| visible.iter().position(|row| &row.id == id))
+                .unwrap_or(0);
+            visible[index..]
+                .iter()
+                .chain(visible[..index].iter().rev())
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        };
         let visible_ids = self.visible_row_indices.as_ref().map(|indices| {
             indices
                 .iter()
@@ -715,7 +727,15 @@ where
         if let Some(ids) = visible_ids {
             self.visible_row_indices = Some(self.row_indices_for_ids(ids));
         }
-        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
+        let visible = self.all_visible_rows();
+        let position = neighbors
+            .iter()
+            .find_map(|id| visible.iter().position(|row| &row.id == id))
+            .unwrap_or(0);
+        let has_visible_rows = !visible.is_empty();
+        drop(visible);
+        let (_, update) =
+            self.set_highlighted_visible_position_from(position, has_visible_rows, before_id);
         DataViewOutcome {
             handled: true,
             changed: true,
@@ -1501,6 +1521,24 @@ where
             return DataViewOutcome::IDLE;
         }
         self.expanded = ids;
+        self.invalidate_tree_projection();
+        let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
+        DataViewOutcome {
+            handled: true,
+            changed: true,
+            active: false,
+            activated: update.activated,
+        }
+    }
+
+    pub fn expand(&mut self, id: &Id) -> DataViewOutcome {
+        if self.tree.is_none()
+            || !self.expandable_ids().any(|expandable| &expandable == id)
+            || !self.expanded.insert(id.clone())
+        {
+            return DataViewOutcome::IDLE;
+        }
+        let before_id = self.highlighted_id();
         self.invalidate_tree_projection();
         let (_, update) = self.sync_highlight_after_visible_set_change(before_id);
         DataViewOutcome {
