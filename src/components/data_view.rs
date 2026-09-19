@@ -1177,7 +1177,7 @@ where
             id,
             settings,
             theme.inactive_selected_bg(),
-            theme.selected_bg(),
+            theme.move_selected_bg(),
         );
     }
 

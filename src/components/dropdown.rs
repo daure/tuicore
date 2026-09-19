@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::animation::Easing;
 use crate::components::{Column, DataView, SelectionMode, Spinner, TextInput};
-use crate::event::{Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crate::event::{Key, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crate::search::{MatchSpan, SearchMode, search_match, search_ranked};
 use crate::{
     Animated, AnimationSettings, AnimationSpec, EventCtx, EventOutcome, EventRoute, FocusCtx,
@@ -970,6 +970,13 @@ where
             return self.toggle_highlighted();
         }
 
+        if self.multi
+            && key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, Key::Char('a'))
+        {
+            return self.toggle_all();
+        }
+
         if matches_any(&self.action_keys.commit, key) {
             let activates_no_selection = self.no_selection_highlighted;
             if activates_no_selection && !self.disabled {
@@ -1175,6 +1182,26 @@ where
             return self.commit();
         }
         DropdownOutcome::changed()
+    }
+
+    fn toggle_all(&mut self) -> DropdownOutcome {
+        if self.disabled {
+            return DropdownOutcome::HANDLED;
+        }
+        let changed = if self.data_view.select_all() {
+            true
+        } else {
+            self.data_view.clear_selection()
+        };
+        self.draft = self.data_view.selected_ids();
+        if self.close_on_select {
+            return self.commit();
+        }
+        if changed {
+            DropdownOutcome::changed()
+        } else {
+            DropdownOutcome::HANDLED
+        }
     }
 
     fn select_highlighted(&mut self) -> DropdownOutcome {

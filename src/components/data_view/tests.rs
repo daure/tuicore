@@ -3299,7 +3299,7 @@ fn unfocused_reorder_highlight_blends_neutral_backgrounds_and_clears() {
     assert_eq!(cell.fg, theme.selected_fg());
     assert_eq!(
         cell.bg,
-        lerp_color(theme.inactive_selected_bg(), theme.selected_bg(), 0.5)
+        lerp_color(theme.inactive_selected_bg(), theme.move_selected_bg(), 0.5)
     );
     assert!(cell.modifier.contains(Modifier::BOLD));
     assert!(!cell.modifier.contains(Modifier::REVERSED));
@@ -3315,7 +3315,7 @@ fn unfocused_reorder_highlight_blends_neutral_backgrounds_and_clears() {
         .expect("data view should render");
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     assert_eq!(cell.fg, theme.selected_fg());
-    assert_eq!(cell.bg, theme.selected_bg());
+    assert_eq!(cell.bg, theme.move_selected_bg());
 
     view.clear_reorder_highlight(settings);
     Animated::tick(&mut view, Duration::from_millis(100), settings);
@@ -3329,7 +3329,7 @@ fn unfocused_reorder_highlight_blends_neutral_backgrounds_and_clears() {
     );
     assert_eq!(
         terminal.backend().buffer().cell((0, 0)).unwrap().bg,
-        lerp_color(theme.inactive_selected_bg(), theme.selected_bg(), 0.5)
+        lerp_color(theme.inactive_selected_bg(), theme.move_selected_bg(), 0.5)
     );
 
     Animated::tick(&mut view, Duration::from_millis(100), settings);
@@ -3344,7 +3344,7 @@ fn unfocused_reorder_highlight_blends_neutral_backgrounds_and_clears() {
 }
 
 #[test]
-fn disabled_animation_snaps_reorder_background_to_selected_and_normal() {
+fn disabled_animation_snaps_reorder_background_to_move_selected_and_normal() {
     let mut view = DataView::list(
         [Row::new(1, "moving")],
         |row| row.id,
@@ -3363,7 +3363,7 @@ fn disabled_animation_snaps_reorder_background_to_selected_and_normal() {
         .expect("data view should render");
     let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
     assert_eq!(cell.fg, theme.selected_fg());
-    assert_eq!(cell.bg, theme.selected_bg());
+    assert_eq!(cell.bg, theme.move_selected_bg());
 
     view.clear_reorder_highlight(settings);
     terminal
@@ -3453,7 +3453,7 @@ fn moving_rich_row_preserves_semantic_colors_and_modifiers() {
         let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
         assert_eq!(cell.symbol(), "m");
         assert_eq!(cell.fg, semantic_color);
-        assert_eq!(cell.bg, theme.selected_bg());
+        assert_eq!(cell.bg, theme.move_selected_bg());
         assert!(cell.modifier.contains(Modifier::BOLD));
         assert!(cell.modifier.contains(Modifier::UNDERLINED));
     }

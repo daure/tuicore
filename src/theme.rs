@@ -368,6 +368,9 @@ impl Theme {
     pub fn selected_bg(&self) -> Color {
         self.selected_bg
     }
+    pub fn move_selected_bg(&self) -> Color {
+        mix_color(self.selected_bg, Color::White, 0.2)
+    }
     pub fn inactive_selected_bg(&self) -> Color {
         self.inactive_selected_bg
     }
@@ -1607,6 +1610,7 @@ mod tests {
 
         assert_eq!(theme.selected_fg(), Color::Rgb(0x11, 0x22, 0x33));
         assert_eq!(theme.selected_bg(), Color::Rgb(0x44, 0x55, 0x66));
+        assert_eq!(theme.move_selected_bg(), Color::Rgb(0x69, 0x77, 0x85));
         assert_eq!(theme.inactive_selected_bg(), Color::Rgb(0x22, 0x33, 0x44));
         assert_eq!(theme.highlight_fg(), Color::Rgb(0x77, 0x88, 0x99));
         assert_eq!(theme.highlight_bg(), Color::Rgb(0xaa, 0xbb, 0xcc));

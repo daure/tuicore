@@ -1289,6 +1289,25 @@ fn ctrl_space_toggles_highlighted_multi_row() {
 }
 
 #[test]
+fn ctrl_a_toggles_all_multi_rows() {
+    let mut dropdown = multi_dropdown();
+
+    dropdown.open();
+    let selected = dropdown.on_key(ctrl('a'), AREA);
+
+    assert!(selected.handled);
+    assert!(selected.changed);
+    assert_eq!(dropdown.draft, ROWS);
+    assert!(dropdown.selected_ids().is_empty());
+
+    let cleared = dropdown.on_key(ctrl('a'), AREA);
+
+    assert!(cleared.handled);
+    assert!(cleared.changed);
+    assert!(dropdown.draft.is_empty());
+}
+
+#[test]
 fn space_is_added_to_multi_dropdown_search_query() {
     let mut dropdown = multi_dropdown();
 

@@ -577,7 +577,7 @@ where
         let theme = theme();
         self.reorder_highlighted_row_style_with_colors(
             theme.inactive_selected_bg(),
-            theme.selected_bg(),
+            theme.move_selected_bg(),
         )
     }
 
