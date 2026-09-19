@@ -54,21 +54,31 @@ def next_version(version, bump):
 
 
 def registry_cargo(*args):
-    # Personal Cargo patches must not enter the published lockfile.
-    manifest = str(Path("Cargo.toml").resolve())
-    with tempfile.TemporaryDirectory(prefix="tuicore-release-cargo-") as directory:
-        home = Path(directory)
-        registry = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "registry"
-        if registry.is_dir():
-            (home / "registry").symlink_to(registry.resolve(), target_is_directory=True)
+    manifest = Path("Cargo.toml").resolve()
+    cache = manifest.parent / "target/release-check"
+    home = cache / "cargo-home"
+    home.mkdir(parents=True, exist_ok=True)
+    registry = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "registry"
+    if registry.is_dir() and not (home / "registry").exists():
+        (home / "registry").symlink_to(registry.resolve(), target_is_directory=True)
+    # Cargo discovers config from cwd's ancestors as well as CARGO_HOME.
+    # A neutral cwd excludes personal patches; stable cache paths preserve builds.
+    with tempfile.TemporaryDirectory(prefix="tuicore-release-cwd-") as directory:
         run(
             "cargo",
             args[0],
             "--manifest-path",
-            manifest,
+            str(manifest),
             *args[1:],
-            cwd=home,
-            env={"CARGO_HOME": str(home)},
+            cwd=directory,
+            env={
+                "CARGO_HOME": str(home),
+                "CARGO_TARGET_DIR": str(cache / "build"),
+                "CARGO_BUILD_JOBS": "2",
+                "CARGO_PROFILE_DEV_DEBUG": "0",
+                "CARGO_PROFILE_TEST_DEBUG": "0",
+                "CARGO_INCREMENTAL": "0",
+            },
         )
 
 
@@ -83,7 +93,7 @@ def preflight():
     )
     run("python3", "-m", "unittest", "discover", "-s", "scripts/tests")
     registry_cargo("clippy", "--locked", "--all-targets", "--", "-D", "warnings")
-    registry_cargo("test", "--locked")
+    registry_cargo("test", "--locked", "--", "--test-threads=2")
 
 
 def release(bump):

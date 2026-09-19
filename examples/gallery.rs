@@ -5006,7 +5006,7 @@ mod tests {
             .expect("roadmap row should render");
         let theme = tuicore::theme();
         assert_eq!(cell.fg, theme.selected_fg());
-        assert_eq!(cell.bg, theme.selected_bg());
+        assert_eq!(cell.bg, theme.move_selected_bg());
     }
 
     #[test]

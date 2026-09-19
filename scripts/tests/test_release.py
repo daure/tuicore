@@ -37,13 +37,74 @@ class ReleaseTests(unittest.TestCase):
             registry.assert_not_called()
 
     def test_registry_cargo_ignores_local_config(self):
-        with patch.object(release, "run") as run:
-            release.registry_cargo("metadata", "--locked")
-            args, kwargs = run.call_args
-            self.assertEqual(args[:3], ("cargo", "metadata", "--manifest-path"))
-            self.assertEqual(args[-1], "--locked")
-            self.assertEqual(str(kwargs["cwd"]), kwargs["env"]["CARGO_HOME"])
-            self.assertIn("tuicore-release-cargo-", kwargs["env"]["CARGO_HOME"])
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            personal_home = root / "personal-cargo"
+            (personal_home / "registry").mkdir(parents=True)
+            try:
+                os.chdir(repo)
+                with patch.dict(os.environ, {"CARGO_HOME": str(personal_home)}), patch.object(release, "run") as run:
+                    release.registry_cargo("metadata", "--locked")
+                    first = run.call_args
+                    home = Path(first.kwargs["env"]["CARGO_HOME"])
+                    (home / "cache-marker").touch()
+                    release.registry_cargo("metadata", "--locked")
+                args, kwargs = run.call_args
+                self.assertEqual(args[:3], ("cargo", "metadata", "--manifest-path"))
+                self.assertEqual(args[-1], "--locked")
+                self.assertEqual(home, repo / "target/release-check/cargo-home")
+                self.assertTrue((home / "cache-marker").exists())
+                self.assertEqual((home / "registry").resolve(), personal_home / "registry")
+                self.assertNotIn(repo, Path(kwargs["cwd"]).parents)
+                self.assertNotIn(Path.home(), Path(kwargs["cwd"]).parents)
+                self.assertEqual(first.kwargs["env"], kwargs["env"])
+                self.assertEqual(kwargs["env"]["CARGO_TARGET_DIR"], str(repo / "target/release-check/build"))
+                self.assertEqual(kwargs["env"]["CARGO_BUILD_JOBS"], "2")
+                self.assertEqual(kwargs["env"]["CARGO_PROFILE_DEV_DEBUG"], "0")
+                self.assertEqual(kwargs["env"]["CARGO_PROFILE_TEST_DEBUG"], "0")
+                self.assertEqual(kwargs["env"]["CARGO_INCREMENTAL"], "0")
+            finally:
+                os.chdir(original_cwd)
+
+    def test_cargo_checks_reuse_artifacts_without_personal_or_project_config(self):
+        original_cwd = Path.cwd()
+        real_run = release.run
+        results = []
+
+        def capture(*args, **kwargs):
+            result = real_run(*args, capture_output=True, **kwargs)
+            results.append(result)
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            (repo / "src").mkdir(parents=True)
+            (repo / "Cargo.toml").write_text('[package]\nname = "cache-probe"\nversion = "0.1.0"\nedition = "2024"\n')
+            (repo / "src/main.rs").write_text("fn main() {}\n")
+            personal_home = root / "personal-cargo"
+            for config in (personal_home, root / ".cargo", repo / ".cargo"):
+                config.mkdir()
+                (config / "config.toml").write_text('invalid TOML: this config must not be loaded\n')
+            environment = {
+                "CARGO_HOME": str(personal_home),
+                "CARGO_TARGET_DIR": str(root / "personal-target"),
+                "CARGO_BUILD_JOBS": "8",
+                "CARGO_TERM_COLOR": "never",
+            }
+            try:
+                os.chdir(repo)
+                with patch.dict(os.environ, environment), patch.object(release, "run", side_effect=capture):
+                    release.registry_cargo("check", "--offline", "--verbose")
+                    release.registry_cargo("check", "--offline", "--verbose")
+                self.assertIn("Fresh cache-probe", results[-1].stderr)
+                self.assertTrue((repo / "target/release-check/build/debug").is_dir())
+                self.assertFalse((root / "personal-target").exists())
+            finally:
+                os.chdir(original_cwd)
 
 
 class ReleaseGitTests(unittest.TestCase):
@@ -109,7 +170,7 @@ class ReleaseGitTests(unittest.TestCase):
                 cargo.assert_has_calls(
                     [
                         call("clippy", "--locked", "--all-targets", "--", "-D", "warnings"),
-                        call("test", "--locked"),
+                        call("test", "--locked", "--", "--test-threads=2"),
                         call("update", "--workspace"),
                     ]
                 )
