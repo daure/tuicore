@@ -322,11 +322,12 @@ impl ToastRack {
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    trim_line(toast.notification.title(), area.width.saturating_sub(7)),
+                    trim_line(toast.notification.title(), area.width.saturating_sub(8)),
                     Style::default()
                         .fg(palette.text_fg())
                         .add_modifier(Modifier::BOLD),
                 ),
+                Span::raw(" "),
             ]));
         let inner = block.inner(area);
 

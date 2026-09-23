@@ -300,6 +300,15 @@ where
                 &CellContext {
                     row_id: row.id.clone(),
                     column_id: column.id.clone(),
+                    available_width: Some(
+                        self.cell_content_width(column_index, column_widths)
+                            .saturating_sub(if column_index == 0 {
+                                self.row_prefix_width(row, selection_descendants, show_tree_gutter)
+                                    .min(u16::MAX as usize) as u16
+                            } else {
+                                0
+                            }),
+                    ),
                     depth: row.depth,
                     has_children: row.has_children,
                     expanded: row.expanded,

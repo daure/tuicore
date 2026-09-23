@@ -164,7 +164,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
    reorder animation blends between these neutral backgrounds.
 - Columns use `Column::text`/`rich` or `Column::multiline`, then sortable/reorderable/search/filter/
   sizing/visibility builders. Multiline output never auto-grows rows: declared fixed or per-row
-  height is authoritative and clips extra lines. Trees use `TreeAdapter`; supporting types:
+  height is authoritative and clips extra lines. Render-time `CellContext::available_width` gives
+  the usable cell width after tree and selection gutters; measurement calls leave it unset. Trees use `TreeAdapter`; supporting types:
   `CellContext`, `ColumnSizing`,
   `ActivationMode`, `SelectionMode`, `SelectionTrigger`, `SelectionPropagation`, `CheckState`,
   `SelectionGlyphs`, `TreeGlyphs`, `SortDirection`, `DataViewEvent`, `DataViewSort`,

@@ -467,6 +467,7 @@ where
                     &CellContext {
                         row_id: row.id.clone(),
                         column_id: column.id.clone(),
+                        available_width: None,
                         depth: row.depth,
                         has_children: row.has_children,
                         expanded: row.expanded,
@@ -837,6 +838,7 @@ where
             &CellContext {
                 row_id: row.id.clone(),
                 column_id: column.id.clone(),
+                available_width: None,
                 depth: row.depth,
                 has_children: row.has_children,
                 expanded: row.expanded,
@@ -858,7 +860,7 @@ where
             .saturating_add(prefix_width)
     }
 
-    fn row_prefix_width(
+    pub(super) fn row_prefix_width(
         &self,
         row: &VisibleRow<'_, T, Id>,
         selection_descendants: &HashMap<Id, Vec<Id>>,

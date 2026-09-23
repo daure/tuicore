@@ -258,6 +258,7 @@ impl TreeGlyphs {
 pub struct CellContext<Id> {
     pub row_id: Id,
     pub column_id: String,
+    pub available_width: Option<u16>,
     pub depth: usize,
     pub has_children: bool,
     pub expanded: bool,

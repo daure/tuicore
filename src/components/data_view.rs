@@ -1596,6 +1596,7 @@ where
                 &CellContext {
                     row_id: row.id.clone(),
                     column_id: column.id.clone(),
+                    available_width: None,
                     depth: row.depth,
                     has_children: row.has_children,
                     expanded: row.expanded,
