@@ -5688,7 +5688,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_escape_cancels_data_view_search_before_returning_to_overview() {
+    fn preview_empty_data_view_search_escape_returns_to_overview() {
         let mut gallery = Gallery::new();
         gallery.select(ComponentKind::DataViewList);
         gallery
@@ -5706,27 +5706,15 @@ mod tests {
             ChildKey::new("search"),
         ]));
 
-        let mut first = EventCtx::default();
+        let mut ctx = EventCtx::default();
         let outcome = gallery.dispatch_event(
             &search_route,
             &TuiEvent::Key(KeyEvent::from(Key::Esc)),
-            &mut first,
+            &mut ctx,
         );
         assert_eq!(outcome, EventOutcome::Handled);
-        assert!(matches!(
-            first.focus_request(),
-            Some(FocusRequest::TargetAt { path, id })
-                if path.is_empty() && id.as_str() == "data-view"
-        ));
-
-        let mut second = EventCtx::default();
-        gallery.dispatch_event(
-            &search_route,
-            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
-            &mut second,
-        );
         assert_eq!(
-            second.focus_request(),
+            ctx.focus_request(),
             Some(&FocusRequest::TargetAt {
                 path: TreePath::from_keys([gallery_list_child_key()]),
                 id: FocusId::new("data-view"),

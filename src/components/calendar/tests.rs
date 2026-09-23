@@ -1139,13 +1139,13 @@ fn month_selection_persists_through_blur_and_refocus() {
     for y in 1..4 {
         assert_eq!(
             terminal.backend().buffer().cell((0, y)).unwrap().bg,
-            crate::theme().selected_bg(),
+            crate::theme().inactive_selected_bg(),
             "month row {y} should retain selection"
         );
     }
     assert_eq!(
         terminal.backend().buffer().cell((0, 2)).unwrap().fg,
-        crate::theme().selected_fg()
+        crate::theme().accent_fg()
     );
 
     calendar.set_focused(true);
@@ -1154,7 +1154,7 @@ fn month_selection_persists_through_blur_and_refocus() {
         .unwrap();
     assert_eq!(
         terminal.backend().buffer().cell((0, 1)).unwrap().bg,
-        crate::theme().highlight_bg()
+        crate::theme().selected_bg()
     );
 }
 
@@ -1183,13 +1183,13 @@ fn week_selection_persists_through_blur_and_refocus() {
     for y in 1..4 {
         assert_eq!(
             terminal.backend().buffer().cell((0, y)).unwrap().bg,
-            crate::theme().selected_bg(),
+            crate::theme().inactive_selected_bg(),
             "week row {y} should retain selection"
         );
     }
     assert_eq!(
         terminal.backend().buffer().cell((0, 2)).unwrap().fg,
-        crate::theme().selected_fg()
+        crate::theme().accent_fg()
     );
 
     calendar.set_focused(true);
@@ -1198,7 +1198,7 @@ fn week_selection_persists_through_blur_and_refocus() {
         .unwrap();
     assert_eq!(
         terminal.backend().buffer().cell((0, 1)).unwrap().bg,
-        crate::theme().highlight_bg()
+        crate::theme().selected_bg()
     );
 }
 
@@ -1869,11 +1869,11 @@ fn selected_nonhighlighted_month_entry_uses_selected_style() {
         .unwrap();
 
     let selected = terminal.backend().buffer().cell((0, 2)).unwrap();
-    assert_eq!(selected.fg, crate::theme().selected_fg());
-    assert_eq!(selected.bg, crate::theme().selected_bg());
+    assert_eq!(selected.fg, crate::theme().accent_fg());
+    assert_eq!(selected.bg, crate::theme().inactive_selected_bg());
     let highlighted = terminal.backend().buffer().cell((0, 3)).unwrap();
-    assert_eq!(highlighted.fg, crate::theme().highlight_fg());
-    assert_eq!(highlighted.bg, crate::theme().highlight_bg());
+    assert_eq!(highlighted.fg, crate::theme().accent_fg());
+    assert_eq!(highlighted.bg, crate::theme().selected_bg());
 }
 
 #[test]
@@ -1921,11 +1921,11 @@ fn selected_nonhighlighted_week_entry_uses_selected_style() {
         .unwrap();
 
     let selected = terminal.backend().buffer().cell((3, 2)).unwrap();
-    assert_eq!(selected.fg, crate::theme().selected_fg());
-    assert_eq!(selected.bg, crate::theme().selected_bg());
+    assert_eq!(selected.fg, crate::theme().accent_fg());
+    assert_eq!(selected.bg, crate::theme().inactive_selected_bg());
     let highlighted = terminal.backend().buffer().cell((3, 3)).unwrap();
-    assert_eq!(highlighted.fg, crate::theme().highlight_fg());
-    assert_eq!(highlighted.bg, crate::theme().highlight_bg());
+    assert_eq!(highlighted.fg, crate::theme().accent_fg());
+    assert_eq!(highlighted.bg, crate::theme().selected_bg());
 }
 
 #[test]
@@ -3590,7 +3590,7 @@ fn day_rows_place_time_or_all_day_before_the_event_marker() {
 }
 
 #[test]
-fn focused_date_event_markers_use_selection_foreground() {
+fn focused_date_event_markers_preserve_accent_foreground() {
     let day = date(2026, Month::June, 22);
     let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
         [
@@ -3621,13 +3621,13 @@ fn focused_date_event_markers_use_selection_foreground() {
     for y in [2, 3] {
         let marker = terminal.backend().buffer().cell((0, y)).unwrap();
         assert_eq!(marker.symbol(), "◆");
-        assert_eq!(marker.fg, crate::theme().highlight_fg());
-        assert_eq!(marker.bg, crate::theme().highlight_bg());
+        assert_eq!(marker.fg, crate::theme().accent_fg());
+        assert_eq!(marker.bg, crate::theme().selected_bg());
     }
 }
 
 #[test]
-fn focused_week_timed_entry_uses_selection_foreground_for_time() {
+fn focused_week_timed_entry_preserves_accent_foreground_for_time() {
     let day = date(2026, Month::June, 22);
     let mut calendar: Calendar<DemoEntry, &'static str> = Calendar::new(
         [DemoEntry {
@@ -3652,8 +3652,8 @@ fn focused_week_timed_entry_uses_selection_foreground_for_time() {
 
     for x in 3..8 {
         let time = terminal.backend().buffer().cell((x, 2)).unwrap();
-        assert_eq!(time.fg, crate::theme().highlight_fg());
-        assert_eq!(time.bg, crate::theme().highlight_bg());
+        assert_eq!(time.fg, crate::theme().accent_fg());
+        assert_eq!(time.bg, crate::theme().selected_bg());
     }
 }
 

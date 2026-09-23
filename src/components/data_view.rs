@@ -1836,6 +1836,9 @@ where
         }
 
         if keybindings().focus().unfocus_matches(key) {
+            if self.transform_state.search.is_empty() {
+                return DataViewOutcome::IDLE;
+            }
             self.interaction = DataViewInteraction::Grid;
             self.search_input.set_focused(false);
             let mut outcome = self.clear_search_preserving_highlight(area, settings);

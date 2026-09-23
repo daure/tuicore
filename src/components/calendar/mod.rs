@@ -60,19 +60,20 @@ type ReorderGroupFn<T> = dyn Fn(&T, &T) -> bool;
 
 pub(super) fn calendar_entry_style(role: Option<CalendarEntryRole>, selected: bool) -> Style {
     let t = theme();
-    if selected {
-        return Style::default()
-            .fg(t.highlight_fg())
-            .bg(t.highlight_bg())
-            .add_modifier(ratatui::style::Modifier::BOLD);
-    }
-    match role {
+    let style = match role {
         Some(CalendarEntryRole::Accent) => Style::default().fg(t.accent_fg()),
         Some(CalendarEntryRole::Success) => Style::default().fg(t.success_fg()),
         Some(CalendarEntryRole::Warning) => Style::default().fg(t.warning_fg()),
         Some(CalendarEntryRole::Error) => Style::default().fg(t.error_fg()),
         Some(CalendarEntryRole::Muted) => Style::default().fg(t.muted_fg()),
         None => Style::default().fg(t.text_fg()),
+    };
+    if selected {
+        style
+            .bg(t.selected_bg())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        style
     }
 }
 

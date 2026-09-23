@@ -423,8 +423,8 @@ where
         if date == self.cursor {
             if self.focused {
                 return Style::default()
-                    .fg(t.highlight_fg())
-                    .bg(t.highlight_bg())
+                    .fg(t.selected_fg())
+                    .bg(t.selected_bg())
                     .add_modifier(Modifier::BOLD);
             }
             if self.date_has_day_selection(date) {
@@ -470,7 +470,7 @@ where
     fn date_cell_style(&self, date: Date) -> Style {
         if date == self.cursor {
             if self.focused {
-                return Style::default().bg(theme().highlight_bg());
+                return Style::default().bg(theme().selected_bg());
             }
             if self.date_has_day_selection(date) {
                 return self.persistent_selection_style();
@@ -483,7 +483,8 @@ where
         if highlighted && self.focused {
             calendar_entry_style((self.role)(&self.entries[index]), true)
         } else if self.day_selection_contains(index) {
-            self.persistent_selection_style()
+            calendar_entry_style((self.role)(&self.entries[index]), false)
+                .bg(theme().inactive_selected_bg())
         } else {
             calendar_entry_style((self.role)(&self.entries[index]), false)
         }
@@ -500,7 +501,9 @@ where
 
     fn persistent_selection_style(&self) -> Style {
         let t = theme();
-        Style::default().fg(t.selected_fg()).bg(t.selected_bg())
+        Style::default()
+            .fg(t.selected_fg())
+            .bg(t.inactive_selected_bg())
     }
 
     fn append_event_lines(
@@ -560,20 +563,7 @@ where
         };
         let entry = self.summary_entry_line(index);
         let line_style = self.entry_summary_style(index, entry.style);
-        let on_highlight_background = self.highlighted_entry == Some(index)
-            || matches!(kind, EventSummaryKind::Month | EventSummaryKind::Week)
-                && span.covers_date(self.cursor);
-        let marker_style = if self.day_selection_contains(index)
-            && !(self.focused && self.highlighted_entry == Some(index))
-        {
-            Style::default().fg(theme().selected_fg())
-        } else if self.focused && on_highlight_background {
-            Style::default().fg(theme().highlight_fg())
-        } else if on_highlight_background && self.date_has_day_selection(self.cursor) {
-            Style::default().fg(theme().selected_fg())
-        } else {
-            Style::default().fg(theme().accent_fg())
-        };
+        let marker_style = Style::default().fg(theme().accent_fg());
         let mut body_spans = Vec::new();
         if week_timed {
             body_spans.push(Span::styled(

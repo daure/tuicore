@@ -2299,11 +2299,14 @@ fn unfocus_keys_clear_search_from_grid() {
         let mut view = clear_transform_view();
         view.highlight_id(&12);
         view.set_search_query("12");
+        view.set_focused(true);
+        <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+        let mut ctx = EventCtx::<()>::default();
 
-        let outcome = view.on_key(key, area);
+        let outcome = view.event(&TuiEvent::Key(key), &mut ctx);
 
-        assert!(outcome.handled);
-        assert!(outcome.changed);
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(view.transform_state().search.is_empty());
         assert_restored_highlight_is_visible(&view, area);
     }
@@ -2325,14 +2328,53 @@ fn unfocus_keys_clear_search_when_leaving_search_input() {
         view.highlight_id(&12);
         view.on_key(KeyEvent::from(Key::Char('/')), area);
         view.set_search_query("12");
+        <DataView<usize, usize> as TuiNode<()>>::layout(&mut view, area, &mut LayoutCtx::new());
+        let route = EventRoute::new(TreePath::from_keys([ChildKey::new(SEARCH_SLOT)]));
+        let mut ctx = EventCtx::<()>::default();
 
-        let outcome = view.on_key(key, area);
+        let outcome = view.dispatch_event(&route, &TuiEvent::Key(key), &mut ctx);
 
-        assert!(outcome.handled);
-        assert!(outcome.changed);
+        assert_eq!(outcome, EventOutcome::Handled);
+        assert_eq!(ctx.propagation(), Propagation::Stopped);
         assert!(view.transform_state().search.is_empty());
         assert_eq!(view.interaction, DataViewInteraction::Grid);
         assert_restored_highlight_is_visible(&view, area);
+    }
+}
+
+#[test]
+fn unfocus_keys_bubble_when_search_is_empty() {
+    let area = Rect::new(0, 0, 40, 6);
+    let keys = [
+        KeyEvent::from(Key::Esc),
+        KeyEvent {
+            code: Key::Char('['),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ];
+
+    for key in keys {
+        let mut grid = clear_transform_view().action_bar(true).focused(true);
+        <DataView<usize, usize> as TuiNode<()>>::layout(&mut grid, area, &mut LayoutCtx::new());
+        let mut grid_ctx = EventCtx::<()>::default();
+
+        assert_eq!(
+            grid.event(&TuiEvent::Key(key), &mut grid_ctx),
+            EventOutcome::Ignored
+        );
+        assert_eq!(grid_ctx.propagation(), Propagation::Continue);
+
+        let mut search = clear_transform_view().action_bar(true).focused(true);
+        search.on_key(KeyEvent::from(Key::Char('/')), area);
+        let route = EventRoute::new(TreePath::from_keys([ChildKey::new(SEARCH_SLOT)]));
+        let mut search_ctx = EventCtx::<()>::default();
+
+        assert_eq!(
+            search.dispatch_event(&route, &TuiEvent::Key(key), &mut search_ctx),
+            EventOutcome::Ignored
+        );
+        assert_eq!(search_ctx.propagation(), Propagation::Continue);
+        assert_eq!(search.interaction, DataViewInteraction::Search);
     }
 }
 
