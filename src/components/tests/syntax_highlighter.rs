@@ -53,7 +53,6 @@ fn render(highlighter: &SyntaxHighlighter, area: Rect) -> String {
 
 #[test]
 fn wrapped_description_supports_visual_navigation_and_resize() {
-    crate::init();
     let code = "Details before the final marker END";
     let mut highlighter = SyntaxHighlighter::new(code, Language::Markdown).wrap(true);
     let area = Rect::new(0, 0, 14, 2);
@@ -90,7 +89,6 @@ fn wrapped_description_supports_visual_navigation_and_resize() {
 
 #[test]
 fn wrapping_is_opt_in_and_preserves_indentation_and_wide_text() {
-    crate::init();
     let area = Rect::new(0, 0, 16, 6);
     let mut highlighter = SyntaxHighlighter::new(
         "  - 界界 words across several lines END",

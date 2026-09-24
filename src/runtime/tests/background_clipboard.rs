@@ -15,7 +15,6 @@ impl TuiNode for CopyRoot {
 
 #[test]
 fn background_clipboard_notifies_only_after_write_and_reports_write_failure() {
-    crate::init();
     for fail in [false, true] {
         let notifications = Rc::new(RefCell::new(Vec::new()));
         let observed = notifications.clone();
