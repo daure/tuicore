@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     fs::{File, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::{Child, Command},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -318,10 +318,7 @@ where
                 if flags.focus_request.is_none() {
                     flags.focus_request = self.root.take_pending_focus_request();
                 }
-                self.flush_pending_clipboard(flags, |value| {
-                    write_clipboard_osc52(terminal, value)?;
-                    terminal.terminal_mut().backend_mut().flush()
-                });
+                self.flush_pending_clipboard(flags, |value| write_clipboard_osc52(terminal, value));
             }
         }
 
@@ -945,9 +942,7 @@ where
                     MouseCopyRelease::Selection(text) => {
                         flags.redraw = true;
                         if let (Some(terminal), Some(value)) = (terminal, text) {
-                            let notification = match write_clipboard_osc52(terminal, &value)
-                                .and_then(|()| terminal.terminal_mut().backend_mut().flush())
-                            {
+                            let notification = match write_clipboard_osc52(terminal, &value) {
                                 Ok(()) => Notification::info(
                                     "Copied to clipboard",
                                     format!("\"{value}\""),
@@ -1330,11 +1325,13 @@ fn strip_editor_terminal_newline(content: String) -> String {
 }
 
 fn write_clipboard_osc52(terminal: &mut TerminalGuard, value: &str) -> std::io::Result<()> {
+    write_clipboard_osc52_to(terminal.terminal_mut().backend_mut(), value)
+}
+
+fn write_clipboard_osc52_to(writer: &mut impl Write, value: &str) -> io::Result<()> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
-    write!(
-        terminal.terminal_mut().backend_mut(),
-        "\x1b]52;c;{encoded}\x07"
-    )
+    write!(writer, "\x1b]52;c;{encoded}\x07")?;
+    writer.flush()
 }
 
 struct EditorTempFiles {
@@ -1697,6 +1694,8 @@ mod resize_focus_tests;
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use ratatui::{Frame, layout::Rect};
 
     use super::*;
@@ -1704,6 +1703,34 @@ mod tests {
         Button, Dialog, DialogLayer, Dropdown, ListControl, MenuButton, MenuItem, Tab, Tabs,
         TextInput,
     };
+
+    #[test]
+    fn clipboard_write_flushes_the_complete_osc52_sequence() {
+        #[derive(Default)]
+        struct RecordingWriter {
+            bytes: Vec<u8>,
+            flushed: bool,
+        }
+
+        impl Write for RecordingWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.bytes.extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.flushed = true;
+                Ok(())
+            }
+        }
+
+        let mut writer = RecordingWriter::default();
+
+        write_clipboard_osc52_to(&mut writer, "try-3").unwrap();
+
+        assert_eq!(writer.bytes, b"\x1b]52;c;dHJ5LTM=\x07");
+        assert!(writer.flushed);
+    }
     use crate::{
         ChildKey, EventOutcome, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, Key, KeyEvent,
         KeyModifiers, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,

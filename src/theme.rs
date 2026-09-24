@@ -310,7 +310,7 @@ impl Theme {
             border_fg: palette.border,
             highlight_fg,
             highlight_bg,
-            key_fg: palette.blue,
+            key_fg: key_source_color(name, &palette),
             warning_fg: palette.yellow,
             weather_sun_fg: weather.sun,
             weather_cool_fg: weather.cool,
@@ -600,18 +600,22 @@ fn weather_palette_for(palette: &Palette) -> WeatherPalette {
 
 fn themed_weather_color(primary: Color, secondary: Color, palette: &Palette) -> Color {
     let color = mix_color(primary, secondary, 0.18);
-    readable_against(color, palette.base, palette.text)
+    readable_against_surfaces(color, palette, 3.0)
 }
 
-fn readable_against(color: Color, background: Color, text: Color) -> Color {
-    if contrast_ratio(color, background) >= 3.0 {
+fn readable_against_surfaces(color: Color, palette: &Palette, minimum_contrast: f64) -> Color {
+    if contrast_ratio(color, palette.base) >= minimum_contrast
+        && contrast_ratio(color, palette.surface) >= minimum_contrast
+    {
         return color;
     }
 
     let mut color = color;
     for _ in 0..6 {
-        color = mix_color(color, text, 0.18);
-        if contrast_ratio(color, background) >= 3.0 {
+        color = mix_color(color, palette.text, 0.18);
+        if contrast_ratio(color, palette.base) >= minimum_contrast
+            && contrast_ratio(color, palette.surface) >= minimum_contrast
+        {
             return color;
         }
     }
@@ -620,28 +624,49 @@ fn readable_against(color: Color, background: Color, text: Color) -> Color {
 
 fn info_source_color(name: ThemeName, palette: &Palette) -> Color {
     match name {
-        ThemeName::Dracula => rgb([0xbd, 0x93, 0xf9]),
-        ThemeName::Matrix => rgb([0x66, 0xb3, 0xff]),
+        ThemeName::Dracula => rgb([0xca, 0xa9, 0xfa]),
+        ThemeName::Everforest => rgb([0x9f, 0xae, 0xd8]),
+        ThemeName::Flexoki => rgb([0x8b, 0x7e, 0xc8]),
+        ThemeName::Github => rgb([0xd2, 0xa8, 0xff]),
+        ThemeName::Gruvbox => rgb([0xe0, 0x9a, 0xaf]),
+        ThemeName::Kanagawa => rgb([0xb8, 0xb4, 0xd0]),
         ThemeName::LucentOrng => rgb([0x7d, 0xcf, 0xff]),
+        ThemeName::Material => rgb([0xd8, 0xad, 0xf5]),
+        ThemeName::Matrix => rgb([0xa7, 0x8b, 0xfa]),
         ThemeName::Orng => rgb([0x7a, 0xa2, 0xf7]),
-        ThemeName::Everforest => rgb([0x7f, 0x9f, 0xce]),
         ThemeName::Monokai => rgb([0xae, 0x81, 0xff]),
-        ThemeName::Nord => rgb([0xb4, 0x8e, 0xad]),
+        ThemeName::Nord => rgb([0xca, 0xa7, 0xc3]),
+        ThemeName::Palenight => rgb([0xc7, 0x92, 0xea]),
+        ThemeName::RosePine => rgb([0xc4, 0xa7, 0xe7]),
+        ThemeName::Solarized => rgb([0x92, 0x92, 0xe3]),
         ThemeName::Synthwave84 => rgb([0xb5, 0x8c, 0xff]),
-        ThemeName::Zenburn => rgb([0x8c, 0xb4, 0xd8]),
+        ThemeName::TokyoNight => rgb([0xbb, 0x9a, 0xf7]),
+        ThemeName::Vercel => rgb([0xa8, 0x55, 0xf7]),
+        ThemeName::Vesper => rgb([0xa0, 0xa0, 0xff]),
+        ThemeName::Zenburn => rgb([0xc8, 0xba, 0xe5]),
+        _ => palette.blue,
+    }
+}
+
+fn key_source_color(name: ThemeName, palette: &Palette) -> Color {
+    match name {
+        ThemeName::Monokai => rgb([0xfd, 0x97, 0x1f]),
         _ => palette.blue,
     }
 }
 
 fn readable_info_foreground(source: Color, palette: &Palette) -> Color {
-    if contrast_ratio(source, palette.base) >= 4.5 {
+    if contrast_ratio(source, palette.base) >= 4.5 && contrast_ratio(source, palette.surface) >= 4.5
+    {
         return source;
     }
 
     let mut foreground = source;
     for _ in 0..16 {
         foreground = mix_color(foreground, palette.text, 0.18);
-        if contrast_ratio(foreground, palette.base) >= 4.5 {
+        if contrast_ratio(foreground, palette.base) >= 4.5
+            && contrast_ratio(foreground, palette.surface) >= 4.5
+        {
             return foreground;
         }
     }
@@ -811,7 +836,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Amoled => palette(
             [0, 0, 0],
             [12, 12, 12],
-            [32, 32, 32],
+            [96, 96, 96],
             [242, 242, 242],
             [196, 196, 196],
             [128, 128, 128],
@@ -824,7 +849,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Aura => palette(
             [21, 18, 27],
             [36, 31, 49],
-            [69, 58, 94],
+            [118, 102, 154],
             [237, 233, 254],
             [178, 165, 209],
             [122, 109, 156],
@@ -837,7 +862,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Ayu => palette(
             [11, 18, 24],
             [15, 29, 39],
-            [36, 49, 62],
+            [93, 107, 122],
             [191, 199, 213],
             [171, 180, 194],
             [94, 104, 117],
@@ -850,7 +875,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Carbonfox => palette(
             [22, 25, 30],
             [42, 45, 53],
-            [82, 88, 100],
+            [116, 124, 137],
             [242, 244, 248],
             [196, 203, 211],
             [109, 114, 124],
@@ -863,7 +888,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Catppuccin => palette(
             [30, 30, 46],
             [49, 50, 68],
-            [69, 71, 90],
+            [127, 132, 156],
             [205, 214, 244],
             [166, 173, 200],
             [108, 112, 134],
@@ -876,20 +901,20 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::CatppuccinFrappe => palette(
             [48, 52, 70],
             [65, 69, 89],
-            [115, 121, 148],
+            [148, 156, 187],
             [198, 208, 245],
             [181, 191, 226],
             [140, 145, 172],
-            [140, 170, 238],
+            [165, 176, 242],
             [153, 209, 219],
             [166, 209, 137],
             [229, 200, 144],
-            [231, 130, 132],
+            [238, 162, 164],
         ),
         ThemeName::CatppuccinMacchiato => palette(
             [36, 39, 58],
             [54, 58, 79],
-            [110, 115, 141],
+            [128, 135, 162],
             [202, 211, 245],
             [184, 192, 224],
             [128, 135, 162],
@@ -902,7 +927,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Cobalt2 => palette(
             [25, 36, 76],
             [31, 44, 92],
-            [63, 83, 161],
+            [96, 121, 214],
             [255, 255, 255],
             [187, 205, 255],
             [124, 150, 222],
@@ -915,7 +940,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Cursor => palette(
             [27, 31, 39],
             [41, 47, 58],
-            [73, 83, 100],
+            [109, 122, 142],
             [230, 236, 241],
             [182, 191, 202],
             [122, 132, 145],
@@ -928,20 +953,20 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Dracula => palette(
             [40, 42, 54],
             [68, 71, 90],
-            [98, 114, 164],
+            [146, 152, 181],
             [248, 248, 242],
-            [189, 147, 249],
+            [182, 185, 204],
             [98, 114, 164],
             [139, 233, 253],
-            [139, 233, 253],
+            [255, 150, 210],
             [80, 250, 123],
             [241, 250, 140],
-            [255, 85, 85],
+            [255, 155, 155],
         ),
         ThemeName::Everforest => palette(
             [45, 53, 59],
             [52, 63, 68],
-            [75, 86, 91],
+            [133, 146, 137],
             [211, 198, 170],
             [168, 176, 162],
             [127, 137, 125],
@@ -949,30 +974,30 @@ fn palette_for(name: ThemeName) -> Palette {
             [131, 192, 146],
             [167, 192, 128],
             [219, 188, 127],
-            [230, 126, 128],
+            [240, 143, 145],
         ),
         ThemeName::Flexoki => palette(
             [16, 15, 15],
             [28, 27, 26],
-            [64, 62, 60],
+            [111, 110, 105],
             [206, 205, 195],
-            [185, 173, 146],
-            [135, 124, 99],
-            [67, 133, 190],
+            [183, 181, 172],
+            [135, 133, 128],
+            [102, 160, 200],
             [58, 169, 159],
-            [102, 128, 11],
+            [160, 175, 84],
             [173, 131, 1],
-            [209, 77, 65],
+            [232, 112, 95],
         ),
         ThemeName::Github => palette(
             [13, 17, 23],
             [22, 27, 34],
-            [48, 54, 61],
+            [115, 124, 135],
             [230, 237, 243],
             [139, 148, 158],
             [110, 118, 129],
             [121, 192, 255],
-            [57, 211, 83],
+            [88, 166, 255],
             [63, 185, 80],
             [210, 153, 34],
             [248, 81, 73],
@@ -980,20 +1005,20 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Gruvbox => palette(
             [40, 40, 40],
             [60, 56, 54],
-            [80, 73, 69],
+            [156, 141, 125],
             [235, 219, 178],
             [213, 196, 161],
             [146, 131, 116],
-            [131, 165, 152],
+            [145, 178, 165],
             [142, 192, 124],
             [184, 187, 38],
             [250, 189, 47],
-            [251, 73, 52],
+            [255, 128, 112],
         ),
         ThemeName::Kanagawa => palette(
             [31, 31, 40],
             [42, 42, 55],
-            [84, 84, 109],
+            [133, 133, 149],
             [220, 215, 186],
             [200, 192, 147],
             [114, 113, 105],
@@ -1001,43 +1026,43 @@ fn palette_for(name: ThemeName) -> Palette {
             [112, 192, 183],
             [152, 187, 108],
             [230, 195, 132],
-            [224, 105, 99],
+            [237, 130, 124],
         ),
         ThemeName::LucentOrng => palette(
             [10, 10, 10],
             [20, 20, 20],
-            [60, 60, 60],
+            [112, 112, 112],
             [238, 238, 238],
-            [96, 96, 96],
             [128, 128, 128],
+            [96, 96, 96],
             [238, 121, 72],
             [236, 91, 43],
-            [107, 161, 230],
-            [236, 91, 43],
+            [127, 216, 143],
+            [245, 167, 66],
             [224, 108, 117],
         ),
         ThemeName::Material => palette(
             [38, 50, 56],
             [55, 71, 79],
-            [84, 110, 122],
+            [144, 164, 174],
             [238, 255, 255],
             [176, 190, 197],
             [120, 144, 156],
-            [130, 170, 255],
+            [137, 180, 255],
             [137, 221, 255],
             [195, 232, 141],
             [255, 203, 107],
-            [240, 113, 120],
+            [255, 151, 157],
         ),
         ThemeName::Matrix => palette(
             [4, 12, 4],
             [9, 25, 9],
-            [23, 58, 23],
+            [54, 122, 54],
             [166, 255, 166],
             [108, 201, 108],
             [63, 140, 63],
-            [61, 214, 140],
-            [61, 214, 140],
+            [102, 179, 255],
+            [94, 234, 212],
             [89, 255, 89],
             [178, 255, 89],
             [255, 89, 89],
@@ -1045,7 +1070,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Mercury => palette(
             [26, 29, 33],
             [39, 43, 48],
-            [79, 86, 94],
+            [106, 117, 128],
             [233, 238, 242],
             [195, 203, 211],
             [132, 142, 151],
@@ -1058,23 +1083,23 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Monokai => palette(
             [39, 40, 34],
             [49, 51, 45],
-            [73, 72, 62],
+            [129, 125, 105],
             [248, 248, 242],
-            [230, 219, 116],
+            [183, 181, 168],
             [117, 113, 94],
             [102, 217, 239],
             [102, 217, 239],
             [166, 226, 46],
             [230, 219, 116],
-            [249, 38, 114],
+            [255, 102, 153],
         ),
         ThemeName::NightOwl => palette(
             [1, 22, 39],
             [10, 34, 57],
-            [18, 54, 86],
+            [63, 112, 152],
             [214, 222, 235],
-            [127, 219, 202],
-            [99, 119, 119],
+            [168, 179, 194],
+            [114, 125, 139],
             [130, 170, 255],
             [127, 219, 202],
             [173, 219, 103],
@@ -1084,20 +1109,20 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Nord => palette(
             [46, 52, 64],
             [59, 66, 82],
-            [76, 86, 106],
+            [128, 141, 166],
             [216, 222, 233],
-            [229, 233, 240],
-            [129, 161, 193],
-            [94, 129, 172],
+            [184, 193, 209],
+            [143, 154, 175],
+            [168, 181, 232],
             [136, 192, 208],
             [163, 190, 140],
             [235, 203, 139],
-            [191, 97, 106],
+            [231, 152, 160],
         ),
         ThemeName::Oc2 => palette(
             [20, 22, 26],
             [32, 35, 42],
-            [70, 76, 89],
+            [100, 109, 125],
             [235, 236, 240],
             [187, 192, 199],
             [124, 131, 143],
@@ -1110,20 +1135,20 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::OneDark => palette(
             [40, 44, 52],
             [49, 54, 63],
-            [92, 99, 112],
+            [118, 128, 142],
             [171, 178, 191],
-            [190, 195, 202],
+            [144, 151, 163],
             [92, 99, 112],
             [97, 175, 239],
             [86, 182, 194],
             [152, 195, 121],
             [229, 192, 123],
-            [224, 108, 117],
+            [230, 129, 137],
         ),
         ThemeName::Onedarkpro => palette(
             [34, 37, 44],
             [43, 47, 58],
-            [79, 86, 103],
+            [111, 120, 140],
             [213, 218, 227],
             [171, 178, 191],
             [101, 109, 126],
@@ -1131,12 +1156,12 @@ fn palette_for(name: ThemeName) -> Palette {
             [86, 182, 194],
             [152, 195, 121],
             [229, 192, 123],
-            [224, 108, 117],
+            [230, 129, 137],
         ),
         ThemeName::Opencode => palette(
             [17, 20, 26],
             [28, 33, 42],
-            [61, 70, 87],
+            [94, 108, 130],
             [230, 236, 245],
             [182, 190, 202],
             [120, 130, 147],
@@ -1149,7 +1174,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Orng => palette(
             [10, 10, 10],
             [20, 20, 20],
-            [60, 60, 60],
+            [98, 98, 98],
             [238, 238, 238],
             [96, 96, 96],
             [128, 128, 128],
@@ -1162,7 +1187,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::OsakaJade => palette(
             [22, 29, 27],
             [33, 43, 40],
-            [63, 82, 77],
+            [96, 119, 113],
             [223, 235, 231],
             [177, 204, 195],
             [116, 151, 141],
@@ -1175,7 +1200,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Palenight => palette(
             [41, 45, 62],
             [54, 58, 79],
-            [103, 114, 229],
+            [124, 131, 166],
             [166, 172, 205],
             [149, 157, 203],
             [103, 114, 149],
@@ -1183,42 +1208,42 @@ fn palette_for(name: ThemeName) -> Palette {
             [137, 221, 255],
             [195, 232, 141],
             [255, 203, 107],
-            [240, 113, 120],
+            [245, 139, 146],
         ),
         ThemeName::RosePine => palette(
             [25, 23, 36],
             [31, 29, 46],
-            [64, 61, 82],
+            [118, 113, 143],
             [224, 222, 244],
             [144, 140, 170],
             [110, 106, 134],
-            [49, 116, 143],
+            [86, 148, 159],
             [156, 207, 216],
-            [156, 207, 216],
+            [156, 207, 159],
             [246, 193, 119],
             [235, 111, 146],
         ),
         ThemeName::Solarized => palette(
             [0, 43, 54],
             [7, 54, 66],
-            [88, 110, 117],
-            [131, 148, 150],
+            [107, 130, 137],
             [147, 161, 161],
+            [131, 148, 150],
             [101, 123, 131],
-            [38, 139, 210],
-            [42, 161, 152],
-            [133, 153, 0],
-            [181, 137, 0],
-            [220, 50, 47],
+            [67, 160, 223],
+            [48, 173, 163],
+            [145, 166, 0],
+            [197, 150, 0],
+            [255, 107, 102],
         ),
         ThemeName::Synthwave84 => palette(
             [38, 24, 67],
             [53, 33, 92],
-            [107, 74, 145],
+            [137, 104, 176],
             [255, 255, 255],
             [241, 223, 255],
             [170, 123, 255],
-            [54, 247, 255],
+            [127, 166, 255],
             [54, 247, 255],
             [114, 255, 184],
             [255, 209, 102],
@@ -1227,7 +1252,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::TokyoNight => palette(
             [26, 27, 38],
             [41, 46, 66],
-            [65, 72, 104],
+            [116, 124, 163],
             [192, 202, 245],
             [169, 177, 214],
             [86, 95, 137],
@@ -1240,11 +1265,11 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Vercel => palette(
             [0, 0, 0],
             [20, 20, 20],
-            [44, 44, 44],
+            [100, 100, 100],
             [255, 255, 255],
             [170, 170, 170],
             [112, 112, 112],
-            [0, 112, 243],
+            [50, 145, 255],
             [0, 166, 255],
             [0, 204, 136],
             [247, 181, 0],
@@ -1253,7 +1278,7 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Vesper => palette(
             [16, 18, 24],
             [27, 30, 38],
-            [54, 60, 74],
+            [98, 106, 123],
             [245, 245, 245],
             [185, 188, 193],
             [116, 122, 136],
@@ -1266,15 +1291,15 @@ fn palette_for(name: ThemeName) -> Palette {
         ThemeName::Zenburn => palette(
             [63, 63, 63],
             [76, 76, 76],
-            [98, 98, 98],
+            [154, 154, 145],
             [220, 220, 204],
-            [181, 189, 104],
-            [127, 159, 127],
-            [140, 208, 211],
+            [184, 184, 172],
+            [152, 152, 144],
+            [136, 192, 255],
             [147, 224, 227],
-            [95, 126, 93],
+            [163, 198, 163],
             [240, 223, 175],
-            [204, 147, 147],
+            [232, 176, 176],
         ),
     }
 }
@@ -1454,7 +1479,7 @@ mod tests {
 
         assert_eq!(theme.background_bg(), Color::Rgb(0x0a, 0x0a, 0x0a));
         assert_eq!(theme.surface_bg(), Color::Rgb(0x14, 0x14, 0x14));
-        assert_eq!(theme.border_fg(), Color::Rgb(0x3c, 0x3c, 0x3c));
+        assert_eq!(theme.border_fg(), Color::Rgb(0x62, 0x62, 0x62));
         assert_eq!(theme.text_fg(), Color::Rgb(0xee, 0xee, 0xee));
         assert_eq!(theme.subtle_fg(), Color::Rgb(0x60, 0x60, 0x60));
         assert_eq!(theme.muted_fg(), Color::Rgb(0x80, 0x80, 0x80));
@@ -1479,14 +1504,29 @@ mod tests {
         assert_eq!(theme.background_bg(), Color::Reset);
         assert_eq!(theme.surface_bg(), Color::Reset);
         assert_eq!(theme.backdrop_bg(), Color::Reset);
-        assert_eq!(theme.border_fg(), Color::Rgb(0x3c, 0x3c, 0x3c));
+        assert_eq!(theme.border_fg(), Color::Rgb(0x70, 0x70, 0x70));
         assert_eq!(theme.text_fg(), Color::Rgb(0xee, 0xee, 0xee));
-        assert_eq!(theme.muted_fg(), Color::Rgb(0x80, 0x80, 0x80));
+        assert_eq!(theme.subtle_fg(), Color::Rgb(0x80, 0x80, 0x80));
+        assert_eq!(theme.muted_fg(), Color::Rgb(0x60, 0x60, 0x60));
         assert_eq!(theme.key_fg(), Color::Rgb(0xee, 0x79, 0x48));
         assert_eq!(theme.accent_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
-        assert_eq!(theme.success_fg(), Color::Rgb(0x6b, 0xa1, 0xe6));
-        assert_eq!(theme.warning_fg(), Color::Rgb(0xec, 0x5b, 0x2b));
+        assert_eq!(theme.success_fg(), Color::Rgb(0x7f, 0xd8, 0x8f));
+        assert_eq!(theme.warning_fg(), Color::Rgb(0xf5, 0xa7, 0x42));
         assert_eq!(theme.error_fg(), Color::Rgb(0xe0, 0x6c, 0x75));
+    }
+
+    #[test]
+    fn monokai_uses_distinct_neutral_interaction_and_status_roles() {
+        let theme = Theme::named(ThemeName::Monokai);
+
+        assert_eq!(theme.border_fg(), Color::Rgb(0x81, 0x7d, 0x69));
+        assert_eq!(theme.subtle_fg(), Color::Rgb(0xb7, 0xb5, 0xa8));
+        assert_eq!(theme.muted_fg(), Color::Rgb(0x75, 0x71, 0x5e));
+        assert_eq!(theme.key_fg(), Color::Rgb(0xfd, 0x97, 0x1f));
+        assert_eq!(theme.accent_fg(), Color::Rgb(0x66, 0xd9, 0xef));
+        assert_eq!(theme.warning_fg(), Color::Rgb(0xe6, 0xdb, 0x74));
+        assert_eq!(theme.error_fg(), Color::Rgb(0xff, 0x66, 0x99));
+        assert_eq!(theme.weather_rain_fg(), Color::Rgb(0x66, 0xd9, 0xef));
     }
 
     #[test]
@@ -1516,11 +1556,7 @@ mod tests {
     fn weather_roles_keep_readable_contrast() {
         for name in ThemeName::ALL {
             let theme = Theme::named(name);
-            let contrast_background = if theme.background_bg() == Color::Reset {
-                palette_for(name).base
-            } else {
-                theme.background_bg()
-            };
+            let palette = palette_for(name);
             for color in [
                 theme.weather_sun_fg(),
                 theme.weather_cool_fg(),
@@ -1528,20 +1564,81 @@ mod tests {
                 theme.weather_hot_fg(),
                 theme.weather_rain_fg(),
             ] {
-                assert!(contrast_ratio(color, contrast_background) >= 3.0);
+                assert!(contrast_ratio(color, palette.base) >= 3.0, "{name:?} base");
+                assert!(
+                    contrast_ratio(color, palette.surface) >= 3.0,
+                    "{name:?} surface"
+                );
             }
         }
     }
 
     #[test]
-    fn info_roles_keep_accessible_contrast_against_theme_base() {
+    fn info_roles_keep_accessible_contrast_against_base_and_surface() {
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+            let palette = palette_for(name);
+
+            assert!(
+                contrast_ratio(theme.info_fg(), palette.base) >= 4.5,
+                "{name:?} info/base contrast"
+            );
+            assert!(
+                contrast_ratio(theme.info_fg(), palette.surface) >= 4.5,
+                "{name:?} info/surface contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn built_in_foreground_roles_are_readable_on_base_and_surface() {
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+            let palette = palette_for(name);
+            for (role, color) in [
+                ("text", theme.text_fg()),
+                ("key", theme.key_fg()),
+                ("accent", theme.accent_fg()),
+                ("info", theme.info_fg()),
+                ("success", theme.success_fg()),
+                ("warning", theme.warning_fg()),
+                ("error", theme.error_fg()),
+            ] {
+                assert!(
+                    contrast_ratio(color, palette.base) >= 4.5,
+                    "{name:?} {role}/base contrast"
+                );
+                assert!(
+                    contrast_ratio(color, palette.surface) >= 4.5,
+                    "{name:?} {role}/surface contrast"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn built_in_borders_are_visible_on_base_and_surface() {
+        for name in ThemeName::ALL {
+            let theme = Theme::named(name);
+            let palette = palette_for(name);
+
+            assert!(
+                contrast_ratio(theme.border_fg(), palette.base) >= 3.0,
+                "{name:?} border/base contrast"
+            );
+            assert!(
+                contrast_ratio(theme.border_fg(), palette.surface) >= 3.0,
+                "{name:?} border/surface contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn built_in_key_and_accent_roles_are_distinct() {
         for name in ThemeName::ALL {
             let theme = Theme::named(name);
 
-            assert!(
-                contrast_ratio(theme.info_fg(), palette_for(name).base) >= 4.5,
-                "{name:?} info contrast"
-            );
+            assert_ne!(theme.key_fg(), theme.accent_fg(), "{name:?}");
         }
     }
 
@@ -1589,6 +1686,16 @@ mod tests {
                 color_distance_squared(theme.highlight_bg(), theme.warning_fg())
                     >= MIN_INTERACTION_DISTANCE_SQUARED,
                 "{name:?} interaction/warning distance"
+            );
+            assert!(
+                color_distance_squared(theme.highlight_bg(), theme.error_fg())
+                    >= MIN_INTERACTION_DISTANCE_SQUARED,
+                "{name:?} interaction/error distance"
+            );
+            assert!(
+                color_distance_squared(theme.highlight_bg(), theme.info_fg())
+                    >= MIN_INTERACTION_DISTANCE_SQUARED,
+                "{name:?} interaction/info distance"
             );
             assert!(
                 contrast_ratio(theme.selected_fg(), theme.selected_bg()) >= 4.5,
@@ -1639,6 +1746,11 @@ mod tests {
                 }
             }
             assert_ne!(theme.diff_added_bg(), theme.diff_removed_bg(), "{name:?}");
+            assert_ne!(
+                theme.diff_added_emphasis_bg(),
+                theme.diff_removed_emphasis_bg(),
+                "{name:?} emphasis"
+            );
             assert!(
                 color_distance_squared(theme.diff_added_emphasis_bg(), base)
                     > color_distance_squared(theme.diff_added_bg(), base),
