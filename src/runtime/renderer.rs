@@ -56,14 +56,30 @@ pub(crate) struct GraphicsLevel {
 pub(crate) struct DirectKittyIntent {
     pub id: DirectKittyPlacementId,
     pub area: Rect,
+    pub source_rect: DirectKittySourceRect,
     pub generation: u64,
     pub payload: Arc<str>,
     pub level: GraphicsLevel,
     pub z_index: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DirectKittySourceRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DirectKittyResident {
+    pub image_id: u32,
+    pub payload: Arc<str>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct GraphicsFrame {
+    pub residents: Vec<DirectKittyResident>,
     pub intents: Vec<DirectKittyIntent>,
 }
 
@@ -78,6 +94,7 @@ enum DirectKittyCommand {
     Place {
         id: DirectKittyPlacementId,
         area: Rect,
+        source_rect: DirectKittySourceRect,
         z_index: i32,
     },
 }
@@ -132,6 +149,11 @@ impl GraphicsLevel {
 
 impl DirectKittyGraphics {
     fn reconcile(&mut self, frame: GraphicsFrame) -> Vec<DirectKittyCommand> {
+        let residents = frame
+            .residents
+            .into_iter()
+            .map(|resident| (resident.image_id, resident.payload))
+            .collect::<BTreeMap<_, _>>();
         let mut desired = BTreeMap::new();
         let mut display_order = Vec::new();
         for intent in frame.intents {
@@ -145,61 +167,63 @@ impl DirectKittyGraphics {
                 .expect("display order only contains registered Kitty placements");
             (intent.z_index, intent.level)
         });
-
-        let desired_image_ids = desired
+        let visible_image_ids = desired
             .keys()
             .map(|id| id.image_id)
             .collect::<BTreeSet<_>>();
-        let changed_image_ids = desired
-            .values()
-            .filter(|intent| {
+
+        let changed_image_ids = residents
+            .iter()
+            .filter(|(image_id, payload)| {
                 self.transmitted
-                    .get(&intent.id.image_id)
-                    .is_some_and(|payload| payload != &intent.payload)
+                    .get(image_id)
+                    .is_some_and(|transmitted| transmitted != *payload)
             })
-            .map(|intent| intent.id.image_id)
+            .map(|(image_id, _)| *image_id)
             .collect::<BTreeSet<_>>();
 
         let mut commands = Vec::new();
         let mut deleted_images = BTreeSet::new();
+        let transmitted_image_ids = self.transmitted.keys().copied().collect::<Vec<_>>();
+        for image_id in transmitted_image_ids {
+            if (!residents.contains_key(&image_id) || changed_image_ids.contains(&image_id))
+                && deleted_images.insert(image_id)
+            {
+                commands.push(DirectKittyCommand::DeleteImage(image_id));
+                self.transmitted.remove(&image_id);
+            }
+        }
         for (id, active) in &self.active {
             if desired.get(id) == Some(active) {
                 continue;
             }
-            if changed_image_ids.contains(&id.image_id) {
-                if deleted_images.insert(id.image_id) {
-                    commands.push(DirectKittyCommand::DeleteImage(id.image_id));
-                    self.transmitted.remove(&id.image_id);
-                }
-            } else if !desired.contains_key(id) && desired_image_ids.contains(&id.image_id) {
-                commands.push(DirectKittyCommand::DeletePlacement(*id));
-            } else if !desired_image_ids.contains(&id.image_id)
-                && deleted_images.insert(id.image_id)
+            if !changed_image_ids.contains(&id.image_id)
+                && residents.contains_key(&id.image_id)
+                && !desired.contains_key(id)
             {
-                commands.push(DirectKittyCommand::DeleteImage(id.image_id));
-                self.transmitted.remove(&id.image_id);
+                commands.push(DirectKittyCommand::DeletePlacement(*id));
+            }
+        }
+        for (image_id, payload) in &residents {
+            if visible_image_ids.contains(image_id)
+                && self.transmitted.get(image_id) != Some(payload)
+            {
+                commands.push(DirectKittyCommand::Transmit {
+                    image_id: *image_id,
+                    payload: Arc::clone(payload),
+                });
+                self.transmitted.insert(*image_id, Arc::clone(payload));
             }
         }
         for id in display_order {
             let intent = desired
                 .get(&id)
                 .expect("display order only contains registered Kitty placements");
-            if self.transmitted.get(&id.image_id) != Some(&intent.payload) {
-                if self.transmitted.contains_key(&id.image_id) && deleted_images.insert(id.image_id)
-                {
-                    commands.push(DirectKittyCommand::DeleteImage(id.image_id));
-                }
-                commands.push(DirectKittyCommand::Transmit {
-                    image_id: id.image_id,
-                    payload: Arc::clone(&intent.payload),
-                });
-                self.transmitted
-                    .insert(id.image_id, Arc::clone(&intent.payload));
-            }
             if self.active.get(&id) != Some(intent) || changed_image_ids.contains(&id.image_id) {
                 commands.push(DirectKittyCommand::Place {
                     id,
                     area: intent.area,
+                    source_rect: intent.source_rect,
                     z_index: intent.z_index,
                 });
             }
@@ -225,6 +249,7 @@ impl PartialEq for DirectKittyIntent {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
             && self.area == other.area
+            && self.source_rect == other.source_rect
             && self.generation == other.generation
             && self.z_index == other.z_index
     }
@@ -375,13 +400,22 @@ fn emit_direct_kitty(backend: &mut impl Write, commands: Vec<DirectKittyCommand>
             DirectKittyCommand::Transmit { payload, .. } => {
                 backend.write_all(payload.as_bytes())?
             }
-            DirectKittyCommand::Place { id, area, z_index } => write!(
+            DirectKittyCommand::Place {
+                id,
+                area,
+                source_rect,
+                z_index,
+            } => write!(
                 backend,
-                "\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p={},c={},r={},z={},C=1,q=2\x1b\\\x1b8",
+                "\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p={},x={},y={},w={},h={},c={},r={},z={},C=1,q=2\x1b\\\x1b8",
                 area.y.saturating_add(1),
                 area.x.saturating_add(1),
                 id.image_id,
                 id.placement_id,
+                source_rect.x,
+                source_rect.y,
+                source_rect.width,
+                source_rect.height,
                 area.width,
                 area.height,
                 z_index,
@@ -564,21 +598,115 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_kitty_placement_emits_targeted_cleanup() {
+    fn empty_graphics_frames_clean_up_once_and_visible_graphics_retransmit() {
         let mut graphics = DirectKittyGraphics::default();
         let image = kitty_intent(9, Rect::new(1, 1, 2, 1));
         let _ = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&image)],
+            intents: vec![image.clone()],
+        });
+
+        let cleanup = graphics.reconcile(GraphicsFrame::default());
+        let suppressed = graphics.reconcile(GraphicsFrame::default());
+        let final_frame = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&image)],
             intents: vec![image],
         });
 
-        let removed = graphics.reconcile(GraphicsFrame::default());
-
-        assert_eq!(command_kinds(&removed), vec![("delete-image", 9)]);
+        assert_eq!(command_kinds(&cleanup), vec![("delete-image", 9)]);
+        assert!(suppressed.is_empty());
+        assert_eq!(
+            command_kinds(&final_frame),
+            vec![("transmit", 9), ("place", 9)]
+        );
         let mut output = Vec::new();
-        emit_direct_kitty(&mut output, removed).expect("targeted cleanup should serialize");
+        emit_direct_kitty(&mut output, cleanup).expect("full-image cleanup should serialize");
         assert_eq!(
             String::from_utf8(output).expect("Kitty commands are UTF-8"),
             "\x1b_Ga=d,d=I,i=9,q=2\x1b\\"
+        );
+    }
+
+    #[test]
+    fn initially_hidden_resident_transmits_when_it_becomes_visible() {
+        let mut graphics = DirectKittyGraphics::default();
+        let visible = kitty_intent(9, Rect::new(1, 1, 4, 4));
+
+        let hidden = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&visible)],
+            intents: Vec::new(),
+        });
+        let appeared = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&visible)],
+            intents: vec![visible],
+        });
+
+        assert!(hidden.is_empty());
+        assert_eq!(
+            command_kinds(&appeared),
+            vec![("transmit", 9), ("place", 9)]
+        );
+    }
+
+    #[test]
+    fn resident_kitty_image_survives_hidden_placement_until_node_removal() {
+        let mut graphics = DirectKittyGraphics::default();
+        let visible = kitty_intent(9, Rect::new(1, 1, 4, 4));
+        let mut partial = visible.clone();
+        partial.area = Rect::new(1, 1, 4, 2);
+        partial.source_rect.height = 40;
+
+        let first = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&visible)],
+            intents: vec![visible.clone()],
+        });
+        let clipped = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&partial)],
+            intents: vec![partial],
+        });
+        let hidden = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&visible)],
+            intents: Vec::new(),
+        });
+        let reappeared = graphics.reconcile(GraphicsFrame {
+            residents: vec![kitty_resident(&visible)],
+            intents: vec![visible],
+        });
+        let removed = graphics.reconcile(GraphicsFrame::default());
+
+        assert_eq!(command_kinds(&first), vec![("transmit", 9), ("place", 9)]);
+        assert_eq!(command_kinds(&clipped), vec![("place", 9)]);
+        assert_eq!(command_kinds(&hidden), vec![("delete-placement", 9)]);
+        assert_eq!(command_kinds(&reappeared), vec![("place", 9)]);
+        assert_eq!(command_kinds(&removed), vec![("delete-image", 9)]);
+    }
+
+    #[test]
+    fn kitty_placement_serializes_source_crop_and_destination_cells() {
+        let mut output = Vec::new();
+
+        emit_direct_kitty(
+            &mut output,
+            vec![DirectKittyCommand::Place {
+                id: DirectKittyPlacementId {
+                    image_id: 7,
+                    placement_id: 3,
+                },
+                area: Rect::new(4, 5, 6, 2),
+                source_rect: DirectKittySourceRect {
+                    x: 11,
+                    y: 13,
+                    width: 120,
+                    height: 40,
+                },
+                z_index: -9,
+            }],
+        )
+        .expect("cropped placement should serialize");
+
+        assert_eq!(
+            String::from_utf8(output).expect("Kitty commands are UTF-8"),
+            "\x1b7\x1b[6;5H\x1b_Ga=p,i=7,p=3,x=11,y=13,w=120,h=40,c=6,r=2,z=-9,C=1,q=2\x1b\\\x1b8"
         );
     }
 
@@ -593,10 +721,23 @@ mod tests {
                 placement_id: 1,
             },
             area,
+            source_rect: DirectKittySourceRect {
+                x: 0,
+                y: 0,
+                width: u32::from(area.width) * 10,
+                height: u32::from(area.height) * 20,
+            },
             generation: 0,
             payload: Arc::from("payload"),
             level,
             z_index: level.kitty_image_z_index(),
+        }
+    }
+
+    fn kitty_resident(intent: &DirectKittyIntent) -> DirectKittyResident {
+        DirectKittyResident {
+            image_id: intent.id.image_id,
+            payload: Arc::clone(&intent.payload),
         }
     }
 

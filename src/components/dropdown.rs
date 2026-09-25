@@ -350,6 +350,15 @@ where
         self.data_view.set_row_height(row_height);
     }
 
+    pub fn row_style_by(mut self, style: impl Fn(&T) -> Option<Style> + 'static) -> Self {
+        self.set_row_style_by(style);
+        self
+    }
+
+    pub fn set_row_style_by(&mut self, style: impl Fn(&T) -> Option<Style> + 'static) {
+        self.data_view.set_row_style_by(style);
+    }
+
     pub fn set_wrap_cells(&mut self, wrap_cells: bool) {
         self.data_view.set_wrap_cells(wrap_cells);
     }

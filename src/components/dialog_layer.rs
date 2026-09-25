@@ -19,6 +19,10 @@ const BACKDROP_BACKGROUND_DIM_FACTOR: f64 = 0.35;
 const MODAL_OVERLAY_ID: u64 = 0;
 const DEFAULT_FIT_CONTENT_MAX_WIDTH: u16 = 80;
 
+#[cfg(test)]
+#[path = "tests/dialog_layer_bounds.rs"]
+mod bounds_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DialogBackdrop {
     enabled: bool,
@@ -33,6 +37,7 @@ pub struct DialogLayer<Base, Layer> {
     layer_percent: u16,
     layer_cross_percent: u16,
     layer_edge_offset: u16,
+    extend_to_overlay_bottom: bool,
     fit_content: bool,
     fit_content_max_width: u16,
     fit_content_max_height: u16,
@@ -40,6 +45,7 @@ pub struct DialogLayer<Base, Layer> {
     base_rect: Rect,
     layer_rect: Rect,
     layer_path: TreePath,
+    focus_reassert_pending: bool,
     backdrop: DialogBackdrop,
     backdrop_tween: Tween,
     restore_focus_on_close: bool,
@@ -194,6 +200,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             layer_percent: 100,
             layer_cross_percent: 100,
             layer_edge_offset: 0,
+            extend_to_overlay_bottom: false,
             fit_content: false,
             fit_content_max_width: DEFAULT_FIT_CONTENT_MAX_WIDTH,
             fit_content_max_height: u16::MAX,
@@ -201,6 +208,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             base_rect: Rect::default(),
             layer_rect: Rect::default(),
             layer_path: TreePath::from_keys([ChildKey::second()]),
+            focus_reassert_pending: false,
             backdrop: DialogBackdrop::none(),
             backdrop_tween: Tween::idle(0.0),
             restore_focus_on_close: true,
@@ -314,6 +322,17 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
         self.fit_content = false;
     }
 
+    /// Extends the layer's available bounds to the enclosing overlay's bottom edge.
+    /// The base keeps its allocated area.
+    pub fn extend_to_overlay_bottom(mut self, enabled: bool) -> Self {
+        self.set_extend_to_overlay_bottom(enabled);
+        self
+    }
+
+    pub fn set_extend_to_overlay_bottom(&mut self, enabled: bool) {
+        self.extend_to_overlay_bottom = enabled;
+    }
+
     pub fn fit_content(mut self) -> Self {
         self.set_fit_content(true);
         self
@@ -422,6 +441,7 @@ impl<Base, Layer> DialogLayer<Base, Layer> {
             layer.mount(&mut lifecycle);
         }
         let old = std::mem::replace(&mut self.layer, layer);
+        self.focus_reassert_pending = true;
         merge_lifecycle_effects(ctx, lifecycle);
         ctx.request_layout();
         ctx.request_redraw();
@@ -474,17 +494,35 @@ where
 {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.base_rect = area;
+        let layer_bounds = if self.extend_to_overlay_bottom {
+            Rect {
+                height: ctx
+                    .overlay_bounds()
+                    .bottom()
+                    .max(area.bottom())
+                    .saturating_sub(area.y),
+                ..area
+            }
+        } else {
+            area
+        };
         self.layer_rect = if self.fit_content {
             let (width, height) = fit_content_size::<Layer, M>(
                 &self.layer,
-                area,
+                layer_bounds,
                 self.fit_content_max_width,
                 self.fit_content_max_height,
             );
-            place_sized_rect(area, width, height, self.placement, self.layer_edge_offset)
+            place_sized_rect(
+                layer_bounds,
+                width,
+                height,
+                self.placement,
+                self.layer_edge_offset,
+            )
         } else {
             layer_rect(
-                area,
+                layer_bounds,
                 self.layer_percent,
                 self.layer_cross_percent,
                 self.placement,
@@ -510,11 +548,11 @@ where
             ctx.set_focus_disabled(was_disabled);
 
             let mut overlay = OverlaySpec::new(MODAL_OVERLAY_ID, self.layer_rect, self.layer_rect);
-            overlay.bounds = Some(self.base_rect);
+            overlay.bounds = Some(layer_bounds);
             overlay.layer = OverlayLayer::Modal;
             ctx.register_overlay(overlay);
 
-            ctx.register_hit_region(HitRegion::new(ctx.current_path(), area));
+            ctx.register_hit_region(HitRegion::new(ctx.current_path(), layer_bounds));
             let child_overlay_bounds = if self.child_overlays_use_base_bounds {
                 self.base_rect
             } else {
@@ -522,6 +560,9 @@ where
             };
             ctx.with_overlay_bounds(child_overlay_bounds, |ctx| {
                 ctx.push_slot(ChildKey::second(), self.layer_rect, |ctx| {
+                    if std::mem::take(&mut self.focus_reassert_pending) {
+                        ctx.mark_replaced_subtree();
+                    }
                     self.layer.layout(self.layer_rect, ctx);
                 });
             });

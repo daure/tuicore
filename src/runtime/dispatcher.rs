@@ -83,7 +83,7 @@ impl TreeDispatcher {
             messages: ctx.drain_messages().collect(),
             redraw: true,
             layout: true,
-            tick: false,
+            tick: ctx.tick_requested(),
             quit: false,
             focus_request: ctx.focus_request().cloned(),
             focus_repair: None,

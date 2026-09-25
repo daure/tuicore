@@ -37,6 +37,8 @@ use super::text_input::{
 };
 use super::{Language, Panel};
 
+mod hit_test;
+
 const TEXTAREA_FOCUS: &str = "textarea";
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 const TAB_INSERT: &str = "    ";

@@ -10,6 +10,7 @@ mod tests;
 
 use ratatui::{
     layout::{Constraint, Rect},
+    style::Style,
     text::Text,
 };
 
@@ -1135,6 +1136,26 @@ where
         };
         dropdown.set_rows(rows);
         dropdown.set_row_height(2);
+    }
+
+    pub fn set_dropdown_row_height(&mut self, field_index: usize, row_height: u16) {
+        let Some(ListControlInput::Dropdown(Some(dropdown))) = self.inputs.get_mut(field_index)
+        else {
+            return;
+        };
+        dropdown.set_row_height(row_height);
+    }
+
+    pub fn set_dropdown_row_style_by(
+        &mut self,
+        field_index: usize,
+        style: impl Fn(&str, &str) -> Option<Style> + 'static,
+    ) {
+        let Some(ListControlInput::Dropdown(Some(dropdown))) = self.inputs.get_mut(field_index)
+        else {
+            return;
+        };
+        dropdown.set_row_style_by(move |(id, label)| style(id, label));
     }
 
     pub fn data_view_mut(&mut self) -> &mut DataView<T, Id> {

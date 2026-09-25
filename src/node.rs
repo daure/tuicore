@@ -270,6 +270,7 @@ pub struct FocusCtx<M> {
     focus_request: Option<FocusRequest>,
     redraw: bool,
     layout: bool,
+    tick: bool,
     animation: AnimationSettings,
     external_editor: Option<ExternalEditorRequest>,
 }
@@ -1374,6 +1375,7 @@ impl<M> FocusCtx<M> {
             focus_request: None,
             redraw: false,
             layout: false,
+            tick: false,
             animation,
             external_editor: None,
         }
@@ -1393,6 +1395,10 @@ impl<M> FocusCtx<M> {
 
     pub fn request_layout(&mut self) {
         self.layout = true;
+    }
+
+    pub fn request_tick(&mut self) {
+        self.tick = true;
     }
 
     pub fn request_external_editor(&mut self, value: impl Into<String>, line: usize, col: usize) {
@@ -1439,6 +1445,10 @@ impl<M> FocusCtx<M> {
 
     pub fn layout_requested(&self) -> bool {
         self.layout
+    }
+
+    pub fn tick_requested(&self) -> bool {
+        self.tick
     }
 
     pub fn animation(&self) -> AnimationSettings {

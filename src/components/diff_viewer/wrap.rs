@@ -81,7 +81,7 @@ pub(super) fn side_by_side(
     output
 }
 
-fn wrap_line(source: &StyledLine, width: usize) -> Vec<StyledLine> {
+pub(super) fn wrap_line(source: &StyledLine, width: usize) -> Vec<StyledLine> {
     if width == 0 {
         return vec![styled_line_with_location(Vec::new(), 0, source.location)];
     }
@@ -107,7 +107,7 @@ fn wrap_line(source: &StyledLine, width: usize) -> Vec<StyledLine> {
         .collect()
 }
 
-fn chunks(parts: &[StyledPart], width: usize) -> Vec<Vec<StyledPart>> {
+pub(super) fn chunks(parts: &[StyledPart], width: usize) -> Vec<Vec<StyledPart>> {
     let mut chunks = Vec::new();
     let mut current = Vec::new();
     let mut current_width = 0;
@@ -130,7 +130,10 @@ fn chunks(parts: &[StyledPart], width: usize) -> Vec<Vec<StyledPart>> {
     chunks
 }
 
-fn split_at_width(parts: &[StyledPart], width: usize) -> (Vec<StyledPart>, Vec<StyledPart>) {
+pub(super) fn split_at_width(
+    parts: &[StyledPart],
+    width: usize,
+) -> (Vec<StyledPart>, Vec<StyledPart>) {
     let mut left = Vec::new();
     let mut right = Vec::new();
     let mut used = 0;

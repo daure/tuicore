@@ -71,10 +71,11 @@ asynchronous work needs polling beyond the current animation window. Runtime err
 - `ScrollContainer::vertical(child)`: one viewport, `ScrollState`, and scrollbar around arbitrary
   measured `TuiNode` content. Use `FlexItem::fill(1)` for its viewport and `fit_content()` for
   stacked content: the child measures to natural height, while the container clips and translates
-  it. Configure `scrollbars`, `scroll_behavior`, `padding`, and `focus_reveal`. Child input routes
-  first; unhandled configured keys and wheel events scroll the container. Tab focus auto-reveals
-  descendants. `horizontal` and `both` select other axes. Copy `examples/scroll_container.rs` for
-  mixed content or stacked tree DataViews.
+  it. Configure `scrollbars`, `scroll_behavior`, `padding`, and `focus_reveal`. Use
+  `pause_direct_kitty_while_scrolling(duration)` when a multiplexer cannot safely move direct-Kitty
+  placements during scroll. Child input routes first; unhandled configured keys and wheel events
+  scroll the container. Tab focus auto-reveals descendants. `horizontal` and `both` select other
+  axes. Copy `examples/scroll_container.rs` for mixed content or stacked tree DataViews.
 
   ```rust
   let page = ScrollContainer::vertical(
@@ -94,7 +95,9 @@ asynchronous work needs polling beyond the current animation window. Runtime err
 - `Overlay::new(base, layer)`: anchored `OverlayAnchor` + `OverlaySize`.
 - `DialogLayer::new(base, layer)`: modal/docked layer using `DialogBackdrop`,
   `DialogLayerPlacement`, `DockSpec`, `DockSide`, and `DockChrome`; replace alternatives with
-  `replace_layer`, nest layers for nested modals.
+  `replace_layer`, nest layers for nested modals. Replacing a layer restores focus to a retained
+  target identity on the next layout.
+  `extend_to_overlay_bottom(true)` lets a page-owned layer cover a footer while retaining the base layout.
 - Shared spacing/chrome: `Padding`, `Gap`, `Separator`, `SeparatorColorRole`.
 
 Prefer fit-content plus fill over guessed sizes. Built-in popup controls own portals. Custom popup
@@ -121,6 +124,7 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `TextareaInput<M>`: multiline equivalent with rows, wrapping, optional live syntax highlighting
   via `language(Language)`, external editor, repeatable message-producing `action_hotkey` bindings,
   and `TextareaInputKeyBindings`; `min_rows` is measured minimum height before panel chrome.
+  `text_index_at(column, row)` maps a visible cell to a character index through wrapping and scrolling.
 - `TagInput<Id>`: `new(strings)` or `with_options`; configure selected/custom tags, placeholder,
   hotkey/style/panel; drain `take_events() -> Vec<TagInputEvent<Id>>`. Values use `SelectedTag`.
 
@@ -140,6 +144,7 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   `external_loading`/`set_external_loading` and a custom message with
   `external_loading_message`/`set_external_loading_message`; loading renders the shared `Spinner`.
   Inspect IDs/query/open state; open/close/cancel/commit return `DropdownOutcome`.
+  `row_style_by`/`set_row_style_by` style popup options while preserving search highlighting.
   Configure with `DropdownActionKeys`, `DropdownCommitMode`, `DropdownLabelPosition`,
    `DropdownPopupDirection`, `DropdownSearchMode`, and `DropdownVariant`. Bordered dropdowns also
    support a bottom-left border label via `bottom_left`, with optional `bottom_left_style`.
@@ -181,7 +186,7 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
    `Local` behavior remains unchanged.
 - `ListControl<T, Id, M>`: mutable `DataView`; construct `new`, `new_fields`, or `list`. Define
   `ListControlField::text`/`dropdown`/`dropdown_options`, validation and conditional visibility;
-  configure columns,
+  configure columns and per-field dropdown rows, row height, or styles with `set_dropdown_row_style_by`,
   edit/remove confirmation/reorder/tree/checking, title/panel/hotkey/row limits, and
   `ListControlKeyBindings`. Use `allow_horizontal_moving(false)` to prevent indent/outdent during
   active tree reorders while retaining vertical movement. Always drain
@@ -215,7 +220,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   closable host.
 - `Dialog<M>`: chrome/content/actions/close/scroll; `host(child)` gives `DialogHost<C, M>`. Build
   `DialogAction::new`; configure `DialogKeyBindings`, `DialogTitlePosition`; outputs use
-  `DialogCloseReason`. Place modals in `DialogLayer`.
+  `DialogCloseReason`. `dock_padding(0)` places content directly beside a vertical dock border;
+  the default gap is one column. Place modals in `DialogLayer`.
 - `ConfirmationDialog<M>`: `new(title, description)`, labels/hotkeys/callback, drain outcomes;
   `ConfirmationDialogKeyBindings`, `ConfirmationDialogOutcome`.
 - `Tabs<M>` + `Tab<M>`: `Tab::new(title, body)`/`text`, then `Tabs::new`; configure selection,
@@ -230,8 +236,10 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `DiffViewer`: side-by-side, inline, word, or raw-patch views with selection, search, scrolling,
   and `Ctrl+O` external diff through Git's configured `diff.tool`. Types: `DiffStyle`,
   `DiffLocation`, `DiffViewerKeyBindings`.
+  `text_position_at(column, row)` identifies the source side, one-based line, and character column.
 - `Image`: `from_path`, `from_url`, `from_base64`, or `from_bytes`; configure fit-content
-  dimensions with `size`. The default `ImageProtocol::Auto` selects a compatible graphics backend;
+  dimensions with `size`; `on_double_click` accepts a nonblocking action for the image's hit area.
+  The default `ImageProtocol::Auto` selects a compatible graphics backend;
   `ImageProtocol::Kitty` uses renderer-owned direct placements, while `KittyPlaceholder` uses
   cell-bound Unicode placeholders on terminals and multiplexers that support them.
 - `MermaidRenderer`: native, reusable Mermaid-to-SVG/PNG renderer with no Node.js or browser.

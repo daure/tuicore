@@ -27,6 +27,8 @@ pub struct ScrollContainer<C, M = ()> {
     content_area: Rect,
     focus_areas: Vec<FocusTarget>,
     pending_reveal_path: Option<TreePath>,
+    direct_kitty_scroll_pause: Option<Duration>,
+    direct_kitty_pause_remaining: Option<Duration>,
 }
 
 impl<C, M> ScrollContainer<C, M>
@@ -57,6 +59,8 @@ where
             content_area: Rect::default(),
             focus_areas: Vec::new(),
             pending_reveal_path: None,
+            direct_kitty_scroll_pause: None,
+            direct_kitty_pause_remaining: None,
         }
     }
 
@@ -77,6 +81,12 @@ where
 
     pub fn focus_reveal(mut self, enabled: bool) -> Self {
         self.focus_reveal = enabled;
+        self
+    }
+
+    /// Suppresses direct-Kitty graphics while scrolling and for `duration` after movement stops.
+    pub fn pause_direct_kitty_while_scrolling(mut self, duration: Duration) -> Self {
+        self.direct_kitty_scroll_pause = Some(duration);
         self
     }
 
@@ -190,7 +200,53 @@ where
     }
 
     fn apply_scroll(&mut self, outcome: crate::ScrollOutcome) -> bool {
-        outcome.changed || outcome.active
+        let accepted = outcome.changed || outcome.active;
+        if accepted {
+            self.arm_direct_kitty_pause();
+        }
+        accepted
+    }
+
+    fn arm_direct_kitty_pause(&mut self) {
+        if let Some(duration) = self.direct_kitty_scroll_pause {
+            self.direct_kitty_pause_remaining = Some(duration);
+        }
+    }
+
+    fn tick_direct_kitty_pause(
+        &mut self,
+        dt: Duration,
+        scroll_was_active: bool,
+        scroll: TickResult,
+    ) -> TickResult {
+        let Some(duration) = self.direct_kitty_scroll_pause else {
+            return TickResult::IDLE;
+        };
+        if scroll_was_active || scroll.changed || scroll.active {
+            self.direct_kitty_pause_remaining = Some(duration);
+            return TickResult {
+                changed: false,
+                layout: false,
+                active: true,
+                next_tick: Some(duration),
+            };
+        }
+        let Some(remaining) = self.direct_kitty_pause_remaining else {
+            return TickResult::IDLE;
+        };
+        if dt >= remaining {
+            self.direct_kitty_pause_remaining = None;
+            TickResult::CHANGED
+        } else {
+            let remaining = remaining - dt;
+            self.direct_kitty_pause_remaining = Some(remaining);
+            TickResult {
+                changed: false,
+                layout: false,
+                active: true,
+                next_tick: Some(remaining),
+            }
+        }
     }
 
     fn reveal(
@@ -258,11 +314,11 @@ where
             },
             _ => crate::ScrollOutcome::idle(),
         };
-        if !outcome.changed && !outcome.active {
+        if !self.apply_scroll(outcome) {
             return EventOutcome::Ignored;
         }
         ctx.request_redraw();
-        if outcome.active {
+        if outcome.active || self.direct_kitty_pause_remaining.is_some() {
             ctx.request_tick();
         }
         ctx.request_layout();
@@ -397,9 +453,21 @@ where
             let y_offset = i32::from(viewport.y) - offset.y as i32;
             terminal
                 .draw(|child_frame| {
-                    ctx.with_portal_offset(x_offset, y_offset, |ctx| {
-                        self.child.render(child_frame, self.content_area, ctx)
-                    })
+                    if self.direct_kitty_pause_remaining.is_some() {
+                        ctx.with_direct_kitty_suppressed(|ctx| {
+                            ctx.with_portal_offset(x_offset, y_offset, |ctx| {
+                                ctx.with_direct_kitty_viewport(x_offset, y_offset, visible, |ctx| {
+                                    self.child.render(child_frame, self.content_area, ctx)
+                                })
+                            })
+                        })
+                    } else {
+                        ctx.with_portal_offset(x_offset, y_offset, |ctx| {
+                            ctx.with_direct_kitty_viewport(x_offset, y_offset, visible, |ctx| {
+                                self.child.render(child_frame, self.content_area, ctx)
+                            })
+                        })
+                    }
                 })
                 .expect("scroll container offscreen render should succeed");
             if terminal.backend().cursor_visible() {
@@ -458,8 +526,12 @@ where
             }
             if self.reveal(area, settings, alignment) {
                 ctx.request_redraw();
-                if alignment != RevealAlignment::Center {
+                if alignment != RevealAlignment::Center
+                    || self.direct_kitty_pause_remaining.is_some()
+                {
                     ctx.request_tick();
+                }
+                if alignment != RevealAlignment::Center {
                     ctx.request_layout();
                 }
             }
@@ -471,8 +543,10 @@ where
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        let scroll_was_active = self.scroll.is_active();
         let scroll = self.scroll.tick(dt, settings);
-        let mut result = self.child.tick(dt, settings).merge(scroll);
+        let pause = self.tick_direct_kitty_pause(dt, scroll_was_active, scroll);
+        let mut result = self.child.tick(dt, settings).merge(scroll).merge(pause);
         if scroll.changed {
             result.layout = true;
         }
@@ -500,6 +574,9 @@ where
             }) && self.reveal(area, ctx.animation(), alignment)
             {
                 ctx.request_layout();
+                if self.direct_kitty_pause_remaining.is_some() {
+                    ctx.request_tick();
+                }
             }
         }
         ctx.request_redraw();
@@ -738,7 +815,8 @@ mod tests {
     #[test]
     fn focused_descendant_is_revealed() {
         let mut node =
-            ScrollContainer::vertical(FocusableLines(Lines(vec!["one", "two", "three", "four"])));
+            ScrollContainer::vertical(FocusableLines(Lines(vec!["one", "two", "three", "four"])))
+                .pause_direct_kitty_while_scrolling(Duration::from_millis(80));
         let mut layout = LayoutCtx::new();
         node.layout(Rect::new(0, 0, 8, 2), &mut layout);
         let target = layout.focus_targets()[0].clone();
@@ -752,6 +830,7 @@ mod tests {
 
         assert_eq!(node.offset().y, 2);
         assert!(focus.layout_requested());
+        assert!(focus.tick_requested());
     }
 
     #[test]

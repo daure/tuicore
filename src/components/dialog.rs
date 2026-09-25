@@ -79,6 +79,7 @@ pub struct Dialog<M = ()> {
     actions: Vec<DialogAction<M>>,
     border: Option<BorderKind>,
     edge_borders: Option<Borders>,
+    dock_padding: u16,
     content_padding: Padding,
     content: Vec<Line<'static>>,
     wrap: bool,
@@ -114,6 +115,7 @@ impl<M> Dialog<M> {
             actions: Vec::new(),
             border: None,
             edge_borders: None,
+            dock_padding: 1,
             content_padding: Padding::default(),
             content: Vec::new(),
             wrap: true,
@@ -206,6 +208,16 @@ impl<M> Dialog<M> {
 
     pub fn clear_edge_borders(&mut self) {
         self.edge_borders = None;
+    }
+
+    /// Extra columns between content and a vertical dock border. Defaults to one.
+    pub fn dock_padding(mut self, padding: u16) -> Self {
+        self.set_dock_padding(padding);
+        self
+    }
+
+    pub fn set_dock_padding(&mut self, padding: u16) {
+        self.dock_padding = padding;
     }
 
     pub fn content_padding(mut self, padding: Padding) -> Self {
@@ -348,7 +360,7 @@ impl<M> Dialog<M> {
     fn natural_width(&self) -> u16 {
         let borders = self.resolved_edge_borders();
         let full = Rect::new(0, 0, u16::MAX, 1);
-        let inner = Self::inner_area_for(full, borders);
+        let inner = Self::inner_area_for(full, borders, self.dock_padding);
         let border_width = full.width.saturating_sub(inner.width);
         let content_width = self.content_size().width.min(u16::MAX as usize) as u16;
         let padding_width = self
@@ -444,14 +456,14 @@ impl<M> Dialog<M> {
     }
 
     pub fn inner_area(area: Rect) -> Rect {
-        Self::inner_area_for(area, Borders::ALL)
+        Self::inner_area_for(area, Borders::ALL, 1)
     }
 
     fn resolved_edge_borders(&self) -> Borders {
         self.edge_borders.unwrap_or(Borders::ALL)
     }
 
-    fn inner_area_for(area: Rect, borders: Borders) -> Rect {
+    fn inner_area_for(area: Rect, borders: Borders, dock_padding: u16) -> Rect {
         let left_edge_dock = !borders.contains(Borders::TOP)
             && !borders.contains(Borders::BOTTOM)
             && borders.contains(Borders::LEFT);
@@ -459,12 +471,12 @@ impl<M> Dialog<M> {
             && !borders.contains(Borders::BOTTOM)
             && borders.contains(Borders::RIGHT);
         let left = if left_edge_dock {
-            2
+            1u16.saturating_add(dock_padding)
         } else {
             borders.contains(Borders::LEFT) as u16
         };
         let right = if right_edge_dock {
-            2
+            1u16.saturating_add(dock_padding)
         } else {
             borders.contains(Borders::RIGHT) as u16
         };
@@ -479,7 +491,7 @@ impl<M> Dialog<M> {
     }
 
     fn content_area_for(&self, area: Rect, borders: Borders) -> Rect {
-        let inner = Self::inner_area_for(area, borders);
+        let inner = Self::inner_area_for(area, borders, self.dock_padding);
         Rect::new(
             inner.x.saturating_add(self.content_padding.left),
             inner.y.saturating_add(self.content_padding.top),

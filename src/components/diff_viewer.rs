@@ -21,6 +21,7 @@ use crate::{
 };
 use crate::{KeyEvent, TuiEvent};
 
+mod hit_test;
 mod wrap;
 
 const DIFF_FOCUS: &str = "diff-viewer";

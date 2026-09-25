@@ -31,6 +31,9 @@ type MessageHandler<N, M> = dyn FnMut(&mut N, M, &mut EventCtx<M>);
 #[cfg(test)]
 #[path = "tests/background_clipboard.rs"]
 mod background_clipboard_tests;
+#[cfg(test)]
+#[path = "tests/dialog_layer_focus.rs"]
+mod dialog_layer_focus_tests;
 type NotificationHandler<N, M> = dyn FnMut(&mut N, Notification, &mut EventCtx<M>);
 
 pub struct TreeApp<N, M = ()> {

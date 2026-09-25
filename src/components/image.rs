@@ -3,6 +3,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use image::{DynamicImage, ImageFormat, imageops::FilterType};
@@ -13,11 +14,12 @@ use ratatui_image::protocol::Protocol;
 use ratatui_image::{Image as RatatuiImage, Resize};
 
 use crate::runtime::renderer::{
-    BASE_DIRECT_KITTY_Z_INDEX, DirectKittyIntent, DirectKittyPlacementId, GraphicsLevel,
-    next_direct_kitty_image_id,
+    BASE_DIRECT_KITTY_Z_INDEX, DirectKittyIntent, DirectKittyPlacementId, DirectKittySourceRect,
+    GraphicsLevel, next_direct_kitty_image_id,
 };
 use crate::{
-    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, RenderCtx, TickResult, TuiNode,
+    EventCtx, EventOutcome, HitRegion, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    MouseButton, MouseEventKind, RenderCtx, TickResult, TuiEvent, TuiNode,
 };
 
 /// Selects the terminal graphics protocol used to render an [`Image`].
@@ -50,6 +52,9 @@ pub struct Image {
     graphics_protocol: ImageProtocol,
     size: Size,
     encoded_size: Option<Size>,
+    on_double_click: Option<Box<dyn Fn() + Send + Sync>>,
+    hit_area: Rect,
+    last_click: Option<(Instant, u16, u16)>,
 }
 
 struct PendingKittyImage {
@@ -149,6 +154,9 @@ impl Image {
             graphics_protocol: ImageProtocol::Auto,
             size: Size::new(32, 16),
             encoded_size: None,
+            on_double_click: None,
+            hit_area: Rect::default(),
+            last_click: None,
         })
     }
 
@@ -171,6 +179,12 @@ impl Image {
     /// Set the preferred size in terminal cells when the parent uses fit-content sizing.
     pub const fn size(mut self, width: u16, height: u16) -> Self {
         self.size = Size::new(width, height);
+        self
+    }
+
+    /// Run a nonblocking action on a left-button double click inside the image.
+    pub fn on_double_click(mut self, action: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_double_click = Some(Box::new(action));
         self
     }
 
@@ -283,6 +297,7 @@ impl Image {
 struct DirectKittyImage {
     data: Arc<str>,
     size: Size,
+    source_rect: DirectKittySourceRect,
     requested_size: Size,
     image_id: u32,
     placement_id: u32,
@@ -315,6 +330,12 @@ impl DirectKittyImage {
         Ok(Self {
             data: Arc::from(data),
             size,
+            source_rect: DirectKittySourceRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
             requested_size,
             image_id,
             placement_id,
@@ -343,6 +364,7 @@ impl DirectKittyImage {
                 placement_id: self.placement_id,
             },
             area: Rect::new(area.x, area.y, self.size.width, self.size.height),
+            source_rect: self.source_rect,
             generation: self.generation,
             payload: Arc::clone(&self.data),
             level: GraphicsLevel::base(),
@@ -381,9 +403,54 @@ impl<M> TuiNode<M> for Image {
         LayoutSizeHint::content(self.size.width, self.size.height).normalized(proposal)
     }
 
-    fn layout(&mut self, area: Rect, _ctx: &mut LayoutCtx) -> LayoutResult {
+    fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.encode(area);
+        let size = if self.graphics_protocol == ImageProtocol::Kitty {
+            fitted_kitty_size(&self.image, area.into()).2
+        } else {
+            self.protocol.as_ref().map_or(area.into(), Protocol::size)
+        };
+        let hit_area = Rect::new(area.x, area.y, size.width, size.height).intersection(area);
+        if self.hit_area != hit_area {
+            self.last_click = None;
+        }
+        self.hit_area = hit_area;
+        if self.on_double_click.is_some() && !hit_area.is_empty() {
+            ctx.register_hit_region(HitRegion::new(ctx.current_path(), hit_area));
+        }
         LayoutResult::new(area)
+    }
+
+    fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<M>) -> EventOutcome {
+        let Some(action) = &self.on_double_click else {
+            return EventOutcome::Ignored;
+        };
+        let TuiEvent::Mouse(mouse) = event else {
+            self.last_click = None;
+            return EventOutcome::Ignored;
+        };
+        if matches!(mouse.kind, MouseEventKind::Up(_) | MouseEventKind::Moved) {
+            return EventOutcome::Ignored;
+        }
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left)
+            || !self.hit_area.contains((mouse.column, mouse.row).into())
+        {
+            self.last_click = None;
+            return EventOutcome::Ignored;
+        }
+        let now = Instant::now();
+        let double_click = self.last_click.take().is_some_and(|(time, column, row)| {
+            now.duration_since(time) <= Duration::from_millis(500)
+                && column.abs_diff(mouse.column) <= 1
+                && row.abs_diff(mouse.row) <= 1
+        });
+        if double_click {
+            action();
+        } else {
+            self.last_click = Some((now, mouse.column, mouse.row));
+        }
+        ctx.stop_propagation();
+        EventOutcome::Handled
     }
 
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
@@ -410,6 +477,10 @@ impl<M> TuiNode<M> for Image {
 }
 
 #[cfg(test)]
+#[path = "tests/image_interaction.rs"]
+mod interaction_tests;
+
+#[cfg(test)]
 mod tests {
     use std::{
         io::{Read, Write},
@@ -419,7 +490,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAwCAIAAABhdOiYAAAAf0lEQVR42u3RMRGAQBADwBdBTU1NjTDkvAhcffMSMJFrbjYTA9mM47wjvd4v0j2fSFcoAxAgQIAAAQIECBAgQIAKgLoOSx0PCBAgQIAAAQIECBAgQBVAXYeljgcECBAgQIAAAQIECBCgCqCuw1LHAwIECBAgQIAAAQIECFAB0A/Lrzglvf/PRwAAAABJRU5ErkJggg==";
+    pub(super) const TEST_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAwCAIAAABhdOiYAAAAf0lEQVR42u3RMRGAQBADwBdBTU1NjTDkvAhcffMSMJFrbjYTA9mM47wjvd4v0j2fSFcoAxAgQIAAAQIECBAgQIAKgLoOSx0PCBAgQIAAAQIECBAgQBVAXYeljgcECBAgQIAAAQIECBCgCqCuw1LHAwIECBAgQIAAAQIECFAB0A/Lrzglvf/PRwAAAABJRU5ErkJggg==";
 
     #[test]
     fn decodes_raw_base64_image_data() {
