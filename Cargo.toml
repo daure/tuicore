@@ -1,6 +1,6 @@
 [package]
 name = "tuicore"
-version = "0.40.12"
+version = "0.40.13"
 edition = "2024"
 default-run = "gallery"
 autoexamples = false
