@@ -97,8 +97,8 @@ where
 }
 
 #[test]
-fn popup_portal_uses_the_scrolled_field_position() {
-    let mut dropdown = single_dropdown();
+fn popup_portal_places_the_configured_search_prompt_at_the_scrolled_field_position() {
+    let mut dropdown = single_dropdown().search_placeholder("Find...");
     dropdown.open();
     let field = Rect::new(0, 10, 12, 3);
     layout_dropdown(&mut dropdown, field, Rect::new(0, 0, 20, 20));
@@ -117,7 +117,7 @@ fn popup_portal_uses_the_scrolled_field_position() {
             (0..20)
                 .map(|x| terminal.backend().buffer().cell((x, *y)).unwrap().symbol())
                 .collect::<String>()
-                .contains("Search…")
+                .contains("Find...")
         })
         .expect("popup search should render");
     assert_eq!(search_row, 5);

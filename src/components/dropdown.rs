@@ -322,6 +322,11 @@ where
         self
     }
 
+    pub fn search_placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.search_input = self.search_input.placeholder(placeholder);
+        self
+    }
+
     pub fn set_search_mode(&mut self, mode: DropdownSearchMode) {
         self.search_mode = mode;
         self.search_render_mode.set(mode);

@@ -134,7 +134,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   callbacks. Configure disabled state with `disabled(bool)`/`set_disabled` and inspect it with
   `is_disabled`; disabled fields use muted dashed rounded chrome and remain focusable, hotkey-openable,
   searchable, and navigable while locking committed selection and `on_select` callbacks. Search results can require `min_search_chars`, be capped with `max_filtered_items`,
-  and use `visible_without_search` for a default subset before querying all options. Replace options
+   and use `visible_without_search` for a default subset before querying all options. Set the search
+   prompt with `search_placeholder`. Replace options
   with `set_rows` while preserving open/query state, and set a query programmatically with
    `set_search_query`. Switch matching at runtime with `set_search_mode`.
    Set `max_popup_width` to keep the popup at least as wide as its field while expanding to its
