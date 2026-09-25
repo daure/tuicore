@@ -177,7 +177,7 @@ where
 
         Self {
             data_view,
-            search_input: TextInput::new().placeholder("Search..."),
+            search_input: TextInput::new().placeholder("Search…"),
             search_render_query,
             search_render_mode,
             filtered: ids.clone(),

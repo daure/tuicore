@@ -258,7 +258,7 @@ where
             data_view,
             row_id,
             row_label: label,
-            search_input: TextInput::new().placeholder("Search..."),
+            search_input: TextInput::new().placeholder("Search…"),
             search_render_query,
             search_render_mode,
             filtered: ids.clone(),

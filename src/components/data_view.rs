@@ -285,7 +285,7 @@ where
             search_mode: SearchMode::Fuzzy,
             interaction: DataViewInteraction::Grid,
             search_input: TextInput::new()
-                .placeholder("Search...")
+                .placeholder("Search…")
                 .hotkey("/")
                 .hotkey_focus_enabled(false),
             filter_dropdown: None,

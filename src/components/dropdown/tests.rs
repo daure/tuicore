@@ -117,7 +117,7 @@ fn popup_portal_uses_the_scrolled_field_position() {
             (0..20)
                 .map(|x| terminal.backend().buffer().cell((x, *y)).unwrap().symbol())
                 .collect::<String>()
-                .contains("Search...")
+                .contains("Search…")
         })
         .expect("popup search should render");
     assert_eq!(search_row, 5);

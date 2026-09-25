@@ -1401,7 +1401,7 @@ fn all_hidden_columns_still_render_action_bar_without_panicking() {
     let action_bar = (0..20)
         .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
         .collect::<String>();
-    assert!(action_bar.contains("Search..."));
+    assert!(action_bar.contains("Search…"));
 }
 
 #[test]
@@ -3001,7 +3001,7 @@ fn disabled_filter_controls_ignore_hotkey_and_hide_action_bar_hint() {
     let action_bar = (0..60)
         .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
         .collect::<String>();
-    assert!(action_bar.contains("Search..."));
+    assert!(action_bar.contains("Search…"));
     assert!(!action_bar.contains("filters"));
 }
 
