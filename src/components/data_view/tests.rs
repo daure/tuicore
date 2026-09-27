@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests/gutter_overlay.rs"]
+mod gutter_overlay;
 use crate::{KeyBindings, KeySpec};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

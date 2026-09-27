@@ -178,6 +178,22 @@ where
                     show_tree_gutter,
                 ),
             }
+            if let DisplayRow::Data(row) = row
+                && let Some(marker) = self
+                    .left_gutter_overlay_by
+                    .as_ref()
+                    .and_then(|marker| marker(row.row, row_style.unwrap_or_default()))
+                && marker.width() == 1
+                && row_area.width > 0
+            {
+                for y in row_area.y..row_area.bottom() {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((row_area.x, y))
+                        && cell.symbol() == " "
+                    {
+                        cell.set_symbol(&marker.content).set_style(marker.style);
+                    }
+                }
+            }
         }
 
         self.scroll

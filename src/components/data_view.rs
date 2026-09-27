@@ -61,6 +61,8 @@ type RowHeightFn<T> = dyn Fn(&T) -> u16;
 type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
 type RowStyleTransform<T> = dyn Fn(&T, ratatui::style::Style) -> ratatui::style::Style;
 type LeftGutterMarkerFn<T> = dyn Fn(&T) -> Option<ratatui::text::Span<'static>>;
+type LeftGutterOverlayFn<T> =
+    dyn Fn(&T, ratatui::style::Style) -> Option<ratatui::text::Span<'static>>;
 type SelectionDisabledFn<T> = dyn Fn(&T) -> bool;
 type SelectionGlyphHiddenFn<T> = dyn Fn(&T) -> bool;
 
@@ -148,6 +150,7 @@ pub struct DataView<T, Id> {
     row_style_by: Option<Box<RowStyleFn<T>>>,
     row_style_transform: Option<Box<RowStyleTransform<T>>>,
     left_gutter_marker_by: Option<Box<LeftGutterMarkerFn<T>>>,
+    left_gutter_overlay_by: Option<Box<LeftGutterOverlayFn<T>>>,
     scroll: ScrollState,
     vertical_scroll: DataViewVerticalScroll,
     sort: Option<DataViewSort>,
@@ -260,6 +263,7 @@ where
             row_style_by: None,
             row_style_transform: None,
             left_gutter_marker_by: None,
+            left_gutter_overlay_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             vertical_scroll: DataViewVerticalScroll::Local,
             sort: None,
@@ -501,6 +505,23 @@ where
     ) {
         self.left_gutter_marker_by = Some(Box::new(marker));
         self.invalidate_metrics();
+    }
+
+    /// Paints a one-cell marker over blank cells at the viewport's left edge on each row line.
+    /// Preserves layout and nonblank content. The pure callback receives the resolved row style.
+    pub fn left_gutter_overlay_by(
+        mut self,
+        marker: impl Fn(&T, ratatui::style::Style) -> Option<ratatui::text::Span<'static>> + 'static,
+    ) -> Self {
+        self.set_left_gutter_overlay_by(marker);
+        self
+    }
+
+    pub fn set_left_gutter_overlay_by(
+        &mut self,
+        marker: impl Fn(&T, ratatui::style::Style) -> Option<ratatui::text::Span<'static>> + 'static,
+    ) {
+        self.left_gutter_overlay_by = Some(Box::new(marker));
     }
 
     pub fn configured_row_height(&self) -> u16 {
