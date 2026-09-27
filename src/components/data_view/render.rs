@@ -543,7 +543,7 @@ where
             (b, None) => b,
         };
 
-        if self.row_has_reorder_highlight(&row.id) {
+        let style = if self.row_has_reorder_highlight(&row.id) {
             Some(self.reorder_highlighted_row_style())
         } else if self
             .selection_overlay
@@ -560,6 +560,10 @@ where
             Some(self.selected_row_style())
         } else {
             effective_base
+        };
+        match &self.row_style_transform {
+            Some(transform) => Some(transform(row.row, style.unwrap_or_default())),
+            None => style,
         }
     }
 

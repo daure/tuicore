@@ -168,6 +168,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
    direct operations return `DataViewOutcome`. Row focus uses `selected_bg`; inactive selection
    uses the subtler `inactive_selected_bg` role. Rich text and chip colors are preserved, and
    reorder animation blends between these neutral backgrounds.
+  `row_style_by` supplies a row's base style; `row_style_transform` receives its resolved style
+  after focus/selection/reorder styling for pure effects such as background tinting.
 - Columns use `Column::text`/`rich` or `Column::multiline`, then sortable/reorderable/search/filter/
   sizing/visibility builders. Multiline output never auto-grows rows: declared fixed or per-row
   height is authoritative and clips extra lines. Render-time `CellContext::available_width` gives

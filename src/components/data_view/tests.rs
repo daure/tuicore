@@ -3319,6 +3319,61 @@ fn focused_highlight_preserves_embedded_chip_colors() {
 }
 
 #[test]
+fn row_style_transforms_tint_resolved_selection_without_changing_rich_foregrounds() {
+    for focused in [false, true] {
+        let theme = theme();
+        let tint = theme.success_fg();
+        let rich = theme.warning_fg();
+        let view = DataView::new([1, 2], |row| *row)
+            .column(Column::multiline(
+                "name",
+                "",
+                Constraint::Fill(1),
+                move |_, _| {
+                    Text::from(vec![
+                        Line::from(Span::styled("colored", Style::default().fg(rich))),
+                        Line::from("second line"),
+                    ])
+                },
+            ))
+            .row_height(2)
+            .row_style_by(|_| Some(Style::default().bg(crate::theme().surface_bg())))
+            .row_style_transform(move |row, style| {
+                if *row == 1 {
+                    style.bg(lerp_color(style.bg.unwrap(), tint, 0.2))
+                } else {
+                    style
+                }
+            })
+            .focused(focused);
+        let mut terminal = Terminal::new(TestBackend::new(16, 4)).unwrap();
+        terminal
+            .draw(|frame| view.render(frame, frame.area()))
+            .unwrap();
+        let base = if focused {
+            theme.selected_bg()
+        } else {
+            theme.surface_bg()
+        };
+        for y in 0..2 {
+            for x in 0..16 {
+                assert_eq!(
+                    terminal.backend().buffer().cell((x, y)).unwrap().bg,
+                    lerp_color(base, tint, 0.2)
+                );
+            }
+        }
+        let first = terminal.backend().buffer().cell((0, 0)).unwrap();
+        assert_eq!(first.fg, rich);
+        assert_eq!(first.modifier.contains(Modifier::BOLD), focused);
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 2)).unwrap().bg,
+            theme.surface_bg()
+        );
+    }
+}
+
+#[test]
 fn unfocused_reorder_highlight_blends_neutral_backgrounds_and_clears() {
     let mut view = DataView::list(
         [Row::new(1, "moving"), Row::new(2, "other")],

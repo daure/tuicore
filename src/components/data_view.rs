@@ -59,6 +59,7 @@ type CopyFormatter<T> = dyn Fn(&T) -> String;
 type CopyHotkeyFormatter<T> = dyn Fn(&T) -> Option<String>;
 type RowHeightFn<T> = dyn Fn(&T) -> u16;
 type RowStyleFn<T> = dyn Fn(&T) -> Option<ratatui::style::Style>;
+type RowStyleTransform<T> = dyn Fn(&T, ratatui::style::Style) -> ratatui::style::Style;
 type LeftGutterMarkerFn<T> = dyn Fn(&T) -> Option<ratatui::text::Span<'static>>;
 type SelectionDisabledFn<T> = dyn Fn(&T) -> bool;
 type SelectionGlyphHiddenFn<T> = dyn Fn(&T) -> bool;
@@ -145,6 +146,7 @@ pub struct DataView<T, Id> {
     row_height_by: Option<Box<RowHeightFn<T>>>,
     wrap_cells: bool,
     row_style_by: Option<Box<RowStyleFn<T>>>,
+    row_style_transform: Option<Box<RowStyleTransform<T>>>,
     left_gutter_marker_by: Option<Box<LeftGutterMarkerFn<T>>>,
     scroll: ScrollState,
     vertical_scroll: DataViewVerticalScroll,
@@ -256,6 +258,7 @@ where
             row_height_by: None,
             wrap_cells: false,
             row_style_by: None,
+            row_style_transform: None,
             left_gutter_marker_by: None,
             scroll: ScrollState::from_preset(ScrollAxes::Both, preset().scroll()),
             vertical_scroll: DataViewVerticalScroll::Local,
@@ -462,6 +465,24 @@ where
         row_style: impl Fn(&T) -> Option<ratatui::style::Style> + 'static,
     ) {
         self.row_style_by = Some(Box::new(row_style));
+    }
+
+    /// Transforms the resolved row style after focus, selection, and reorder styling.
+    /// The callback runs during rendering and must not mutate state.
+    pub fn row_style_transform(
+        mut self,
+        transform: impl Fn(&T, ratatui::style::Style) -> ratatui::style::Style + 'static,
+    ) -> Self {
+        self.set_row_style_transform(transform);
+        self
+    }
+
+    /// Replaces the transform applied after resolving the row's interaction style.
+    pub fn set_row_style_transform(
+        &mut self,
+        transform: impl Fn(&T, ratatui::style::Style) -> ratatui::style::Style + 'static,
+    ) {
+        self.row_style_transform = Some(Box::new(transform));
     }
 
     /// Adds a one-cell, row-specific marker before tree and selection gutters.
