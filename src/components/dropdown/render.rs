@@ -312,7 +312,7 @@ where
         );
         if !text_area.is_empty() {
             let text = if inline_trigger {
-                self.inline_filled_line(base_style)
+                self.bounded_inline_filled_line(base_style, text_area.width as usize)
             } else if self.hotkey.is_some() {
                 self.filled_summary_line(base_style)
             } else if self.committed.is_empty() {
@@ -473,6 +473,17 @@ where
     }
 
     pub(super) fn inline_filled_line(&self, base_style: Style) -> Line<'static> {
+        let (mut spans, hotkey_spans) = self.inline_filled_spans(base_style);
+        spans.extend(hotkey_spans);
+        Line::from(spans)
+    }
+
+    fn bounded_inline_filled_line(&self, base_style: Style, max_width: usize) -> Line<'static> {
+        let (spans, hotkey_spans) = self.inline_filled_spans(base_style);
+        bounded_prefix_line(spans, hotkey_spans, max_width, base_style)
+    }
+
+    fn inline_filled_spans(&self, base_style: Style) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
         let mut spans = Vec::new();
         if let Some(label) = &self.label {
             spans.push(Span::styled(format!("{label}: "), base_style));
@@ -485,18 +496,18 @@ where
         };
         spans.extend(self.selected_summary_spans(value_style));
 
-        if let Some(hotkey) = &self.hotkey {
-            spans.extend(hotkey_label_spans(
+        let hotkey_spans = self.hotkey.as_ref().map_or_else(Vec::new, |hotkey| {
+            hotkey_label_spans(
                 "",
                 Some(hotkey.as_str()),
                 HotkeyLabelMode::Inline,
                 self.pending_hotkey_prefix.as_deref(),
                 base_style,
                 hotkey_underline_style(base_style),
-            ));
-        }
+            )
+        });
 
-        Line::from(spans)
+        (spans, hotkey_spans)
     }
 
     pub(super) fn filled_summary_line(&self, base_style: Style) -> Line<'static> {
@@ -707,4 +718,56 @@ where
             Rect::new(area.x.saturating_add(1), y, width, 1),
         );
     }
+}
+
+fn bounded_prefix_line(
+    spans: Vec<Span<'static>>,
+    suffix: Vec<Span<'static>>,
+    max_width: usize,
+    fallback_style: Style,
+) -> Line<'static> {
+    let suffix_width = line_width(&Line::from(suffix.clone()));
+    let prefix_width = line_width(&Line::from(spans.clone()));
+    let ellipsis_width = line_width(&Line::from("..."));
+    if prefix_width.saturating_add(suffix_width) <= max_width
+        || max_width < suffix_width.saturating_add(ellipsis_width)
+    {
+        return Line::from(spans.into_iter().chain(suffix).collect::<Vec<_>>());
+    }
+
+    let prefix_width = max_width.saturating_sub(suffix_width);
+    let mut spans = ellipsize_spans(spans, prefix_width, fallback_style);
+    spans.extend(suffix);
+    Line::from(spans)
+}
+
+fn ellipsize_spans(
+    spans: Vec<Span<'static>>,
+    max_width: usize,
+    fallback_style: Style,
+) -> Vec<Span<'static>> {
+    if max_width == 0 {
+        return Vec::new();
+    }
+
+    let ellipsis = truncate_cells("...", max_width);
+    let content_width = max_width.saturating_sub(ellipsis.len());
+    let mut remaining = content_width;
+    let mut truncated = Vec::new();
+    let mut ellipsis_style = fallback_style;
+
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let text = truncate_cells(span.content.as_ref(), remaining);
+        let width = line_width(&Line::from(text.as_str()));
+        if !text.is_empty() {
+            ellipsis_style = span.style;
+            truncated.push(Span::styled(text, span.style));
+        }
+        remaining = remaining.saturating_sub(width);
+    }
+    truncated.push(Span::styled(ellipsis, ellipsis_style));
+    truncated
 }

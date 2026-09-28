@@ -1559,6 +1559,29 @@ fn filled_variant_renders_hotkey_and_reserves_its_width() {
 }
 
 #[test]
+fn narrow_filled_variant_ellipsizes_value_and_preserves_hotkey() {
+    let dropdown = Dropdown::single(["Ready for production"], |row| *row, |row| row.to_string())
+        .variant(DropdownVariant::Filled)
+        .alt_style(true)
+        .label_position(DropdownLabelPosition::Inline)
+        .field_padding_left(1)
+        .hotkey("shift+f")
+        .selected_one("Ready for production");
+    let area = Rect::new(0, 0, 24, 1);
+    let mut terminal =
+        Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal should build");
+
+    terminal
+        .draw(|frame| render_dropdown(&dropdown, frame, area))
+        .expect("dropdown should render");
+
+    let row = (0..area.width)
+        .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().symbol())
+        .collect::<String>();
+    assert_eq!(row, " Ready for prod... |F| ");
+}
+
+#[test]
 fn focused_filled_trigger_uses_focus_style() {
     let mut dropdown = single_dropdown()
         .variant(DropdownVariant::Filled)
