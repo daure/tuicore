@@ -69,6 +69,7 @@ pub struct Tabs<M = ()> {
     body_border_style: TabsBodyBorderStyle,
     animation: Option<AnimationSpec>,
     focused: bool,
+    tab_stop: bool,
     transition: Tween,
     border_color: ColorTween,
     tab_color: ColorTween,
@@ -151,6 +152,7 @@ where
             body_border_style: TabsBodyBorderStyle::Solid,
             animation: None,
             focused: false,
+            tab_stop: true,
             transition: Tween::idle(1.0),
             border_color: ColorTween::idle(theme.border_fg()),
             tab_color: ColorTween::idle(theme.border_fg()),
@@ -277,6 +279,12 @@ where
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
         self.hotkey = Some(hotkey.into());
+        self
+    }
+
+    /// Controls Tab traversal of the header while preserving body focus targets and hotkeys.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
         self
     }
 
@@ -1754,6 +1762,7 @@ where
                 hotkey_sequences,
             );
         }
+        ctx.set_focus_tab_stop(FocusId::new(TABS_FOCUS), self.tab_stop);
         LayoutResult::new(area)
     }
 
@@ -2035,6 +2044,45 @@ mod tests {
 
     use super::*;
     use crate::{Key, KeyEvent, Propagation, TreePath};
+
+    #[test]
+    fn header_tab_stop_is_configurable_while_hotkeys_and_mouse_selection_remain_enabled() {
+        for tab_stop in [true, false] {
+            let mut tabs =
+                Tabs::<()>::new(vec![Tab::text("One", ""), Tab::text("Two", "").hotkey("b")])
+                    .tab_stop(tab_stop);
+            let mut layout = LayoutCtx::new();
+            tabs.layout(Rect::new(0, 0, 80, 5), &mut layout);
+            let target = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == TABS_FOCUS)
+                .unwrap();
+            assert!(target.enabled);
+            assert_eq!(target.tab_stop, tab_stop);
+            assert!(target.hotkey_sequences.iter().any(|key| key == "b"));
+            let mut ctx = EventCtx::default();
+            assert_eq!(
+                tabs.event(&TuiEvent::Key(KeyEvent::from(Key::Char('b'))), &mut ctx),
+                EventOutcome::Handled
+            );
+            assert_eq!(tabs.selected_index(), 1);
+            let column = (0..80)
+                .find(|column| tabs.tab_at_column(*column) == Some(0))
+                .unwrap();
+            let event = TuiEvent::Mouse(crate::MouseEvent {
+                kind: crate::MouseEventKind::Down(crate::MouseButton::Left),
+                column,
+                row: tabs.tab_header_area.y,
+                modifiers: crate::KeyModifiers::NONE,
+            });
+            assert_eq!(
+                tabs.event(&event, &mut EventCtx::default()),
+                EventOutcome::Handled
+            );
+            assert_eq!(tabs.selected_index(), 0);
+        }
+    }
 
     fn render_node<M>(node: &impl TuiNode<M>, frame: &mut Frame, area: Rect) {
         let mut ctx = crate::RenderCtx::new();

@@ -230,7 +230,7 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
 - `ConfirmationDialog<M>`: `new(title, description)`, labels/hotkeys/callback, drain outcomes;
   `ConfirmationDialogKeyBindings`, `ConfirmationDialogOutcome`.
 - `Tabs<M>` + `Tab<M>`: `Tab::new(title, body)`/`text`, then `Tabs::new`; configure selection,
-  looping, variant, borders, modal mode, hotkeys/focus/close. Repeat
+  looping, variant, borders, modal mode, hotkeys/tab-stop/focus/close. Repeat
   `action_hotkey(sequence, |selected_index| message)` for custom bottom-right actions alongside the
   optional focus hotkey. `TabsVariant` provides `Minimal`, `Underline`, `Boxed`, and `OneRow`;
   `OneRow` (preset value `one-row`) matches minimal styling with only the top tab-row border and no
