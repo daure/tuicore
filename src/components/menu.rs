@@ -55,6 +55,28 @@ fn search_mode_for_highlight(search_mode: MenuSearchMode) -> Option<SearchMode> 
     }
 }
 
+fn menu_item_line<Id>(
+    row: &MenuItem<Id>,
+    query: &str,
+    search_mode: MenuSearchMode,
+    available_width: Option<u16>,
+) -> Line<'static> {
+    let mut line = highlighted_label_line(row.label.clone(), query, search_mode);
+    if let Some(hint) = &row.hint {
+        let width = available_width.map_or_else(|| row.content_width(), usize::from);
+        let spacing = width
+            .saturating_sub(line_width(&line))
+            .saturating_sub(line_width(&Line::from(hint.as_str())))
+            .max(1);
+        line.spans.push(Span::raw(" ".repeat(spacing)));
+        line.spans.push(Span::styled(
+            hint.clone(),
+            Style::default().fg(theme().muted_fg()),
+        ));
+    }
+    line
+}
+
 fn highlighted_spans(label: String, spans: &[MatchSpan]) -> Line<'static> {
     if spans.is_empty() {
         return Line::from(label);
@@ -164,11 +186,12 @@ where
                 "label",
                 "",
                 Constraint::Percentage(100),
-                move |row: &MenuItem<Id>, _| {
-                    highlighted_label_line(
-                        row.label.clone(),
+                move |row: &MenuItem<Id>, ctx| {
+                    menu_item_line(
+                        row,
                         &data_view_search_query.borrow(),
                         data_view_search_mode.get(),
+                        ctx.available_width,
                     )
                 },
             ))
@@ -731,10 +754,11 @@ where
     fn needs_horizontal_scrollbar(&self, width: u16) -> bool {
         let viewport_width = width;
         let content_width = self
-            .filtered
+            .data_view
+            .rows()
             .iter()
-            .filter_map(|id| self.label_for(id))
-            .map(|label| line_width(&Line::from(label)))
+            .filter(|row| self.filtered.contains(&row.id))
+            .map(MenuItem::content_width)
             .max()
             .unwrap_or_else(|| line_width(&Line::from("No results")));
         content_width > viewport_width as usize
@@ -742,9 +766,10 @@ where
 
     fn measured_popup_width(&self) -> u16 {
         let label_width = self
-            .labels
+            .data_view
+            .rows()
             .iter()
-            .map(|label| line_width(&Line::from(label.as_str())))
+            .map(MenuItem::content_width)
             .max()
             .unwrap_or(0)
             .min(u16::MAX as usize) as u16;
@@ -768,13 +793,6 @@ where
         }
         let [_, list_area] = self.popup_inner_areas(popup_area);
         list_area
-    }
-
-    fn label_for(&self, id: &Id) -> Option<String> {
-        self.ids
-            .iter()
-            .position(|known| known == id)
-            .map(|index| self.labels[index].clone())
     }
 
     fn render_popup(&self, frame: &mut Frame, area: Rect) {
@@ -925,6 +943,10 @@ where
             .merge(self.backdrop_tween.tick(dt, settings))
     }
 }
+
+#[cfg(test)]
+#[path = "tests/menu_hints.rs"]
+mod hint_tests;
 
 #[cfg(test)]
 mod tests {

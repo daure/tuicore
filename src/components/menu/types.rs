@@ -1,10 +1,12 @@
 use crate::KeySpec;
 use crate::event::Key;
+use ratatui::text::Line;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem<Id> {
     pub id: Id,
     pub label: String,
+    pub hint: Option<String>,
 }
 
 impl<Id> MenuItem<Id> {
@@ -12,7 +14,21 @@ impl<Id> MenuItem<Id> {
         Self {
             id,
             label: label.into(),
+            hint: None,
         }
+    }
+
+    pub fn hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub(super) fn content_width(&self) -> usize {
+        crate::line_width(&Line::from(self.label.as_str()))
+            + self
+                .hint
+                .as_ref()
+                .map_or(0, |hint| 1 + crate::line_width(&Line::from(hint.as_str())))
     }
 }
 

@@ -51,6 +51,11 @@ pub enum StatusBarMenuItem {
         id: &'static str,
         label: &'static str,
     },
+    CustomWithHint {
+        id: &'static str,
+        label: &'static str,
+        hint: &'static str,
+    },
     Theme,
     WeatherForecast,
     StoreView,
@@ -59,7 +64,7 @@ pub enum StatusBarMenuItem {
 impl StatusBarMenuItem {
     fn label(self) -> &'static str {
         match self {
-            Self::Custom { label, .. } => label,
+            Self::Custom { label, .. } | Self::CustomWithHint { label, .. } => label,
             Self::Theme => " Theme",
             Self::WeatherForecast => " Weather forecast",
             Self::StoreView => " Store view",
@@ -365,7 +370,7 @@ where
 
     fn activate_menu_item(&mut self, item: StatusBarMenuItem, ctx: &mut EventCtx<M>) {
         match item {
-            StatusBarMenuItem::Custom { id, .. } => {
+            StatusBarMenuItem::Custom { id, .. } | StatusBarMenuItem::CustomWithHint { id, .. } => {
                 if let Some(on_custom_menu_item) = &self.on_custom_menu_item {
                     ctx.emit(on_custom_menu_item(id));
                 }
@@ -927,11 +932,13 @@ fn status_menu(
     items: impl IntoIterator<Item = StatusBarMenuItem>,
     trigger_hotkey: &str,
 ) -> Menu<StatusBarMenuItem> {
-    Menu::new(
-        items
-            .into_iter()
-            .map(|item| MenuItem::new(item, item.label())),
-    )
+    Menu::new(items.into_iter().map(|item| {
+        let row = MenuItem::new(item, item.label());
+        match item {
+            StatusBarMenuItem::CustomWithHint { hint, .. } => row.hint(hint),
+            _ => row,
+        }
+    }))
     .visible_items(8)
     .popup_direction(MenuPopupDirection::Up)
     .trigger_hotkey(trigger_hotkey)

@@ -249,12 +249,13 @@ where
         frame.render_widget(Paragraph::new(Text::from(layout.lines.clone())), area);
         if self.popup_open && self.highlighted_tag.is_none() {
             let input_row = layout.input_row;
+            let field_area = ctx.translate_portal_rect(area);
             ctx.push_portal(
                 OverlayLayer::Popover,
                 0,
                 self.overlay_bounds,
                 move |frame, bounds| {
-                    self.render_popup(frame, self.popup_area(input_row, bounds));
+                    self.render_popup(frame, self.popup_area(field_area, input_row, bounds));
                 },
             );
         }
@@ -667,14 +668,14 @@ where
         spans
     }
 
-    fn popup_area(&self, input_row: u16, bounds: Rect) -> Rect {
-        let y = self.area.y.saturating_add(input_row).saturating_add(1);
+    fn popup_area(&self, field_area: Rect, input_row: u16, bounds: Rect) -> Rect {
+        let y = field_area.y.saturating_add(input_row).saturating_add(1);
         let available = bounds.y.saturating_add(bounds.height).saturating_sub(y);
         let height = self.popup_height().min(available);
         let width = self
             .popup_width()
-            .min(bounds.right().saturating_sub(self.area.x));
-        Rect::new(self.area.x, y, width, height)
+            .min(bounds.right().saturating_sub(field_area.x));
+        Rect::new(field_area.x, y, width, height)
     }
 
     fn popup_height(&self) -> u16 {
@@ -1099,7 +1100,54 @@ fn rect_contains(area: Rect, x: u16, y: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Propagation, TreePath};
+    use crate::{Flex, FlexItem, Propagation, ScrollContainer, ScrollOffset, TreePath};
+
+    #[test]
+    fn suggestions_stay_beneath_the_tags_field_in_an_offset_scrolling_pane() {
+        for scroll_y in [0, 4] {
+            let mut input = TagInput::new(["Tandem"]).panel("Tags");
+            input.set_focused(true);
+            let mut events = EventCtx::<()>::default();
+            for key in [Key::Enter, Key::Char('t'), Key::Char('a')] {
+                input.event(&TuiEvent::Key(KeyEvent::from(key)), &mut events);
+            }
+            let mut pane = ScrollContainer::vertical(
+                Flex::<()>::column()
+                    .child("above", crate::Paragraph::new(""), FlexItem::fixed(6))
+                    .child("tags", input, FlexItem::fit_content())
+                    .child("below", crate::Paragraph::new(""), FlexItem::fixed(20)),
+            );
+            let bounds = Rect::new(0, 0, 100, 30);
+            let viewport = Rect::new(60, 3, 30, 12);
+            let mut layout = LayoutCtx::new();
+            layout.with_overlay_bounds(bounds, |ctx| pane.layout(viewport, ctx));
+            pane.scroll_to(
+                ScrollOffset { x: 0, y: scroll_y },
+                AnimationSettings {
+                    enabled: false,
+                    ..Default::default()
+                },
+            );
+            let mut layout = LayoutCtx::new();
+            layout.with_overlay_bounds(bounds, |ctx| pane.layout(viewport, ctx));
+            let field = layout.focus_targets().first().unwrap().area;
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut ctx = crate::RenderCtx::new();
+                    pane.render(frame, viewport, &mut ctx);
+                    ctx.flush(frame);
+                })
+                .unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let suggestion = (field.x + 2..field.x + 8)
+                .map(|x| buffer.cell((x, field.y + 3)).unwrap().symbol())
+                .collect::<String>();
+            assert_eq!(suggestion, "Tandem", "scroll offset: {scroll_y}");
+        }
+    }
 
     #[test]
     fn popup_cursor_uses_focused_selection_style() {
