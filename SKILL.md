@@ -253,7 +253,8 @@ are `OverlayId`, `OverlayLayer`, `OutsideMousePolicy`, `OverlayPolicy`, `Overlay
   scale: `.with_fit_to(MermaidRasterFitBox::contain(width, height)).with_scale(scale)`. Use
   `render_*_with_theme(..., &theme())` to apply active semantic colors to SVG/PNG output.
 - `Paragraph`: `new(text)`, wrap, `ParagraphOverflow`, max lines/style. `Spinner`: `new`, style,
-  must tick. `SeasonalEmptyState`: `new(message)`, `SeasonalGlyphs`, must tick when live.
+  must tick; frame changes use `next_tick`, so parents merge the complete result. `SeasonalEmptyState`:
+  `new(message)`, `SeasonalGlyphs`, must tick when live.
 - `SyntaxHighlighter::new(text, language)`: highlighted, scrollable source; `.wrap(true)` enables
    word wrapping with keyboard navigation across visual rows for prose detail panes. While focused,
    `/` starts live search, Enter submits, `n`/`N` cycles matches, and Esc clears the search.

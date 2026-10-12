@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -30,21 +30,22 @@ pub struct DateTimeIndicator<M = ()> {
     time_text: String,
     format: DateTimeIndicatorFormat,
     auto_update: bool,
-    update_wait: Duration,
+    update_due: Instant,
     action: StatusAction<M>,
     _marker: PhantomData<fn() -> M>,
 }
 
 impl<M> DateTimeIndicator<M> {
     pub fn new() -> Self {
+        let now = local_datetime();
         Self {
             icon: "".to_string(),
             ascii_icon: "clock".to_string(),
             use_ascii_icon: false,
-            time_text: format_datetime(local_datetime(), DateTimeIndicatorFormat::Time),
+            time_text: format_datetime(now, DateTimeIndicatorFormat::Time),
             format: DateTimeIndicatorFormat::Time,
             auto_update: true,
-            update_wait: next_update_wait(local_datetime()),
+            update_due: Instant::now() + next_update_wait(now),
             action: StatusAction::new(),
             _marker: PhantomData,
         }
@@ -54,7 +55,7 @@ impl<M> DateTimeIndicator<M> {
         self.format = format;
         let now = local_datetime();
         self.time_text = format_datetime(now, format);
-        self.update_wait = next_update_wait(now);
+        self.update_due = Instant::now() + next_update_wait(now);
         self.auto_update = true;
         self
     }
@@ -77,14 +78,12 @@ impl<M> DateTimeIndicator<M> {
     pub fn time_text(mut self, text: impl Into<String>) -> Self {
         self.time_text = text.into();
         self.auto_update = false;
-        self.update_wait = Duration::ZERO;
         self
     }
 
     pub fn set_time_text(&mut self, text: impl Into<String>) {
         self.time_text = text.into();
         self.auto_update = false;
-        self.update_wait = Duration::ZERO;
     }
 
     pub fn hotkey(mut self, hotkey: impl Into<String>) -> Self {
@@ -178,14 +177,14 @@ where
             return self.action.tick(dt, settings);
         }
         let action_tick = self.action.tick(dt, settings);
-        if self.update_wait > dt {
-            self.update_wait -= dt;
+        let update_now = Instant::now();
+        if update_now < self.update_due {
             return action_tick;
         }
 
         let now = local_datetime();
         let next = format_datetime(now, self.format);
-        self.update_wait = next_update_wait(now);
+        self.update_due = update_now + next_update_wait(now);
         if next != self.time_text {
             self.time_text = next;
             TickResult::CHANGED.merge(action_tick)
@@ -215,3 +214,7 @@ fn format_datetime(datetime: OffsetDateTime, format: DateTimeIndicatorFormat) ->
         DateTimeIndicatorFormat::DateTime => format!("{} {clock}", datetime.date()),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/date_time_indicator.rs"]
+mod tests;

@@ -569,7 +569,8 @@ mod tests {
         let loading_tick = indicator.tick(Duration::from_millis(80), settings);
 
         assert!(loading_tick.changed);
-        assert!(loading_tick.active);
+        assert!(!loading_tick.active);
+        assert_eq!(loading_tick.next_tick, Some(Duration::from_millis(80)));
         assert_eq!(indicator.label(), "⠙ Loading…");
 
         indicator.set_loading(false);

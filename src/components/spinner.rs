@@ -79,8 +79,8 @@ impl Animated for Spinner {
         TickResult {
             changed,
             layout: false,
-            active: true,
-            next_tick: None,
+            active: false,
+            next_tick: Some(SPINNER_FRAME_INTERVAL - self.elapsed),
         }
     }
 }
@@ -100,42 +100,5 @@ impl<M> TuiNode<M> for Spinner {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn spinner_ticks_and_advances_frames() {
-        let mut spinner = Spinner::new();
-        let settings = AnimationSettings::default();
-
-        assert_eq!(spinner.glyph(), "⠋");
-
-        // Tick less than interval -> no change
-        let result = Animated::tick(&mut spinner, Duration::from_millis(50), settings);
-        assert!(!result.changed);
-        assert!(result.active);
-        assert_eq!(spinner.glyph(), "⠋");
-
-        // Tick more -> advances frame
-        let result = Animated::tick(&mut spinner, Duration::from_millis(60), settings);
-        assert!(result.changed);
-        assert!(result.active);
-        assert_eq!(spinner.glyph(), "⠙");
-    }
-
-    #[test]
-    fn spinner_stays_idle_when_animations_disabled() {
-        let mut spinner = Spinner::new();
-        let settings = AnimationSettings {
-            enabled: false,
-            ..Default::default()
-        };
-
-        assert_eq!(spinner.glyph(), "⠋");
-
-        let result = Animated::tick(&mut spinner, Duration::from_millis(150), settings);
-        assert!(!result.changed);
-        assert!(!result.active);
-        assert_eq!(spinner.glyph(), "⠋");
-    }
-}
+#[path = "tests/spinner.rs"]
+mod tests;
