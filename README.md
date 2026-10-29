@@ -16,6 +16,24 @@ Built on Ratatui and Crossterm. Compose UI trees with Rust builders; the runtime
 - Inputs, searchable dropdowns, tables, trees, forms, and dialogs.
 - Shared themes, configurable keybindings, and animations.
 
+## Screenshots
+
+![Table tree with nested tasks, colored statuses, and progress bars](docs/screenshots/table-tree.png)
+
+<sub>Table tree — browse hierarchical rows with status colors and progress bars.</sub>
+
+![Date and time controls with calendars and inline inputs](docs/screenshots/date-time.png)
+
+<sub>Date &amp; time — combine calendars, time selectors, and inline or dropdown inputs.</sub>
+
+![Rust code rendered with syntax highlighting in the component gallery](docs/screenshots/syntax-highlighting.png)
+
+<sub>Syntax highlighting — display source code with language-aware colors.</sub>
+
+![Mermaid source and an entity relationship diagram rendered in the terminal](docs/screenshots/mermaid.png)
+
+<sub>Mermaid — render diagrams alongside their source inside the terminal.</sub>
+
 ## Quick start
 
 Add to `Cargo.toml`:
